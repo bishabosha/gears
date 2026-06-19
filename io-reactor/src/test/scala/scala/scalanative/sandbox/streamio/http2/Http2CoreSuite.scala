@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
-import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
+import java.util.concurrent.{CountDownLatch, Executors, ThreadFactory, TimeUnit}
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -20,15 +20,20 @@ import scala.scalanative.sandbox.streamio.transport.{
 import munit.FunSuite
 
 class Http2CoreSuite extends FunSuite {
-  private val serialTestExecutor = Executors.newSingleThreadExecutor()
+  private val serialTestExecutor = Executors.newSingleThreadExecutor(
+    new ThreadFactory {
+      override def newThread(task: Runnable): Thread = {
+        val thread = new Thread(task, "http2-core-suite")
+        thread.setDaemon(true)
+        thread
+      }
+    }
+  )
 
   override def munitIgnore: Boolean = LinktimeInfo.isWindows
   override val munitTimeout: Duration = 60.seconds
   override def munitExecutionContext: ExecutionContext =
     ExecutionContext.fromExecutor(serialTestExecutor)
-
-  override def afterAll(): Unit =
-    serialTestExecutor.shutdown()
 
   test("loopback client round-trips echoed body") {
     StreamIoDebug.log("core-test", "loopback start")
