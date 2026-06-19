@@ -264,7 +264,7 @@ class GearsHttp2LimitsSuite extends FunSuite {
       Async.group {
         body(using summon[Async.Spawn])
       }
-    }(using DefaultSupport, DefaultSupport)
+    }
 
   private def requestHeaders(
       port: Int,

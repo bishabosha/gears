@@ -36,15 +36,13 @@ lazy val ioReactor =
           .withSourceLevelDebuggingConfig(_.disableAll)
       },
       testFrameworks += new TestFramework("munit.Framework"),
-      libraryDependencies ++= {
-        val gearsDeps =
-          CrossVersion.partialVersion(scalaVersion.value).toList.collect {
-            case (3, _) => "ch.epfl.lamp" %%% "gears" % "0.2.0"
-          }
-        gearsDeps :+ ("org.scalameta" %%% "munit" % "1.3.0" % Test)
+      libraryDependencies += {
+        ("org.scalameta" %%% "munit" % "1.3.0" % Test)
       },
-      fork := true
+      Compile / fork := true,
+      Test/fork := false
     )
+    .dependsOn(root.native)
 
 lazy val root =
   crossProject(JSPlatform, JVMPlatform, NativePlatform)

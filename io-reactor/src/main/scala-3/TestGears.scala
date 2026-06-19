@@ -165,7 +165,7 @@ object TestGears {
           }
         }
       }
-    }(using DefaultSupport, DefaultSupport)
+    }
   }
 
   def startExampleServer(
