@@ -21,6 +21,30 @@ inThisBuild(
   )
 )
 
+lazy val ioReactor =
+  (project in file("io-reactor"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      Compile / mainClass := {
+        CrossVersion.partialVersion(scalaVersion.value) match {
+          case Some((3, _)) => Some("TestGears")
+          case _            => Some("Test")
+        }
+      },
+      nativeConfig ~= {
+        _.withMode(scala.scalanative.build.Mode.releaseFast)
+          .withSourceLevelDebuggingConfig(_.disableAll)
+      },
+      testFrameworks += new TestFramework("munit.Framework"),
+      libraryDependencies ++= {
+        val gearsDeps =
+          CrossVersion.partialVersion(scalaVersion.value).toList.collect {
+            case (3, _) => "ch.epfl.lamp" %%% "gears" % "0.2.0"
+          }
+        gearsDeps :+ ("org.scalameta" %%% "munit" % "1.3.0" % Test)
+      }
+    )
+
 lazy val root =
   crossProject(JSPlatform, JVMPlatform, NativePlatform)
     .crossType(CrossType.Full)
