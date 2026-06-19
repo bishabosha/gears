@@ -5,13 +5,33 @@
 [![Homepage](https://img.shields.io/badge/website-homepage-brightgreen)](https://lampepfl.github.io/gears)
 [![API Documentation Link](https://img.shields.io/badge/api-documentation-brightgreen)](https://lampepfl.github.io/gears/api)
 
+## Gears IO experiment
+> this branch contains an experiment for an async IO runtime for gears
+
+run a HTTP/2 echo server:
+```bash
+sbt --client ioReactor/run --server --port 8080
+```
+
+or display the output binary's path to run directly:
+```bash
+sbt --client show ioReactor/nativeLink
+...
+[info] /.../.../.../io-reactor/target/scala-3.3.7/ioreactor
+[success] elapsed time: 5 s
+```
+
+Note: that running under sbt-client will require a double `ctrl+C` invocation to terminate fully.
+
+## Introduction
+
 An Experimental Asynchronous Programming Library for Scala 3. It aims to be:
 - **Simple**: enables direct-style programming (suspending with `.await`, calling Async-functions directly) and comes with few simple concepts.
 - **Structured**: allows an idiomatic way of structuring concurrent programs minimizing computation leaking (*structured concurrency*), while
   providing a toolbox for dealing with external, unstructured events.
 - **Cross-platform**: Works on JVM >= 21, Scala Native and Scala.js with WAsm support.
 
-> [!WARNING]  
+> [!WARNING]
 > On V8 <14.2.75 (Node.js 24 and 25), there is a bug that causes stack overflows in nested async contexts, which are used extensively by Gears. Use Node.js 26+, or stay on Node.js 23, or use Deno / Bun / Firefox as the Wasm runtime target.
 > See #165 for more details.
 
