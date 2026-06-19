@@ -42,7 +42,8 @@ lazy val ioReactor =
             case (3, _) => "ch.epfl.lamp" %%% "gears" % "0.2.0"
           }
         gearsDeps :+ ("org.scalameta" %%% "munit" % "1.3.0" % Test)
-      }
+      },
+      fork := true
     )
 
 lazy val root =

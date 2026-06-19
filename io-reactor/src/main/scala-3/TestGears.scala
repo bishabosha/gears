@@ -119,7 +119,16 @@ object TestGears {
             println(
               s"h2c gears echo server listening on 127.0.0.1:${listener.port}"
             )
-            new CountDownLatch(1).await()
+            Future {
+              var cont = true
+              while cont do
+                scala.io.StdIn.readLine() match
+                  case ":q" =>
+                    Console.err.println("quit requested...")
+                    cont = false
+                  case _ =>
+              end while
+            }.await
           } else if (benchMode) {
             try runBenchmark("127.0.0.1", listener.port, args)
             finally {
