@@ -1,112 +1,172 @@
 package asyncio.unsafe
 
-import asyncio.scalanative.bsd.sys.event
-import asyncio.scalanative.bsd.sys.event.kevent.{*, given}
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.{*, given}
-import scala.scalanative.posix.string
-import scala.scalanative.posix.errno
-import scala.scalanative.posix.unistd
+import java.io.IOException
+import scala.scalanative.annotation.alwaysinline
+import scala.scalanative.bsd.kevent
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.time.timespec
 import scala.scalanative.posix.timeOps.*
-import java.io.IOException
+import scala.scalanative.posix.unistd
+import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.USize
+import scala.scalanative.unsigned.{*, given}
+
 import PosixErr.cError
-import scala.scalanative.annotation.alwaysinline
 
 object KqueueLoop {
 
-  type Event = Ptr[event.kevent]
+  // posixlib owns the native layout. Keep buffers opaque so callers cannot
+  // accidentally advance by one byte instead of one event.
+  opaque type Event = Ptr[Byte]
+  opaque type EventQueue = Ptr[Byte]
 
-  def debugEvent(evt: Ptr[event.kevent]): Unit = {
-    println(s"kevent{ident=${evt.ident}, filter=${evt.filter}, flags=${evt.flags}, fflags=${evt.fflags}, data=${evt.data}, udata=${evt.udata}}")
+  object EventQueue {
+    extension (queue: EventQueue) inline def apply(inline index: Int): Event = eventAt(queue, index)
   }
 
-  @alwaysinline
-  def isError(evt: Ptr[event.kevent]): Boolean = {
-    (evt.flags & event.EV_ERROR) != 0
-  }
-  @alwaysinline
-  def errno(evt: Ptr[event.kevent]): CInt = {
-    evt.data.toInt
-  }
-  @alwaysinline
-  def rwAvailable(evt: Ptr[event.kevent]): CInt = {
-    evt.data.toInt
-  }
-  @alwaysinline
-  def isReadEvent(evt: Ptr[event.kevent]): Boolean = {
-    evt.filter == event.EVFILT_READ
-  }
-  @alwaysinline
-  def isWriteEvent(evt: Ptr[event.kevent]): Boolean = {
-    evt.filter == event.EVFILT_WRITE
-  }
-  def fileIdent(evt: Ptr[event.kevent]): Int = {
-    evt.ident.toInt
+  private val eventSize = kevent.scalanative_kevent_size()
+
+  @alwaysinline def eventAt(events: EventQueue, index: Int): Event =
+    events + eventSize * index.toCSize
+
+  def debugEvent(evt: Event): Unit = {
+    val ident = stackalloc[USize]()
+    val filter = stackalloc[CShort]()
+    val flags = stackalloc[CUnsignedShort]()
+    val fflags = stackalloc[CUnsignedInt]()
+    val data = stackalloc[Size]()
+    val udata = stackalloc[CVoidPtr]()
+    kevent.scalanative_kevent_get(evt, 0, ident, filter, flags, fflags, data, udata)
+    println(
+      s"kevent{ident=${!ident}, filter=${!filter}, flags=${!flags}, fflags=${!fflags}, data=${!data}, udata=${!udata}}"
+    )
   }
 
   @alwaysinline
-  def pollQueue(nevents: Int)(op: Ptr[event.kevent] => Unit): Unit = {
-    val events = stackalloc[event.kevent](nevents)
+  def ident(evt: Event): USize = {
+    val value = stackalloc[USize]()
+    kevent.scalanative_kevent_get(evt, 0, value, null, null, null, null, null)
+    !value
+  }
+
+  @alwaysinline
+  def filter(evt: Event): CShort = {
+    val value = stackalloc[CShort]()
+    kevent.scalanative_kevent_get(evt, 0, null, value, null, null, null, null)
+    !value
+  }
+
+  @alwaysinline
+  def flags(evt: Event): CUnsignedShort = {
+    val value = stackalloc[CUnsignedShort]()
+    kevent.scalanative_kevent_get(evt, 0, null, null, value, null, null, null)
+    !value
+  }
+
+  @alwaysinline
+  def data(evt: Event): Size = {
+    val value = stackalloc[Size]()
+    kevent.scalanative_kevent_get(evt, 0, null, null, null, null, value, null)
+    !value
+  }
+
+  @alwaysinline
+  def isError(evt: Event): Boolean = (flags(evt).toInt & kevent.EV_ERROR) != 0
+
+  @alwaysinline
+  def isEOF(evt: Event): Boolean = (flags(evt).toInt & kevent.EV_EOF) != 0
+
+  @alwaysinline
+  def errno(evt: Event): CInt = data(evt).toInt
+
+  @alwaysinline
+  def rwAvailable(evt: Event): CInt = data(evt).toInt
+
+  @alwaysinline
+  def isReadEvent(evt: Event): Boolean = filter(evt) == kevent.EVFILT_READ
+
+  @alwaysinline
+  def isWriteEvent(evt: Event): Boolean = filter(evt) == kevent.EVFILT_WRITE
+
+  def fileIdent(evt: Event): Int = ident(evt).toInt
+
+  @alwaysinline
+  def pollQueue(nevents: Int)(op: EventQueue => Unit): Unit = {
+    require(nevents > 0, "Event buffer capacity must be positive")
+    // Keep the multiplication outside stackalloc: Scala Native 0.5.11 can
+    // discard it when lowering an inline allocation-size expression.
+    val byteCount = eventSize * nevents.toCSize
+    val events = stackalloc[Byte](byteCount)
     op(events)
   }
 
-  def addTimerOneShot(evt: Ptr[event.kevent], id: USize, unit: CUnsignedInt, length: Size): Unit = {
-    event.EV_SET(
-      evt,
-      id, // timer ID
-      event.EVFILT_TIMER, // filter type
-      (event.EV_ADD | event.EV_ONESHOT).toUShort, // flags
-      unit, // fflags
-      length, // timeout in seconds
-      null // data
-    )
+  /** Register a one-shot timer using kqueue's default millisecond units. */
+  def addTimerOneShot(evt: Event, id: USize, milliseconds: Size): Unit = {
+    if (LinktimeInfo.isMac || LinktimeInfo.isFreeBSD) {
+      // posixlib 0.5.11 does not expose EVFILT_TIMER. Its value is -7 on these platforms.
+      val timerFilter: CShort = -7
+      kevent.scalanative_kevent_set(
+        evt,
+        0, // index within the event buffer
+        id, // timer ID
+        timerFilter, // filter type
+        (kevent.EV_ADD | kevent.EV_ONESHOT).toUShort, // flags
+        0.toUInt, // default units: milliseconds
+        milliseconds, // timeout
+        null // user data
+      )
+    } else {
+      throw new UnsupportedOperationException("Kqueue timers require macOS or FreeBSD")
+    }
   }
 
-  def addFile(evt: Ptr[event.kevent], fd: Int, read: Boolean, clear: Boolean): Unit = {
-    var flags = event.EV_ADD | event.EV_ENABLE
+  def addFile(evt: Event, fd: Int, read: Boolean, clear: Boolean): Unit = {
+    var flags = kevent.EV_ADD | kevent.EV_ENABLE
     if (clear) {
-      flags |= event.EV_CLEAR
+      flags |= kevent.EV_CLEAR
     }
-    event.EV_SET(
+    kevent.scalanative_kevent_set(
       evt,
+      0, // index within the event buffer
       fd.toUSize, // file descriptor
-      if (read) event.EVFILT_READ else event.EVFILT_WRITE, // filter type
+      (if (read) kevent.EVFILT_READ else kevent.EVFILT_WRITE).toShort, // filter type
       flags.toUShort, // flags
       0.toUInt, // fflags
-      0, // timeout in seconds
-      null // data
+      0, // filter-specific data
+      null // user data
     )
   }
 
-  def deleteFile(evt: Ptr[event.kevent], fd: Int, read: Boolean): Unit = {
-    event.EV_SET(
+  def deleteFile(evt: Event, fd: Int, read: Boolean): Unit = {
+    kevent.scalanative_kevent_set(
       evt,
+      0, // index within the event buffer
       fd.toUSize, // file descriptor
-      if (read) event.EVFILT_READ else event.EVFILT_WRITE, // filter type
-      event.EV_DELETE.toUShort, // flags
+      (if (read) kevent.EVFILT_READ else kevent.EVFILT_WRITE).toShort, // filter type
+      kevent.EV_DELETE.toUShort, // flags
       0.toUInt, // fflags
-      0, // timeout in seconds
-      null // data
+      0, // filter-specific data
+      null // user data
     )
   }
 
+  @alwaysinline
   def createAndRegisterEvents(
       kq: Int,
       nEvents: Int
-  )(f: Ptr[event.kevent] => Unit): Unit = {
-    val events = stackalloc[event.kevent](nEvents)
-    f(events)
-    registerEvents(kq, events, nEvents)
+  )(f: EventQueue => Unit): Unit = {
+    pollQueue(nEvents) { events =>
+      f(events)
+      registerEvents(kq, events, nEvents)
+    }
   }
 
   def registerEvents(
       kq: Int,
-      events: Ptr[event.kevent],
+      events: EventQueue,
       nEvents: Int
   ): Unit = {
-    if (event.kevent(kq, events, nEvents, null, 0, null) < 0) {
+    if (kevent.kevent(kq, events, nEvents, null, 0, null) < 0) {
       throw new IOException(
         s"Failed to register events: ${cError()}"
       )
@@ -115,16 +175,16 @@ object KqueueLoop {
 
   def pollEventsNow(
       kq: Int,
-      events: Ptr[event.kevent],
+      events: EventQueue,
       nEvents: Int
   ): Int = pollEventsTimeout(kq, events, nEvents, 0, 0)
 
   def pollEventsForever(
       kq: Int,
-      events: Ptr[event.kevent],
+      events: EventQueue,
       nEvents: Int
   ): Int = {
-    val polledEvents = event.kevent(kq, null, 0, events, nEvents, null)
+    val polledEvents = kevent.kevent(kq, null, 0, events, nEvents, null)
     if (polledEvents < 0) {
       throw new IOException(
         s"Failed to poll events: ${cError()}"
@@ -135,7 +195,7 @@ object KqueueLoop {
 
   def pollEventsTimeout(
       kq: Int,
-      events: Ptr[event.kevent],
+      events: EventQueue,
       nEvents: Int,
       seconds: Int,
       nanoseconds: Int
@@ -143,7 +203,7 @@ object KqueueLoop {
     val timeout = stackalloc[timespec]()
     timeout.tv_sec = seconds
     timeout.tv_nsec = nanoseconds
-    val polledEvents = event.kevent(kq, null, 0, events, nEvents, timeout)
+    val polledEvents = kevent.kevent(kq, null, 0, events, nEvents, timeout)
     if (polledEvents < 0) {
       throw new IOException(
         s"Failed to poll events: ${cError()}"
@@ -153,9 +213,9 @@ object KqueueLoop {
   }
 
   /** Opens a kqueue.
-   */
+    */
   def open(): Int = {
-    val kq = event.kqueue()
+    val kq = kevent.kqueue()
     if (kq < 0) {
       throw new IOException(
         s"Failed to create kqueue: ${cError()}"

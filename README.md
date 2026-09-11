@@ -80,8 +80,16 @@ See [LICENSE](./LICENSE) for more details.
 
 ## Scala Native async I/O demos
 
-The `nativeAsyncioCore`, `nativeAsyncioLoop`, and `kqueueDemo` sbt projects currently are ported
-verbatim from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0)
+The `nativeAsyncioLoop` and `kqueueDemo` sbt projects were ported
+from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0),
+and extended with Unix datagrams and IPv4/IPv6 sockets. These low-level experiments
+require kqueue and are tested on macOS.
+
+Kqueue operations use `scala.scalanative.bsd.kevent` from Scala Native's `posixlib`,
+including its native event size and get/set helpers. The original custom Scala/C
+bindings and `nativeAsyncioCore` project are no longer needed. Scala Native 0.5.11
+does not export `EVFILT_TIMER`, so the timer helper keeps that constant locally
+and uses kqueue's default millisecond units.
 
 ```bash
 sbt 'kqueueDemo/run timer'
@@ -97,13 +105,54 @@ sbt 'kqueueDemo/run file-read --fifo /tmp/gears-demo.fifo'
 sbt 'kqueueDemo/run file-write --fifo /tmp/gears-demo.fifo -m hello'
 ```
 
-For Unix domain sockets, start the server first, then the client in another terminal:
+For Unix domain stream sockets, start the server first, then the client in another terminal:
 
 ```bash
 sbt 'kqueueDemo/run sock-serve --sock /tmp/gears-demo.sock'
 sbt 'kqueueDemo/run sock --sock /tmp/gears-demo.sock'
 ```
 
-These are the original low-level experiments, including their existing behavior
-and limitations. Stop the long-running demos with Ctrl+C. Use
-`sbt 'show kqueueDemo/nativeLink'` to locate the executable for running directly.
+Unix domain datagrams preserve message boundaries and echo each packet to its
+sender. The client binds its own path so the server can reply:
+
+```bash
+sbt 'kqueueDemo/run datagram-serve --sock /tmp/gears-datagram.sock'
+sbt 'kqueueDemo/run datagram --sock /tmp/gears-datagram.sock --local-sock /tmp/gears-client.sock -m hello'
+```
+
+Use distinct client and server paths, and a different client path for each
+concurrent client. Bound Unix paths are removed when their resource scope exits;
+force-stopping a process can leave a path behind, which the next bind removes.
+
+IPv4 (`AF_INET`) and IPv6 (`AF_INET6`) demos default to the numeric localhost
+addresses `127.0.0.1` and `::1`. Start each server before its corresponding client:
+
+| Transport | Address family | Server | Client |
+| --- | --- | --- | --- |
+| TCP stream | IPv4 | `sbt 'kqueueDemo/run sock4-serve --port 9999'` | `sbt 'kqueueDemo/run sock4 --port 9999'` |
+| TCP stream | IPv6 | `sbt 'kqueueDemo/run sock6-serve --port 9999'` | `sbt 'kqueueDemo/run sock6 --port 9999'` |
+| UDP datagram | IPv4 | `sbt 'kqueueDemo/run datagram4-serve --port 9999'` | `sbt 'kqueueDemo/run datagram4 --port 9999 -m hello'` |
+| UDP datagram | IPv6 | `sbt 'kqueueDemo/run datagram6-serve --port 9999'` | `sbt 'kqueueDemo/run datagram6 --port 9999 -m hello'` |
+
+`--host` overrides the numeric address; DNS names and IPv6 scope suffixes are not
+resolved. Ports must be in `0..65535` (binding port `0` asks the OS to choose one).
+UDP clients receive an ephemeral local port automatically. Datagram clients send
+one packet, wait up to five seconds for socket readiness or a reply, and exit.
+Empty datagrams are valid; there is no stream length header. The receive buffer is
+64 KiB and truncation is reported as an error; the OS may impose smaller send limits.
+Stream demos use a four-byte big-endian request length (up to 1 MiB) and close the
+connection after replying.
+
+Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
+to build and locate the executable for running directly.
+
+The `kqueueDemoTests` project holds JVM munit suites that link the demo executable
+and drive it as a subprocess with Java sockets and FIFOs. They check timer expiry,
+FIFO read/write readiness, and all six socket combinations, including fragmented
+stream requests, queued datagrams, empty packets, multiple senders, and invalid
+addresses. Java has no Unix domain datagram sockets, so that case uses native
+clients only. The suites skip themselves on other operating systems.
+
+```bash
+sbt kqueueDemoTests/test
+```
