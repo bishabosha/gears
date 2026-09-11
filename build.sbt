@@ -63,3 +63,27 @@ lazy val root =
         }
       )
     )
+
+// ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
+lazy val nativeAsyncioCore =
+  (project in file("asyncio-native/core"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(publish / skip := true)
+
+// ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
+lazy val nativeAsyncioLoop =
+  (project in file("asyncio-native/loop"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(publish / skip := true)
+    .dependsOn(nativeAsyncioCore)
+
+// ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
+lazy val kqueueDemo =
+  (project in file("kqueue-demo"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      Compile / mainClass := Some("example.Main"),
+      libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8"
+    )
+    .dependsOn(nativeAsyncioLoop)
