@@ -65,17 +65,10 @@ lazy val root =
     )
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
-lazy val nativeAsyncioCore =
-  (project in file("asyncio-native/core"))
-    .enablePlugins(ScalaNativePlugin)
-    .settings(publish / skip := true)
-
-// ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val nativeAsyncioLoop =
   (project in file("asyncio-native/loop"))
     .enablePlugins(ScalaNativePlugin)
     .settings(publish / skip := true)
-    .dependsOn(nativeAsyncioCore)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =
@@ -87,3 +80,17 @@ lazy val kqueueDemo =
       libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8"
     )
     .dependsOn(nativeAsyncioLoop)
+
+// JVM tests that drive the linked kqueueDemo executable as a subprocess (macOS only)
+lazy val kqueueDemoTests =
+  (project in file("kqueue-demo/tests"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework,
+      Test / fork := true,
+      Test / javaOptions += {
+        val binary = fileConverter.value.toPath((kqueueDemo / Compile / nativeLink).value)
+        s"-Dkqueue.demo.binary=${binary.toAbsolutePath}"
+      }
+    )
