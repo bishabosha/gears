@@ -77,3 +77,33 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 See [LICENSE](./LICENSE) for more details.
+
+## Scala Native async I/O demos
+
+The `nativeAsyncioCore`, `nativeAsyncioLoop`, and `kqueueDemo` sbt projects currently are ported
+verbatim from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0)
+
+```bash
+sbt 'kqueueDemo/run timer'
+sbt 'kqueueDemo/run target-info'
+sbt 'kqueueDemo/run echo --msg hello'
+```
+
+For the FIFO demos, create a named pipe with `mkfifo /tmp/gears-demo.fifo`, then
+run the reader and writer in separate terminals:
+
+```bash
+sbt 'kqueueDemo/run file-read --fifo /tmp/gears-demo.fifo'
+sbt 'kqueueDemo/run file-write --fifo /tmp/gears-demo.fifo -m hello'
+```
+
+For Unix domain sockets, start the server first, then the client in another terminal:
+
+```bash
+sbt 'kqueueDemo/run sock-serve --sock /tmp/gears-demo.sock'
+sbt 'kqueueDemo/run sock --sock /tmp/gears-demo.sock'
+```
+
+These are the original low-level experiments, including their existing behavior
+and limitations. Stop the long-running demos with Ctrl+C. Use
+`sbt 'show kqueueDemo/nativeLink'` to locate the executable for running directly.
