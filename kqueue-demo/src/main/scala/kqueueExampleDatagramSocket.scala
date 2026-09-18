@@ -1,14 +1,43 @@
 package example
 
 import java.io.IOException
+import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.unsafe.KqueueLoop
+import asyncio.reactor.Reactor
+import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleDatagramSocket {
+
+  /** Sends one packet to the connected peer and collects the echo. */
+  private final class Ping(fd: Int, message: String)(using Zone) {
+    private val request = NativeBuffer.of(message.getBytes(StandardCharsets.UTF_8))
+    private val response = NativeBuffer.allocate(65536)
+    private val server = new PeerAddress
+    private var sent = false
+
+    /** Sends the request if it has not gone yet; returns true once it has been sent. */
+    def send(): Boolean = {
+      if !sent && sendDatagram(fd, request) then {
+        println(s"Sent datagram of ${request.limit()} bytes.")
+        sent = true
+      }
+      sent
+    }
+
+    def awaitingReply: Boolean = sent
+
+    /** Receives the echo; returns true once it has arrived. */
+    def receive(): Boolean = {
+      val read = server.receive(fd, response)
+      if read >= 0 then println(s"Received datagram of $read bytes: `${text(response)}`")
+      read >= 0
+    }
+  }
+
   def run(sock: String, localSock: String, message: String): Unit = {
     require(sock != localSock, "The client and server socket paths must be different")
     // Unix datagram clients need their own bound address for the server's reply.
@@ -28,27 +57,18 @@ object KQueueExampleDatagramSocket {
   private def runConnected(fd: Int, address: KQueueExampleAddress, message: String): Unit = {
     address.connect(fd)
     println(s"Connected datagram socket $fd to $address")
-    KqueueLoop.scoped { kq =>
-      registerWrite(kq, fd)
+    Reactor.scoped { r =>
+      r.registerWrite(fd)
       Zone.acquire { implicit z =>
-        val request = Frame.of(message)
-        val response = new Frame(65536)
-        val server = new PeerAddress
-        var sent = false
+        val ping = new Ping(fd, message)
         // UDP has no delivery guarantee; make a missing reply visible in the demo.
         val timedOut = () => throw new IOException("Timed out waiting for datagram socket readiness or a reply")
-        pollLoop(kq, capacity = 1, timeoutSeconds = 5)(timedOut) { event =>
-          if KqueueLoop.isWriteEvent(event) && !sent then {
-            if sendDatagram(fd, request) then {
-              println(s"Sent datagram of ${request.length} bytes.")
-              sent = true
-              switchToRead(kq, fd)
-            }
+        r.run(capacity = 1, timeoutSeconds = 5)(timedOut) { event =>
+          if r.isWriteEvent(event) && !ping.awaitingReply then {
+            if ping.send() then r.switchToRead(fd)
             true
-          } else if KqueueLoop.isReadEvent(event) && sent then {
-            val read = server.receive(fd, response)
-            if read >= 0 then println(s"Received datagram of $read bytes: `${response.text}`")
-            read < 0 // Stop once the reply has arrived
+          } else if r.isReadEvent(event) && ping.awaitingReply then {
+            !ping.receive() // Stop once the reply has arrived
           } else true
         }
       }
