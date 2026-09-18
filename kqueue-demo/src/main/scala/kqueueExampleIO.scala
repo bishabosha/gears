@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-import scala.scalanative.posix.errno
 import scala.scalanative.posix.fcntl
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.unistd
@@ -52,58 +51,70 @@ object KQueueExampleIO {
 
     /** Decodes the length header at the start of `header`; negative values mean an invalid frame. */
     def messageLength(header: ByteBuffer): Int = header.getInt(0)
-  }
 
-  // Non-blocking I/O
+    /** Appends one framed message at the buffer's position; returns false, leaving it untouched, if it does not fit.
+      */
+    def append(message: String, buf: ByteBuffer): Boolean = {
+      val bytes = message.getBytes(StandardCharsets.UTF_8)
+      if HeaderLength + bytes.length > buf.remaining() then false
+      else {
+        buf.putInt(bytes.length)
+        buf.put(bytes)
+        true
+      }
+    }
 
-  private def wouldBlock: Boolean =
-    val err = errno.errno
-    err == errno.EAGAIN || err == errno.EWOULDBLOCK || err == errno.EINTR
-
-  inline val EOF = -1
-
-  /** Accepts a new connection on `serverFd` in non-blocking mode. Returns the client file descriptor, or -1 if no
-    * client was accepted.
-    */
-  def nioAccept(serverFd: Int): Int = {
-    val clientFd = socket.accept(serverFd, null, null)
-    if clientFd < 0 then {
-      val transient = wouldBlock
-      if !transient then throw new IOException(s"Failed to accept connection: ${cError()}")
-      -1 // no client was accepted
-    } else {
-      PosixSockets.setNonBlocking(clientFd)
-      clientFd
+    /** Appends one framed message to a byte stream. */
+    def appendTo(out: ByteArrayOutputStream, message: String): Unit = {
+      val bytes = message.getBytes(StandardCharsets.UTF_8)
+      out.write(bytes.length >>> 24)
+      out.write(bytes.length >>> 16)
+      out.write(bytes.length >>> 8)
+      out.write(bytes.length)
+      out.write(bytes)
     }
   }
 
-  /** Fills `buf` from `fd` between position and limit. Returns the number of bytes read, 0 if the read would block, or
-    * -1 at EOF.
-    */
-  def nioReadBytes(fd: Int, buf: ByteBuffer): Int = {
-    val read = unistd.read(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
-    if read < 0 then
-      if !wouldBlock then throw new IOException(s"Failed to read from descriptor $fd: ${cError()}")
-      0
-    else if read == 0 then EOF
-    else
-      NativeBuffer.advance(buf, read.toInt)
-      read.toInt
-  }
+  /** Reassembles framed messages from a byte stream that arrives in arbitrary chunks. */
+  final class FrameParser {
+    private var pending = new Array[Byte](0)
 
-  /** Drains `buf` into `fd` between position and limit. Returns the number of bytes written, or -1 if the write would
-    * block.
-    */
-  def nioWriteBytes(fd: Int, buf: ByteBuffer): Int = {
-    val written = unistd.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
-    if written < 0 then {
-      if !wouldBlock then throw new IOException(s"Failed to write to descriptor $fd: ${cError()}")
-      -1
-    } else {
-      NativeBuffer.advance(buf, written.toInt)
-      written.toInt
+    /** Takes the bytes between position and limit of `buf`. */
+    def feed(buf: ByteBuffer): Unit = {
+      val chunk = new Array[Byte](buf.remaining())
+      buf.get(chunk)
+      pending = pending ++ chunk
+    }
+
+    /** The next complete message, or null if the pending bytes do not hold one yet. */
+    def next(): String | Null = {
+      if pending.length < StreamProtocol.HeaderLength then return null
+      val length = ByteBuffer.wrap(pending).getInt(0)
+      require(length >= 0 && length <= StreamProtocol.MaxMessageLength, s"Invalid frame length $length")
+      val end = StreamProtocol.HeaderLength + length
+      if pending.length < end then null
+      else {
+        val message = new String(pending, StreamProtocol.HeaderLength, length, StandardCharsets.UTF_8)
+        pending = pending.drop(end)
+        message
+      }
     }
   }
+
+  /** A connecting stream socket; the connection is verified before its first use. */
+  final class ClientSock(val fd: Int) {
+    private var connected = false
+
+    def ensureConnected(): Unit = {
+      if !connected then {
+        PosixSockets.checkConnect(fd)
+        connected = true
+      }
+    }
+  }
+
+  // Non-blocking I/O, now provided by the loop project under the names the demos used.
+  export asyncio.unsafe.NonBlocking.{EOF, accept as nioAccept, read as nioReadBytes, write as nioWriteBytes}
 
   /** Opens `path` non-blocking for reading or writing and closes it after `use`. */
   def withFile(path: String, write: Boolean)(use: FileOperation): Unit = {

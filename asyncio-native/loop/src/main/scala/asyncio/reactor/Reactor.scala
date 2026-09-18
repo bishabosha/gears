@@ -6,36 +6,62 @@ import scala.scalanative.unsigned.*
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
 
-/** A kqueue handle with the registration calls and polling loop the demos share. Each registration change is its own
-  * kevent call, and `run` dispatches every polled event to one handler, exactly as the demos did inline.
+enum Interest {
+  case Read, Write
+}
+
+/** What to do with a descriptor once it is ready. `perform` runs a non-blocking operation, such as `NonBlocking.read`,
+  * and its return value is the command's result.
+  */
+trait Command {
+  def fd: Int
+  def interest: Interest
+  def perform(): Int
+}
+
+/** What to do with a command's result. The command comes back with it, so one completion can own many commands. */
+@FunctionalInterface
+trait Completion[-C <: Command] {
+  def onComplete(r: Reactor, command: C, result: Int): Unit
+}
+
+/** A kqueue handle with the polling loop the demos share. Objects submit a `Command` with a `Completion`; the reactor
+  * waits for readiness with a one-shot filter, performs the command, and hands the completion the command and its
+  * result. Each submission is its own kevent call.
   */
 final class Reactor private (val kq: Int) {
 
-  def registerRead(fd: Int, clear: Boolean = false): Unit =
-    KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
-      KqueueLoop.addFile(events(0), fd, read = true, clear = clear)
-    }
+  private final class Pending[C <: Command](val command: C, val completion: Completion[C]) {
+    def complete(r: Reactor, result: Int): Unit = completion.onComplete(r, command, result)
+  }
 
-  def registerWrite(fd: Int, clear: Boolean = false): Unit =
-    KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
-      KqueueLoop.addFile(events(0), fd, read = false, clear = clear)
-    }
+  private final class Slot {
+    var read: Pending[?] | Null = null
+    var write: Pending[?] | Null = null
+  }
 
-  /** Stops watching for writability and starts watching for readability. */
-  def switchToRead(fd: Int): Unit =
-    KqueueLoop.createAndRegisterEvents(kq, 2) { events =>
-      KqueueLoop.deleteFile(events(0), fd, read = false)
-      KqueueLoop.addFile(events(1), fd, read = true, clear = false)
-    }
+  private var slots = new Array[Slot | Null](64)
+  private var timers = Map.empty[Int, Event => Unit]
+  private var running = false
 
-  /** Stops watching for readability and starts watching for writability. */
-  def switchToWrite(fd: Int): Unit =
-    KqueueLoop.createAndRegisterEvents(kq, 2) { events =>
-      KqueueLoop.deleteFile(events(0), fd, read = true)
-      KqueueLoop.addFile(events(1), fd, read = false, clear = false)
+  /** Performs `command` once its descriptor is ready for its interest, then hands `completion` the result. One pending
+    * command per descriptor and interest at a time.
+    */
+  def submit[C <: Command](command: C, completion: Completion[C]): Unit = {
+    val slot = slotFor(command.fd)
+    val pending = new Pending(command, completion)
+    command.interest match {
+      case Interest.Read =>
+        require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
+        slot.read = pending
+      case Interest.Write =>
+        require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+        slot.write = pending
     }
+    arm(command.fd, read = command.interest == Interest.Read)
+  }
 
-  def registerTimerOneShot(id: Int, milliseconds: Int): Unit =
+  private def registerTimerOneShot(id: Int, milliseconds: Int): Unit =
     KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
       KqueueLoop.addTimerOneShot(events(0), id.toUSize, milliseconds)
     }
@@ -55,26 +81,81 @@ final class Reactor private (val kq: Int) {
   def describe(event: Event): String =
     s"Event triggered: ID = ${KqueueLoop.ident(event)}, Filter = ${KqueueLoop.filter(event)}, Data = ${KqueueLoop.data(event)}"
 
-  /** Polls until `handle` returns false, passing up to `capacity` events per poll. Error events throw. */
-  def run(capacity: Int)(handle: Event => Boolean): Unit =
-    run(capacity, timeoutSeconds = -1)(() => true)(handle)
+  /** Runs `onFire` with the event when a one-shot timer expires. */
+  def submitTimer(id: Int, milliseconds: Int)(onFire: Event => Unit): Unit = {
+    timers = timers.updated(id, onFire)
+    registerTimerOneShot(id, milliseconds)
+  }
+
+  /** Forgets any pending commands on `fd`. Closing the descriptor removes its kqueue filters. */
+  def forget(fd: Int): Unit =
+    if fd < slots.length then slots(fd) = null
+
+  def stop(): Unit = running = false
+
+  private def slotFor(fd: Int): Slot = {
+    require(fd >= 0, "Descriptor must be non-negative")
+    if fd >= slots.length then slots = java.util.Arrays.copyOf(slots, math.max(slots.length * 2, fd + 1))
+    var slot = slots(fd)
+    if slot == null then {
+      slot = new Slot
+      slots(fd) = slot
+    }
+    slot.nn
+  }
+
+  /** One kevent call per command: the filter is one-shot, so nothing fires without a command waiting for it. */
+  private def arm(fd: Int, read: Boolean): Unit =
+    KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
+      KqueueLoop.addFile(events(0), fd, read = read, clear = false, oneShot = true)
+    }
+
+  /** Finds the command an event is for, performs it, and hands its completion the result. The slot is cleared first so
+    * the completion may submit the next command.
+    */
+  private def dispatch(event: Event): Unit = {
+    val ident = fileIdent(event)
+    if KqueueLoop.isTimerEvent(event) then
+      timers.get(ident).foreach { onFire =>
+        timers = timers.removed(ident)
+        onFire(event)
+      }
+    else {
+      val slot = if ident < slots.length then slots(ident) else null
+      if slot != null then {
+        val write = isWriteEvent(event)
+        val pending = if write then slot.write else slot.read
+        if pending != null then {
+          if write then slot.write = null else slot.read = null
+          val p = pending.nn
+          p.complete(this, p.command.perform())
+        }
+      }
+    }
+  }
+
+  /** Dispatches events to their commands until `stop` is called, passing up to `capacity` events per poll. Error events
+    * throw.
+    */
+  def run(capacity: Int = 255): Unit =
+    run(capacity, timeoutSeconds = -1)(() => true)
 
   /** Like the untimed `run`, but `onTimeout` runs whenever `timeoutSeconds` pass without an event and decides whether
     * polling continues.
     */
-  def run(capacity: Int, timeoutSeconds: Int)(onTimeout: () => Boolean)(handle: Event => Boolean): Unit =
+  def run(capacity: Int, timeoutSeconds: Int)(onTimeout: () => Boolean): Unit =
     KqueueLoop.pollQueue(capacity) { events =>
-      var doPoll = true
-      while doPoll do {
+      running = true
+      while running do {
         val polled =
           if timeoutSeconds < 0 then KqueueLoop.pollEventsForever(kq, events, capacity)
           else KqueueLoop.pollEventsTimeout(kq, events, capacity, timeoutSeconds, 0)
-        if polled == 0 then doPoll = onTimeout()
+        if polled == 0 then running = onTimeout()
         var i = 0
-        while i < polled && doPoll do {
+        while i < polled && running do {
           val event = events(i)
           if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
-          doPoll = handle(event)
+          dispatch(event)
           i += 1
         }
       }

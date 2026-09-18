@@ -40,6 +40,30 @@ object Main {
     KQueueExampleSocket.run(KQueueExampleAddress.IPv6(host, port))
   }
   @main
+  def kvServe(@arg sock: String): Unit = {
+    KQueueExampleKeyValue.serve(KQueueExampleAddress.Unix(sock))
+  }
+  @main
+  def kv(@arg sock: String, @arg count: Int = 1000): Unit = {
+    KQueueExampleKeyValue.run(KQueueExampleAddress.Unix(sock), count)
+  }
+  @main(name = "kv4-serve")
+  def kv4Serve(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
+    KQueueExampleKeyValue.serve(KQueueExampleAddress.IPv4(host, port))
+  }
+  @main(name = "kv4")
+  def kv4(@arg host: String = "127.0.0.1", @arg port: Int = 9999, @arg count: Int = 1000): Unit = {
+    KQueueExampleKeyValue.run(KQueueExampleAddress.IPv4(host, port), count)
+  }
+  @main(name = "kv6-serve")
+  def kv6Serve(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
+    KQueueExampleKeyValue.serve(KQueueExampleAddress.IPv6(host, port))
+  }
+  @main(name = "kv6")
+  def kv6(@arg host: String = "::1", @arg port: Int = 9999, @arg count: Int = 1000): Unit = {
+    KQueueExampleKeyValue.run(KQueueExampleAddress.IPv6(host, port), count)
+  }
+  @main
   def datagramServe(@arg sock: String): Unit = {
     KQueueExampleDatagramServerSocket.run(KQueueExampleAddress.Unix(sock))
   }

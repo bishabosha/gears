@@ -101,16 +101,20 @@ object KqueueLoop {
     op(events)
   }
 
+  /** posixlib does not expose EVFILT_TIMER. Its value is -7 on macOS and FreeBSD. */
+  val EVFILT_TIMER: CShort = -7
+
+  @alwaysinline
+  def isTimerEvent(evt: Event): Boolean = filter(evt) == EVFILT_TIMER
+
   /** Register a one-shot timer using kqueue's default millisecond units. */
   def addTimerOneShot(evt: Event, id: USize, milliseconds: Size): Unit = {
     if (LinktimeInfo.isMac || LinktimeInfo.isFreeBSD) {
-      // posixlib 0.5.11 does not expose EVFILT_TIMER. Its value is -7 on these platforms.
-      val timerFilter: CShort = -7
       kevent.scalanative_kevent_set(
         evt,
         0, // index within the event buffer
         id, // timer ID
-        timerFilter, // filter type
+        EVFILT_TIMER, // filter type
         (kevent.EV_ADD | kevent.EV_ONESHOT).toUShort, // flags
         0.toUInt, // default units: milliseconds
         milliseconds, // timeout
@@ -121,10 +125,13 @@ object KqueueLoop {
     }
   }
 
-  def addFile(evt: Event, fd: Int, read: Boolean, clear: Boolean): Unit = {
+  def addFile(evt: Event, fd: Int, read: Boolean, clear: Boolean, oneShot: Boolean = false): Unit = {
     var flags = kevent.EV_ADD | kevent.EV_ENABLE
     if (clear) {
       flags |= kevent.EV_CLEAR
+    }
+    if (oneShot) {
+      flags |= kevent.EV_ONESHOT
     }
     kevent.scalanative_kevent_set(
       evt,

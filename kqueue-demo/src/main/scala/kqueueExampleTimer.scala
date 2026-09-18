@@ -7,7 +7,10 @@ object KQueueExampleTimer {
   def run(): Unit = {
     Reactor.scoped { r =>
       println("Creating and registering timer event...")
-      r.registerTimerOneShot(id = 1, milliseconds = 5000)
+      r.submitTimer(id = 1, milliseconds = 5000) { event =>
+        println(r.describe(event))
+        r.stop() // Exit after handling the event
+      }
       println("Event registered successfully. Waiting for it to trigger...")
       println("calling kevent to wait for events...")
       var seconds = 0
@@ -17,10 +20,7 @@ object KQueueExampleTimer {
         println("No events triggered within the timeout period.")
         true
       }
-      r.run(capacity = 1, timeoutSeconds = 1)(tick) { event =>
-        println(r.describe(event))
-        false // Exit after handling the event
-      }
+      r.run(capacity = 1, timeoutSeconds = 1)(tick)
     }
   }
 }
