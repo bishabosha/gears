@@ -4,11 +4,11 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.*
 
 import asyncio.unsafe.Bracket
+import asyncio.unsafe.Bracket.FileOperation
 import asyncio.unsafe.PosixFileOps
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
-import asyncio.unsafe.Bracket.FileOperation
 
 enum KQueueExampleAddress {
   case Unix(sock: String)
@@ -34,28 +34,29 @@ enum KQueueExampleAddress {
   }
 
   def withSocket(transport: Transport)(use: FileOperation): Unit = {
-    open(transport)(use(_))
+    open(transport, unlinkOnClose = false)(use(_))
   }
 
+  /** Binds the address; a bound Unix path is removed again when the socket closes. */
   def withBoundSocket(transport: Transport)(use: FileOperation): Unit = {
-    open(transport) { fd =>
+    open(transport, unlinkOnClose = true) { fd =>
       bind(fd)
       println(s"Bound socket $fd to $this")
       use(fd)
     }
   }
 
-  private inline def open(transport: Transport)(inline use: Int => Unit): Unit = {
-    Bracket.fileResource(PosixSockets.open(flavor, transport))(close)(fd =>
+  private inline def open(transport: Transport, unlinkOnClose: Boolean)(inline use: Int => Unit): Unit = {
+    Bracket.fileResource(PosixSockets.open(flavor, transport))(close(_, unlinkOnClose))(fd =>
       PosixSockets.setNonBlocking(fd)
       use(fd)
     )
   }
 
-  private def close(fd: Int): Unit = {
+  private def close(fd: Int, unlinkOnClose: Boolean): Unit = {
     PosixSockets.close(fd)
     this match
-      case Unix(sock) =>
+      case Unix(sock) if unlinkOnClose =>
         Zone.acquire { implicit z =>
           PosixFileOps.safeUnlink(toCString(sock, StandardCharsets.UTF_8))
         }
