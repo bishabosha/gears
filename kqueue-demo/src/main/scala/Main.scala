@@ -94,6 +94,6 @@ object Main {
     ).productIterator.foreach(println)
   }
   def main(args: Array[String]): Unit = {
-    ParserForMethods(this).runOrExit(args)
+    ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }
 }
