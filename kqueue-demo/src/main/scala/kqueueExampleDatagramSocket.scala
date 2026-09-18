@@ -31,7 +31,7 @@ object KQueueExampleDatagramSocket {
   private def runConnected(fd: Int, address: KQueueExampleAddress, message: String): Unit = {
     address.connect(fd)
     println(s"Connected datagram socket $fd to $address")
-    Bracket.fileResource(KqueueLoop.open())(KqueueLoop.close) { kq =>
+    KqueueLoop.scoped { kq =>
       KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
         KqueueLoop.addFile(events(0), fd, read = false, clear = false)
       }

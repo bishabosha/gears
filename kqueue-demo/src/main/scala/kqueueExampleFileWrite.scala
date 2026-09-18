@@ -19,7 +19,7 @@ import asyncio.unsafe.KqueueLoop
   */
 object KQueueExampleFileWrite {
   def run(fifo: String, msg0: String): Unit = {
-    Bracket.fileResource(KqueueLoop.open())(KqueueLoop.close) { kq =>
+    KqueueLoop.scoped { kq =>
       val fd = Zone.acquire { implicit z =>
         println(s"attempt to open file ${fifo}")
         val path = toCString(fifo)

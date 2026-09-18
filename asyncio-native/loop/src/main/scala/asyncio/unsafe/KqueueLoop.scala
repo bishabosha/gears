@@ -12,6 +12,7 @@ import scala.scalanative.unsigned.USize
 import scala.scalanative.unsigned.{*, given}
 
 import PosixErr.cError
+import asyncio.unsafe.Bracket.FileOperation
 
 object KqueueLoop {
 
@@ -231,4 +232,7 @@ object KqueueLoop {
       )
     }
   }
+
+  def scoped(f: FileOperation): Unit =
+    Bracket.fileResource(open())(close)(f)
 }

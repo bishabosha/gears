@@ -8,7 +8,7 @@ import asyncio.unsafe.KqueueLoop.pollEventsTimeout
 
 object KQueueExampleTimer {
   def run(): Unit = {
-    Bracket.fileResource(KqueueLoop.open())(KqueueLoop.close) { kq =>
+    KqueueLoop.scoped { kq =>
       KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
         println("Creating and registering timer event...")
         KqueueLoop.addTimerOneShot(

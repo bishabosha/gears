@@ -18,7 +18,7 @@ object KQueueExampleServerSocket {
   def run(sock: String): Unit = run(KQueueExampleAddress.Unix(sock))
 
   def run(address: KQueueExampleAddress): Unit = {
-    Bracket.fileResource(KqueueLoop.open())(KqueueLoop.close) { kq =>
+    KqueueLoop.scoped { kq =>
       address.withBoundSocket(Transport.Stream) { serverFd =>
         PosixSockets.listen(serverFd, PosixSockets.maxConnections)
         println("Socket is now listening for connections.")

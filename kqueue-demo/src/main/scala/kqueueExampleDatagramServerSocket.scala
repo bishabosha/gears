@@ -13,7 +13,7 @@ import asyncio.unsafe.Sockets.Transport
 
 object KQueueExampleDatagramServerSocket {
   def run(address: KQueueExampleAddress): Unit = {
-    Bracket.fileResource(KqueueLoop.open())(KqueueLoop.close) { kq =>
+    KqueueLoop.scoped { kq =>
       address.withBoundSocket(Transport.Datagram) { fd =>
         KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
           KqueueLoop.addFile(events(0), fd, read = true, clear = false)
