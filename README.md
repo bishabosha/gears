@@ -143,6 +143,18 @@ Empty datagrams are valid; there is no stream length header. The receive buffer 
 Stream demos use a four-byte big-endian request length (up to 1 MiB) and close the
 connection after replying.
 
+The key-value demos are a pipelined request and response service in the style of
+Redis, over the same length-framed protocol. The server keeps each connection open,
+answers `SET key value`, `GET key`, and `INCR key` in order, and writes replies while
+further commands are still arriving. The client pipelines a batch of `--count`
+increments without waiting, reading the replies as they come back, so each socket has
+a read and a write pending at the same time. `kv4` and `kv6` use IP addresses:
+
+```bash
+sbt 'kqueueDemo/run kv-serve --sock /tmp/gears-kv.sock'
+sbt 'kqueueDemo/run kv --sock /tmp/gears-kv.sock --count 20000'
+```
+
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.
 

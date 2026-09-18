@@ -44,6 +44,9 @@ class SocketDemoSuite extends DemoSuite {
     demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
       withTempDirectory("gears-sockets-")(datagram(family, _))
     }
+    demoTest(s"key-value ${family.name}: pipelined commands from native and Java clients") {
+      withTempDirectory("gears-sockets-")(keyValue(family, _))
+    }
   }
   demoTest("errors: numeric addresses, ports, refused connection, cleanup, path length, UDP timeout") {
     withTempDirectory("gears-sockets-")(errors)
@@ -116,6 +119,39 @@ class SocketDemoSuite extends DemoSuite {
           client.write(ByteBuffer.wrap(frame(utf8(s"concurrent client $i"))))
         for (client <- clients) assertEquals(readAll(client), Reply)
       } finally clients.foreach(_.close())
+      assert(server.isAlive, server.output.takeRight(4096))
+    }
+  }
+
+  private def keyValue(family: Family, directory: Path): Unit = {
+    val Endpoint(address, args) = endpoint(family, datagram = false, directory)
+    withServer(s"kv${family.suffix}-serve" +: args, "listening for connections") { server =>
+      // Sets a counter, pipelines 20000 increments, and reads it back. The batch is far larger than the socket
+      // buffers, so it only completes if replies are read while commands are still being sent.
+      val output = run(s"kv${family.suffix}" +: args ++: Seq("--count", "20000")*)
+      assert(output.contains("Received 20002 replies; last reply: `20000`"), output)
+      // A Java client sends a batch in one write and checks each reply, including the counter left by the native run.
+      val commands = Seq("SET name gears", "GET name", "INCR hits", "INCR hits", "GET missing", "GET counter", "BOGUS")
+      val expected = Seq("OK", "gears", "1", "2", "(nil)", "20000", "ERR unknown command `BOGUS`")
+      Using.resource(SocketChannel.open(address)) { client =>
+        val batch = new java.io.ByteArrayOutputStream()
+        for (command <- commands) {
+          val bytes = utf8(command)
+          batch.write(ByteBuffer.allocate(4).putInt(bytes.length).array())
+          batch.write(bytes)
+        }
+        client.write(ByteBuffer.wrap(batch.toByteArray))
+        val replies = expected.map { reply =>
+          val frame = ByteBuffer.allocate(4 + utf8(reply).length)
+          while (frame.hasRemaining) assert(client.read(frame) != -1, "server closed early")
+          frame.flip()
+          val length = frame.getInt()
+          val bytes = new Array[Byte](length)
+          frame.get(bytes)
+          new String(bytes, StandardCharsets.UTF_8)
+        }
+        assertEquals(replies, expected)
+      }
       assert(server.isAlive, server.output.takeRight(4096))
     }
   }
