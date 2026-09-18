@@ -76,6 +76,10 @@ object Main {
     KQueueExampleDatagramSocket.run(KQueueExampleAddress.IPv6(host, port), message)
   }
   @main
+  def fileHandles(@arg count: Int = 32): Unit = {
+    KQueueExampleFileHandles.run(count)
+  }
+  @main
   def echo(@arg msg: String): Unit = {
     println(msg)
   }
