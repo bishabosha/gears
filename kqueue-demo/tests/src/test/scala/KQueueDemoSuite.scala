@@ -21,6 +21,12 @@ class KQueueDemoSuite extends DemoSuite {
     assert(elapsed >= 4.5.seconds, s"timer fired after ${elapsed.toMillis} ms:\n$output")
   }
 
+  demoTest("resolve localhost off the reactor thread") {
+    val output = run("resolve", "--host", "localhost")
+    assert(output.contains("IPv4 127.0.0.1") || output.contains("IPv6 ::1"), output)
+    assert(output.contains("resolved localhost to"), output)
+  }
+
   demoTest("FIFO read readiness and EOF") {
     withFifo { fifo =>
       withDemo("file-read", "--fifo", fifo.toString) { reader =>

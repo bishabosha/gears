@@ -155,6 +155,17 @@ sbt 'kqueueDemo/run kv-serve --sock /tmp/gears-kv.sock'
 sbt 'kqueueDemo/run kv --sock /tmp/gears-kv.sock --count 20000'
 ```
 
+`whois` pulls a real reply off the internet with the WHOIS protocol on port 43. It
+resolves the host, sends one query line, and prints the raw text until the server
+closes the connection. Name resolution is the `Resolve` command: there is no
+non-blocking `getaddrinfo`, so it runs on a worker thread and signals the reactor
+through a pipe, the way libuv does. `resolve` runs just that step:
+
+```bash
+sbt 'kqueueDemo/run whois --host whois.iana.org --query example.com'
+sbt 'kqueueDemo/run resolve --host localhost'
+```
+
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.
 

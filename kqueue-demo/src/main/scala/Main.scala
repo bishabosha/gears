@@ -104,6 +104,18 @@ object Main {
     KQueueExampleFileHandles.run(count)
   }
   @main
+  def whois(
+      @arg host: String = "whois.iana.org",
+      @arg port: Int = 43,
+      @arg query: String = "example.com"
+  ): Unit = {
+    KQueueExampleWhois.run(host, port, query)
+  }
+  @main
+  def resolve(@arg host: String = "localhost"): Unit = {
+    KQueueExampleWhois.resolve(host)
+  }
+  @main
   def echo(@arg msg: String): Unit = {
     println(msg)
   }
