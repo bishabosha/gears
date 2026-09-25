@@ -64,11 +64,23 @@ lazy val root =
       )
     )
 
+// The platform-independent reactor model: ops, completions, the Reactor trait, and the blocker pool.
+lazy val asyncio =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Pure)
+    .in(file("asyncio"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework
+    )
+
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val nativeAsyncioLoop =
   (project in file("asyncio-native/loop"))
     .enablePlugins(ScalaNativePlugin)
     .settings(publish / skip := true)
+    .dependsOn(asyncio.native)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =
@@ -77,9 +89,11 @@ lazy val kqueueDemo =
     .settings(
       publish / skip := true,
       Compile / mainClass := Some("example.Main"),
-      libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8"
+      libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
+      // The gears mirrors in src/main/scala/gears-example run futures on gears' fork-join pool.
+      nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop)
+    .dependsOn(nativeAsyncioLoop, root.native)
 
 // JVM tests that drive the linked kqueueDemo executable as a subprocess (macOS only)
 lazy val kqueueDemoTests =

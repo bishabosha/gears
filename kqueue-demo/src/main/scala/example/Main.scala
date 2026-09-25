@@ -112,6 +112,10 @@ object Main {
     KQueueExampleWhois.run(host, port, query)
   }
   @main
+  def cancel(): Unit = {
+    KQueueExampleCancel.run()
+  }
+  @main
   def resolve(@arg host: String = "localhost"): Unit = {
     KQueueExampleWhois.resolve(host)
   }
@@ -134,6 +138,8 @@ object Main {
     ).productIterator.foreach(println)
   }
   def main(args: Array[String]): Unit = {
-    ParserForMethods(this).runOrExit(args.toIndexedSeq)
+    // `gears <command> ...` runs the gears mirror of a demo from src/main/scala/gears-example.
+    if args.headOption.contains("gears") then gearsexample.Main.main(args.tail)
+    else ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }
 }

@@ -80,6 +80,16 @@ See [LICENSE](./LICENSE) for more details.
 
 ## Scala Native async I/O demos
 
+The cross-built `asyncio` project (JVM and Native) is interface only: `Op`, `Completion`,
+the `Reactor` trait with `Reactor.Factory`, and the `Ops` factory that each reactor exposes
+as `reactor.ops` for building reads, writes, accepts, connects, timers, custom readiness
+ops, blocking tasks, promises, and name resolution. `nativeAsyncioLoop` implements it in
+`asyncio.kqueue`: `KqueueReactor`, `KqueueOps`, the concrete op classes, and the blocker
+pool. The kqueue demos use those internals directly. The gears demos use only the interface,
+including `reactor.handles` for opening files, sockets, and pipes by `Address`, so they
+work with any reactor's handle type; they receive a `Reactor.Factory` from their `Main`,
+the one place naming kqueue.
+
 The `nativeAsyncioLoop` and `kqueueDemo` sbt projects were ported
 from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0),
 and extended with Unix datagrams and IPv4/IPv6 sockets. These low-level experiments
@@ -165,6 +175,12 @@ through a pipe, the way libuv does. `resolve` runs just that step:
 sbt 'kqueueDemo/run whois --host whois.iana.org --query example.com'
 sbt 'kqueueDemo/run resolve --host localhost'
 ```
+
+Every reactor demo also has a gears mirror in `kqueue-demo/src/main/scala/gears-example`,
+run by putting `gears` before the command, for example `kqueueDemo/run gears kv-serve
+--sock /tmp/gears-kv.sock`. Each completion step becomes a gears future for one
+command's result, awaited in plain sequential code; the reactor still runs on the main
+thread while the program runs in gears. The test suites run against both versions.
 
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.

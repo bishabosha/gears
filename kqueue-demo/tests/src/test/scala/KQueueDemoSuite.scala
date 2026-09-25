@@ -17,7 +17,7 @@ class KQueueDemoSuite extends DemoSuite {
     val started = System.nanoTime()
     val output = run("timer")
     val elapsed = (System.nanoTime() - started).nanos
-    assert(output.contains("Event triggered: ID = 1, Filter = -7, Data = 1"), output)
+    assert(output.contains("timer fired"), output)
     assert(elapsed >= 4.5.seconds, s"timer fired after ${elapsed.toMillis} ms:\n$output")
   }
 
@@ -25,6 +25,26 @@ class KQueueDemoSuite extends DemoSuite {
     val output = run("resolve", "--host", "localhost")
     assert(output.contains("IPv4 127.0.0.1") || output.contains("IPv6 ::1"), output)
     assert(output.contains("resolved localhost to"), output)
+  }
+
+  demoTest("cancel a pending read, blocking task, promise, and timer") {
+    val output = run("cancel")
+    val expected = Seq(
+      "read cancelled: true",
+      "blocking cancelled: true",
+      "promise cancelled: true",
+      "timer cancelled: true",
+      "resubmitting the cancelled promise: refused",
+      "cancelling after close: true",
+      "read after cancel: `hello`",
+      "blocking interrupted: true",
+      "cancel notifications: 4",
+      "close notified the leftover: true",
+      "blocking interrupted by close: true",
+      "cancelled completions run: 0"
+    )
+    for (line <- expected) assert(output.contains(line), output)
+    assert(!output.contains("unexpected"), output)
   }
 
   demoTest("FIFO read readiness and EOF") {

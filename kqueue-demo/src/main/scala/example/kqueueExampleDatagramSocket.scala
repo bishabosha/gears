@@ -4,10 +4,12 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.reactor.Command
-import asyncio.reactor.Completion
-import asyncio.reactor.Interest
-import asyncio.reactor.Reactor
+import asyncio.Completion
+import asyncio.Interest
+import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueOp
+import asyncio.kqueue.KqueueReactor
+import asyncio.kqueue.KqueueTimer
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
@@ -16,42 +18,48 @@ import KQueueExampleIO.*
 object KQueueExampleDatagramSocket {
 
   /** Sends one packet to the connected peer and collects the echo. */
-  private final class Ping(fd: Int, message: String)(using Zone) extends Completion[Command] {
+  private final class Ping(r: KqueueReactor, fd: Int, message: String)(using Zone) extends Completion[KqueueOp] {
     private val request = NativeBuffer.of(message.getBytes(StandardCharsets.UTF_8))
     private val response = NativeBuffer.allocate(65536)
     private val server = new PeerAddress
-    private var sent = false
 
-    /** Sends the request if it has not gone yet; the result is 1 once it has been sent. */
+    /** Sends the request; done once it has gone. */
     private object Send extends Command {
       def fd: Int = Ping.this.fd
       def interest: Interest = Interest.Write
-      def perform(): Int = {
-        if !sent && sendDatagram(fd, request) then {
-          println(s"Sent datagram of ${request.limit()} bytes.")
-          sent = true
-        }
-        if sent then 1 else 0
+      def perform(): Boolean = {
+        val sent = sendDatagram(fd, request)
+        if sent then println(s"Sent datagram of ${request.limit()} bytes.")
+        sent
       }
     }
 
-    /** Receives the echo; the result is 1 once it has arrived. */
+    /** Receives the echo; done once it has arrived. */
     private object Receive extends Command {
       def fd: Int = Ping.this.fd
       def interest: Interest = Interest.Read
-      def perform(): Int = {
+      def perform(): Boolean = {
         val read = server.receive(fd, response)
         if read >= 0 then println(s"Received datagram of $read bytes: `${text(response)}`")
-        if read >= 0 then 1 else 0
+        read >= 0
       }
     }
 
-    def start(r: Reactor): Unit = r.submit(Send, this)
+    /** UDP has no delivery guarantee; make a missing reply visible in the demo. */
+    private val deadline = new KqueueTimer(milliseconds = 5000)
 
-    def onComplete(r: Reactor, command: Command, result: Int): Unit = command match {
-      case Send    => if result == 1 then r.submit(Receive, this) else r.submit(Send, this)
-      case Receive => if result == 1 then r.stop() else r.submit(Receive, this) // Stop once the reply has arrived
-      case _       => ()
+    def start(): Unit = {
+      r.submit(deadline, this)
+      r.submit(Send, this)
+    }
+
+    def onComplete(op: KqueueOp): Unit = op match {
+      case Send    => r.submit(Receive, this)
+      case Receive =>
+        r.cancel(deadline)
+        r.stop() // Stop once the reply has arrived
+      case `deadline` => throw new IOException("Timed out waiting for datagram socket readiness or a reply")
+      case _          => ()
     }
   }
 
@@ -74,13 +82,11 @@ object KQueueExampleDatagramSocket {
   private def runConnected(fd: Int, address: KQueueExampleAddress, message: String): Unit = {
     address.connect(fd)
     println(s"Connected datagram socket $fd to $address")
-    Reactor.scoped { r =>
+    KqueueReactor.scoped(maxEvents = 1) { r =>
       Zone.acquire { implicit z =>
-        val ping = new Ping(fd, message)
-        ping.start(r)
-        // UDP has no delivery guarantee; make a missing reply visible in the demo.
-        val timedOut = () => throw new IOException("Timed out waiting for datagram socket readiness or a reply")
-        r.run(capacity = 1, timeoutSeconds = 5)(timedOut)
+        val ping = new Ping(r, fd, message)
+        ping.start()
+        r.run()
       }
     }
   }

@@ -274,6 +274,24 @@ object PosixSockets {
     addr.asInstanceOf[Ptr[socket.sockaddr]]
   }
 
+  /** Builds a Unix socket address for `path` and passes it to `use`, valid only during the call. */
+  def withUnixSocketAddr[A](path: String)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A = {
+    Sockets.checkUnixPathLength(path)
+    Zone.acquire { implicit z =>
+      val cPath = toCString(path, StandardCharsets.UTF_8)
+      val length = string.strlen(cPath).toInt
+      use(createUnixSocketAddr(cPath, length), unixSocketAddrLen(length))
+    }
+  }
+
+  /** Builds an IPv4 socket address and passes it to `use`, valid only during the call. */
+  def withIPv4SocketAddr[A](host: String, port: Int)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A =
+    Zone.acquire { implicit z => use(createIPv4SocketAddr(host, port), sizeOf[in.sockaddr_in].toUInt) }
+
+  /** Builds an IPv6 socket address and passes it to `use`, valid only during the call. */
+  def withIPv6SocketAddr[A](host: String, port: Int)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A =
+    Zone.acquire { implicit z => use(createIPv6SocketAddr(host, port), sizeOf[in.sockaddr_in6].toUInt) }
+
   def close(fd: Int): Unit = {
     if (unistd.close(fd) < 0) {
       throw new IOException(

@@ -6,11 +6,12 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.reactor.Accept
-import asyncio.reactor.Command
-import asyncio.reactor.Completion
-import asyncio.reactor.Interest
-import asyncio.reactor.Reactor
+import asyncio.Completion
+import asyncio.Interest
+import asyncio.Slot
+import asyncio.kqueue.Accept
+import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
@@ -27,7 +28,9 @@ object KQueueExampleServerSocket {
     * KiB buffer; a body larger than that is read in chunks and gathered until complete. The zone closes with the
     * connection.
     */
-  private final class Connection(val fd: Int, server: Server) extends AutoCloseable with Completion[Command] {
+  private final class Connection(r: KqueueReactor, val fd: Int, server: Server)
+      extends AutoCloseable
+      with Completion[Command] {
     private var state = State.ReadHeader
     private val zone: Zone = Zone.open()
     private val buf: ByteBuffer = NativeBuffer.allocate(8192)(using zone)
@@ -38,28 +41,35 @@ object KQueueExampleServerSocket {
     inline val KeepOpen = true
     inline val Close = false
 
-    /** A step of the connection's state machine, as a command. The result is 1 to keep the connection open. */
+    private var closing = false
+
+    /** A step of the connection's state machine, as a command. It is done when the connection must close, or, for
+      * reading, when the request is complete and it is time to reply; otherwise the reactor keeps waiting.
+      */
     private final class Step(val interest: Interest, step: () => Boolean) extends Command {
       def fd: Int = Connection.this.fd
-      def perform(): Int =
-        try if step() then 1 else 0
-        catch {
-          case e: IOException =>
-            // One misbehaving client must not take the server down.
-            println(s"Client socket $fd failed: ${e.getMessage}")
-            0
-        }
+      def perform(): Boolean = {
+        val keepOpen =
+          try step()
+          catch {
+            case e: IOException =>
+              // One misbehaving client must not take the server down.
+              println(s"Client socket $fd failed: ${e.getMessage}")
+              Close
+          }
+        if !keepOpen then closing = true
+        closing || (interest == Interest.Read && state == State.SendResponse)
+      }
     }
 
     private val readStep = new Step(Interest.Read, () => readEvent())
     private val writeStep = new Step(Interest.Write, () => writeEvent())
 
-    def start(r: Reactor): Unit = r.submit(readStep, this)
+    def start(): Unit = r.submit(readStep, this)
 
-    def onComplete(r: Reactor, command: Command, result: Int): Unit =
-      if result == 0 then server.drop(this)
-      else if state == State.SendResponse then r.submit(writeStep, this)
-      else r.submit(readStep, this)
+    def onComplete(command: Command): Unit =
+      if closing then server.drop(this)
+      else r.submit(writeStep, this) // only reading finishes without closing, once the request is in
 
     /** Handles readability. Returns false when the connection should be closed. */
     def readEvent(): Boolean = {
@@ -121,20 +131,19 @@ object KQueueExampleServerSocket {
   }
 
   /** Accepts one connection per readiness event and starts reading from it. */
-  private class Server(serverFd: Int) extends Completion[Accept] {
+  private class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
     private var connections: Map[Int, Connection] = Map.empty
 
-    def start(r: Reactor): Unit = r.submit(Accept(serverFd), this)
+    private val accepted = Slot[Integer]() // each accept writes its connection here
 
-    def onComplete(r: Reactor, command: Accept, clientFd: Int): Unit = {
-      if clientFd < 0 then {
-        () // non blocking accept
-      } else {
-        val connection = new Connection(clientFd, this)
-        connections += clientFd -> connection
-        connection.start(r)
-        println(s"Accepted new client connection on serverFd: $clientFd")
-      }
+    def start(): Unit = r.submit(Accept(serverFd, accepted), this)
+
+    def onComplete(command: Accept): Unit = {
+      val clientFd = accepted.clear().intValue
+      val connection = new Connection(r, clientFd, this)
+      connections += clientFd -> connection
+      connection.start()
+      println(s"Accepted new client connection on serverFd: $clientFd")
       r.submit(command, this)
     }
 
@@ -156,13 +165,13 @@ object KQueueExampleServerSocket {
   def run(sock: String): Unit = run(KQueueExampleAddress.Unix(sock))
 
   def run(address: KQueueExampleAddress): Unit = {
-    Reactor.scoped { r =>
+    KqueueReactor.scoped() { r =>
       address.withBoundSocket(Transport.Stream) { serverFd =>
         PosixSockets.listen(serverFd, PosixSockets.maxConnections)
         println("Socket is now listening for connections.")
-        val server = new Server(serverFd)
-        server.start(r)
-        try r.run(capacity = 255)
+        val server = new Server(r, serverFd)
+        server.start()
+        try r.run()
         finally server.close()
       }
     }

@@ -116,6 +116,21 @@ object KQueueExampleIO {
   // Non-blocking I/O, now provided by the loop project under the names the demos used.
   export asyncio.unsafe.NonBlocking.{EOF, accept as nioAccept, read as nioReadBytes, write as nioWriteBytes}
 
+  /** A non-blocking pipe, closed after `use`. */
+  def withPipe(use: (Int, Int) => Unit): Unit = {
+    val ends = stackalloc[CInt](2)
+    if unistd.pipe(ends) < 0 then throw new IOException(s"Failed to create pipe: ${cError()}")
+    val (readFd, writeFd) = (ends(0), ends(1))
+    try {
+      PosixSockets.setNonBlocking(readFd)
+      PosixSockets.setNonBlocking(writeFd)
+      use(readFd, writeFd)
+    } finally {
+      PosixSockets.close(readFd)
+      PosixSockets.close(writeFd)
+    }
+  }
+
   /** Opens `path` non-blocking for reading or writing and closes it after `use`. */
   def withFile(path: String, write: Boolean)(use: FileOperation): Unit = {
     println(s"attempt to open file $path")

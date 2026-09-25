@@ -4,10 +4,10 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.reactor.Command
-import asyncio.reactor.Completion
-import asyncio.reactor.Interest
-import asyncio.reactor.Reactor
+import asyncio.Completion
+import asyncio.Interest
+import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import KQueueExampleIO.*
 
@@ -16,18 +16,18 @@ import KQueueExampleIO.*
 object KQueueExampleFileRead {
 
   /** Reads everything available whenever the FIFO is readable, gathering the contents until the writer closes it. */
-  private final class Reader(fd: Int)(using Zone) extends Completion[Command] {
+  private final class Reader(r: KqueueReactor, fd: Int)(using Zone) extends Completion[Command] {
     private val chunk = NativeBuffer.allocate(1024)
     private val contents = new ByteArrayOutputStream()
 
     inline val ReadAgain = true
     inline val Stop = false
 
-    /** Drains the FIFO; the result records whether EOF was reached. */
+    /** Drains the FIFO. It is done only once the writer has closed it; until then the reactor waits again. */
     final class Drain extends Command {
       def fd: Int = Reader.this.fd
       def interest: Interest = Interest.Read
-      def perform(): Int = if drain() then 1 else 0
+      def perform(): Boolean = drain()
     }
 
     val drainCommand = new Drain
@@ -60,23 +60,23 @@ object KQueueExampleFileRead {
       contents.reset() // Start over for the next writer
     }
 
-    def start(r: Reactor): Unit = r.submit(drainCommand, this)
+    def start(): Unit = r.submit(drainCommand, this)
 
-    def onComplete(r: Reactor, command: Command, result: Int): Unit = {
-      if result == 1 then report()
+    def onComplete(command: Command): Unit = {
+      report()
       r.submit(command, this)
     }
   }
 
   def run(fifo: String): Unit = {
-    Reactor.scoped { r =>
+    KqueueReactor.scoped(maxEvents = 1) { r =>
       withFile(fifo, write = false) { fd =>
         Zone.acquire { implicit z =>
-          val reader = new Reader(fd)
-          reader.start(r)
+          val reader = new Reader(r, fd)
+          reader.start()
           println("Event registered for file read.")
           println("starting to poll...")
-          r.run(capacity = 1)
+          r.run()
         }
       }
     }

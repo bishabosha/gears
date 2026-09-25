@@ -7,12 +7,14 @@ import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
-import asyncio.reactor.Accept
-import asyncio.reactor.Command
-import asyncio.reactor.Completion
-import asyncio.reactor.Interest
-import asyncio.reactor.Reactor
-import asyncio.reactor.ReadIntoBuffer
+import asyncio.Completion
+import asyncio.Interest
+import asyncio.Slot
+import asyncio.kqueue.Accept
+import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueReactor
+import asyncio.kqueue.ReadIntoBuffer
+import asyncio.kqueue.WriteFromBuffer
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
@@ -52,7 +54,7 @@ object KQueueExampleKeyValue {
   /** One client connection: parses commands out of whatever arrives, queues the replies, and writes them back while
     * reading continues. Owns a zone holding its two buffers, closed with the connection.
     */
-  private final class Session(val fd: Int, store: Store, server: Server)
+  private final class Session(r: KqueueReactor, val fd: Int, store: Store, server: Server)
       extends AutoCloseable
       with Completion[Command] {
     private val zone: Zone = Zone.open()
@@ -64,78 +66,52 @@ object KQueueExampleKeyValue {
     private var reading = false
     private var clientClosed = false
 
-    private inline val Failed = -2
+    // One repeatable op per direction for the whole session.
+    private val readCommands = ReadIntoBuffer(fd, inbox)
+    private val writeReplies = WriteFromBuffer(fd, outbox)
 
-    /** Reads a chunk of commands into the inbox. Failures become a result rather than an exception. */
-    private object ReadCommands extends Command {
-      def fd: Int = Session.this.fd
-      def interest: Interest = Interest.Read
-      def perform(): Int =
-        try {
-          inbox.clear()
-          nioReadBytes(fd, inbox)
-        } catch {
-          case e: IOException =>
-            println(s"Client socket $fd failed: ${e.getMessage}")
-            Failed
-        }
-    }
-
-    /** Writes the outbox of framed replies. */
-    private object WriteReplies extends Command {
-      def fd: Int = Session.this.fd
-      def interest: Interest = Interest.Write
-      def perform(): Int =
-        try nioWriteBytes(fd, outbox)
-        catch {
-          case e: IOException =>
-            println(s"Client socket $fd failed: ${e.getMessage}")
-            Failed
-        }
-    }
-
-    def onComplete(r: Reactor, command: Command, result: Int): Unit = command match {
-      case ReadCommands =>
+    def onComplete(command: Command): Unit =
+      if command eq readCommands then {
         reading = false
-        if result == Failed then server.drop(this)
-        else if result < 0 then {
-          clientClosed = true // Answer what has been parsed, then close.
+        if inbox.position() == 0 then {
+          clientClosed = true // Nothing added: end of stream. Answer what has been parsed, then close.
           if !writing then server.drop(this)
         } else {
-          if result > 0 then {
-            inbox.flip()
-            commands.feed(inbox)
-            var next = commands.next()
-            while next != null do {
-              StreamProtocol.appendTo(replies, store.execute(next))
-              next = commands.next()
-            }
-            if !writing then sendReplies(r)
+          inbox.flip()
+          commands.feed(inbox)
+          var next = commands.next()
+          while next != null do {
+            StreamProtocol.appendTo(replies, store.execute(next))
+            next = commands.next()
           }
+          if !writing then sendReplies(r)
           // Back-pressure: stop reading while the client is not taking its replies.
           if replies.size <= Backlog then submitRead(r)
         }
-      case WriteReplies =>
-        if result == Failed then server.drop(this)
-        else if outbox.hasRemaining() then r.submit(WriteReplies, this)
-        else {
-          writing = false
-          if replies.size > 0 then sendReplies(r)
-          if !reading && !clientClosed && replies.size <= Backlog then submitRead(r)
-          if clientClosed && !writing then server.drop(this)
-        }
-      case _ => ()
+      } else if outbox.hasRemaining() then r.submit(writeReplies, this)
+      else {
+        writing = false
+        if replies.size > 0 then sendReplies(r)
+        if !reading && !clientClosed && replies.size <= Backlog then submitRead(r)
+        if clientClosed && !writing then server.drop(this)
+      }
+
+    /** A failed read or write ends the session; one misbehaving client must not take the server down. */
+    override def onFailure(command: Command, failure: Throwable): Unit = {
+      println(s"Client socket $fd failed: ${failure.getMessage}")
+      server.drop(this)
     }
 
-    def start(r: Reactor): Unit = submitRead(r)
+    def start(): Unit = submitRead(r)
 
-    private def submitRead(r: Reactor): Unit = {
+    private def submitRead(r: KqueueReactor): Unit = {
       reading = true
-      r.submit(ReadCommands, this)
+      inbox.clear()
+      r.submit(readCommands, this)
     }
 
     /** Moves up to one buffer of queued replies into the outbox and starts writing it. */
-    private def sendReplies(r: Reactor): Unit = {
+    private def sendReplies(r: KqueueReactor): Unit = {
       val queued = replies.toByteArray
       val chunk = math.min(queued.length, outbox.capacity())
       outbox.clear()
@@ -144,29 +120,33 @@ object KQueueExampleKeyValue {
       replies.reset()
       replies.write(queued, chunk, queued.length - chunk)
       writing = true
-      r.submit(WriteReplies, this)
+      r.submit(writeReplies, this)
     }
 
     def close(): Unit = {
+      // The other direction may still be pending; cancel it so nothing is left on this descriptor's slot.
+      r.cancel(readCommands)
+      r.cancel(writeReplies)
       zone.close()
       PosixSockets.close(fd)
       println(s"Closed client socket: $fd")
     }
   }
 
-  private final class Server(serverFd: Int) extends Completion[Accept] {
+  private final class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
     private val store = new Store
     private var sessions: Map[Int, Session] = Map.empty
 
-    def start(r: Reactor): Unit = r.submit(Accept(serverFd), this)
+    private val accepted = Slot[Integer]() // each accept writes its connection here
 
-    def onComplete(r: Reactor, command: Accept, clientFd: Int): Unit = {
-      if clientFd >= 0 then {
-        val session = new Session(clientFd, store, this)
-        sessions += clientFd -> session
-        session.start(r)
-        println(s"Accepted new client connection on serverFd: $clientFd")
-      }
+    def start(): Unit = r.submit(Accept(serverFd, accepted), this)
+
+    def onComplete(command: Accept): Unit = {
+      val clientFd = accepted.clear().intValue
+      val session = new Session(r, clientFd, store, this)
+      sessions += clientFd -> session
+      session.start()
+      println(s"Accepted new client connection on serverFd: $clientFd")
       r.submit(command, this)
     }
 
@@ -183,20 +163,21 @@ object KQueueExampleKeyValue {
   }
 
   def serve(address: KQueueExampleAddress): Unit = {
-    Reactor.scoped { r =>
+    KqueueReactor.scoped() { r =>
       address.withBoundSocket(Transport.Stream) { serverFd =>
         PosixSockets.listen(serverFd, PosixSockets.maxConnections)
         println("Key-value server is now listening for connections.")
-        val server = new Server(serverFd)
-        server.start(r)
-        try r.run(capacity = 255)
+        val server = new Server(r, serverFd)
+        server.start()
+        try r.run()
         finally server.close()
       }
     }
   }
 
   /** Pipelines a batch of commands without waiting for replies, and reads the replies back as they arrive. */
-  private final class Pipeline(sock: ClientSock, batch: IndexedSeq[String])(using Zone) extends Completion[Command] {
+  private final class Pipeline(r: KqueueReactor, sock: ClientSock, batch: IndexedSeq[String])(using Zone)
+      extends Completion[Command] {
     private val outbox = NativeBuffer.allocate(BufferSize)
     private val inbox = NativeBuffer.allocate(BufferSize)
     private val parser = new FrameParser
@@ -216,29 +197,27 @@ object KQueueExampleKeyValue {
     private object SendBatch extends Command {
       def fd: Int = sock.fd
       def interest: Interest = Interest.Write
-      def perform(): Int = {
+      def perform(): Boolean = {
         sock.ensureConnected()
         if !outbox.hasRemaining() then pack()
-        nioWriteBytes(sock.fd, outbox)
+        nioWriteBytes(sock.fd, outbox) >= 0 || !outbox.hasRemaining()
       }
     }
 
-    def onComplete(r: Reactor, command: Command, result: Int): Unit = command match {
+    def onComplete(command: Command): Unit = command match {
       case SendBatch =>
         if outbox.hasRemaining() || sent < batch.length then r.submit(SendBatch, this)
         else println(s"Pipelined ${batch.length} commands.")
       case read: ReadIntoBuffer =>
-        if result < 0 then throw new IOException(s"Server closed the connection after $received replies")
+        if inbox.position() == 0 then throw new IOException(s"Server closed the connection after $received replies")
         else {
-          if result > 0 then {
-            inbox.flip()
-            parser.feed(inbox)
-            var reply = parser.next()
-            while reply != null do {
-              received += 1
-              lastReply = reply
-              reply = parser.next()
-            }
+          inbox.flip()
+          parser.feed(inbox)
+          var reply = parser.next()
+          while reply != null do {
+            received += 1
+            lastReply = reply
+            reply = parser.next()
           }
           if received == batch.length then {
             println(s"Received $received replies; last reply: `$lastReply`")
@@ -251,7 +230,7 @@ object KQueueExampleKeyValue {
       case _ => ()
     }
 
-    def start(r: Reactor): Unit = {
+    def start(): Unit = {
       r.submit(SendBatch, this)
       inbox.clear()
       r.submit(ReadIntoBuffer(sock.fd, inbox), this)
@@ -262,14 +241,14 @@ object KQueueExampleKeyValue {
   def run(address: KQueueExampleAddress, count: Int): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
-    Reactor.scoped { r =>
+    KqueueReactor.scoped() { r =>
       address.withSocket(Transport.Stream) { clientFd =>
         println(s"opened file descriptor: $clientFd (socket-type)")
         address.connect(clientFd)
         println(s"connection in progress to: $address")
         Zone.acquire { implicit z =>
-          new Pipeline(ClientSock(clientFd), batch).start(r)
-          r.run(capacity = 255)
+          new Pipeline(r, ClientSock(clientFd), batch).start()
+          r.run()
         }
       }
     }
