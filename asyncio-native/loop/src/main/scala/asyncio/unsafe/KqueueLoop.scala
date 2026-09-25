@@ -145,6 +145,19 @@ object KqueueLoop {
     )
   }
 
+  /** Removes a timer registered with `addTimerOneShot` before it fires. */
+  def deleteTimer(evt: Event, id: USize): Unit =
+    kevent.scalanative_kevent_set(
+      evt,
+      0, // index within the event buffer
+      id, // timer ID
+      EVFILT_TIMER, // filter type
+      kevent.EV_DELETE.toUShort, // flags
+      0.toUInt, // fflags
+      0, // filter-specific data
+      null // user data
+    )
+
   def deleteFile(evt: Event, fd: Int, read: Boolean): Unit = {
     kevent.scalanative_kevent_set(
       evt,
@@ -168,6 +181,19 @@ object KqueueLoop {
       registerEvents(kq, events, nEvents)
     }
   }
+
+  /** Deletes `fd`'s read or write filter. A filter that is already gone because `fd` was closed, reported as `ENOENT`
+    * or `EBADF`, is not an error: kqueue removes a descriptor's filters when it is closed.
+    */
+  def deleteFileIfOpen(kq: Int, fd: Int, read: Boolean): Unit =
+    pollQueue(1) { events =>
+      deleteFile(eventAt(events, 0), fd, read)
+      if (kevent.kevent(kq, events, 1, null, 0, null) < 0) {
+        val code = scala.scalanative.posix.errno.errno
+        if (code != scala.scalanative.posix.errno.ENOENT && code != scala.scalanative.posix.errno.EBADF)
+          throw new IOException(s"Failed to delete filter: ${cError()}")
+      }
+    }
 
   def registerEvents(
       kq: Int,

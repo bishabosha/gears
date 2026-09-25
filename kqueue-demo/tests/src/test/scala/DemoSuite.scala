@@ -19,6 +19,9 @@ abstract class DemoSuite extends FunSuite {
       case None       => fail("set -Dkqueue.demo.binary=<path to executable>, or run `sbt kqueueDemoTests/test`")
     }
 
+  /** Arguments placed before every demo command; `Seq("gears")` runs the gears mirrors instead. */
+  def commandPrefix: Seq[String] = Nil
+
   /** Several demo runs per test, including the five-second timer and datagram timeout. */
   override def munitTimeout: Duration = 2.minutes
 
@@ -88,7 +91,7 @@ abstract class DemoSuite extends FunSuite {
     }
 
   private def start(log: Path, args: Seq[String]): Process =
-    new ProcessBuilder((binary +: args)*)
+    new ProcessBuilder((binary +: (commandPrefix ++ args))*)
       .redirectErrorStream(true)
       .redirectOutput(log.toFile)
       .start()
