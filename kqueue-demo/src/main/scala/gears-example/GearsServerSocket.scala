@@ -9,8 +9,8 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Address
+import asyncio.HandleSlot
 import asyncio.Reactor
-import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
 import ReactorFutures.*
@@ -22,7 +22,7 @@ object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
-  private def serve(r: Reactor, client: r.Handle)(using Async): Unit = {
+  private def serve(r: Reactor, client: Int)(using Async): Unit = {
     val zone = Zone.open()
     try {
       val buf = NativeBuffer.allocate(8192)(using zone)
@@ -82,21 +82,19 @@ object GearsServerSocket {
   def run(sock: String)(using Reactor.Factory[Reactor]): Unit = run(Address.Unix(sock))
 
   def run(address: Address)(using Reactor.Factory[Reactor]): Unit = {
-    Reactor.scoped { r =>
-      ReactorFutures.run(r) {
-        val server = r.handles.listen(address)
-        try {
-          println("Socket is now listening for connections.")
-          val accepted = Slot[r.BoxedHandle]() // each accept writes its connection here, like a read fills a buffer
-          val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
-          while true do {
-            submit(r, accept).await // completes once a connection has been accepted
-            val client = r.unbox(accepted.clear())
-            println(s"Accepted new client connection: $client")
-            Future(serve(r, client))
-          }
-        } finally r.handles.close(server)
-      }
+    ReactorFutures.run { r =>
+      val server = r.handles.listen(address)
+      try {
+        println("Socket is now listening for connections.")
+        val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
+        val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
+        while true do {
+          submit(r, accept).await // completes once a connection has been accepted
+          val client = accepted.clear()
+          println(s"Accepted new client connection: $client")
+          Future(serve(r, client))
+        }
+      } finally r.handles.close(server)
     }
   }
 }

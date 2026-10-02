@@ -40,6 +40,8 @@ enum KQueueExampleAddress {
   /** Binds the address; a bound Unix path is removed again when the socket closes. */
   def withBoundSocket(transport: Transport)(use: FileOperation): Unit = {
     open(transport, unlinkOnClose = true) { fd =>
+      // A listening IP socket may need its port while connections closed just before a restart are in TIME_WAIT.
+      if transport == Transport.Stream && flavor != Flavor.Unix then PosixSockets.setReuseAddress(fd)
       bind(fd)
       println(s"Bound socket $fd to $this")
       use(fd)

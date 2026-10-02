@@ -3,6 +3,7 @@ package asyncio.kqueue
 import java.nio.ByteBuffer
 
 import asyncio.Address
+import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.Ops
 import asyncio.Repeatable
@@ -19,10 +20,10 @@ sealed trait KqueueOp {
 }
 
 /** Builds the ops `KqueueReactor` understands. */
-object KqueueOps extends Ops[KqueueOp, Int, Integer] {
+object KqueueOps extends Ops[KqueueOp] {
   def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
   def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
-  def accept(fd: Int, into: Slot[Integer]): Accept = Accept(fd, into)
+  def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)
   def connect(fd: Int): KqueueOp = Connect(fd)
   def receive(fd: Int, buf: ByteBuffer, from: Slot[Address]): ReceiveFrom = new ReceiveFrom(fd, buf, from)
   def send(fd: Int, buf: ByteBuffer, to: Address | Null): SendTo = new SendTo(fd, buf, to)

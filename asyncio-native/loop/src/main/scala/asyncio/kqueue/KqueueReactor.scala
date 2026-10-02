@@ -27,16 +27,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     */
   type Op = KqueueOp
 
-  /** Kqueue watches POSIX file descriptors. */
-  type Handle = Int
+  def ops: Ops[Op] = KqueueOps
 
-  type BoxedHandle = Integer
-
-  def ops: Ops[Op, Handle, BoxedHandle] = KqueueOps
-
-  def handles: Handles[Handle] = KqueueHandles
-
-  def unbox(boxed: BoxedHandle): Handle = boxed.intValue()
+  /** Kqueue watches POSIX file descriptors, so a handle is the descriptor itself. */
+  def handles: Handles = KqueueHandles
 
   private final class Pending[C <: Op](val op: C, val completion: Completion[C]) {
     def complete(): Unit = completion.onComplete(op)

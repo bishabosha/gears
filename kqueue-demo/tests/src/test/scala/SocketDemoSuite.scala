@@ -44,6 +44,10 @@ class SocketDemoSuite extends DemoSuite {
     demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
       withTempDirectory("gears-sockets-")(datagram(family, _))
     }
+    if family != Family.Unix then
+      demoTest(s"restart ${family.name}: a killed server's port can be listened on again at once") {
+        withTempDirectory("gears-sockets-")(restart(family, _))
+      }
     demoTest(s"key-value ${family.name}: pipelined commands from native and Java clients") {
       withTempDirectory("gears-sockets-")(keyValue(family, _))
     }
@@ -81,6 +85,18 @@ class SocketDemoSuite extends DemoSuite {
       buffer.clear()
     }
     out.toString(StandardCharsets.UTF_8)
+  }
+
+  /** Serves one request, kills the server without letting it clean up, and listens on the same port again. The server
+    * closed that connection first, so the port has a connection in TIME_WAIT when the second server binds it.
+    */
+  private def restart(family: Family, directory: Path): Unit = {
+    val Endpoint(_, args) = endpoint(family, datagram = false, directory)
+    for (_ <- 1 to 2)
+      // Stopping a server destroys its process, which, like Ctrl-C, ends it without running any cleanup.
+      withServer(s"sock${family.suffix}-serve" +: args, "listening for connections") { _ =>
+        assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
+      }
   }
 
   private def stream(family: Family, directory: Path): Unit = {

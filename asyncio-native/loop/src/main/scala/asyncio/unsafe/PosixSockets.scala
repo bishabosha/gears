@@ -76,6 +76,19 @@ object PosixSockets {
     }
   }
 
+  /** Lets a listening socket bind a port that still has connections in `TIME_WAIT`, such as those a server closed just
+    * before it was stopped. Without it, restarting the server fails with `EADDRINUSE` for up to a minute. Call it
+    * before `bind`.
+    */
+  def setReuseAddress(fd: Int): Unit = {
+    val on = stackalloc[CInt]()
+    !on = 1
+    if (
+      socket.setsockopt(fd, socket.SOL_SOCKET, socket.SO_REUSEADDR, on.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0
+    )
+      throw new IOException(s"Failed to set SO_REUSEADDR: ${cError()}")
+  }
+
   def listen(fd: Int, backlog: Int): Unit = {
     if (socket.listen(fd, backlog) < 0) {
       throw new IOException(
