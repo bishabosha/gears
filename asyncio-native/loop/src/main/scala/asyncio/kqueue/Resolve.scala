@@ -12,7 +12,7 @@ import asyncio.unsafe.PosixResolver
   */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends KqueueBlocking {
   def block(): Unit = PosixResolver.lookup(host) match {
-    case Right(addresses) => into.set(addresses)
+    case Right(addresses) => publish(into, addresses) // not if cancelled during the lookup
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
   }
 }

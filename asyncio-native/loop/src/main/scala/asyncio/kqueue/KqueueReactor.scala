@@ -64,6 +64,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
   private val pendingPromises = scala.collection.mutable.HashSet.empty[KqueuePromise]
 
+  // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
+  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[KqueueBlocking]
+
   // Guards the wake pipe against a blocker finishing after `close`, when its descriptor number may already be reused.
   private object wakeLock {}
   private var closed = false
@@ -97,6 +100,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
           KqueueLoop.addTimerOneShot(events(0), timer.id.toUSize, timer.milliseconds)
         }
       case promise: KqueuePromise =>
+        promise match {
+          case blocking: KqueueBlocking if blocking.cancelling != null =>
+            throw new IllegalStateException(s"$op is still running after being cancelled")
+          case _ => ()
+        }
         promise.reactor = this
         promise.pending = pending
         pendingPromises += promise
@@ -125,10 +133,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       val pending = promise.pending
       promise.pending = null
       pendingPromises -= promise
-      if pending != null then {
-        val p = pending.asInstanceOf[Pending[?]]
-        val failure = promise.failure
-        if failure != null then p.fail(failure.nn) else p.complete()
+      promise match {
+        case blocking: KqueueBlocking if blocking.cancelling != null =>
+          // A cancelled blocker's `block` has returned, so its op's buffers and slots are the caller's again. Its
+          // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
+          assert(pending == null, "a blocker awaiting its cancel was resubmitted")
+          val cancelled = blocking.cancelling.asInstanceOf[Pending[?]]
+          blocking.cancelling = null
+          cancellingBlockers -= blocking
+          cancelled.cancelled()
+        case _ =>
+          if pending != null then {
+            val p = pending.asInstanceOf[Pending[?]]
+            val failure = promise.failure
+            if failure != null then p.fail(failure.nn) else p.complete()
+          }
       }
       promise = resolvedQueue.poll()
     }
@@ -141,7 +160,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   }
 
   /** Cancels every pending promise, interrupting blockers, then closes the wake pipe and the kqueue. The kqueue's own
-    * filters and timers go with it.
+    * filters and timers go with it. A blocker still running is waited for before its `onCancel`.
     */
   def close(): Unit = {
     if !closed then {
@@ -154,10 +173,23 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
       dropped ++= timers.values
       timers.clear()
+      val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
       for promise <- pendingPromises.toList do {
         val pending = detach(promise)
-        if pending != null then dropped += pending.nn
+        if pending != null then {
+          dropped += pending.nn
+          promise match {
+            case blocking: KqueueBlocking if blocking.interrupt() => running += blocking
+            case _                                                => ()
+          }
+        }
       }
+      for blocking <- cancellingBlockers do {
+        dropped += blocking.cancelling.asInstanceOf[Pending[?]]
+        blocking.cancelling = null
+        running += blocking
+      }
+      cancellingBlockers.clear()
       resolvedQueue.clear()
       wakeLock.synchronized {
         closed = true
@@ -165,6 +197,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
         PosixSockets.close(wakeWrite)
       }
       KqueueLoop.close(kq) // Its filters and timers go with it.
+      running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
       dropped.foreach(_.cancelled())
     }
@@ -178,7 +211,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
 
   /** A pending command is removed from its slot and its filter deleted; a pending timer is deleted; a promise is
     * detached, so completing it later does nothing, and a blocking task is skipped or interrupted. The completion's
-    * `onCancel` then runs before this returns.
+    * `onCancel` then runs before this returns, except for a blocking task that was running: its `onCancel` runs from
+    * the loop once `block` has returned.
     */
   def cancel(op: Op): Boolean = {
     val pending: Pending[?] | Null = op match {
@@ -207,7 +241,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     }
     if pending == null then false
     else {
-      pending.nn.cancelled()
+      op match {
+        case blocking: KqueueBlocking if blocking.interrupt() =>
+          blocking.cancelling = pending
+          cancellingBlockers += blocking
+        case _ => pending.nn.cancelled()
+      }
       true
     }
   }
@@ -218,16 +257,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     */
   private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read)
 
-  /** Detaches a pending promise so its outcome is never delivered, skipping or interrupting a blocking task. */
+  /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
   private def detach(promise: KqueuePromise): Pending[?] | Null = {
     val pending = promise.pending
     promise.pending = null
     pendingPromises -= promise
-    if pending != null then
-      promise match {
-        case blocking: KqueueBlocking => blocking.interrupt() // skip it, or interrupt its worker
-        case _                        => ()
-      }
     pending.asInstanceOf[Pending[?] | Null]
   }
 

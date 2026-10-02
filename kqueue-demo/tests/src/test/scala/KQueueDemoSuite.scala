@@ -36,10 +36,14 @@ class KQueueDemoSuite extends DemoSuite {
       "timer cancelled: true",
       "resubmitting the cancelled promise: refused",
       "cancelling after close: true",
+      "completing the promise again: refused",
       "read after cancel: `hello`",
       "blocking interrupted: true",
       "cancel notifications: 4",
+      "a running blocking task had stopped before onCancel: true",
+      "the cancelled task left its slot empty: true",
       "close notified the leftover: true",
+      "the leftover had stopped when notified: true",
       "blocking interrupted by close: true",
       "cancelled completions run: 0"
     )
