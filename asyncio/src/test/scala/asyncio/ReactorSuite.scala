@@ -49,7 +49,7 @@ class ReactorSuite extends FunSuite {
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
-    assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.promise()").nonEmpty)
+    assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.promise[Unit]()").nonEmpty)
     assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.blocking(() => ())").nonEmpty)
   }
 

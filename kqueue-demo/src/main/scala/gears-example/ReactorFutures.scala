@@ -72,7 +72,7 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     * or wakes the new promise.
     */
   private def arm(): Unit = {
-    val promise = reactor.ops.promise()
+    val promise = reactor.ops.promise[Unit]()
     reactor.submit(
       promise,
       _ => {

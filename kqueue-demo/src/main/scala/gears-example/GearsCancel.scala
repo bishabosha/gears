@@ -12,6 +12,7 @@ import scala.util.Failure
 import asyncio.Completion
 import asyncio.Interest
 import asyncio.Reactor
+import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.text
 import ReactorFutures.*
@@ -32,6 +33,15 @@ object GearsCancel {
     }
   }
 
+  /** A blocking body that keeps running for `millis` whatever happens, like a native call that cannot be interrupted.
+    */
+  private def stubborn(millis: Long, finished: AtomicBoolean): () => String = () => {
+    val deadline = System.nanoTime() + millis * 1_000_000L
+    while System.nanoTime() < deadline do ()
+    finished.set(true)
+    "finished"
+  }
+
   /** Waits up to two seconds for `interrupted` to be set. */
   private def interruptedSoon(interrupted: AtomicBoolean): Boolean = {
     val deadline = System.nanoTime() + 2_000_000_000L
@@ -48,13 +58,14 @@ object GearsCancel {
   def run()(using Reactor.Factory[Reactor]): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the reactor closes
     val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the reactor closes
+    val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
     Zone.acquire { implicit z =>
       val buf = NativeBuffer.allocate(64)
       ReactorFutures.run { r =>
         // Everything below runs on the thread that owns `r`, so ops go straight to the reactor.
         val (readFd, writeFd) = r.handles.pipe()
         try {
-          val promise = r.ops.promise() // nobody will complete it before it is cancelled
+          val promise = r.ops.promise[Unit]() // nobody will complete it before it is cancelled
           val sleeperInterrupted = new AtomicBoolean()
           val readPerforms = new AtomicInteger() // shows the cancelled read is never performed
           val read = r.ops.whenReady(readFd, Interest.Read) { () =>
@@ -72,12 +83,21 @@ object GearsCancel {
             r.ops.blocking(sleeper(10000, leftoverInterrupted)),
             new Completion[r.Op] {
               def onComplete(op: r.Op): Unit = println("unexpected completion of the leftover task")
-              override def onCancel(op: r.Op): Unit = leftoverNotified.set(true)
+              override def onCancel(op: r.Op): Unit = {
+                leftoverNotified.set(true)
+                leftoverStopped.set(leftoverInterrupted.get())
+              }
             }
           )
+          // Cancelled while it runs; it ignores the interrupt, so the future is rejected only once it has finished, and
+          // the value it produces after the cancel must not reach its slot.
+          val stubbornFinished = new AtomicBoolean()
+          val stubbornResult = Slot[String]()
+          val stubbornTask = submit(r, r.ops.blocking(stubborn(300, stubbornFinished), stubbornResult))
           println("submitted a read, a blocking task, a promise, and a timer")
 
           submit(r, r.ops.timer(100)).await
+          stubbornTask.cancel()
           for (name, future) <- pending do {
             future.cancel()
             future.awaitResult // rejected once the reactor confirms the cancel, through the completion's onCancel
@@ -97,10 +117,21 @@ object GearsCancel {
           orphan.awaitResult
           println(s"cancelling after close: ${isCancelled(orphan)}")
 
+          stubbornTask.awaitResult
+          println(s"a running blocking task had stopped before onCancel: ${stubbornFinished.get()}")
+          println(s"the cancelled task left its slot empty: ${example.KQueueExampleCancel.isEmpty(stubbornResult)}")
+
           // Completing the cancelled promise from another thread must not run its completion.
           val completer = new Thread(() => promise.complete(()))
           completer.start()
           completer.join()
+          // Only the first completion counts.
+          val again =
+            try {
+              promise.complete(())
+              "accepted"
+            } catch case _: IllegalStateException => "refused"
+          println(s"completing the promise again: $again")
 
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
           r.handles.writeNow(writeFd, NativeBuffer.of("hello".getBytes(StandardCharsets.UTF_8)))
@@ -123,6 +154,7 @@ object GearsCancel {
       }
     }
     println(s"close notified the leftover: ${leftoverNotified.get()}")
+    println(s"the leftover had stopped when notified: ${leftoverStopped.get()}")
     println(s"blocking interrupted by close: ${interruptedSoon(leftoverInterrupted)}")
   }
 }

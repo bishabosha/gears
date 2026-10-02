@@ -18,8 +18,9 @@ trait Completion[-C] {
   def onFailure(op: C, failure: Throwable): Unit = throw failure
 
   /** The op was cancelled before it finished, by `Reactor.cancel` or because the reactor closed. It runs on the reactor
-    * thread, and afterwards neither `onComplete` nor `onFailure` runs for this submission. It must not submit ops while
-    * the reactor is closing. By default it does nothing.
+    * thread once the reactor has stopped using the op's buffers and slots, which are the caller's again, and afterwards
+    * neither `onComplete` nor `onFailure` runs for this submission. It must not submit ops while the reactor is
+    * closing. By default it does nothing.
     */
   def onCancel(op: C): Unit = ()
 }
@@ -48,8 +49,10 @@ trait Reactor extends AutoCloseable {
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
-  /** Cancels a submitted op that has not finished. Its completion's `onCancel` runs before this returns, and its
-    * `onComplete` and `onFailure` never run. Returns false if the op already finished or was never submitted here.
+  /** Cancels a submitted op that has not finished, and returns true: its completion's `onComplete` and `onFailure` will
+    * never run, and its `onCancel` runs once the reactor has stopped using the op's buffers and slots. That is before
+    * this returns for most ops, but later, from `run`, for one still running elsewhere, such as a blocking op that has
+    * to be interrupted. Returns false if the op already finished or was never submitted here.
     */
   def cancel(op: Op): Boolean
 
@@ -60,8 +63,8 @@ trait Reactor extends AutoCloseable {
   def stop(): Unit
 
   /** Releases the reactor's own resources. Every pending op is cancelled, so its completion gets `onCancel` and nothing
-    * else. Handles named by ops belong to the caller and stay open. Call it when `run` is not running; closing twice
-    * does nothing.
+    * else; ops still running elsewhere, such as blocking ops, are waited for first. Handles named by ops belong to the
+    * caller and stay open. Call it when `run` is not running; closing twice does nothing.
     */
   def close(): Unit
 }
@@ -136,22 +139,24 @@ trait Handles {
   def close(handle: Int): Unit
 }
 
-/** A mutable outcome of an operation. Contract: setting/clearing is atomic; additional set before a clear is forbidden.
-  * A `clear()` after the op's completion sees the latest written value.
+/** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
+  * to the reactor while the op is pending: the caller clears it only after the op's completion has reached them, and
+  * the handoff that delivers the completion is what makes the op's write visible. Setting it again before it is cleared
+  * is forbidden.
   */
 final class Slot[A <: AnyRef] {
-  private val inner: java.util.concurrent.atomic.AtomicReference[A | Null] =
-    new java.util.concurrent.atomic.AtomicReference(null)
+  private var value: A | Null = null
 
   def clear(): A = {
-    inner.getAndSet(null) match
-      case null => throw new IllegalStateException("Nothing has been written to this slot yet")
-      case v    => v.asInstanceOf[A]
+    val v = value
+    if v == null then throw new IllegalStateException("Nothing has been written to this slot yet")
+    value = null
+    v.nn
   }
 
   private[asyncio] def set(outcome: A): Unit = {
-    val value = outcome.nn
-    if !inner.compareAndSet(null, value) then throw new IllegalStateException("Slot was already set")
+    if value != null then throw new IllegalStateException("Slot was already set")
+    value = outcome.nn
   }
 }
 
@@ -159,17 +164,19 @@ final class Slot[A <: AnyRef] {
   * the same contract as `Slot`.
   */
 final class HandleSlot {
-  private val inner = new java.util.concurrent.atomic.AtomicInteger(HandleSlot.Empty)
+  private var handle = HandleSlot.Empty
 
   def clear(): Int = {
-    val handle = inner.getAndSet(HandleSlot.Empty)
-    if handle == HandleSlot.Empty then throw new IllegalStateException("Nothing has been written to this slot yet")
-    handle
+    val h = handle
+    if h == HandleSlot.Empty then throw new IllegalStateException("Nothing has been written to this slot yet")
+    handle = HandleSlot.Empty
+    h
   }
 
   private[asyncio] def set(handle: Int): Unit = {
     require(handle >= 0, s"Not a handle: $handle")
-    if !inner.compareAndSet(HandleSlot.Empty, handle) then throw new IllegalStateException("Slot was already set")
+    if this.handle != HandleSlot.Empty then throw new IllegalStateException("Slot was already set")
+    this.handle = handle
   }
 }
 
@@ -183,11 +190,20 @@ object HandleSlot {
   */
 trait Repeatable
 
-/** What a promise op adds: it completes when whoever holds it calls `complete`, from any thread. */
-trait Promise[-A] {
+/** What a promise op adds: it completes when whoever holds it calls `complete`, from any thread, and then holds the
+  * value it was completed with.
+  */
+trait Promise[A] {
 
-  /** Completes the promise with `value`, from any thread. A promise that carries a value writes it into its slot. */
+  /** Completes the promise with `value`, from any thread. Only the first completion counts; completing it again throws
+    * `IllegalStateException`.
+    */
   def complete(value: A): Unit
+
+  /** The value the promise was completed with. Read it once the op's completion has reached you; before the promise is
+    * completed, it throws `IllegalStateException`.
+    */
+  def result: A
 }
 
 enum AddressFamily {
@@ -237,21 +253,21 @@ trait Ops[Op] {
   def whenReady(handle: Int, interest: Interest)(perform: () => Boolean): Op & Repeatable
 
   /** Runs `body` off the reactor thread, completing when it returns. Cancelling it skips `body` if it has not started
-    * and interrupts it if it is running; interruption is cooperative.
+    * and interrupts it if it is running; interruption is cooperative, and `onCancel` waits for `body` to return.
     */
   def blocking(body: () => Unit): Op
 
-  /** Like the other `blocking`, writing `body`'s value into `into`, which must be empty, before completing. */
+  /** Like the other `blocking`, writing `body`'s value into `into`, which must be empty, before completing. A cancel
+    * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel.
+    */
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 
-  /** A promise for someone else to complete, carrying no value. */
-  def promise(): Op & Promise[Unit]
-
-  /** A promise whose completer supplies a value, written into `into`, which must be empty. */
-  def promise[A <: AnyRef](into: Slot[A]): Op & Promise[A]
+  /** A promise for someone else to complete with a value of type `A`, such as `Unit` for a plain signal. */
+  def promise[A](): Op & Promise[A]
 
   /** Resolves a host name without blocking the reactor. Completes after writing its addresses, in numeric form, into
-    * `into`, which must be empty; fails with an `IOException` if the name cannot be resolved.
+    * `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. As with `blocking`, a
+    * cancel that arrives before the write leaves `into` empty.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
