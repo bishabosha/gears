@@ -12,8 +12,8 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Address
+import asyncio.HandleSlot
 import asyncio.Reactor
-import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{FrameParser, StreamProtocol}
 import ReactorFutures.*
@@ -58,7 +58,7 @@ object GearsKeyValue {
     */
   private def readCommands(
       r: Reactor,
-      fd: r.Handle,
+      fd: Int,
       inbox: ByteBuffer,
       store: Store,
       replies: BufferedChannel[Array[Byte]]
@@ -88,7 +88,7 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: Reactor, fd: r.Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(using
+  private def writeReplies(r: Reactor, fd: Int, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(using
       Async
   ): Unit = {
     val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
@@ -111,7 +111,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: Reactor, fd: r.Handle, store: Store)(using Async): Unit = {
+  private def session(r: Reactor, fd: Int, store: Store)(using Async): Unit = {
     val zone = Zone.open()
     try {
       val inbox = NativeBuffer.allocate(BufferSize)(using zone)
@@ -133,22 +133,20 @@ object GearsKeyValue {
   }
 
   def serve(address: Address)(using Reactor.Factory[Reactor]): Unit = {
-    Reactor.scoped { r =>
-      val store = new Store
-      ReactorFutures.run(r) {
-        val server = r.handles.listen(address)
-        try {
-          println("Key-value server is now listening for connections.")
-          val accepted = Slot[r.BoxedHandle]() // each accept writes its connection here, like a read fills a buffer
-          val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
-          while true do {
-            submit(r, accept).await // completes once a connection has been accepted
-            val client = r.unbox(accepted.clear())
-            println(s"Accepted new client connection: $client")
-            Future(session(r, client, store))
-          }
-        } finally r.handles.close(server)
-      }
+    val store = new Store
+    ReactorFutures.run { r =>
+      val server = r.handles.listen(address)
+      try {
+        println("Key-value server is now listening for connections.")
+        val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
+        val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
+        while true do {
+          submit(r, accept).await // completes once a connection has been accepted
+          val client = accepted.clear()
+          println(s"Accepted new client connection: $client")
+          Future(session(r, client, store))
+        }
+      } finally r.handles.close(server)
     }
   }
 
@@ -158,50 +156,48 @@ object GearsKeyValue {
   def run(address: Address, count: Int)(using Reactor.Factory[Reactor]): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
-    Reactor.scoped { r =>
-      Zone.acquire { implicit z =>
-        val outbox = NativeBuffer.allocate(BufferSize)
-        val inbox = NativeBuffer.allocate(BufferSize)
-        ReactorFutures.run(r) {
-          val socket = r.handles.connect(address)
-          try {
-            println(s"connection in progress to: $address")
-            submit(r, r.ops.connect(socket)).await
-            val sender = Future {
-              val write = r.ops.write(socket, outbox)
-              var sent = 0
-              while sent < batch.length do {
-                outbox.clear()
-                while sent < batch.length && StreamProtocol.append(batch(sent), outbox) do sent += 1
-                outbox.flip()
-                while outbox.hasRemaining() do submit(r, write).await
-              }
-              println(s"Pipelined ${batch.length} commands.")
+    Zone.acquire { implicit z =>
+      val outbox = NativeBuffer.allocate(BufferSize)
+      val inbox = NativeBuffer.allocate(BufferSize)
+      ReactorFutures.run { r =>
+        val socket = r.handles.connect(address)
+        try {
+          println(s"connection in progress to: $address")
+          submit(r, r.ops.connect(socket)).await
+          val sender = Future {
+            val write = r.ops.write(socket, outbox)
+            var sent = 0
+            while sent < batch.length do {
+              outbox.clear()
+              while sent < batch.length && StreamProtocol.append(batch(sent), outbox) do sent += 1
+              outbox.flip()
+              while outbox.hasRemaining() do submit(r, write).await
             }
-            val receiver = Future {
-              val parser = new FrameParser
-              val read = r.ops.read(socket, inbox)
-              var received = 0
-              var lastReply = ""
-              while received < batch.length do {
-                inbox.clear()
-                submit(r, read).await
-                if inbox.position() == 0 then
-                  throw new IOException(s"Server closed the connection after $received replies")
-                inbox.flip()
-                parser.feed(inbox)
-                var reply = parser.next()
-                while reply != null do {
-                  received += 1
-                  lastReply = reply
-                  reply = parser.next()
-                }
+            println(s"Pipelined ${batch.length} commands.")
+          }
+          val receiver = Future {
+            val parser = new FrameParser
+            val read = r.ops.read(socket, inbox)
+            var received = 0
+            var lastReply = ""
+            while received < batch.length do {
+              inbox.clear()
+              submit(r, read).await
+              if inbox.position() == 0 then
+                throw new IOException(s"Server closed the connection after $received replies")
+              inbox.flip()
+              parser.feed(inbox)
+              var reply = parser.next()
+              while reply != null do {
+                received += 1
+                lastReply = reply
+                reply = parser.next()
               }
-              println(s"Received $received replies; last reply: `$lastReply`")
             }
-            Seq(sender, receiver).awaitAllOrCancel
-          } finally r.handles.close(socket)
-        }
+            println(s"Received $received replies; last reply: `$lastReply`")
+          }
+          Seq(sender, receiver).awaitAllOrCancel
+        } finally r.handles.close(socket)
       }
     }
   }

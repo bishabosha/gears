@@ -34,22 +34,13 @@ trait Reactor extends AutoCloseable {
     */
   type Op
 
-  /** How this reactor names an open file, socket, or other I/O object: a descriptor on POSIX, but a channel, an OS
-    * handle, or a registered index elsewhere. Handles belong to the caller; the reactor never closes them.
-    */
-  type Handle
-
-  type BoxedHandle <: AnyRef
-
-  def unbox(boxed: BoxedHandle): Handle
-
   /** Builds this reactor's ops. Building an op does not touch the reactor, so `ops` may be used from any thread. */
-  def ops: Ops[Op, Handle, BoxedHandle]
+  def ops: Ops[Op]
 
   /** Opens, uses without waiting, and closes this reactor's handles. It does not touch the reactor either, so it may be
     * used from any thread.
     */
-  def handles: Handles[Handle]
+  def handles: Handles
 
   /** Submits an op with the completion to run when it finishes. An op marked `Repeatable` may be submitted again once
     * its previous submission has completed, failed, or been cancelled; any other op may be submitted only once. No op
@@ -77,11 +68,8 @@ trait Reactor extends AutoCloseable {
 
 object Reactor {
 
-  /** A reactor whose handles are POSIX file descriptors, for code that opens sockets and files itself. */
-  type Posix = Reactor { type Handle = Int }
-
   /** Opens reactors of kind `R`. Code written against the interface asks for one of these instead of naming an
-    * implementation, and states what it needs of the reactor through `R`, such as `Reactor.Posix`.
+    * implementation, and states what it needs of the reactor through `R`.
     */
   @FunctionalInterface
   trait Factory[+R <: Reactor] {
@@ -109,35 +97,43 @@ enum Address {
 }
 
 /** Opening, closing, and waitless use of a reactor's handles. Every operation is synchronous and never blocks; failures
-  * throw `java.io.IOException`. Handles belong to the caller, who closes them with `close`.
+  * throw `java.io.IOException`.
+  *
+  * A handle is an `Int` that names an open file, socket, or other I/O object. Its meaning belongs to the reactor: it is
+  * the I/O object itself where that is an integer, such as a POSIX descriptor, and otherwise an index into a table the
+  * reactor keeps of references to its I/O objects, such as JVM channels. Handles belong to the caller, who closes them
+  * with `close`; the reactor never closes them.
   */
-trait Handles[Handle] {
+trait Handles {
 
   /** Opens a file, typically a FIFO, for reading or writing without blocking. */
-  def openFile(path: String, write: Boolean): Handle
+  def openFile(path: String, write: Boolean): Int
 
   /** A stream socket whose connection to `address` has started; submit `ops.connect` to wait for it to finish. */
-  def connect(address: Address): Handle
+  def connect(address: Address): Int
 
-  /** A stream socket bound to `address` and listening for connections. */
-  def listen(address: Address): Handle
+  /** A stream socket bound to `address` and listening for connections. With `reuseAddr`, an IP address can be bound
+    * while connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
+    * them to expire. It has no effect on a Unix address.
+    */
+  def listen(address: Address, reuseAddr: Boolean = true): Int
 
   /** A datagram socket, bound to `local` and connected to `remote` where given. A Unix datagram client needs a `local`
     * path so that replies can reach it.
     */
-  def datagram(local: Address | Null, remote: Address | Null): Handle
+  def datagram(local: Address | Null, remote: Address | Null): Int
 
   /** A pipe, as its read end and its write end. */
-  def pipe(): (Handle, Handle)
+  def pipe(): (Int, Int)
 
   /** Reads what is available now into `buf`: the bytes read, 0 if nothing is, or -1 at end of stream. */
-  def readNow(handle: Handle, buf: ByteBuffer): Int
+  def readNow(handle: Int, buf: ByteBuffer): Int
 
   /** Writes what fits now from `buf`: the bytes written, or -1 if nothing fits. */
-  def writeNow(handle: Handle, buf: ByteBuffer): Int
+  def writeNow(handle: Int, buf: ByteBuffer): Int
 
   /** Closes a handle. A Unix socket path that `listen` or `datagram` bound is removed with it. */
-  def close(handle: Handle): Unit
+  def close(handle: Int): Unit
 }
 
 /** A mutable outcome of an operation. Contract: setting/clearing is atomic; additional set before a clear is forbidden.
@@ -159,6 +155,28 @@ final class Slot[A <: AnyRef] {
   }
 }
 
+/** A `Slot` for a handle, which holds it unboxed. Handles are never negative, so -1 marks it empty; otherwise it has
+  * the same contract as `Slot`.
+  */
+final class HandleSlot {
+  private val inner = new java.util.concurrent.atomic.AtomicInteger(HandleSlot.Empty)
+
+  def clear(): Int = {
+    val handle = inner.getAndSet(HandleSlot.Empty)
+    if handle == HandleSlot.Empty then throw new IllegalStateException("Nothing has been written to this slot yet")
+    handle
+  }
+
+  private[asyncio] def set(handle: Int): Unit = {
+    require(handle >= 0, s"Not a handle: $handle")
+    if !inner.compareAndSet(HandleSlot.Empty, handle) then throw new IllegalStateException("Slot was already set")
+  }
+}
+
+object HandleSlot {
+  private final val Empty = -1
+}
+
 /** Marks an op that may be submitted again after its previous submission finished, instead of building a new one each
   * time: an accept loop can resubmit one accept op, and a connection can resubmit one read on its buffer. Anything an
   * op reports, such as `Accepted.accepted`, reflects its latest submission, so read it in that submission's completion.
@@ -178,36 +196,36 @@ enum AddressFamily {
 
 final case class ResolvedAddress(family: AddressFamily, host: String)
 
-/** The ops a reactor can build, as values of its `Op` type, on I/O objects named by its `Handle` type. Buffers are used
-  * between position and limit, and belong to the reactor from submission until the op's completion.
+/** The ops a reactor can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`).
+  * Buffers are used between position and limit, and belong to the reactor from submission until the op's completion.
   */
-trait Ops[Op, Handle, BoxedHandle <: AnyRef] {
+trait Ops[Op] {
 
   /** Fills `buf`, which must have room. Completes once at least one byte has been read, or at end of stream, when
     * nothing was added: compare the buffer's position before and after.
     */
-  def read(handle: Handle, buf: ByteBuffer): Op & Repeatable
+  def read(handle: Int, buf: ByteBuffer): Op & Repeatable
 
   /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. */
-  def write(handle: Handle, buf: ByteBuffer): Op & Repeatable
+  def write(handle: Int, buf: ByteBuffer): Op & Repeatable
 
   /** Accepts one connection on a listening socket. Completes after writing the new, non-blocking connection into
     * `into`, which must be empty.
     */
-  def accept(handle: Handle, into: Slot[BoxedHandle]): Op & Repeatable
+  def accept(handle: Int, into: HandleSlot): Op & Repeatable
 
   /** Waits for a non-blocking connect on `handle` to finish. Completes once connected, or fails. */
-  def connect(handle: Handle): Op
+  def connect(handle: Int): Op
 
   /** Receives one packet into `buf`, which is left flipped for reading, and writes its sender into `from`, which must
     * be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
     */
-  def receive(handle: Handle, buf: ByteBuffer, from: Slot[Address]): Op & Repeatable
+  def receive(handle: Int, buf: ByteBuffer, from: Slot[Address]): Op & Repeatable
 
   /** Sends `buf` as one packet, to `to` or to the connected peer when `to` is null. Completes once the whole packet has
     * been sent, consuming `buf`.
     */
-  def send(handle: Handle, buf: ByteBuffer, to: Address | Null): Op & Repeatable
+  def send(handle: Int, buf: ByteBuffer, to: Address | Null): Op & Repeatable
 
   /** Completes once `milliseconds` have passed. */
   def timer(milliseconds: Int): Op & Repeatable
@@ -216,7 +234,7 @@ trait Ops[Op, Handle, BoxedHandle <: AnyRef] {
     * `perform` returns true; false means it was not ready after all, and the reactor waits again. For operations the
     * other ops do not cover, such as draining a FIFO.
     */
-  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): Op & Repeatable
+  def whenReady(handle: Int, interest: Interest)(perform: () => Boolean): Op & Repeatable
 
   /** Runs `body` off the reactor thread, completing when it returns. Cancelling it skips `body` if it has not started
     * and interrupts it if it is running; interruption is cooperative.

@@ -6,6 +6,7 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import asyncio.Address
+import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
@@ -31,7 +32,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
 /** Accepts one connection on a listening socket, writing its descriptor into `into`. Done once a connection has been
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
-final case class Accept(fd: Int, into: Slot[Integer]) extends Command {
+final case class Accept(fd: Int, into: HandleSlot) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = NonBlocking.accept(fd)

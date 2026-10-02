@@ -8,25 +8,23 @@ import ReactorFutures.*
 /** Mirror of `example.KQueueExampleTimer`: a five-second one-shot timer, with a one-second ticker running alongside. */
 object GearsTimer {
   def run()(using Reactor.Factory[Reactor]): Unit = {
-    Reactor.scoped { r =>
-      ReactorFutures.run(r) {
-        println("Creating and registering timer event...")
-        val fired = submit(r, r.ops.timer(5000))
-        println("Event registered successfully. Waiting for it to trigger...")
-        println("calling kevent to wait for events...")
-        val ticker = Future {
-          var seconds = 0
-          val timer = r.ops.timer(1000)
-          while true do {
-            submit(r, timer).await
-            seconds += 1
-            println(s"waited for $seconds seconds")
-          }
+    ReactorFutures.run { r =>
+      println("Creating and registering timer event...")
+      val fired = submit(r, r.ops.timer(5000))
+      println("Event registered successfully. Waiting for it to trigger...")
+      println("calling kevent to wait for events...")
+      val ticker = Future {
+        var seconds = 0
+        val timer = r.ops.timer(1000)
+        while true do {
+          submit(r, timer).await
+          seconds += 1
+          println(s"waited for $seconds seconds")
         }
-        fired.await
-        println("timer fired")
-        ticker.cancel() // Also cancels its pending one-second timer in the reactor.
       }
+      fired.await
+      println("timer fired")
+      ticker.cancel() // Also cancels its pending one-second timer in the reactor.
     }
   }
 }

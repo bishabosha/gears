@@ -7,8 +7,8 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Completion
+import asyncio.HandleSlot
 import asyncio.Interest
-import asyncio.Slot
 import asyncio.kqueue.Accept
 import asyncio.kqueue.Command
 import asyncio.kqueue.KqueueReactor
@@ -134,12 +134,12 @@ object KQueueExampleServerSocket {
   private class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
     private var connections: Map[Int, Connection] = Map.empty
 
-    private val accepted = Slot[Integer]() // each accept writes its connection here
+    private val accepted = HandleSlot() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 
     def onComplete(command: Accept): Unit = {
-      val clientFd = accepted.clear().intValue
+      val clientFd = accepted.clear()
       val connection = new Connection(r, clientFd, this)
       connections += clientFd -> connection
       connection.start()

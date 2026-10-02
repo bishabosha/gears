@@ -28,7 +28,7 @@ import asyncio.unsafe.Sockets.Transport
 /** Kqueue's handles are POSIX file descriptors, opened non-blocking. Descriptor numbers are process-wide, so the Unix
   * paths bound by `listen` and `datagram` are remembered per descriptor and removed when it is closed.
   */
-object KqueueHandles extends Handles[Int] {
+object KqueueHandles extends Handles {
   private val boundPaths = new ConcurrentHashMap[Integer, String]()
 
   def openFile(path: String, write: Boolean): Int = {
@@ -42,8 +42,9 @@ object KqueueHandles extends Handles[Int] {
   def connect(address: Address): Int =
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
 
-  def listen(address: Address): Int =
+  def listen(address: Address, reuseAddr: Boolean = true): Int =
     socketFor(address, Transport.Stream) { fd =>
+      if reuseAddr && !address.isInstanceOf[Address.Unix] then PosixSockets.setReuseAddress(fd)
       bindTo(fd, address)
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }

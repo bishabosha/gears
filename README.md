@@ -178,9 +178,12 @@ sbt 'kqueueDemo/run resolve --host localhost'
 
 Every reactor demo also has a gears mirror in `kqueue-demo/src/main/scala/gears-example`,
 run by putting `gears` before the command, for example `kqueueDemo/run gears kv-serve
---sock /tmp/gears-kv.sock`. Each completion step becomes a gears future for one
-command's result, awaited in plain sequential code; the reactor still runs on the main
-thread while the program runs in gears. The test suites run against both versions.
+--sock /tmp/gears-kv.sock`. Each completion step becomes a gears future awaited in plain
+sequential code. Reactors are thread-owned: `ReactorFutures.run` makes the calling
+thread the reactor thread, running the program as a future under a scheduler bound to
+that thread and the reactor's loop as its event loop, so futures submit to the reactor
+directly and everything a program spawns stays on that thread (there is no work stealing
+or balancing yet). The test suites run against both versions.
 
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.
