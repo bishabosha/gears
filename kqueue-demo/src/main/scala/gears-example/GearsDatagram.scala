@@ -49,14 +49,14 @@ object GearsDatagram {
           Async.group {
             val ping = Future {
               val send = r.ops.send(socket, request, null) // resubmitted until the packet has gone
-              submit(r, send).await // completes once the whole packet has gone
+              perform(r, send) // completes once the whole packet has gone
               println(s"Sent datagram of ${request.limit()} bytes.")
               val receive = r.ops.receive(socket, response, Slot[Address]()) // resubmitted until a packet arrives
-              submit(r, receive).await // completes once a packet has arrived
+              perform(r, receive) // completes once a packet has arrived
               println(s"Received datagram of ${response.remaining()} bytes: `${text(response)}`")
             }
             // UDP has no delivery guarantee; make a missing reply visible in the demo.
-            val deadline = submit(r, r.ops.timer(5000))
+            val deadline = Future(perform(r, r.ops.timer(5000)))
             Async.select(
               ping.handle(_.get),
               deadline.handle(_ => throw new IOException("Timed out waiting for datagram socket readiness or a reply"))
@@ -80,11 +80,11 @@ object GearsDatagram {
           val sender = Slot[Address]() // each packet's sender, written alongside the packet itself
           val receive = r.ops.receive(socket, packet, sender) // one repeatable op for every packet
           while true do {
-            submit(r, receive).await
+            perform(r, receive)
             val size = packet.remaining()
             println(s"Received datagram of $size bytes: `${text(packet)}`")
             val reply = r.ops.send(socket, packet, sender.clear()) // a new op per sender
-            submit(r, reply).await
+            perform(r, reply)
             println(s"Replied with datagram of $size bytes.")
           }
         } finally r.handles.close(socket)

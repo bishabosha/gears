@@ -73,10 +73,10 @@ object GearsCancel {
             r.handles.readNow(readFd, buf) != 0
           }
           val pending = Seq(
-            "read" -> submit(r, read), // nothing has been written yet
-            "blocking" -> submit(r, r.ops.blocking(sleeper(1000, sleeperInterrupted))),
-            "promise" -> submit(r, promise),
-            "timer" -> submit(r, r.ops.timer(300))
+            "read" -> Future(perform(r, read)), // nothing has been written yet
+            "blocking" -> Future(perform(r, r.ops.blocking(sleeper(1000, sleeperInterrupted)))),
+            "promise" -> Future(perform(r, promise)),
+            "timer" -> Future(perform(r, r.ops.timer(300)))
           )
           // Submitted straight to the reactor, with no future to cancel it: only closing the reactor can stop it.
           r.submit(
@@ -93,10 +93,10 @@ object GearsCancel {
           // the value it produces after the cancel must not reach its slot.
           val stubbornFinished = new AtomicBoolean()
           val stubbornResult = Slot[String]()
-          val stubbornTask = submit(r, r.ops.blocking(stubborn(300, stubbornFinished), stubbornResult))
+          val stubbornTask = Future(perform(r, r.ops.blocking(stubborn(300, stubbornFinished), stubbornResult)))
           println("submitted a read, a blocking task, a promise, and a timer")
 
-          submit(r, r.ops.timer(100)).await
+          perform(r, r.ops.timer(100))
           stubbornTask.cancel()
           for (name, future) <- pending do {
             future.cancel()
@@ -104,13 +104,18 @@ object GearsCancel {
             println(s"$name cancelled: ${isCancelled(future)}")
           }
 
-          // A promise is not Repeatable, so the reactor refuses it a second time, failing the future.
-          val refused = submit(r, promise).awaitResult.failed.toOption.exists(_.isInstanceOf[IllegalStateException])
+          // A promise is not Repeatable, so the reactor refuses it a second time, which `perform` throws.
+          val refused =
+            try {
+              perform(r, promise)
+              false
+            } catch case _: IllegalStateException => true
           println(s"resubmitting the cancelled promise: ${if refused then "refused" else "accepted"}")
 
           // Closing a handle may remove what the reactor watches, so a read still pending on it must stay cancellable.
           val (orphanRead, orphanWrite) = r.handles.pipe()
-          val orphan = submit(r, r.ops.read(orphanRead, NativeBuffer.allocate(16)))
+          val orphan = Future(perform(r, r.ops.read(orphanRead, NativeBuffer.allocate(16))))
+          perform(r, r.ops.timer(0)) // lets the future start, submitting its read before the pipe is closed
           r.handles.close(orphanRead)
           r.handles.close(orphanWrite)
           orphan.cancel()
@@ -136,12 +141,12 @@ object GearsCancel {
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
           r.handles.writeNow(writeFd, NativeBuffer.of("hello".getBytes(StandardCharsets.UTF_8)))
           buf.clear()
-          submit(r, r.ops.read(readFd, buf)).await
+          perform(r, r.ops.read(readFd, buf))
           buf.flip()
           println(s"read after cancel: `${text(buf)}`")
 
           // Past the cancelled timer's deadline, with the interrupted sleeper long stopped.
-          submit(r, r.ops.timer(500)).await
+          perform(r, r.ops.timer(500))
           val late = readPerforms.get() + pending.count((_, future) => !isCancelled(future))
           println(s"blocking interrupted: ${sleeperInterrupted.get()}")
           println(s"cancelled completions run: $late")

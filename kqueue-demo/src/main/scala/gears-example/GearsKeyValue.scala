@@ -70,7 +70,7 @@ object GearsKeyValue {
     var eof = false
     while !eof do {
       inbox.clear()
-      submit(r, readCommands).await
+      perform(r, readCommands)
       if inbox.position() == 0 then eof = true // Nothing added: end of stream. Answer what has been parsed, then close.
       else {
         inbox.flip()
@@ -104,7 +104,7 @@ object GearsKeyValue {
           outbox.put(batch, offset, chunk)
           outbox.flip()
           offset += chunk
-          while outbox.hasRemaining() do submit(r, writeReplies).await
+          while outbox.hasRemaining() do perform(r, writeReplies)
         }
       }
     }
@@ -141,7 +141,7 @@ object GearsKeyValue {
         val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
         val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
-          submit(r, accept).await // completes once a connection has been accepted
+          perform(r, accept) // completes once a connection has been accepted
           val client = accepted.clear()
           println(s"Accepted new client connection: $client")
           Future(session(r, client, store))
@@ -163,7 +163,7 @@ object GearsKeyValue {
         val socket = r.handles.connect(address)
         try {
           println(s"connection in progress to: $address")
-          submit(r, r.ops.connect(socket)).await
+          perform(r, r.ops.connect(socket))
           val sender = Future {
             val write = r.ops.write(socket, outbox)
             var sent = 0
@@ -171,7 +171,7 @@ object GearsKeyValue {
               outbox.clear()
               while sent < batch.length && StreamProtocol.append(batch(sent), outbox) do sent += 1
               outbox.flip()
-              while outbox.hasRemaining() do submit(r, write).await
+              while outbox.hasRemaining() do perform(r, write)
             }
             println(s"Pipelined ${batch.length} commands.")
           }
@@ -182,7 +182,7 @@ object GearsKeyValue {
             var lastReply = ""
             while received < batch.length do {
               inbox.clear()
-              submit(r, read).await
+              perform(r, read)
               if inbox.position() == 0 then
                 throw new IOException(s"Server closed the connection after $received replies")
               inbox.flip()

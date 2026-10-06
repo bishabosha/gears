@@ -3,15 +3,20 @@ package gearsexample
 import gears.async.Async
 import gears.async.AsyncSupport
 import gears.async.Cancellable
+import gears.async.CompletionGroup
 import gears.async.Future
 import gears.async.Listener
 import gears.async.Scheduler
 import gears.async.native.NativeSuspend
 
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration.FiniteDuration
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 
 import asyncio.Completion
 import asyncio.Promise
@@ -108,37 +113,77 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
 /** Gears futures over a thread-owned reactor. */
 object ReactorFutures {
 
-  /** Submits `op`, which must have been built by `r.ops`, and returns a future that completes when the op does. It must
-    * be called on the thread that owns `r`, which is where a program started by `run` executes. The future is linked to
-    * the caller's group, so cancelling the caller, or the future itself, asks the reactor to cancel the op; the future
-    * is rejected as cancelled when the reactor confirms it, which also happens if the reactor closes first.
+  /** Submits `op`, which must have been built by `r.ops`, and suspends the caller until the reactor finishes with it:
+    * it returns when the op completes, throws its failure, or throws `CancellationException` when it is cancelled. It
+    * must be called on the thread that owns `r`, which is where a program started by `run` executes. To run an op
+    * alongside other work, call this inside a `Future`.
+    *
+    * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
+    * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def submit(r: Reactor, op: r.Op)(using Async): Future[Unit] = {
-    val scheduler = {
-      val local = ReactorScheduler.onThisThread
-      if local == null || (local.reactor ne r) then
-        throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
-      local
+  def perform(r: Reactor, op: r.Op)(using ac: Async): Unit = {
+    val scheduler = ReactorScheduler.onThisThread
+    if scheduler == null || (scheduler.reactor ne r) then
+      throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
+    if ac.group.isCancelled then throw new CancellationException()
+    val waiter = new OpWaiter(scheduler, () => r.cancel(op))
+    r.submit(op, waiter.completion) // A refused op, such as a one-shot op submitted twice, throws here.
+    waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
+    // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
+    try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
+    finally waiter.unlink()
+  }
+
+  private val done = Success(())
+
+  /** One submission of an op, as a source that its completion completes once, and as a member of the caller's
+    * cancellation group. It has at most one listener, the suspended caller.
+    */
+  private final class OpWaiter(scheduler: ReactorScheduler, cancelOp: () => Boolean)
+      extends Async.Source[Try[Unit]]
+      with Cancellable {
+    // Empty, then either the suspended caller's listener or the outcome, and finally the outcome. Each transition is
+    // one atomic step, so exactly one side delivers the outcome: `finish` to a listener it swaps out, or `onComplete`
+    // to itself when it finds the outcome already there.
+    private val state = new AtomicReference[AnyRef](OpWaiter.Empty)
+
+    // Completions are contravariant, so this one fits the op of any reactor.
+    val completion: Completion[Any] = new Completion[Any] {
+      def onComplete(op: Any): Unit = finish(done)
+      override def onFailure(op: Any, failure: Throwable): Unit = finish(Failure(failure))
+      override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
     }
-    Future
-      .withResolver[Unit] { resolver =>
-        // Cancellation can come from any thread, so it is carried out on the reactor's own.
-        resolver.onCancel(() => scheduler.sync(r.cancel(op)))
-        // An op the reactor refuses, such as a one-shot op submitted twice, fails the future instead of the caller.
-        try
-          scheduler.sync {
-            r.submit(
-              op,
-              new Completion[r.Op] {
-                def onComplete(op: r.Op): Unit = resolver.resolve(())
-                override def onFailure(op: r.Op, failure: Throwable): Unit = resolver.reject(failure)
-                override def onCancel(op: r.Op): Unit = resolver.rejectAsCancelled()
-              }
-            )
-          }
-        catch case t: Throwable => resolver.reject(t)
+
+    private def finish(outcome: Try[Unit]): Unit =
+      state.getAndSet(outcome) match {
+        case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
+        case _                                 => ()
       }
-      .link()
+
+    def poll(k: Listener[Try[Unit]]): Boolean =
+      state.get() match {
+        case outcome: Try[Unit] @unchecked =>
+          k.completeNow(outcome, this)
+          true
+        case _ => false
+      }
+
+    def onComplete(k: Listener[Try[Unit]]): Unit =
+      if !state.compareAndSet(OpWaiter.Empty, k) then
+        state.get() match {
+          case outcome: Try[Unit] @unchecked => k.completeNow(outcome, this)
+          case _                             => () // Only the one caller ever waits.
+        }
+
+    def dropListener(k: Listener[Try[Unit]]): Unit = state.compareAndSet(k, OpWaiter.Empty)
+
+    // Cancellation can come from any thread, so it is carried out on the reactor's own. By then the op may have
+    // finished, and a repeatable op may even have been submitted again, which must not be cancelled.
+    def cancel(): Unit = scheduler.sync(if !state.get().isInstanceOf[Try[?]] then cancelOp())
+  }
+
+  private object OpWaiter {
+    private val Empty = new Object
   }
 
   /** Runs `program` on the calling thread, which becomes the reactor thread: it opens a reactor from the factory,

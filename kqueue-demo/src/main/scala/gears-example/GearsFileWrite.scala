@@ -25,7 +25,7 @@ object GearsFileWrite {
             buf.clear()
             buf.put(bytes)
             buf.flip()
-            submit(r, write).await
+            perform(r, write)
             println(s"actually wrote ${buf.position()} bytes") // the buffer was loaded at position 0
           }
         } finally r.handles.close(file)

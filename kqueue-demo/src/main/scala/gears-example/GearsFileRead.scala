@@ -44,15 +44,13 @@ object GearsFileRead {
           }
 
           val readable = r.ops.whenReady(file, Interest.Read)(drain) // one repeatable op, resubmitted each time
-          var next = submit(r, readable)
           println("Event registered for file read.")
           println("starting to poll...")
           while true do {
-            next.await // completes only at end of file
+            perform(r, readable) // completes only at end of file
             println(s"End of file reached. Contents are ${contents.size} long.")
             println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
             contents.reset() // Start over for the next writer
-            next = submit(r, readable)
           }
         } finally r.handles.close(file)
       }
