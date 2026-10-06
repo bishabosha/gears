@@ -19,7 +19,7 @@ object GearsWhois {
       val buf = NativeBuffer.allocate(8192)
       ReactorFutures.run { r =>
         val addresses = Slot[List[ResolvedAddress]]()
-        submit(r, r.ops.resolve(host, addresses)).await // a failed lookup fails the future
+        perform(r, r.ops.resolve(host, addresses)) // a failed lookup throws
         val resolvedAll = addresses.clear()
         val resolved = resolvedAll.head
         val address = resolved.family match {
@@ -29,19 +29,19 @@ object GearsWhois {
         println(s"resolved $host to $address (${resolvedAll.length} addresses)")
         val fd = r.handles.connect(address)
         try {
-          submit(r, r.ops.connect(fd)).await
+          perform(r, r.ops.connect(fd))
           val write = r.ops.write(fd, buf)
           val read = r.ops.read(fd, buf)
           println(s"connected; sending query `$query`")
           buf.clear()
           buf.put(s"$query\r\n".getBytes(StandardCharsets.UTF_8))
           buf.flip()
-          while buf.hasRemaining() do submit(r, write).await
+          while buf.hasRemaining() do perform(r, write)
           var received = 0L
           var eof = false
           while !eof do {
             buf.clear()
-            submit(r, read).await
+            perform(r, read)
             if buf.position() == 0 then eof = true // nothing added: the server closed the connection
             else {
               received += buf.position()
@@ -59,7 +59,7 @@ object GearsWhois {
   def resolve(host: String)(using Reactor.Factory[Reactor]): Unit = {
     ReactorFutures.run { r =>
       val addresses = Slot[List[ResolvedAddress]]()
-      submit(r, r.ops.resolve(host, addresses)).await // a failed lookup fails the future
+      perform(r, r.ops.resolve(host, addresses)) // a failed lookup throws
       val resolvedAll = addresses.clear()
       resolvedAll.foreach { a =>
         val family = if a.family == AddressFamily.IPv4 then "IPv4" else "IPv6"

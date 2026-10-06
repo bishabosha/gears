@@ -35,7 +35,7 @@ object GearsServerSocket {
         var open = true
         while open && buf.hasRemaining() do {
           val before = buf.position()
-          submit(r, read).await
+          perform(r, read)
           open = buf.position() > before // a read that adds nothing is the end of the stream
         }
         if !open then println(s"Unexpected EOF from client socket $client.")
@@ -64,7 +64,7 @@ object GearsServerSocket {
             buf.clear()
             buf.put(Response)
             buf.flip()
-            while buf.hasRemaining() do submit(r, write).await
+            while buf.hasRemaining() do perform(r, write)
           }
         }
       }
@@ -89,7 +89,7 @@ object GearsServerSocket {
         val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
         val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
-          submit(r, accept).await // completes once a connection has been accepted
+          perform(r, accept) // completes once a connection has been accepted
           val client = accepted.clear()
           println(s"Accepted new client connection: $client")
           Future(serve(r, client))
