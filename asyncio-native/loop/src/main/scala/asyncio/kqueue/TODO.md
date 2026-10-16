@@ -6,16 +6,18 @@ today; with items 1–3 below it would cost 1 (just the `read`), and about 2 whe
 
 ## Measuring
 
-Measure each item with `kqueuedemo gears bench`, comparing saved executables with `kqueue-demo/bench/compare.py` (see
-its header). The scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path), `pingpong-fresh-ops`
-(the same, building its ops anew for every message), `pingpong-deadline` (item 5), `timers` (item 5: 1,000 timers
-pending at a time, half firing and half cancelled), `concurrent` (item 4), `pipelined` (items 2 and 3 on simultaneous
-reads and writes), `blocking` (item 6), and two that check that queued work is not starved: `mixed`, ping-pong while a
-compute future on the same thread works in slices, reporting the compute side as `mixed-compute`, and `fairness`,
-pipelined traffic while a ticker future on the same thread awaits zero-length timers, reporting the time between ticks
-as `fairness-tick`. `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a reference for what a
-hand-written loop costs, except the gears-only `pingpong-fresh-ops`, `mixed` and `fairness`. Medians from the same build
-differ by about 1% between runs (`blocking` by up to about 6%).
+Measure each item with `kqueuedemo gears bench`: build the executables to compare with `kqueue-demo/bench/build.sh`
+(release-fast, against the Scala Native nightly, since 0.5.12's GC can crash multithreaded release builds) and compare
+them with `kqueue-demo/bench/compare.py` (see its header). Debug builds overstate the Scala-side cost, so measure
+release builds. The scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path),
+`pingpong-fresh-ops` (the same, building its ops anew for every message), `pingpong-deadline` (item 5), `timers` (item
+5: 1,000 timers pending at a time, half firing and half cancelled), `concurrent` (item 4), `pipelined` (items 2 and 3 on
+simultaneous reads and writes), `blocking` (item 6), and two that check that queued work is not starved: `mixed`,
+ping-pong while a compute future on the same thread works in slices, reporting the compute side as `mixed-compute`, and
+`fairness`, pipelined traffic while a ticker future on the same thread awaits zero-length timers, reporting the time
+between ticks as `fairness-tick`. `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a
+reference for what a hand-written loop costs, except the gears-only `pingpong-fresh-ops`, `mixed` and `fairness`.
+Medians from the same build differ by about 1% between runs (`blocking` by up to about 6%).
 
 Every scenario has run since the first measurement, after one fix made for them: `mixed` never finished, because nothing
 bounded the work a turn took on. `ReactorScheduler.drain` ran tasks until its queue was empty, including tasks they
@@ -119,3 +121,12 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
   (32 bytes on macOS).
 - [ ] **SIGPIPE (correctness).** No socket sets `SO_NOSIGPIPE`, and writes don't pass `MSG_NOSIGNAL`, so writing to a peer
   that has closed raises `SIGPIPE` and kills the process. Set `SO_NOSIGPIPE` once per socket, at creation or accept.
+- [ ] **Move to Scala Native 0.5.13 once it is released.** On 0.5.12, multithreaded release builds of the gears demos
+  crash intermittently in `ReactorFutures.perform` just after a continuation resumes: the GC ignored conservative roots
+  that point partway into an object, so an object referenced only by such an interior pointer, as optimised code can
+  hold across a suspension, was collected while live ([scala-native#5080](https://github.com/scala-native/scala-native/pull/5080),
+  the fix for [#5046](https://github.com/scala-native/scala-native/issues/5046)). Debug builds are unaffected. The
+  `gears-release-repro` branch reproduces it with gears alone: two threads awaiting through `Async.withGroup`. Until then,
+  `SCALA_NATIVE_NIGHTLY=1` builds against a nightly that includes the fix, and `kqueue-demo/bench/build.sh` uses it for
+  benchmark executables. When moving, set the plugin version in `project/plugins.sbt` and remove the nightly switch
+  there and in `build.sbt`, along with the nightly check in `build.sh`.

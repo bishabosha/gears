@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Compares `kqueuedemo gears bench` across builds of the demo executable.
 
-Keep a copy of the executable before each change, then compare:
+Build the executables to compare with kqueue-demo/bench/build.sh, which links a commit in release-fast mode against the
+Scala Native nightly (0.5.12's GC can crash multithreaded release builds), then compare them:
 
-    sbt 'show kqueueDemo/nativeLink'          # prints the executable's path
-    cp <path> /tmp/kqueuedemo.before
-    ... make the change, link again ...
-    kqueue-demo/bench/compare.py before=/tmp/kqueuedemo.before after=<path>
+    kqueue-demo/bench/build.sh HEAD~ /tmp/kqueuedemo.before
+    kqueue-demo/bench/build.sh HEAD /tmp/kqueuedemo.after
+    kqueue-demo/bench/compare.py before=/tmp/kqueuedemo.before after=/tmp/kqueuedemo.after raw=/tmp/kqueuedemo.after@raw
 
 A build runs the gears benchmark, `gears bench`; suffix its path with `@raw` to run the same scenarios written against
 `KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`.
@@ -22,9 +22,17 @@ import subprocess
 import sys
 
 
-def run_once(path, bench_args):
+def run_once(path, bench_args, retries, crashes):
     command = [path[: -len("@raw")], "bench"] if path.endswith("@raw") else [path, "gears", "bench"]
-    output = subprocess.run([*command, *bench_args], check=True, capture_output=True, text=True, timeout=600).stdout
+    for attempt in range(retries + 1):
+        result = subprocess.run([*command, *bench_args], capture_output=True, text=True, timeout=600)
+        if result.returncode == 0:
+            break
+        crashes.append(f"{' '.join(command)} exited with {result.returncode}: {result.stderr.strip()[-300:]}")
+        if attempt == retries:
+            sys.exit(f"{' '.join(command)} failed {retries + 1} times; last output:\n{result.stdout}{result.stderr}")
+        print(f"  failed with exit code {result.returncode}; retrying", file=sys.stderr)
+    output = result.stdout
     results = {}
     for line in output.splitlines():
         fields = line.split()
@@ -47,6 +55,9 @@ def main():
         "builds", nargs="+", metavar="label=path[@raw]", help="a demo executable and a label for it"
     )
     parser.add_argument("--runs", type=int, default=3, help="runs per build (default 3)")
+    parser.add_argument(
+        "--retries", type=int, default=0, help="times to rerun a run that fails before giving up (default 0)"
+    )
     args = parser.parse_args(argv)
 
     builds = []
@@ -57,10 +68,11 @@ def main():
         builds.append((label, path))
 
     samples = {label: {} for label, _ in builds}
+    crashes = []
     for run in range(args.runs):
         for label, path in builds:
             print(f"run {run + 1}/{args.runs}: {label}", file=sys.stderr)
-            for scenario, us in run_once(path, bench_args).items():
+            for scenario, us in run_once(path, bench_args, args.retries, crashes).items():
                 samples[label].setdefault(scenario, []).append(us)
 
     scenarios = list(samples[builds[0][0]])
@@ -80,6 +92,10 @@ def main():
                 row += f"{median:>13.2f} ({change:+6.1f}%)"
         print(row)
 
+    if crashes:
+        print(f"\n{len(crashes)} run(s) failed and were retried:")
+        for crash in crashes:
+            print(f"  {crash}")
 
 if __name__ == "__main__":
     main()

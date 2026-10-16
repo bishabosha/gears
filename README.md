@@ -198,8 +198,12 @@ pipelining with a write per message; and blocking tasks completing on worker thr
 with no reactor, as a reference for what a hand-written loop costs.
 `kqueue-demo/bench/compare.py before=<old executable> after=<new executable>` runs saved
 builds alternately and reports each scenario's median microseconds per operation and the
-change (add `raw=<executable>@raw` for the reference); keep a copy of the executable
-before each change to compare against.
+change (add `raw=<executable>@raw` for the reference).
+`kqueue-demo/bench/build.sh <commit> <output>` builds an executable to compare: the commit
+linked in release-fast mode against a Scala Native nightly, because 0.5.12's GC can crash
+multithreaded release builds of the gears demos (scala-native#5080). Setting
+`SCALA_NATIVE_NIGHTLY=1` when starting sbt builds against the nightly too; otherwise the
+build uses Scala Native 0.5.12.
 
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.
