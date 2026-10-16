@@ -67,15 +67,22 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
   and blocking only when it has none. `ReactorScheduler.execute` calls `Reactor.wakeup` only from another thread, so
   resuming a continuation on the reactor thread costs no syscalls and no promise allocation.
 
-- [ ] **2. Try the operation before waiting for readiness.**
-  Sockets are usually writable, and a request-response or pipelined peer usually has data waiting already. Go and tokio
-  both try first.
-  - On `submit`, call `perform()` straight away. If it would block, register and wait as now.
-  - If it succeeds, put the completion on the ready queue from item 1, rather than calling it inside `submit`, so
-    completions still run from the loop and there's no recursion. Depends on item 1.
-  - Saves the registering `kevent`, the wait, and the event for a successful attempt.
-  - Cost: a wasted `read` when nothing is waiting. Keep it cheap by not retrying right after a would-block on the same
-    descriptor.
+- [x] **2. Try the operation before waiting for readiness.**
+  Done in `KqueueReactor.submit`: a read, write, accept, receive, or send is performed at once, and only registered if
+  it would block. `Connect` and `WhenReady` still wait (`Command.tryFirst`): a connect's error check passes while the
+  connection is in progress, and `whenReady` promises its body runs once the descriptor is ready. A command that finished
+  at once has its completion queued and run on the next turn, never inside `submit`; a turn delivers only what was queued
+  when it began, so one busy descriptor cannot starve the rest.
+  - Trying first alone made things worse (release: `pingpong` +67%, `pipelined` +108%): each finished command then cost
+    a turn that still polled kqueue. A turn that delivered completions now skips the poll, polling at least every 16
+    turns (`KqueueReactor.PollEvery`) so other descriptors are still seen.
+  - Trying reads helps pipelined traffic but wastes a read per round trip in request/response traffic, where the reply
+    is not there yet; item 3's readiness bits would remove that waste.
+  - Release-fast, median of 5 runs, µs/op before → after: `pingpong` 18.5 → 12.1 (−35%), `pingpong-deadline` 20.4 → 17.6
+    (−13%), `concurrent` 7.4 → 7.0 (−6%), `pipelined` 7.4 → 3.1 (−59%), `mixed` 36.7 → 32.3 (−12%, its compute slices
+    36.5 → 32.2), `blocking` unchanged (`kqueue-demo/bench/results/try-first.json`).
+  - Skipping polls cost fairness: `fairness-tick` 9.8 → 53.0 µs, one tick per 17 messages instead of one, as the
+    ticker's kernel timers were only seen when a turn polled. Item 5's timers, checked every turn, restored it.
 
 - [ ] **3. Persistent edge-triggered registration instead of one-shot filters.**
   `EV_ONESHOT` means one `kevent` per submit, and another after each spurious wake-up.
@@ -84,6 +91,9 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
   - Closing the descriptor removes its filters automatically.
   - A cancel only clears the slot, so it needs no `EV_DELETE`.
   - Saves every registration and re-registration in steady state.
+  - With readiness known, item 2 can try a command only when its descriptor is ready, instead of always. Should that not
+    be enough, a caller hint per op (try now, wait for readiness, or let the reactor decide) could cover protocols where
+    the caller knows better, such as a client reading a reply it has just requested.
 
 - [ ] **4. Batch remaining changes into the wait call.**
   `kevent` takes a list of changes and an array for events in one call, but the reactor issues a separate call per change.

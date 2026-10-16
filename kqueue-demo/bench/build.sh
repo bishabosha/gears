@@ -5,13 +5,19 @@
 #
 #   kqueue-demo/bench/build.sh <commit> <output>
 #
-# Then compare executables with kqueue-demo/bench/compare.py. Only committed code is built.
+# Then compare executables with kqueue-demo/bench/compare.py. <commit> may be WORKTREE, for the working tree's changes to
+# tracked files on top of HEAD (untracked files are left out).
 set -euo pipefail
 commit=${1:?usage: build.sh <commit> <output>}
 output=${2:?usage: build.sh <commit> <output>}
 case "$output" in /*) ;; *) output="$PWD/$output" ;; esac
 
 repo=$(git rev-parse --show-toplevel)
+if [ "$commit" = WORKTREE ]; then
+  # A commit of the tracked changes, made without touching the working tree, the index, or the stash list.
+  commit=$(git -C "$repo" stash create)
+  [ -n "$commit" ] || commit=HEAD # no changes
+fi
 worktree=$(mktemp -d "${TMPDIR:-/tmp}/kqueue-bench-build.XXXXXX")
 cleanup() {
   (cd "$worktree" && sbt --client shutdown >/dev/null 2>&1) || true

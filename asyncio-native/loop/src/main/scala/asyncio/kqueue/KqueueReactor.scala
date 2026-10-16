@@ -13,10 +13,11 @@ import asyncio.Repeatable
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
 
-/** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command waits for readiness with a one-shot
-  * filter and is performed on the loop thread; a timer is a kqueue timer; `wakeup`, and blocking tasks finishing on
-  * other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll returns up to
-  * `maxEvents` events.
+/** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command is performed as soon as it is
+  * submitted when it allows that, and otherwise, or when it would block, waits for readiness with a one-shot filter and
+  * is performed on the loop thread; a timer is a kqueue timer; `wakeup`, and blocking tasks finishing on other threads,
+  * wake the loop with a user event. Each submission is its own kevent call, and each poll returns up to `maxEvents`
+  * events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor {
 
@@ -34,7 +35,18 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     def complete(): Unit = completion.onComplete(op)
     def fail(failure: Throwable): Unit = completion.onFailure(op, failure)
     def cancelled(): Unit = completion.onCancel(op)
+
+    /** For a command that finished when submitted: its failure, or null if it completed. */
+    var failure: Throwable | Null = null
   }
+
+  // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
+  private val ready = new java.util.ArrayDeque[Pending[?]]()
+
+  // Turns in a row that delivered completions without polling. A turn that delivered something skips the poll, since
+  // the completions it ran will likely submit more work; every `KqueueReactor.PollEvery` turns it polls anyway, so
+  // descriptors that only kqueue can report are not starved. Loop thread only.
+  private var turnsWithoutPoll = 0
 
   // Promises resolve on other threads; they queue here and a user event interrupts a blocked poll.
   private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueuePromise]()
@@ -81,15 +93,14 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     op match {
       case command: Command =>
         val slot = slotFor(command.fd)
-        command.interest match {
-          case Interest.Read =>
-            require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
-            slot.read = pending
-          case Interest.Write =>
-            require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
-            slot.write = pending
+        val read = command.interest == Interest.Read
+        // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+        if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
+        else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+        if !(command.tryFirst && performedAtOnce(command, pending)) then {
+          if read then slot.read = pending else slot.write = pending
+          arm(command.fd, read)
         }
-        arm(command.fd, read = command.interest == Interest.Read)
       case timer: KqueueTimer =>
         require(timer.id < 0 || !timers.contains(timer.id), "This timer is already pending")
         if timer.id < 0 then
@@ -113,6 +124,40 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
         }
     }
     op.submitted = true
+  }
+
+  /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
+    * turn rather than run here, and this returns true; if it would block, this returns false.
+    */
+  private def performedAtOnce(command: Command, pending: Pending[?]): Boolean = {
+    val done =
+      try command.perform()
+      catch {
+        case t: Throwable =>
+          pending.failure = t
+          true
+      }
+    if done then ready.add(pending)
+    done
+  }
+
+  /** Runs the completions of the commands that finished when submitted, as many as were queued when it started: a
+    * completion that submits a command which finishes at once is left for the next turn, so one busy descriptor cannot
+    * keep the loop from polling. Returns whether there were any.
+    */
+  private def deliverReady(): Boolean = {
+    var count = ready.size
+    val any = count > 0
+    while count > 0 do {
+      val pending = ready.poll().nn
+      count -= 1
+      val failure = pending.failure
+      if failure != null then {
+        pending.failure = null
+        pending.fail(failure)
+      } else pending.complete()
+    }
+    any
   }
 
   /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
@@ -179,6 +224,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
       dropped ++= timers.values
       timers.clear()
+      while !ready.isEmpty do dropped += ready.poll().nn // finished, but their completions have not run
       val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
       for promise <- pendingPromises.toList do {
         val pending = detach(promise)
@@ -212,7 +258,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   private def isWriteEvent(event: Event): Boolean = KqueueLoop.isWriteEvent(event)
   private def fileIdent(event: Event): Int = KqueueLoop.fileIdent(event)
 
-  /** A pending command is removed from its slot and its filter deleted; a pending timer is deleted; a promise is
+  /** A command that finished when submitted counts as finished: its completion still runs, and this returns false. A
+    * pending command is removed from its slot and its filter deleted; a pending timer is deleted; a promise is
     * detached, so completing it later does nothing, and a blocking task is skipped or interrupted. The completion's
     * `onCancel` then runs before this returns, except for a blocking task that was running: its `onCancel` runs from
     * the loop once `block` has returned.
@@ -327,16 +374,26 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     }
   }
 
-  /** Delivers resolved promises, polls once, dispatches what it polled, then delivers promises resolved meanwhile. It
-    * blocks in the poll only if asked to and nothing was delivered first. Error events throw.
+  /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
+    * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
+    * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. Error events throw.
     */
   def runOnce(block: Boolean): Unit =
     KqueueLoop.pollQueue(maxEvents) { events =>
       loopThread = Thread.currentThread()
-      val delivered = deliverResolved()
+      val delivered = deliverReady() | deliverResolved() // both, without short-circuiting
       val polled =
-        if block && !delivered then KqueueLoop.pollEventsForever(kq, events, maxEvents)
-        else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+        if !delivered then {
+          turnsWithoutPoll = 0
+          if block then KqueueLoop.pollEventsForever(kq, events, maxEvents)
+          else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+        } else if turnsWithoutPoll < KqueueReactor.PollEvery then {
+          turnsWithoutPoll += 1
+          0
+        } else {
+          turnsWithoutPoll = 0
+          KqueueLoop.pollEventsNow(kq, events, maxEvents)
+        }
       var i = 0
       while i < polled do {
         val event = events(i)
@@ -355,6 +412,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
 }
 
 object KqueueReactor {
+
+  /** A loop that keeps delivering completions polls kqueue at least once in this many turns. */
+  private val PollEvery = 16
 
   /** Opens a reactor on a new kqueue; each poll returns up to `maxEvents` events. Close it when done. */
   def open(maxEvents: Int = 255): KqueueReactor = new KqueueReactor(KqueueLoop.open(), maxEvents)
