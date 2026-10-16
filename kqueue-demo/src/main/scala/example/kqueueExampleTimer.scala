@@ -3,7 +3,6 @@ package example
 import asyncio.Completion
 import asyncio.kqueue.KqueueReactor
 import asyncio.kqueue.KqueueTimer
-import asyncio.unsafe.KqueueLoop
 
 /** A five-second one-shot timer, with a one-second ticker running alongside. Both are `KqueueTimer` ops. */
 object KQueueExampleTimer {
@@ -14,7 +13,7 @@ object KQueueExampleTimer {
       r.submit(
         new KqueueTimer(milliseconds = 5000),
         timer => {
-          println(s"Event triggered: ID = ${timer.id}, Filter = ${KqueueLoop.EVFILT_TIMER}")
+          println(s"Event triggered: the ${timer.milliseconds} ms timer")
           println("timer fired")
           r.cancel(tick)
           r.stop() // Exit after handling the event

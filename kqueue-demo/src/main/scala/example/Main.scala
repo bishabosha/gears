@@ -16,6 +16,10 @@ object Main {
     KQueueExampleTimer.run()
   }
   @main
+  def timers(@arg count: Int = 2000): Unit = {
+    KQueueExampleTimers.run(count)
+  }
+  @main
   def sockServe(@arg sock: String): Unit = {
     KQueueExampleServerSocket.run(sock)
   }

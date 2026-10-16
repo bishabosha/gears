@@ -114,12 +114,20 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
     descriptors.
   - Saves one syscall per change that items 2 and 3 don't remove (cancels, timers, first registrations).
 
-- [ ] **5. Timers in user space.**
-  Each timer submit and cancel is a `kevent` call, and gears creates and cancels timers constantly (`sleep`, timeouts that
-  lose an `Async.select`).
-  - Keep a deadline heap on the reactor thread, and pass the nearest deadline as the wait's timeout
-    (`KqueueLoop.pollEventsTimeout` already exists). libuv and tokio work this way.
-  - Saves both syscalls per timer.
+- [x] **5. Timers in user space.**
+  Done in `KqueueReactor`: a timer gets a deadline from `System.nanoTime` and goes into a binary min-heap on the loop
+  thread (deadline, then submission order), and each `KqueueTimer` keeps its heap index, so cancelling it is an
+  O(log n) removal. Setting or cancelling a timer makes no syscall: a blocking poll waits no longer than the earliest
+  deadline, and due timers fire after the turn's events, only those submitted before the turn began, so a completion
+  that resubmits a zero-length timer cannot stall the loop. `KqueueTimer` no longer has a kernel ID. The plain
+  `timers` demo (and its test) checks 2,000 timers with every third cancelled: they fire in deadline order, and no
+  cancelled one fires.
+  - Release-fast, median of 5 runs, µs/op before → after, with the raw benchmark's kernel timers for reference: `timers`
+    1.27 → 0.22 (−83%; raw 1.09), `pingpong-deadline` 10.9 → 9.4 (−14%), so a timer armed and cancelled per round trip
+    now costs nothing measurable over plain `pingpong` (9.4). Due timers fire every turn, polled or not, so
+    `fairness-tick` went 46.9 → 4.1 µs: the ticker gets one tick per message again, and the traffic beside it 2.8 → 4.1
+    µs a message. `blocking` +7%, at the edge of its noise; everything else within 1.1%. Saved as
+    `kqueue-demo/bench/results/user-space-timers.json`.
 
 - [x] **6. Cheaper wake-ups from other threads.**
   Done: the wake pipe is replaced by an `EVFILT_USER` event, so waking is one `kevent(NOTE_TRIGGER)` call with nothing to
