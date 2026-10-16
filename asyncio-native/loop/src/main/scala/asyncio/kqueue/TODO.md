@@ -204,6 +204,16 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
   median of 5 runs: `pipelined` −10%, `fairness` −6%, `timers` −5%, `concurrent` −4%, `blocking` −2%, ping-pong within
   2% (`kqueue-demo/bench/results/reuse-op-records.json`).
 
+- Building ops per call is cheap, so per-descriptor ops were tried and decided against. The `pingpong-fresh-ops`
+  scenario builds its write and read ops anew for every message (`perform(r, r.ops.read(fd, buf))`, as code that
+  does not keep them does); it ran 8.29 µs a round trip against `pingpong`'s 8.20 with ops kept, about 1% more.
+  Letting the reactor keep one op of each kind per descriptor, retargeted each time it is built (so building it
+  allocated nothing and its attachment, holding the gears waiter, carried over), left it at 8.36: no measurable
+  change, and only about 2.5 fewer allocations per round trip. Not worth the cost: building `ops.read(fd, bufB)`
+  would retarget the op an earlier `ops.read(fd, bufA)` returned, ops could only be built on the reactor's thread,
+  and building a pending op had to fail. Callers who want no allocation can keep their ops, which the attachment
+  already makes free in `perform`.
+
 Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
 `scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
 matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.
