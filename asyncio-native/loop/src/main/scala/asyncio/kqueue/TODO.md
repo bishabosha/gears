@@ -184,6 +184,11 @@ What remains is mostly the runtime's cost per allocation, so allocating less per
 the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operation in Scala Native, and the objects
 `perform` creates per call.
 
+- `ReactorScheduler` now queues tasks from the reactor thread on a plain `ArrayDeque`, keeping a `ConcurrentLinkedQueue`
+  only for tasks from other threads: release-fast, median of 5 runs, `concurrent` −9%, `blocking` −3%,
+  `pingpong-deadline` and `mixed` −2%, the rest within 2% (`kqueue-demo/bench/results/scheduler-local-queue.json`).
+  Small, as the profile predicted.
+
 Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
 `scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
 matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.

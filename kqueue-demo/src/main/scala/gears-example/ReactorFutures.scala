@@ -29,7 +29,13 @@ import asyncio.Reactor
   */
 final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extends Scheduler {
   private val owner = Thread.currentThread()
-  private val tasks = new ConcurrentLinkedQueue[Runnable]()
+
+  // Tasks queued on the reactor thread, almost all of them: resuming a continuation is queued by a completion, which
+  // runs there. A plain array deque, used only from that thread, allocates nothing per task.
+  private val local = new java.util.ArrayDeque[Runnable]()
+
+  // Tasks queued from other threads, which wake the loop. `drain` moves them to `local`.
+  private val remote = new ConcurrentLinkedQueue[Runnable]()
 
   ReactorScheduler.current.set(this)
 
@@ -38,13 +44,15 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
   /** Queues `body` to run on the reactor thread, from any thread. Only another thread has to wake the loop: on the
     * reactor thread itself the loop is not blocked, and the task runs before it next blocks.
     */
-  def execute(body: Runnable): Unit = {
-    tasks.add(body)
-    if !isCurrent then reactor.wakeup()
-  }
+  def execute(body: Runnable): Unit =
+    if isCurrent then local.add(body)
+    else {
+      remote.add(body)
+      reactor.wakeup()
+    }
 
-  /** Whether no task is queued, so the loop may block. */
-  private[gearsexample] def isIdle: Boolean = tasks.isEmpty
+  /** Whether no task is queued, so the loop may block. On the reactor thread only. */
+  private[gearsexample] def isIdle: Boolean = local.isEmpty && remote.isEmpty
 
   /** Runs `body` after `delay` on the reactor thread, using a reactor timer. */
   def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
@@ -72,13 +80,17 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     * polled.
     */
   private[gearsexample] def drain(): Unit = {
-    var remaining = tasks.size() // traverses the queue, which stays short
+    var fromElsewhere = remote.poll()
+    while fromElsewhere != null do {
+      local.add(fromElsewhere)
+      fromElsewhere = remote.poll()
+    }
+    var remaining = local.size
     while remaining > 0 do {
-      val task = tasks.poll()
+      val task = local.poll()
       remaining -= 1
-      if task != null then
-        try task.run()
-        catch case t: Throwable => t.printStackTrace()
+      try task.run()
+      catch case t: Throwable => t.printStackTrace()
     }
   }
 }
