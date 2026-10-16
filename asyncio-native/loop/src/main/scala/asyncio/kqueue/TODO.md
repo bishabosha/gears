@@ -220,11 +220,13 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
   polls 66%, `currentThread` 11%, the allocator 10%, monitors 8%.
   - Linking with `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0` (conditional yieldpoints, which check a global flag) gained
     7–14% on the throughput scenarios (release-fast against the nightly, median of 5 runs: `pipelined` −10%,
-    `concurrent` −7%, `blocking` −7%, `timers` −14%, ping-pong −1%), and ran without failure on the nightly. This is
+    `concurrent` −7%, `blocking` −7%, `timers` −14%, ping-pong −1%;
+    `kqueue-demo/bench/results/conditional-yieldpoints.json`), and ran without failure on the nightly. This is
     not made the default here; it is worth recommending to applications that only use thread-owned reactors, with
     futures that stay on their reactor's thread and no work-stealing workers.
   - In our code, `runOnce` no longer calls `Thread.currentThread()` every turn, and `perform` takes its scheduler from
-    its `Async` context instead of a `ThreadLocal`. Simpler, but no measurable difference.
+    its `Async` context instead of a `ThreadLocal`. Simpler, but no measurable difference
+    (`kqueue-demo/bench/results/fewer-current-thread.json`).
 
 - `perform` no longer suspends for an op that finishes at once. `Reactor.trySubmit` finishes such an op inside the call
   and returns true without calling its completion; `perform` then returns, skipping the await, the continuation switch
@@ -241,9 +243,38 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
     (`kqueue-demo/bench/results/fast-path-budgets.json`, 3 runs). Requiring an idle scheduler as well removed the cost
     to fairness entirely while keeping the gain, which comes from futures that run alone.
 
-Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
-`scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
-matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.
+## Proposed changes to Scala Native
+
+Costs found while profiling that only Scala Native can remove, all on macOS arm64. The `scala-native-setjmp-issue`
+branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
+
+- **Continuation resume: `_setjmp` instead of `setjmp`.**
+  Problem: every continuation resume, so every `perform` that suspends, costs two extra system calls.
+  `scalanative_continuation_resume` (`delimcc.c`) calls libc `setjmp`, which on macOS and the BSDs also saves the
+  signal mask and alternate stack (`sigprocmask` and `sigaltstack`); glibc's does not. The mask needs no saving there.
+  Fix: `_setjmp` in `delimcc.c`, with the matching `_longjmp` in `eh.c` and `eh.cpp`. Measured by patching the
+  nightly's `delimcc.c` and `eh.c` in the link output (release-fast, median of 5 runs): `pipelined` −13%,
+  `concurrent` −10%, `pingpong-deadline` −11%, `pingpong` −8%, `blocking` −2%
+  (`kqueue-demo/bench/results/patched-setjmp.json`). No workaround on our side.
+- **GC register capture on arm64: `_setjmp` or inline assembly instead of `setjmp`.**
+  Problem: every `@blocking` extern call costs two extra system calls, so posixlib's `read`, `write` and `kevent` cost
+  three each. Around every `@blocking` call the thread's GC state switches, and `RegistersCapture`
+  (`gc/immix_commix/RegistersCapture.h`) uses inline moves on x86 but falls back to libc `setjmp` everywhere else.
+  Fix: `_setjmp`, or capturing x19–x28, the frame pointer and the stack pointer inline as on x86-64. Our workaround is
+  item 9: `asyncio.unsafe.Unblocked` binds the calls that cannot block without `@blocking`, which gained 8–17%
+  (`kqueue-demo/bench/results/unblocked-syscalls.json`). The kevent call that waits still pays. With the fix, those
+  bindings could go and every library's `@blocking` calls would get cheaper.
+- **Safepoint polls without a thread-local on macOS.**
+  Problem: thread-local lookups (`_tlv_get_addr`) take 18–20% of CPU in the throughput scenarios, two thirds of it from
+  safepoint polls. With trap-based yieldpoints, the default in release builds, every poll is a volatile load of the
+  thread-local `scalanative_GC_yieldpoint_trap`, and on macOS every thread-local access is a function call where Linux
+  has a register-relative load (see the profiling findings above). Fix, for Scala Native to choose: a process-wide trap
+  page where per-thread stopping is not needed, or storing the cell where Darwin can read it without `_tlv_get_addr`.
+  Conditional yieldpoints, which poll a global, show what is at stake: 7–14% on the throughput scenarios
+  (`kqueue-demo/bench/results/conditional-yieldpoints.json`). Our workaround is only a recommendation: link with
+  `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0` when using thread-owned reactors only.
+- **The GC's interior-pointer roots** were fixed upstream ([scala-native#5080](https://github.com/scala-native/scala-native/pull/5080)).
+  The problem: release builds crashed on 0.5.12. Waiting for 0.5.13; see the last item below.
 
 ## Related, not syscalls
 

@@ -1,0 +1,334 @@
+{
+  "started": "2026-10-17T00:17:55+02:00",
+  "finished": "2026-10-17T00:18:51+02:00",
+  "load_average": {
+    "before": [
+      7.24267578125,
+      5.38623046875,
+      4.60986328125
+    ],
+    "after": [
+      4.7001953125,
+      5.01953125,
+      4.52490234375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "trap",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.trap",
+      "benchmark": "gears",
+      "build": {
+        "commit": "45a68b5d7c4bacc5481bf65a6a5274e525da496e",
+        "subject": "test new op per perform",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T00:17:18+02:00"
+      },
+      "median": {
+        "pingpong": 8.36,
+        "pingpong-fresh-ops": 8.33,
+        "pingpong-deadline": 8.4,
+        "concurrent": 4.13,
+        "pipelined": 2.3,
+        "blocking": 6.72,
+        "timers": 0.22,
+        "mixed-compute": 28.26,
+        "mixed": 28.3
+      },
+      "samples": {
+        "pingpong": [
+          8.3,
+          8.19,
+          8.38,
+          8.43,
+          8.36
+        ],
+        "pingpong-fresh-ops": [
+          8.33,
+          8.31,
+          8.45,
+          8.18,
+          8.35
+        ],
+        "pingpong-deadline": [
+          8.49,
+          8.64,
+          8.4,
+          8.38,
+          8.39
+        ],
+        "concurrent": [
+          4.46,
+          3.99,
+          4.07,
+          4.13,
+          4.33
+        ],
+        "pipelined": [
+          2.35,
+          2.19,
+          2.31,
+          2.3,
+          2.17
+        ],
+        "blocking": [
+          6.86,
+          6.8,
+          6.72,
+          6.52,
+          6.47
+        ],
+        "timers": [
+          0.22,
+          0.22,
+          0.22,
+          0.22,
+          0.22
+        ],
+        "mixed-compute": [
+          28.25,
+          28.26,
+          28.27,
+          28.13,
+          28.43
+        ],
+        "mixed": [
+          28.28,
+          28.3,
+          28.31,
+          28.16,
+          28.46
+        ]
+      }
+    },
+    {
+      "label": "conditional",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.conditional",
+      "benchmark": "gears",
+      "build": {
+        "commit": "45a68b5d7c4bacc5481bf65a6a5274e525da496e",
+        "subject": "test new op per perform",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T00:16:47+02:00"
+      },
+      "median": {
+        "pingpong": 8.28,
+        "pingpong-fresh-ops": 8.31,
+        "pingpong-deadline": 8.35,
+        "concurrent": 3.84,
+        "pipelined": 2.07,
+        "blocking": 6.22,
+        "timers": 0.19,
+        "mixed-compute": 27.25,
+        "mixed": 27.28
+      },
+      "samples": {
+        "pingpong": [
+          8.14,
+          8.28,
+          8.27,
+          8.29,
+          8.44
+        ],
+        "pingpong-fresh-ops": [
+          8.31,
+          8.3,
+          8.24,
+          8.52,
+          8.36
+        ],
+        "pingpong-deadline": [
+          8.34,
+          8.36,
+          8.35,
+          8.63,
+          8.35
+        ],
+        "concurrent": [
+          3.85,
+          3.84,
+          4.06,
+          3.77,
+          3.77
+        ],
+        "pipelined": [
+          1.96,
+          2.07,
+          2.1,
+          2.1,
+          2.07
+        ],
+        "blocking": [
+          6.31,
+          6.24,
+          6.05,
+          6.13,
+          6.22
+        ],
+        "timers": [
+          0.2,
+          0.19,
+          0.19,
+          0.19,
+          0.19
+        ],
+        "mixed-compute": [
+          27.23,
+          27.25,
+          27.19,
+          27.25,
+          27.67
+        ],
+        "mixed": [
+          27.27,
+          27.29,
+          27.22,
+          27.28,
+          27.74
+        ]
+      }
+    },
+    {
+      "label": "raw-trap",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.trap@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "45a68b5d7c4bacc5481bf65a6a5274e525da496e",
+        "subject": "test new op per perform",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T00:17:18+02:00"
+      },
+      "median": {
+        "pingpong": 5.29,
+        "pingpong-deadline": 6.31,
+        "concurrent": 1.42,
+        "pipelined": 0.5,
+        "blocking": 4.02,
+        "timers": 0.65
+      },
+      "samples": {
+        "pingpong": [
+          5.31,
+          5.29,
+          5.23,
+          5.3,
+          5.23
+        ],
+        "pingpong-deadline": [
+          6.32,
+          6.22,
+          6.29,
+          6.4,
+          6.31
+        ],
+        "concurrent": [
+          1.42,
+          1.47,
+          1.27,
+          1.52,
+          1.39
+        ],
+        "pipelined": [
+          0.5,
+          0.5,
+          0.53,
+          0.49,
+          0.54
+        ],
+        "blocking": [
+          4.54,
+          4.0,
+          4.02,
+          4.06,
+          4.0
+        ],
+        "timers": [
+          0.64,
+          0.64,
+          0.65,
+          0.66,
+          0.66
+        ]
+      }
+    },
+    {
+      "label": "raw-conditional",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.conditional@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "45a68b5d7c4bacc5481bf65a6a5274e525da496e",
+        "subject": "test new op per perform",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T00:16:47+02:00"
+      },
+      "median": {
+        "pingpong": 5.19,
+        "pingpong-deadline": 6.32,
+        "concurrent": 1.59,
+        "pipelined": 0.52,
+        "blocking": 3.93,
+        "timers": 0.63
+      },
+      "samples": {
+        "pingpong": [
+          5.65,
+          5.19,
+          5.12,
+          5.13,
+          5.61
+        ],
+        "pingpong-deadline": [
+          6.32,
+          6.31,
+          6.27,
+          6.74,
+          6.56
+        ],
+        "concurrent": [
+          1.53,
+          1.66,
+          1.44,
+          1.68,
+          1.59
+        ],
+        "pipelined": [
+          0.48,
+          0.52,
+          0.52,
+          0.5,
+          0.52
+        ],
+        "blocking": [
+          3.94,
+          3.9,
+          4.0,
+          3.93,
+          3.9
+        ],
+        "timers": [
+          0.63,
+          0.62,
+          0.64,
+          0.62,
+          0.64
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
