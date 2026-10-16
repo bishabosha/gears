@@ -24,7 +24,7 @@ import asyncio.unsafe.KqueueLoop.Event
   * finishing on other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll
   * returns up to `maxEvents` events.
   */
-final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor {
+final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) extends Reactor {
 
   /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly. Code that only
     * sees the `Reactor` interface still cannot mix ops between reactors.
@@ -471,7 +471,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       val polled =
         if !delivered then {
           turnsWithoutPoll = 0
-          if block then KqueueLoop.pollEventsForever(kq, events, maxEvents)
+          if block then pollBeforeBlocking(events)
           else KqueueLoop.pollEventsNow(kq, events, maxEvents)
         } else if turnsWithoutPoll < KqueueReactor.PollEvery then {
           turnsWithoutPoll += 1
@@ -491,6 +491,19 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       ()
     }
 
+  /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
+    * awaited reply often arrives within microseconds, and catching it this way saves the thread a sleep and a wake-up.
+    */
+  private def pollBeforeBlocking(events: KqueueLoop.EventQueue): Int = {
+    var polled = 0
+    var spins = 0
+    while polled == 0 && spins < spinPolls do {
+      polled = KqueueLoop.pollEventsNow(kq, events, maxEvents)
+      spins += 1
+    }
+    if polled == 0 then KqueueLoop.pollEventsForever(kq, events, maxEvents) else polled
+  }
+
   def run(): Unit = {
     running = true
     while running do runOnce(block = true)
@@ -509,12 +522,23 @@ object KqueueReactor {
   /** A loop that keeps delivering completions polls kqueue at least once in this many turns. */
   private inline val PollEvery = 16
 
-  /** Opens a reactor on a new kqueue; each poll returns up to `maxEvents` events. Close it when done. */
-  def open(maxEvents: Int = 255): KqueueReactor = new KqueueReactor(KqueueLoop.open(), maxEvents)
+  /** Opens a reactor on a new kqueue; each poll returns up to `maxEvents` events. Before blocking for events it polls
+    * without blocking up to `spinPolls` times, trading a little CPU for not sleeping when an event is about to arrive;
+    * 0 blocks at once. Close it when done.
+    */
+  def open(maxEvents: Int = 255, spinPolls: Int = DefaultSpinPolls): KqueueReactor = {
+    require(spinPolls >= 0, "spinPolls must not be negative")
+    new KqueueReactor(KqueueLoop.open(), maxEvents, spinPolls)
+  }
+
+  /** Non-blocking polls before blocking, by default: the benchmark's request/response scenarios gained most of what
+    * spinning offers by 4.
+    */
+  inline val DefaultSpinPolls = 4
 
   /** Opens a reactor for `body` and closes it afterwards. */
-  def scoped(maxEvents: Int = 255)(body: KqueueReactor => Unit): Unit = {
-    val reactor = open(maxEvents)
+  def scoped(maxEvents: Int = 255, spinPolls: Int = DefaultSpinPolls)(body: KqueueReactor => Unit): Unit = {
+    val reactor = open(maxEvents, spinPolls)
     try body(reactor)
     finally reactor.close()
   }

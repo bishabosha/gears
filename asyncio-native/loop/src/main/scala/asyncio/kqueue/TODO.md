@@ -134,22 +134,28 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
     `PosixSockets.setNonBlocking`.
   - Saves 2 syscalls per accepted connection.
 
-- [ ] **8. Poll a few times without blocking before sleeping.**
-  Once a turn has nothing to do, the loop blocks in `kevent` straight away. In request/response traffic the reply
-  often arrives microseconds later, and sleeping then costs a thread wake-up per round trip. Polling a few times
-  without blocking first catches it. A trial on top of item 3 (release-fast, median of 5 runs, µs/op), by number of
-  non-blocking polls before blocking:
+- [x] **8. Poll a few times without blocking before sleeping.**
+  Done in `KqueueReactor.runOnce`: before blocking, it polls without blocking up to `spinPolls` times
+  (`KqueueReactor.open(spinPolls = ...)`, by default `DefaultSpinPolls`, 4; 0 blocks at once). In request/response
+  traffic the reply often arrives microseconds after the loop runs out of work, and sleeping then cost a thread wake-up
+  per round trip. The cost is at most a few extra `kevent` calls each time the loop goes idle.
+  - The trial that chose 4 (release-fast, median of 5 runs, µs/op), by number of non-blocking polls before blocking:
 
-  | polls | pingpong | pingpong-deadline | concurrent | pipelined |
-  |---|---|---|---|---|
-  | 0 | 14.5 | 16.2 | 5.5 | 3.0 |
-  | 1 | 12.7 | 14.6 | 5.9 | 3.1 |
-  | 4 | 12.3 | 12.4 | 5.3 | 2.8 |
-  | 16 | 11.6 | 14.3 | 5.8 | 3.1 |
-  | 64 | 11.8 | 12.1 | 5.2 | 3.0 |
+    | polls | pingpong | pingpong-deadline | concurrent | pipelined |
+    |---|---|---|---|---|
+    | 0 | 14.5 | 16.2 | 5.5 | 3.0 |
+    | 1 | 12.7 | 14.6 | 5.9 | 3.1 |
+    | 4 | 12.3 | 12.4 | 5.3 | 2.8 |
+    | 16 | 11.6 | 14.3 | 5.8 | 3.1 |
+    | 64 | 11.8 | 12.1 | 5.2 | 3.0 |
 
-  The cost is CPU spent polling when nothing arrives. A handful of polls (about 4) gets most of the gain; a
-  time-bounded spin would behave more predictably across machines than a fixed count.
+  - Release-fast, median of 5 runs, µs/op before → after: `pingpong` 13.8 → 9.8 (−29%), `pingpong-deadline` 15.7 → 11.5
+    (−27%), `mixed` 32.9 → 29.6 (−10%, its compute slices 32.7 → 29.6), the rest within 1.4%
+    (`kqueue-demo/bench/results/spin-before-blocking.json`).
+  - Spinning cannot delay queued work on the reactor thread: the loop only blocks, and so only spins, when the scheduler
+    has no task and the turn delivered nothing. The `mixed` scenario checks it, comparing builds with 0 and 4 spin polls
+    (release-fast, median of 5 runs, µs/op): `mixed` 34.4 → 28.8 (−16%) and `mixed-compute` 34.4 → 28.8 (−16%), so the
+    compute work got faster rather than slower, alongside `pingpong` 13.1 → 9.5 and `pingpong-deadline` 15.0 → 11.0.
 
 ## Related, not syscalls
 
