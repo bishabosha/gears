@@ -123,22 +123,49 @@ object ReactorFutures {
     if scheduler == null || (scheduler.reactor ne r) then
       throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
     if ac.group.isCancelled then throw new CancellationException()
-    val waiter = new OpWaiter(scheduler, () => r.cancel(op))
-    r.submit(op, waiter.completion) // A refused op, such as a one-shot op submitted twice, throws here.
-    waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
-    // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
-    try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
-    finally waiter.unlink()
+    // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here.
+    // A waiter still in use (the op performed twice at once, which the reactor refuses) is left alone.
+    val waiter = r.attachment(op) match {
+      case reused: OpWaiter if !reused.inUse && (reused.scheduler eq scheduler) =>
+        reused.reset()
+        reused
+      case _ =>
+        val fresh = new OpWaiter(scheduler, r, op)
+        r.attach(op, fresh)
+        fresh
+    }
+    waiter.inUse = true
+    try {
+      r.submit(op, waiter.completion) // A refused op, such as a one-shot op submitted twice, throws here.
+      waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
+      // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
+      try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
+      finally waiter.unlink()
+    } finally waiter.inUse = false
   }
 
   private val done = Success(())
 
-  /** One submission of an op, as a source that its completion completes once, and as a member of the caller's
-    * cancellation group. It has at most one listener, the suspended caller.
+  /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the
+    * caller's cancellation group. It has at most one listener, the suspended caller. Kept as the op's attachment and
+    * reset for each submission, so it, its state and its completion are allocated once per op.
     */
-  private final class OpWaiter(scheduler: ReactorScheduler, cancelOp: () => Boolean)
+  private final class OpWaiter(val scheduler: ReactorScheduler, reactor: Reactor, op: Any)
       extends Async.Source[Try[Unit]]
       with Cancellable {
+
+    /** Whether a `perform` is using it. On the reactor thread only. */
+    var inUse = false
+
+    // Counts submissions, so that a cancel requested from another thread for one cannot reach the next.
+    @volatile private var generation = 0
+
+    /** Readies it for the op's next submission, after the previous one has finished. */
+    def reset(): Unit = {
+      generation += 1
+      state.set(OpWaiter.Empty)
+    }
+
     // Empty, then either the suspended caller's listener or the outcome, and finally the outcome. Each transition is
     // one atomic step, so exactly one side delivers the outcome: `finish` to a listener it swaps out, or `onComplete`
     // to itself when it finds the outcome already there.
@@ -155,6 +182,13 @@ object ReactorFutures {
       state.getAndSet(outcome) match {
         case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
         case _                                 => ()
+      }
+
+    // gears' `await` calls this first; the default builds a listener and an `Option` to find out.
+    override def poll(): Option[Try[Unit]] =
+      state.get() match {
+        case outcome: Try[Unit] @unchecked => Some(outcome)
+        case _                             => None
       }
 
     def poll(k: Listener[Try[Unit]]): Boolean =
@@ -176,7 +210,13 @@ object ReactorFutures {
 
     // Cancellation can come from any thread, so it is carried out on the reactor's own. By then the op may have
     // finished, and a repeatable op may even have been submitted again, which must not be cancelled.
-    def cancel(): Unit = scheduler.sync(if !state.get().isInstanceOf[Try[?]] then cancelOp())
+    def cancel(): Unit = {
+      val submission = generation
+      scheduler.sync(
+        if submission == generation && !state.get().isInstanceOf[Try[?]] then
+          reactor.cancel(op.asInstanceOf[reactor.Op]) // `op` was built by `reactor`, as `perform` requires
+      )
+    }
   }
 
   private object OpWaiter {
@@ -195,10 +235,13 @@ object ReactorFutures {
       given ReactorSupport.type = ReactorSupport
       Async.blocking {
         val main = Future(program(reactor)) // queued: it starts with the first drain
-        while main.poll().isEmpty do {
+        // Set once, by the reactor thread, when the program completes; polling `main` would allocate every turn.
+        var finished = false
+        main.onComplete(Listener((_, _) => finished = true))
+        while !finished do {
           scheduler.drain()
           // Block for events only with no task left; a task queued from another thread wakes the loop.
-          if main.poll().isEmpty then reactor.runOnce(block = scheduler.isIdle)
+          if !finished then reactor.runOnce(block = scheduler.isIdle)
         }
         main.await // already complete, so this only rethrows a failure
       }

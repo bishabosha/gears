@@ -3,6 +3,7 @@ package asyncio.unsafe
 import java.io.IOException
 import scala.scalanative.annotation.alwaysinline
 import scala.scalanative.bsd.kevent
+import scala.scalanative.libc.stdlib
 import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.time.timespec
 import scala.scalanative.posix.timeOps.*
@@ -91,8 +92,10 @@ object KqueueLoop {
 
   def fileIdent(evt: Event): Int = ident(evt).toInt
 
-  @alwaysinline
-  def pollQueue(nevents: Int)(op: EventQueue => Unit): Unit = {
+  /** Runs `op` with a stack-allocated buffer for `nevents` events. Inline, with an inline `op`, so no closure is
+    * allocated.
+    */
+  inline def pollQueue(nevents: Int)(inline op: EventQueue => Unit): Unit = {
     require(nevents > 0, "Event buffer capacity must be positive")
     // Keep the multiplication outside stackalloc: Scala Native 0.5.11 can
     // discard it when lowering an inline allocation-size expression.
@@ -204,11 +207,13 @@ object KqueueLoop {
     )
   }
 
-  @alwaysinline
-  def createAndRegisterEvents(
+  /** Fills a stack-allocated buffer of `nEvents` changes with `f` and registers them. Inline, with an inline `f`, so no
+    * closure is allocated.
+    */
+  inline def createAndRegisterEvents(
       kq: Int,
       nEvents: Int
-  )(f: EventQueue => Unit): Unit = {
+  )(inline f: EventQueue => Unit): Unit = {
     pollQueue(nEvents) { events =>
       f(events)
       registerEvents(kq, events, nEvents)
@@ -240,16 +245,26 @@ object KqueueLoop {
     }
   }
 
+  /** An event buffer for `nevents` events, zeroed, for a loop that polls many times. Free it with `freeQueue`. */
+  def allocateQueue(nevents: Int): EventQueue = {
+    require(nevents > 0, "Event buffer capacity must be positive")
+    val events = stdlib.calloc(nevents.toCSize, eventSize)
+    if (events == null) throw new OutOfMemoryError("Failed to allocate a kqueue event buffer")
+    events
+  }
+
+  def freeQueue(events: EventQueue): Unit = stdlib.free(events)
+
+  // A zero timeout for polls that must not wait, allocated once: setting a stack-allocated one boxes its pointer.
+  private val zeroTimeout: Ptr[timespec] = stdlib.calloc(1.toCSize, sizeof[timespec]).asInstanceOf[Ptr[timespec]]
+
   /** Polls without waiting, so without telling the GC (see `Unblocked`). */
   def pollEventsNow(
       kq: Int,
       events: EventQueue,
       nEvents: Int
   ): Int = {
-    val timeout = stackalloc[timespec]()
-    timeout.tv_sec = 0
-    timeout.tv_nsec = 0
-    val polledEvents = Unblocked.kevent(kq, null, 0, events, nEvents, timeout)
+    val polledEvents = Unblocked.kevent(kq, null, 0, events, nEvents, zeroTimeout)
     if (polledEvents < 0) {
       throw new IOException(
         s"Failed to poll events: ${cError()}"

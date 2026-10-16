@@ -3,6 +3,7 @@ package asyncio.kqueue
 import java.nio.ByteBuffer
 
 import asyncio.Address
+import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.Ops
@@ -17,6 +18,17 @@ sealed trait KqueueOp {
 
   /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
   @volatile private[kqueue] var submitted = false
+
+  /** While the op is pending in the reactor: its completion, so the op is its own record and submitting it allocates
+    * nothing. Taken off just before the completion runs, which may then submit the op again. Loop thread only.
+    */
+  private[kqueue] var completion: Completion[KqueueOp] | Null = null
+
+  /** For a command that failed as soon as it was submitted: its failure, until its completion runs. */
+  private[kqueue] var atOnceFailure: Throwable | Null = null
+
+  /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
+  private[kqueue] var attachment: AnyRef | Null = null
 }
 
 /** Builds the ops `KqueueReactor` understands. */
@@ -75,10 +87,9 @@ final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable 
   require(milliseconds >= 0, "Timer duration must not be negative")
 
   // The reactor's bookkeeping for a pending submission, on the loop thread: when it is due (`System.nanoTime`), its
-  // place in submission order, its completion, and its index in the reactor's timer heap (-1 when not pending).
+  // place in submission order, and its index in the reactor's timer heap (-1 when not pending).
   private[kqueue] var deadline = 0L
   private[kqueue] var order = 0L
-  private[kqueue] var pending: AnyRef | Null = null
   private[kqueue] var heapIndex = -1
 }
 
@@ -89,9 +100,6 @@ sealed abstract class KqueuePromise extends KqueueOp {
   // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.
   private val outcome = new java.util.concurrent.atomic.AtomicReference[Any](KqueuePromise.Unsettled)
   @volatile private[kqueue] var reactor: KqueueReactor | Null = null
-
-  /** The reactor's record of the pending completion; null once delivered or cancelled. */
-  @volatile private[kqueue] var pending: AnyRef | Null = null
 
   private[kqueue] def failure: Throwable | Null = outcome.get() match {
     case KqueuePromise.Failed(failure) => failure
@@ -141,7 +149,7 @@ abstract class KqueueBlocking extends KqueuePromise {
   private var ended = false
 
   /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
-  private[kqueue] var cancelling: AnyRef | Null = null
+  private[kqueue] var cancelling: Completion[KqueueOp] | Null = null
 
   /** Called by the worker before `block`; false if the task was cancelled before it started. */
   private[kqueue] def begin(): Boolean = synchronized {

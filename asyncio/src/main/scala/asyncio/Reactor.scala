@@ -50,6 +50,15 @@ trait Reactor extends AutoCloseable {
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
+  /** The caller's own data for `op`, kept across submissions and never read by the reactor, like kqueue's `udata` or
+    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
+    * again allocates nothing. Null until set. On the reactor's thread only.
+    */
+  def attachment(op: Op): AnyRef | Null
+
+  /** Sets `op`'s attachment (see `attachment`). */
+  def attach(op: Op, value: AnyRef | Null): Unit
+
   /** Cancels a submitted op that has not finished, and returns true: its completion's `onComplete` and `onFailure` will
     * never run, and its `onCancel` runs once the reactor has stopped using the op's buffers and slots. That is before
     * this returns for most ops, but later, from `run`, for one still running elsewhere, such as a blocking op that has
