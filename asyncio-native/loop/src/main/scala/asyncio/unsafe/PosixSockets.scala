@@ -256,9 +256,9 @@ object PosixSockets {
     msg.msg_control = null
     msg.msg_controllen = 0.toUInt
     msg.msg_flags = 0
-    var read = socket.recvmsg(fd, msg, 0)
+    var read = Unblocked.recvmsg(fd, msg, 0) // datagram sockets here are non-blocking
     while (read < 0 && errno.errno == errno.EINTR) {
-      read = socket.recvmsg(fd, msg, 0)
+      read = Unblocked.recvmsg(fd, msg, 0)
     }
     if (read < 0) {
       if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK) -1
@@ -283,9 +283,9 @@ object PosixSockets {
       destinationLength: socket.socklen_t = 0.toUInt
   ): Boolean = {
     require(length >= 0, "Datagram length must be non-negative")
-    var written = socket.sendto(fd, buffer, length.toCSize, 0, destination, destinationLength)
+    var written = Unblocked.sendto(fd, buffer, length.toCSize, 0, destination, destinationLength)
     while (written < 0 && errno.errno == errno.EINTR) {
-      written = socket.sendto(fd, buffer, length.toCSize, 0, destination, destinationLength)
+      written = Unblocked.sendto(fd, buffer, length.toCSize, 0, destination, destinationLength)
     }
     if (written < 0) {
       if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK) false

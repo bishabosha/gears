@@ -507,8 +507,16 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     else if timers.isEmpty then KqueueLoop.pollEventsForever(kq, events, maxEvents)
     else {
       // Block no longer than until the earliest timer is due, or not at all if it already is.
-      val wait = math.max(0L, timers.peek.deadline - System.nanoTime())
-      KqueueLoop.pollEventsTimeout(kq, events, maxEvents, (wait / 1_000_000_000L).toInt, (wait % 1_000_000_000L).toInt)
+      val wait = timers.peek.deadline - System.nanoTime()
+      if wait <= 0 then KqueueLoop.pollEventsNow(kq, events, maxEvents)
+      else
+        KqueueLoop.pollEventsTimeout(
+          kq,
+          events,
+          maxEvents,
+          (wait / 1_000_000_000L).toInt,
+          (wait % 1_000_000_000L).toInt
+        )
     }
   }
 
