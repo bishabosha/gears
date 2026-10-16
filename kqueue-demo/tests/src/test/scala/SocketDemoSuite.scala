@@ -127,6 +127,17 @@ class SocketDemoSuite extends DemoSuite {
         assertEquals(client.read(ByteBuffer.allocate(1)), -1)
       }
       assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
+      // Clients that go away before the reply: writing to them must fail only that connection, not raise SIGPIPE and
+      // end the server. A TCP client resets the connection (SO_LINGER 0), so that the server's one write fails.
+      for (_ <- 1 to 3) {
+        val client = SocketChannel.open(address)
+        if (family != Family.Unix) client.setOption(java.net.StandardSocketOptions.SO_LINGER, Integer.valueOf(0))
+        client.write(ByteBuffer.wrap(frame(utf8("going away"))))
+        client.close()
+      }
+      Thread.sleep(200)
+      assert(server.isAlive, server.output.takeRight(4096))
+      assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
       // Keep several connections ready together to exercise native event-array
       // indexing, including events beyond the first entry in a poll result.
       val clients = Vector.fill(8)(SocketChannel.open(address))

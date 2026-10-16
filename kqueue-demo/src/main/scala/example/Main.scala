@@ -19,6 +19,10 @@ object Main {
   def timers(@arg count: Int = 2000): Unit = {
     KQueueExampleTimers.run(count)
   }
+  @main(name = "broken-pipe")
+  def brokenPipe(@arg fifo: String): Unit = {
+    KQueueExampleBrokenPipe.run(fifo)
+  }
   @main
   def sockServe(@arg sock: String): Unit = {
     KQueueExampleServerSocket.run(sock)

@@ -29,6 +29,17 @@ class KQueueDemoSuite extends DemoSuite {
       assert(output.contains("cancelled timers fired: 0"), output)
     }
 
+  if (commandPrefix.isEmpty) // KqueueHandles directly; the gears demos have no mirror of this one
+    demoTest("writing to a pipe or FIFO whose reader has closed fails, instead of ending the process") {
+      withFifo { fifo =>
+        val output = run("broken-pipe", "--fifo", fifo.toString)
+        assert(output.contains("pipe write after its reader closed: failed:"), output)
+        assert(output.contains("fifo write after its reader closed: failed:"), output)
+        assert(output.contains("Broken pipe"), output)
+        assert(output.contains("still running"), output)
+      }
+    }
+
   demoTest("resolve localhost off the reactor thread") {
     val output = run("resolve", "--host", "localhost")
     assert(output.contains("IPv4 127.0.0.1") || output.contains("IPv6 ::1"), output)
