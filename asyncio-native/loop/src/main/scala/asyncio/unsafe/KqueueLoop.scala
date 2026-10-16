@@ -102,7 +102,7 @@ object KqueueLoop {
   }
 
   /** posixlib does not expose EVFILT_TIMER. Its value is -7 on macOS and FreeBSD. */
-  val EVFILT_TIMER: CShort = -7
+  inline val EVFILT_TIMER = -7
 
   @alwaysinline
   def isTimerEvent(evt: Event): Boolean = filter(evt) == EVFILT_TIMER

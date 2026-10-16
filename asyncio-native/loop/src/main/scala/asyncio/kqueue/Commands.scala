@@ -20,7 +20,16 @@ import asyncio.unsafe.PosixSockets
 /** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
 final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
-  def perform(): Boolean = NonBlocking.read(fd, buf) != 0 // 0 is would-block; -1, EOF, leaves the buffer as it was
+  private var read = 0 // what the last perform returned: bytes, 0 for would-block, or -1 at EOF
+  private var filled = false
+  def perform(): Boolean = {
+    read = NonBlocking.read(fd, buf) // -1, EOF, leaves the buffer as it was
+    filled = !buf.hasRemaining()
+    read != 0
+  }
+  override def transferred: Int = read // -1 at EOF, which stays readable, so readiness is not known from it
+  override def mayStillBeReady: Boolean = read < 0 || filled // a short read drained the socket
+  override def edgeTriggered: Boolean = true
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written. */
@@ -34,6 +43,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   */
 final case class Accept(fd: Int, into: HandleSlot) extends Command {
   def interest: Interest = Interest.Read
+  override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
     val client = NonBlocking.accept(fd)
     if client >= 0 then into.set(client)
@@ -54,6 +64,9 @@ final case class Connect(fd: Int) extends Command {
 /** Receives one packet and writes its sender into `from`. Done once a packet has arrived. */
 final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[Address]) extends Command {
   def interest: Interest = Interest.Read
+  private var received = -1
+  override def transferred: Int = received
+  override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
     val storage = stackalloc[socket.sockaddr_storage]()
     val length = stackalloc[socket.socklen_t]()
@@ -61,6 +74,7 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[Address]) exten
     buf.clear()
     val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
     val size = PosixSockets.receiveDatagram(fd, NativeBuffer.atPosition(buf), buf.remaining(), address, length)
+    received = size
     if size >= 0 then {
       NativeBuffer.advance(buf, size)
       buf.flip()
