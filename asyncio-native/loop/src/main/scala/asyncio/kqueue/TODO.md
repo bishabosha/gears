@@ -189,6 +189,21 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
   `pingpong-deadline` and `mixed` −2%, the rest within 2% (`kqueue-demo/bench/results/scheduler-local-queue.json`).
   Small, as the profile predicted.
 
+- Allocations per ping-pong round trip (four `perform`s; counted with lldb on `scalanative_GC_alloc*`, 200 round
+  trips less 100) went from 113 to 58:
+  - each op is now its own record while pending (`KqueueOp.completion`), so `submit` allocates nothing;
+  - ops have an attachment (`Reactor.attachment`/`attach`, like kqueue's `udata` or io_uring's `user_data`), where
+    `perform` keeps its `OpWaiter` and reuses it for the op's next submission, with a generation counter so a late
+    cancel cannot reach a later submission;
+  - `OpWaiter` overrides gears' allocating no-argument `poll()`; `ReactorFutures.run` tracks the program's completion
+    with a flag instead of polling it every turn; polls without waiting share one zero `timespec`; each reactor
+    allocates its event buffer once instead of a zeroed stack buffer per turn; `KqueueLoop`'s buffer helpers are
+    `inline`, so they allocate no closures.
+  The 58 left are nearly all gears' and Scala Native's (await closures and pointer boxing, `NativeSuspend`, `Try`, the
+  `Continuation` and its stack fragments, `withGroup`, `CompletionGroup`'s hash set, `AwaitListener`). Release-fast,
+  median of 5 runs: `pipelined` −10%, `fairness` −6%, `timers` −5%, `concurrent` −4%, `blocking` −2%, ping-pong within
+  2% (`kqueue-demo/bench/results/reuse-op-records.json`).
+
 Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
 `scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
 matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.

@@ -12,6 +12,8 @@ class ReactorSuite extends FunSuite {
     def handles: Handles = throw new UnsupportedOperationException
     def submit[C <: Op](op: C, completion: Completion[C]): Unit = ()
     def cancel(op: Op): Boolean = false
+    def attachment(op: Op): AnyRef | Null = null
+    def attach(op: Op, value: AnyRef | Null): Unit = ()
     def runOnce(block: Boolean): Unit = ()
     def wakeup(): Unit = ()
     def run(): Unit = ()

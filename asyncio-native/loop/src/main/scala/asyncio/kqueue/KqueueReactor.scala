@@ -37,17 +37,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Kqueue watches POSIX file descriptors, so a handle is the descriptor itself. */
   def handles: Handles = KqueueHandles
 
-  private final class Pending[C <: Op](val op: C, val completion: Completion[C]) {
-    def complete(): Unit = completion.onComplete(op)
-    def fail(failure: Throwable): Unit = completion.onFailure(op, failure)
-    def cancelled(): Unit = completion.onCancel(op)
-
-    /** For a command that finished when submitted: its failure, or null if it completed. */
-    var failure: Throwable | Null = null
+  /** Takes a pending op's completion off it, ending the submission: the completion may then submit the op again. */
+  private def take(op: KqueueOp): Completion[KqueueOp] = {
+    val completion = op.completion.nn
+    op.completion = null
+    completion
   }
 
+  private def complete(op: KqueueOp): Unit = take(op).onComplete(op)
+  private def fail(op: KqueueOp, failure: Throwable): Unit = take(op).onFailure(op, failure)
+
+  def attachment(op: Op): AnyRef | Null = op.attachment
+  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
+
   // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
-  private val ready = new java.util.ArrayDeque[Pending[?]]()
+  private val ready = new java.util.ArrayDeque[KqueueOp]()
 
   // Turns in a row that delivered completions without polling. A turn that delivered something skips the poll, since
   // the completions it ran will likely submit more work; every `KqueueReactor.PollEvery` turns it polls anyway, so
@@ -66,8 +70,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
 
   private final class Slot {
-    var read: Pending[?] | Null = null
-    var write: Pending[?] | Null = null
+    var read: KqueueOp | Null = null
+    var write: KqueueOp | Null = null
 
     /** Whether the descriptor's persistent read filter is registered. */
     var readRegistered = false
@@ -118,7 +122,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       case one: KqueueOp =>
         if one.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
     }
-    val pending = new Pending(op, completion)
+    require(op.completion == null, s"$op is already pending")
+    val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     op match {
       case command: Command =>
         val slot = slotFor(command.fd)
@@ -126,16 +131,17 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
         if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
         else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+        command.completion = pending
         if read then {
           val attempt =
             slot.readReadiness == KqueueReactor.Ready ||
               (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
-          if !(attempt && performedAtOnce(command, pending, slot)) then {
-            slot.read = pending
+          if !(attempt && performedAtOnce(command, slot)) then {
+            slot.read = command
             waitToRead(command, slot)
           }
-        } else if !(command.tryFirst && performedAtOnce(command, pending, null)) then {
-          slot.write = pending
+        } else if !(command.tryFirst && performedAtOnce(command, null)) then {
+          slot.write = command
           arm(command.fd, read = false)
         }
       case timer: KqueueTimer =>
@@ -143,7 +149,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
         timer.order = nextTimerOrder
         nextTimerOrder += 1
-        timer.pending = pending
+        timer.completion = pending
         timers.add(timer)
       case promise: KqueuePromise =>
         promise match {
@@ -152,7 +158,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           case _ => ()
         }
         promise.reactor = this
-        promise.pending = pending
+        promise.completion = pending
         pendingPromises += promise
         promise match {
           case blocking: KqueueBlocking => Blockers.run(blocking)
@@ -165,21 +171,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * turn rather than run here, and this returns true; if it would block, this returns false. For a read, `slot`
     * records what that taught about the descriptor's readiness.
     */
-  private def performedAtOnce(command: Command, pending: Pending[?], slot: Slot | Null): Boolean = {
+  private def performedAtOnce(command: Command, slot: Slot | Null): Boolean = {
     val done =
       try command.perform()
       catch {
         case t: Throwable =>
-          pending.failure = t
+          command.atOnceFailure = t
           true
       }
     if slot != null then
       slot.settleReadiness(
-        if !command.edgeTriggered || pending.failure != null then KqueueReactor.Unknown
+        if !command.edgeTriggered || command.atOnceFailure != null then KqueueReactor.Unknown
         else if !done then KqueueReactor.NotReady
         else readinessAfter(command, available = -1)
       )
-    if done then ready.add(pending)
+    if done then ready.add(command)
     done
   }
 
@@ -216,13 +222,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     var count = ready.size
     val any = count > 0
     while count > 0 do {
-      val pending = ready.poll().nn
+      val op = ready.poll().nn
       count -= 1
-      val failure = pending.failure
+      val failure = op.atOnceFailure
       if failure != null then {
-        pending.failure = null
-        pending.fail(failure)
-      } else pending.complete()
+        op.atOnceFailure = null
+        fail(op, failure)
+      } else complete(op)
     }
     any
   }
@@ -252,23 +258,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     var promise = if remaining > 0 then resolvedQueue.poll() else null
     val any = promise != null
     while promise != null do {
-      val pending = promise.pending
-      promise.pending = null
+      val completion = promise.completion
+      promise.completion = null
       pendingPromises -= promise
       promise match {
         case blocking: KqueueBlocking if blocking.cancelling != null =>
           // A cancelled blocker's `block` has returned, so its op's buffers and slots are the caller's again. Its
           // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
-          assert(pending == null, "a blocker awaiting its cancel was resubmitted")
-          val cancelled = blocking.cancelling.asInstanceOf[Pending[?]]
+          assert(completion == null, "a blocker awaiting its cancel was resubmitted")
+          val cancelled = blocking.cancelling.nn
           blocking.cancelling = null
           cancellingBlockers -= blocking
-          cancelled.cancelled()
+          cancelled.onCancel(blocking)
         case _ =>
-          if pending != null then {
-            val p = pending.asInstanceOf[Pending[?]]
+          if completion != null then {
             val failure = promise.failure
-            if failure != null then p.fail(failure.nn) else p.complete()
+            if failure != null then completion.onFailure(promise, failure.nn) else completion.onComplete(promise)
           }
       }
       remaining -= 1
@@ -283,23 +288,20 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   def close(): Unit = {
     if !closed then {
       // Detach every pending op first, so nothing can be delivered while the reactor shuts down.
-      val dropped = scala.collection.mutable.ArrayBuffer.empty[Pending[?]]
+      val dropped = scala.collection.mutable.ArrayBuffer.empty[(KqueueOp, Completion[KqueueOp])]
+      def drop(op: KqueueOp): Unit = dropped += ((op, take(op)))
       for slot <- slots if slot != null do {
-        if slot.nn.read != null then dropped += slot.nn.read.nn
-        if slot.nn.write != null then dropped += slot.nn.write.nn
+        if slot.nn.read != null then drop(slot.nn.read.nn)
+        if slot.nn.write != null then drop(slot.nn.write.nn)
       }
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
-      while !timers.isEmpty do {
-        val timer = timers.poll()
-        dropped += timer.pending.asInstanceOf[Pending[?]]
-        timer.pending = null
-      }
-      while !ready.isEmpty do dropped += ready.poll().nn // finished, but their completions have not run
+      while !timers.isEmpty do drop(timers.poll())
+      while !ready.isEmpty do drop(ready.poll().nn) // finished, but their completions have not run
       val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
       for promise <- pendingPromises.toList do {
-        val pending = detach(promise)
-        if pending != null then {
-          dropped += pending.nn
+        val completion = detach(promise)
+        if completion != null then {
+          dropped += ((promise, completion))
           promise match {
             case blocking: KqueueBlocking if blocking.interrupt() => running += blocking
             case _                                                => ()
@@ -307,7 +309,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         }
       }
       for blocking <- cancellingBlockers do {
-        dropped += blocking.cancelling.asInstanceOf[Pending[?]]
+        dropped += ((blocking, blocking.cancelling.nn))
         blocking.cancelling = null
         running += blocking
       }
@@ -316,11 +318,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       wakeLock.synchronized {
         closed = true
         KqueueLoop.close(kq) // Its filters, timers, and wake event go with it.
+        KqueueLoop.freeQueue(events)
         DescriptorHooks.removeOnClose(forgetClosed)
       }
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
-      dropped.foreach(_.cancelled())
+      dropped.foreach((op, completion) => completion.onCancel(op))
     }
   }
 
@@ -336,14 +339,14 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * the loop once `block` has returned.
     */
   def cancel(op: Op): Boolean = {
-    val pending: Pending[?] | Null = op match {
+    val completion: Completion[KqueueOp] | Null = op match {
       case command: Command =>
         val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
         if slot == null then null
         else {
           val read = command.interest == Interest.Read
           val p = if read then slot.read else slot.write
-          if p == null || !(p.nn.op.asInstanceOf[AnyRef] eq command) then null
+          if p == null || !(p eq command) then null
           else {
             // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
             if read then slot.read = null else slot.write = null
@@ -351,26 +354,24 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
               if read then slot.readRegistered = false
               deleteFilter(command.fd, read)
             }
-            p
+            take(command)
           }
         }
       case timer: KqueueTimer =>
         if timer.heapIndex < 0 then null
         else {
           timers.remove(timer)
-          val p = timer.pending.asInstanceOf[Pending[?]]
-          timer.pending = null
-          p
+          take(timer)
         }
       case promise: KqueuePromise => detach(promise)
     }
-    if pending == null then false
+    if completion == null then false
     else {
       op match {
         case blocking: KqueueBlocking if blocking.interrupt() =>
-          blocking.cancelling = pending
+          blocking.cancelling = completion
           cancellingBlockers += blocking
-        case _ => pending.nn.cancelled()
+        case _ => completion.onCancel(op)
       }
       true
     }
@@ -383,11 +384,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read)
 
   /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
-  private def detach(promise: KqueuePromise): Pending[?] | Null = {
-    val pending = promise.pending
-    promise.pending = null
+  private def detach(promise: KqueuePromise): Completion[KqueueOp] | Null = {
+    val completion = promise.completion
+    promise.completion = null
     pendingPromises -= promise
-    pending.asInstanceOf[Pending[?] | Null]
+    completion
   }
 
   def stop(): Unit = running = false
@@ -425,8 +426,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           if !write then slot.readReadiness = KqueueReactor.Ready // kept for the next read submitted
         } else {
           if write then slot.write = null else slot.read = null
-          val p = pending.nn
-          p.op match {
+          pending.nn match {
             case command: Command =>
               // A throwing command fails its own op; an exception thrown by the completion itself still escapes.
               var failure: Throwable | Null = null
@@ -444,14 +444,14 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
                   else if !done then KqueueReactor.NotReady
                   else readinessAfter(command, KqueueLoop.data(event).toLong)
                 )
-              if failure != null then p.fail(failure.nn)
-              else if done then p.complete()
+              if failure != null then fail(command, failure.nn)
+              else if done then complete(command)
               else if write then {
                 // Not ready after all: wait again, without the completion ever seeing it.
-                slot.write = p
+                slot.write = command
                 arm(ident, read = false)
               } else {
-                slot.read = p
+                slot.read = command
                 waitToRead(command, slot)
               }
             case _ => () // Only commands live in descriptor slots.
@@ -465,33 +465,34 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
     * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. Error events throw.
     */
-  def runOnce(block: Boolean): Unit =
-    KqueueLoop.pollQueue(maxEvents) { events =>
-      loopThread = Thread.currentThread()
-      val delivered = deliverReady() | deliverResolved() // both, without short-circuiting
-      val polled =
-        if !delivered then {
-          turnsWithoutPoll = 0
-          if block then pollBeforeBlocking(events)
-          else KqueueLoop.pollEventsNow(kq, events, maxEvents)
-        } else if turnsWithoutPoll < KqueueReactor.PollEvery then {
-          turnsWithoutPoll += 1
-          0
-        } else {
-          turnsWithoutPoll = 0
-          KqueueLoop.pollEventsNow(kq, events, maxEvents)
-        }
-      var i = 0
-      while i < polled do {
-        val event = events(i)
-        if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
-        dispatch(event)
-        i += 1
+  // The buffer polls fill, allocated once and freed by `close`, rather than on the stack every turn.
+  private val events = KqueueLoop.allocateQueue(maxEvents)
+
+  def runOnce(block: Boolean): Unit = {
+    loopThread = Thread.currentThread()
+    val delivered = deliverReady() | deliverResolved() // both, without short-circuiting
+    val polled =
+      if !delivered then {
+        turnsWithoutPoll = 0
+        if block then pollBeforeBlocking(events)
+        else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+      } else if turnsWithoutPoll < KqueueReactor.PollEvery then {
+        turnsWithoutPoll += 1
+        0
+      } else {
+        turnsWithoutPoll = 0
+        KqueueLoop.pollEventsNow(kq, events, maxEvents)
       }
-      fireDueTimers()
-      deliverResolved() // including any whose wake-up was merged into an event just dispatched
-      ()
+    var i = 0
+    while i < polled do {
+      val event = events(i)
+      if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
+      dispatch(event)
+      i += 1
     }
+    fireDueTimers()
+    deliverResolved() // including any whose wake-up was merged into an event just dispatched
+  }
 
   /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
     * awaited reply often arrives within microseconds, and catching it this way saves the thread a sleep and a wake-up.
@@ -528,10 +529,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do {
-        val timer = timers.poll()
-        val p = timer.pending.asInstanceOf[Pending[?]]
-        timer.pending = null
-        p.complete()
+        complete(timers.poll())
       }
     }
 
