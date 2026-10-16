@@ -142,3 +142,34 @@ two system calls to every `@blocking` call, so posixlib's `read`, `write` or `ke
 reactor above worked around it by binding the calls that cannot block (on non-blocking descriptors) without
 `@blocking`, which gained 10–18%. Using `_setjmp` there too, or capturing x19–x28, the frame pointer and the stack
 pointer with inline assembly as on x86-64, would remove the cost for everyone.
+
+## Related: thread-local access on macOS, mostly from safepoint polls
+
+On macOS, every access to a C thread-local (`SN_ThreadLocal`, i.e. `_Thread_local`) is a call to `_tlv_get_addr`,
+where Linux uses a register-relative load. In the reactor's throughput benchmarks, after the fixes above,
+`_tlv_get_addr` was the largest cost after the I/O system calls themselves: 18–20% of CPU time. Attributing its
+samples by caller (`sample`, release-fast, the pipelined scenario):
+
+| share of `_tlv_get_addr` | caller |
+|---|---|
+| 66% | compiled Scala functions: the safepoint poll in their prologues and loops |
+| 11% | `scalanative_currentThread` |
+| 10% | the allocator (`currentMutatorThread`) |
+| 8% | monitor enter and exit |
+| ~5% | continuation handler bookkeeping (`handlers_load`/`handlers_store`), stack overflow guards |
+
+The safepoint polls dominate because, with trap-based yieldpoints (the default in release builds), every poll is a
+volatile load of the thread-local `scalanative_GC_yieldpoint_trap` (`codegen/llvm/AbstractCodeGen.scala`, the
+`Lower.GCYield` case). The comment there explains why it must be volatile: a continuation may resume on another
+carrier thread, so the cell pointer cannot be cached across polls. On Linux that is a `tpidr_el0`/`fs` relative load;
+on macOS it is a function call at every poll of every function with more than a few instructions.
+
+Possible directions, for whoever knows the GC's constraints better:
+
+- Stop-the-world stops every mutator, so a single, process-wide trap page would need no thread-local at all. The
+  per-thread cell presumably exists for a reason (stopping threads individually, or virtual-thread carriers); if
+  that is only needed in some configurations, the global form could be the default elsewhere.
+- On Darwin, store the cell pointer where it can be read without `_tlv_get_addr`, for example via the thread's own
+  register-addressed storage, as libpthread does for its keys.
+- Conditional yieldpoints (`SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0`) poll a global through `scalanative_GC_yield`,
+  with no thread-local; measured against trap-based yieldpoints below where available.
