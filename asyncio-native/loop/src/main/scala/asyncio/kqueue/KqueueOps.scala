@@ -42,11 +42,17 @@ trait Command extends KqueueOp with Repeatable {
   def fd: Int
   def interest: Interest
   def perform(): Boolean
+
+  /** Whether the reactor may perform this command as soon as it is submitted, before waiting for readiness. True for
+    * operations that simply report would-block when not ready, so trying first only saves the wait when they are.
+    */
+  def tryFirst: Boolean = true
 }
 
 /** A command built from a function, for `Ops.whenReady`. */
 final class WhenReady(val fd: Int, val interest: Interest, body: () => Boolean) extends Command {
   def perform(): Boolean = body()
+  override def tryFirst: Boolean = false // `Ops.whenReady` runs its body only once the descriptor is ready
 }
 
 /** A one-shot kqueue timer. `id` is the `EVFILT_TIMER` identifier assigned on submission, or -1 before it. */

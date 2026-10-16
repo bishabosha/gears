@@ -48,6 +48,7 @@ final case class Connect(fd: Int) extends Command {
     PosixSockets.checkConnect(fd)
     true
   }
+  override def tryFirst: Boolean = false // the check passes while the connection is still in progress
 }
 
 /** Receives one packet and writes its sender into `from`. Done once a packet has arrived. */

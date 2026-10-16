@@ -45,7 +45,8 @@ trait Reactor extends AutoCloseable {
 
   /** Submits an op with the completion to run when it finishes. An op marked `Repeatable` may be submitted again once
     * its previous submission has completed, failed, or been cancelled; any other op may be submitted only once. No op
-    * may be pending twice at the same time.
+    * may be pending twice at the same time. An op may finish during `submit`, such as a read of data already waiting,
+    * but its completion never runs inside `submit`: it runs from a later turn of the loop.
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
