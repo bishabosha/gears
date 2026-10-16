@@ -25,8 +25,8 @@ trait Completion[-C] {
   def onCancel(op: C): Unit = ()
 }
 
-/** A single-threaded event loop. Every completion runs on the thread that called `run`, and apart from completing a
-  * `Promise`, a reactor is only used from that thread.
+/** A single-threaded event loop. Every completion runs on the thread that drives the loop with `runOnce` or `run`, and
+  * apart from `wakeup`, a reactor is only used from that thread.
   */
 trait Reactor extends AutoCloseable {
 
@@ -56,10 +56,21 @@ trait Reactor extends AutoCloseable {
     */
   def cancel(op: Op): Boolean
 
-  /** Runs completions until `stop` is called. */
+  /** One turn of the loop: runs the completions of everything that is ready now, and returns. With `block`, if nothing
+    * was ready it first waits until something is, or until `wakeup` is called. A scheduler drives the loop with this,
+    * running its own tasks between turns and blocking only when it has none.
+    */
+  def runOnce(block: Boolean): Unit
+
+  /** Makes a blocked `runOnce` return, or the next one not block; it may be called from any thread. A scheduler calls
+    * it when another thread gives it a task. Wake-ups requested before the loop gets to them may be merged into one.
+    */
+  def wakeup(): Unit
+
+  /** Runs turns, blocking between them, until `stop` is called. */
   def run(): Unit
 
-  /** Makes `run` return once the current completion finishes. */
+  /** Makes `run` return once the current turn finishes. */
   def stop(): Unit
 
   /** Releases the reactor's own resources. Every pending op is cancelled, so its completion gets `onCancel` and nothing
@@ -190,22 +201,6 @@ object HandleSlot {
   */
 trait Repeatable
 
-/** What a promise op adds: it completes when whoever holds it calls `complete`, from any thread, and then holds the
-  * value it was completed with.
-  */
-trait Promise[A] {
-
-  /** Completes the promise with `value`, from any thread. Only the first completion counts; completing it again throws
-    * `IllegalStateException`.
-    */
-  def complete(value: A): Unit
-
-  /** The value the promise was completed with. Read it once the op's completion has reached you; before the promise is
-    * completed, it throws `IllegalStateException`.
-    */
-  def result: A
-}
-
 enum AddressFamily {
   case IPv4, IPv6
 }
@@ -261,9 +256,6 @@ trait Ops[Op] {
     * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel.
     */
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
-
-  /** A promise for someone else to complete with a value of type `A`, such as `Unit` for a plain signal. */
-  def promise[A](): Op & Promise[A]
 
   /** Resolves a host name without blocking the reactor. Completes after writing its addresses, in numeric form, into
     * `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. As with `blocking`, a

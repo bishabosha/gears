@@ -1,7 +1,6 @@
 package asyncio.kqueue
 
 import java.io.IOException
-import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -13,12 +12,11 @@ import asyncio.Reactor
 import asyncio.Repeatable
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
-import asyncio.unsafe.PosixErr.cError
-import asyncio.unsafe.PosixSockets
 
 /** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command waits for readiness with a one-shot
-  * filter and is performed on the loop thread; a timer is a kqueue timer; resolved promises wake the loop through a
-  * pipe. Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
+  * filter and is performed on the loop thread; a timer is a kqueue timer; `wakeup`, and blocking tasks finishing on
+  * other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll returns up to
+  * `maxEvents` events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor {
 
@@ -38,18 +36,16 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     def cancelled(): Unit = completion.onCancel(op)
   }
 
-  // Promises resolve on other threads; they queue here and a byte on the pipe interrupts a blocked poll.
+  // Promises resolve on other threads; they queue here and a user event interrupts a blocked poll.
   private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueuePromise]()
-  private val (wakeRead, wakeWrite) = {
-    val ends = stackalloc[CInt](2)
-    if unistd.pipe(ends) < 0 then throw new IOException(s"Failed to create wake pipe: ${cError()}")
-    PosixSockets.setNonBlocking(ends(0))
-    PosixSockets.setNonBlocking(ends(1))
-    (ends(0), ends(1))
-  }
+  private val WakeEvent = 0.toUSize
   KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
-    KqueueLoop.addFile(events(0), wakeRead, read = true, clear = true) // edge-triggered, registered once
+    KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
   }
+
+  // Set by the first `wakeup` since the loop last saw the wake event, so later ones skip the syscall. The loop clears it
+  // when it sees the event, before it runs anything, so whatever a merged wake-up was for is seen in that same turn.
+  private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
 
   private final class Slot {
     var read: Pending[?] | Null = null
@@ -67,9 +63,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
   private val cancellingBlockers = scala.collection.mutable.HashSet.empty[KqueueBlocking]
 
-  // Guards the wake pipe against a blocker finishing after `close`, when its descriptor number may already be reused.
+  // Guards triggering the wake event against `close`, after which the kqueue's descriptor number may be reused.
   private object wakeLock {}
-  private var closed = false
+
+  // The thread that runs the loop: the one that opened the reactor until `runOnce` is called. A promise resolved on it
+  // needs no wake-up, because the loop delivers every resolved promise before it polls again.
+  @volatile private var loopThread: Thread = Thread.currentThread()
+  @volatile private var closed = false
 
   def submit[C <: Op](op: C, completion: Completion[C]): Unit = {
     op match {
@@ -110,29 +110,35 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
         pendingPromises += promise
         promise match {
           case blocking: KqueueBlocking => Blockers.run(blocking)
-          case _                        => () // Completed by whoever holds it.
         }
     }
     op.submitted = true
   }
 
-  /** Called from any thread when a promise has its result: queue it and wake the loop. */
-  private[kqueue] def resolved(promise: KqueuePromise): Unit = wakeLock.synchronized {
-    if closed then return // Its completion was dropped by `close`.
-    resolvedQueue.add(promise)
-    val signal = stackalloc[Byte]()
-    !signal = 1
-    unistd.write(wakeWrite, signal, 1.toCSize) // A full pipe already guarantees a wake-up.
-    ()
-  }
+  /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
+    * loop is not polling, so queueing is enough.
+    */
+  private[kqueue] def resolved(promise: KqueuePromise): Unit =
+    if !closed then { // otherwise its completion was dropped by `close`
+      resolvedQueue.add(promise)
+      if !(Thread.currentThread() eq loopThread) then wakeup()
+    }
+
+  def wakeup(): Unit =
+    if wakePending.compareAndSet(false, true) then
+      wakeLock.synchronized {
+        if !closed then
+          KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
+      }
 
   /** Runs the completions of the promises resolved when it starts, on the loop thread. One resolved meanwhile, such as
     * by a completion, waits for the next turn, so completions that keep resolving promises cannot keep the loop from
-    * polling.
+    * polling. Returns whether there were any.
     */
-  private def deliverResolved(): Unit = {
+  private def deliverResolved(): Boolean = {
     var remaining = resolvedQueue.size() // traverses the queue, which stays short
     var promise = if remaining > 0 then resolvedQueue.poll() else null
+    val any = promise != null
     while promise != null do {
       val pending = promise.pending
       promise.pending = null
@@ -156,16 +162,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       remaining -= 1
       promise = if remaining > 0 then resolvedQueue.poll() else null
     }
+    any
   }
 
-  /** Empties the wake pipe after its edge fired. */
-  private def drainWakePipe(): Unit = {
-    val signals = stackalloc[Byte](64)
-    while unistd.read(wakeRead, signals, 64.toCSize) > 0 do ()
-  }
-
-  /** Cancels every pending promise, interrupting blockers, then closes the wake pipe and the kqueue. The kqueue's own
-    * filters and timers go with it. A blocker still running is waited for before its `onCancel`.
+  /** Cancels every pending promise, interrupting blockers, then closes the kqueue. The kqueue's own filters, timers,
+    * and wake event go with it. A blocker still running is waited for before its `onCancel`.
     */
   def close(): Unit = {
     if !closed then {
@@ -198,10 +199,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       resolvedQueue.clear()
       wakeLock.synchronized {
         closed = true
-        PosixSockets.close(wakeRead)
-        PosixSockets.close(wakeWrite)
+        KqueueLoop.close(kq) // Its filters, timers, and wake event go with it.
       }
-      KqueueLoop.close(kq) // Its filters and timers go with it.
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
       dropped.foreach(_.cancelled())
@@ -210,7 +209,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
 
   // Polled events, only meaningful while the reactor dispatches them.
 
-  private def isReadEvent(event: Event): Boolean = KqueueLoop.isReadEvent(event)
   private def isWriteEvent(event: Event): Boolean = KqueueLoop.isWriteEvent(event)
   private def fileIdent(event: Event): Int = KqueueLoop.fileIdent(event)
 
@@ -294,7 +292,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     */
   private def dispatch(event: Event): Unit = {
     val ident = fileIdent(event)
-    if ident == wakeRead && isReadEvent(event) then drainWakePipe() // promises are delivered by the loop itself
+    if KqueueLoop.isUserEvent(event) then wakePending.set(false) // resolved promises are delivered by `runOnce` itself
     else if KqueueLoop.isTimerEvent(event) then timers.remove(ident).foreach(_.complete())
     else {
       val slot = if ident < slots.length then slots(ident) else null
@@ -329,24 +327,31 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     }
   }
 
-  /** Error events throw. */
-  def run(): Unit =
+  /** Delivers resolved promises, polls once, dispatches what it polled, then delivers promises resolved meanwhile. It
+    * blocks in the poll only if asked to and nothing was delivered first. Error events throw.
+    */
+  def runOnce(block: Boolean): Unit =
     KqueueLoop.pollQueue(maxEvents) { events =>
-      running = true
-      while running do {
-        deliverResolved() // Interleave resolved promises with polled events.
-        if running then {
-          val polled = KqueueLoop.pollEventsForever(kq, events, maxEvents)
-          var i = 0
-          while i < polled && running do {
-            val event = events(i)
-            if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
-            dispatch(event)
-            i += 1
-          }
-        }
+      loopThread = Thread.currentThread()
+      val delivered = deliverResolved()
+      val polled =
+        if block && !delivered then KqueueLoop.pollEventsForever(kq, events, maxEvents)
+        else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+      var i = 0
+      while i < polled do {
+        val event = events(i)
+        if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
+        dispatch(event)
+        i += 1
       }
+      deliverResolved() // including any whose wake-up was merged into an event just dispatched
+      ()
     }
+
+  def run(): Unit = {
+    running = true
+    while running do runOnce(block = true)
+  }
 }
 
 object KqueueReactor {

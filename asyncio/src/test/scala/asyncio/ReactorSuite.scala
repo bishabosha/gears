@@ -12,6 +12,8 @@ class ReactorSuite extends FunSuite {
     def handles: Handles = throw new UnsupportedOperationException
     def submit[C <: Op](op: C, completion: Completion[C]): Unit = ()
     def cancel(op: Op): Boolean = false
+    def runOnce(block: Boolean): Unit = ()
+    def wakeup(): Unit = ()
     def run(): Unit = ()
     def stop(): Unit = ()
     def close(): Unit = closed = true
@@ -49,7 +51,6 @@ class ReactorSuite extends FunSuite {
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
-    assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.promise[Unit]()").nonEmpty)
     assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.blocking(() => ())").nonEmpty)
   }
 

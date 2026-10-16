@@ -107,6 +107,39 @@ object KqueueLoop {
   @alwaysinline
   def isTimerEvent(evt: Event): Boolean = filter(evt) == EVFILT_TIMER
 
+  /** posixlib does not expose EVFILT_USER, a filter that only fires when triggered with `NOTE_TRIGGER`. */
+  val EVFILT_USER: CShort = if LinktimeInfo.isFreeBSD then -11 else -10
+  private val NOTE_TRIGGER: CUnsignedInt = 0x01000000.toUInt
+
+  @alwaysinline
+  def isUserEvent(evt: Event): Boolean = filter(evt) == EVFILT_USER
+
+  /** Registers user event `id`, edge-triggered: each trigger is reported once. */
+  def addUser(evt: Event, id: USize): Unit =
+    kevent.scalanative_kevent_set(
+      evt,
+      0, // index within the event buffer
+      id, // user event ID
+      EVFILT_USER, // filter type
+      (kevent.EV_ADD | kevent.EV_CLEAR).toUShort, // flags
+      0.toUInt, // fflags
+      0, // filter-specific data
+      null // user data
+    )
+
+  /** Triggers user event `id`, registered with `addUser`, waking a poll on its kqueue. */
+  def triggerUser(evt: Event, id: USize): Unit =
+    kevent.scalanative_kevent_set(
+      evt,
+      0, // index within the event buffer
+      id, // user event ID
+      EVFILT_USER, // filter type
+      0.toUShort, // flags
+      NOTE_TRIGGER, // fflags
+      0, // filter-specific data
+      null // user data
+    )
+
   /** Register a one-shot timer using kqueue's default millisecond units. */
   def addTimerOneShot(evt: Event, id: USize, milliseconds: Size): Unit = {
     if (LinktimeInfo.isMac || LinktimeInfo.isFreeBSD) {
