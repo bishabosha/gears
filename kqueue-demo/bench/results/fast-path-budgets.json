@@ -1,0 +1,410 @@
+{
+  "started": "2026-10-17T00:40:54+02:00",
+  "finished": "2026-10-17T00:41:58+02:00",
+  "load_average": {
+    "before": [
+      5.259765625,
+      5.48291015625,
+      4.849609375
+    ],
+    "after": [
+      4.63818359375,
+      5.27490234375,
+      4.81689453125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.fast-before",
+      "benchmark": "gears",
+      "build": {
+        "commit": "45a68b5d7c4bacc5481bf65a6a5274e525da496e",
+        "subject": "test new op per perform",
+        "worktree_changes": true,
+        "worktree_changes_hash": "1d9c13d561e6",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T00:36:04+02:00"
+      },
+      "median": {
+        "pingpong": 8.81,
+        "pingpong-fresh-ops": 8.87,
+        "pingpong-deadline": 8.87,
+        "concurrent": 4.44,
+        "pipelined": 2.39,
+        "blocking": 6.75,
+        "timers": 0.22,
+        "fairness-tick": 3.85,
+        "fairness": 3.85,
+        "mixed-compute": 29.01,
+        "mixed": 29.07
+      },
+      "samples": {
+        "pingpong": [
+          9.04,
+          8.81,
+          8.5
+        ],
+        "pingpong-fresh-ops": [
+          9.05,
+          8.87,
+          8.84
+        ],
+        "pingpong-deadline": [
+          8.8,
+          8.93,
+          8.87
+        ],
+        "concurrent": [
+          4.62,
+          4.44,
+          4.4
+        ],
+        "pipelined": [
+          2.34,
+          2.39,
+          2.49
+        ],
+        "blocking": [
+          6.87,
+          6.75,
+          6.71
+        ],
+        "timers": [
+          0.21,
+          0.22,
+          0.22
+        ],
+        "fairness-tick": [
+          3.87,
+          3.77,
+          3.85
+        ],
+        "fairness": [
+          3.87,
+          3.77,
+          3.85
+        ],
+        "mixed-compute": [
+          29.01,
+          29.0,
+          29.11
+        ],
+        "mixed": [
+          29.07,
+          29.05,
+          29.17
+        ]
+      }
+    },
+    {
+      "label": "b1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/budget1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.36,
+        "pingpong-fresh-ops": 8.49,
+        "pingpong-deadline": 8.56,
+        "concurrent": 4.45,
+        "pipelined": 1.7,
+        "blocking": 7.01,
+        "timers": 0.22,
+        "fairness-tick": 5.27,
+        "fairness": 2.64,
+        "mixed-compute": 41.02,
+        "mixed": 20.74
+      },
+      "samples": {
+        "pingpong": [
+          8.76,
+          8.26,
+          8.36
+        ],
+        "pingpong-fresh-ops": [
+          8.49,
+          8.4,
+          8.53
+        ],
+        "pingpong-deadline": [
+          8.48,
+          8.62,
+          8.56
+        ],
+        "concurrent": [
+          4.45,
+          4.6,
+          4.26
+        ],
+        "pipelined": [
+          1.6,
+          1.72,
+          1.7
+        ],
+        "blocking": [
+          7.61,
+          7.01,
+          6.91
+        ],
+        "timers": [
+          0.22,
+          0.23,
+          0.22
+        ],
+        "fairness-tick": [
+          5.27,
+          5.32,
+          5.22
+        ],
+        "fairness": [
+          2.64,
+          2.66,
+          2.61
+        ],
+        "mixed-compute": [
+          41.02,
+          40.46,
+          41.03
+        ],
+        "mixed": [
+          20.74,
+          20.4,
+          20.75
+        ]
+      }
+    },
+    {
+      "label": "b4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/budget4",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.56,
+        "pingpong-fresh-ops": 8.43,
+        "pingpong-deadline": 8.48,
+        "concurrent": 4.29,
+        "pipelined": 1.29,
+        "blocking": 6.94,
+        "timers": 0.22,
+        "fairness-tick": 7.21,
+        "fairness": 1.44,
+        "mixed-compute": 40.19,
+        "mixed": 20.24
+      },
+      "samples": {
+        "pingpong": [
+          8.34,
+          8.56,
+          8.58
+        ],
+        "pingpong-fresh-ops": [
+          8.43,
+          8.55,
+          8.32
+        ],
+        "pingpong-deadline": [
+          8.54,
+          8.48,
+          8.35
+        ],
+        "concurrent": [
+          4.29,
+          4.3,
+          4.18
+        ],
+        "pipelined": [
+          1.23,
+          1.35,
+          1.29
+        ],
+        "blocking": [
+          6.94,
+          6.89,
+          6.96
+        ],
+        "timers": [
+          0.22,
+          0.22,
+          0.22
+        ],
+        "fairness-tick": [
+          7.21,
+          7.33,
+          7.14
+        ],
+        "fairness": [
+          1.44,
+          1.47,
+          1.43
+        ],
+        "mixed-compute": [
+          40.01,
+          40.19,
+          40.21
+        ],
+        "mixed": [
+          20.15,
+          20.24,
+          20.25
+        ]
+      }
+    },
+    {
+      "label": "b8",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/budget8",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.29,
+        "pingpong-fresh-ops": 8.32,
+        "pingpong-deadline": 8.7,
+        "concurrent": 4.06,
+        "pipelined": 0.81,
+        "blocking": 6.86,
+        "timers": 0.22,
+        "fairness-tick": 8.56,
+        "fairness": 0.99,
+        "mixed-compute": 40.49,
+        "mixed": 20.42
+      },
+      "samples": {
+        "pingpong": [
+          8.29,
+          8.31,
+          8.23
+        ],
+        "pingpong-fresh-ops": [
+          8.49,
+          8.32,
+          8.31
+        ],
+        "pingpong-deadline": [
+          8.7,
+          8.72,
+          8.48
+        ],
+        "concurrent": [
+          4.06,
+          3.99,
+          4.44
+        ],
+        "pipelined": [
+          0.8,
+          0.81,
+          0.82
+        ],
+        "blocking": [
+          6.77,
+          6.95,
+          6.86
+        ],
+        "timers": [
+          0.22,
+          0.22,
+          0.22
+        ],
+        "fairness-tick": [
+          8.81,
+          8.21,
+          8.56
+        ],
+        "fairness": [
+          1.02,
+          0.95,
+          0.99
+        ],
+        "mixed-compute": [
+          40.48,
+          40.49,
+          40.78
+        ],
+        "mixed": [
+          20.39,
+          20.42,
+          20.56
+        ]
+      }
+    },
+    {
+      "label": "b32",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/budget32",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.38,
+        "pingpong-fresh-ops": 8.43,
+        "pingpong-deadline": 8.38,
+        "concurrent": 3.54,
+        "pipelined": 0.68,
+        "blocking": 6.95,
+        "timers": 0.22,
+        "fairness-tick": 18.3,
+        "fairness": 0.74,
+        "mixed-compute": 40.43,
+        "mixed": 20.39
+      },
+      "samples": {
+        "pingpong": [
+          8.38,
+          8.59,
+          8.28
+        ],
+        "pingpong-fresh-ops": [
+          8.43,
+          8.34,
+          8.51
+        ],
+        "pingpong-deadline": [
+          8.32,
+          8.43,
+          8.38
+        ],
+        "concurrent": [
+          3.45,
+          3.54,
+          3.59
+        ],
+        "pipelined": [
+          0.67,
+          0.71,
+          0.68
+        ],
+        "blocking": [
+          7.21,
+          6.95,
+          6.93
+        ],
+        "timers": [
+          0.22,
+          0.23,
+          0.22
+        ],
+        "fairness-tick": [
+          18.3,
+          19.46,
+          17.81
+        ],
+        "fairness": [
+          0.74,
+          0.78,
+          0.71
+        ],
+        "mixed-compute": [
+          40.13,
+          40.6,
+          40.43
+        ],
+        "mixed": [
+          20.2,
+          20.49,
+          20.39
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

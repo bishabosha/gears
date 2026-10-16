@@ -51,6 +51,11 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
       reactor.wakeup()
     }
 
+  /** Ops that `perform` may still finish without suspending in this round, reset by each `drain`. Spent, `perform`
+    * suspends even for an op that could finish at once, so the other futures and the reactor's poll get to run.
+    */
+  private[gearsexample] var fastPathsLeft = ReactorScheduler.FastPathBudget
+
   /** Whether no task is queued, so the loop may block. On the reactor thread only. */
   private[gearsexample] def isIdle: Boolean = local.isEmpty && remote.isEmpty
 
@@ -80,6 +85,7 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     * polled.
     */
   private[gearsexample] def drain(): Unit = {
+    fastPathsLeft = ReactorScheduler.FastPathBudget
     var fromElsewhere = remote.poll()
     while fromElsewhere != null do {
       local.add(fromElsewhere)
@@ -96,6 +102,10 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
 }
 
 object ReactorScheduler {
+
+  /** How many ops `perform` may finish without suspending in one round of the scheduler. */
+  inline val FastPathBudget = 32
+
   private val current = new ThreadLocal[ReactorScheduler]()
 
   /** The scheduler running on this thread, if any. */
@@ -119,9 +129,12 @@ object ReactorFutures {
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
   def perform(r: Reactor, op: r.Op)(using ac: Async): Unit = {
-    val scheduler = ReactorScheduler.onThisThread
-    if scheduler == null || (scheduler.reactor ne r) then
-      throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
+    // The caller's scheduler, if it is the reactor's, runs everything on the reactor's thread, so the caller is on it
+    // too; asking it saves a thread-local lookup, which on macOS is a call.
+    val scheduler = ac.scheduler match {
+      case own: ReactorScheduler if own.reactor eq r => own
+      case _ => throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
+    }
     if ac.group.isCancelled then throw new CancellationException()
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here.
     // A waiter still in use (the op performed twice at once, which the reactor refuses) is left alone.
@@ -136,11 +149,25 @@ object ReactorFutures {
     }
     waiter.inUse = true
     try {
-      r.submit(op, waiter.completion) // A refused op, such as a one-shot op submitted twice, throws here.
-      waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
-      // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
-      try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
-      finally waiter.unlink()
+      // The fast path: an op the reactor finishes at once returns here without suspending, which skips the whole await
+      // and resume. Taken only while no other task is queued, so a runnable future never waits behind it, and within a
+      // budget per round of the scheduler, so the reactor still polls for futures waiting on events.
+      // A refused op, such as a one-shot op submitted twice, throws from either call.
+      val finished =
+        if scheduler.fastPathsLeft > 0 && scheduler.isIdle then {
+          val now = r.trySubmit(op, waiter.completion)
+          if now then scheduler.fastPathsLeft -= 1
+          now
+        } else {
+          r.submit(op, waiter.completion)
+          false
+        }
+      if !finished then {
+        waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
+        // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
+        try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
+        finally waiter.unlink()
+      }
     } finally waiter.inUse = false
   }
 
