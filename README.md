@@ -186,6 +186,18 @@ that thread and the reactor's loop as its event loop, so futures submit to the r
 directly and everything a program spawns stays on that thread (there is no work stealing
 or balancing yet). The test suites run against both versions.
 
+`kqueueDemo/run gears bench` is a stress test to measure reactor changes against: an
+echo server and its clients run on two reactor threads in one process, through five
+scenarios that each stress a different cost (one message in flight; the same with a
+timeout armed and cancelled per round trip; many connections at once; full-duplex
+pipelining with a write per message; and blocking tasks completing on worker threads).
+`kqueueDemo/run bench` runs the same scenarios written against `KqueueLoop` directly,
+with no reactor, as a reference for what a hand-written loop costs.
+`kqueue-demo/bench/compare.py before=<old executable> after=<new executable>` runs saved
+builds alternately and reports each scenario's median microseconds per operation and the
+change (add `raw=<executable>@raw` for the reference); keep a copy of the executable
+before each change to compare against.
+
 Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
 to build and locate the executable for running directly.
 

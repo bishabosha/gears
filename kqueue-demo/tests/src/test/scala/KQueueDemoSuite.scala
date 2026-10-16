@@ -51,6 +51,12 @@ class KQueueDemoSuite extends DemoSuite {
     assert(!output.contains("unexpected"), output)
   }
 
+  demoTest("bench: every scenario runs and reports, at a tiny scale") {
+    val output = run("bench", "--scale", "0.01", "--connections", "8")
+    for (scenario <- Seq("pingpong", "pingpong-deadline", "concurrent", "pipelined", "blocking"))
+      assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
+  }
+
   demoTest("FIFO read readiness and EOF") {
     withFifo { fifo =>
       withDemo("file-read", "--fifo", fifo.toString) { reader =>
