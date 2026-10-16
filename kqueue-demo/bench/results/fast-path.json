@@ -1,0 +1,300 @@
+{
+  "started": "2026-10-17T11:18:50+02:00",
+  "finished": "2026-10-17T11:19:45+02:00",
+  "load_average": {
+    "before": [
+      4.451171875,
+      8.4833984375,
+      15.7578125
+    ],
+    "after": [
+      3.5927734375,
+      7.583984375,
+      14.96630859375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/reorder/bin/kqueuedemo.d9d6ad4",
+      "benchmark": "gears",
+      "build": {
+        "commit": "d9d6ad441cb94635eab9b917182579a47bfc5e19",
+        "subject": "move completion to the kqueue op",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T11:06:35+02:00"
+      },
+      "median": {
+        "pingpong": 8.25,
+        "pingpong-fresh-ops": 8.3,
+        "pingpong-deadline": 8.46,
+        "concurrent": 4.08,
+        "pipelined": 2.23,
+        "blocking": 6.45,
+        "timers": 0.21,
+        "fairness-tick": 3.61,
+        "fairness": 3.61,
+        "mixed-compute": 28.15,
+        "mixed": 28.18
+      },
+      "samples": {
+        "pingpong": [
+          8.18,
+          8.57,
+          8.19,
+          8.25,
+          8.77
+        ],
+        "pingpong-fresh-ops": [
+          8.26,
+          8.41,
+          8.3,
+          8.35,
+          8.3
+        ],
+        "pingpong-deadline": [
+          9.15,
+          8.36,
+          8.33,
+          8.46,
+          8.48
+        ],
+        "concurrent": [
+          4.09,
+          4.04,
+          4.03,
+          4.11,
+          4.08
+        ],
+        "pipelined": [
+          2.23,
+          2.19,
+          2.21,
+          2.23,
+          2.23
+        ],
+        "blocking": [
+          6.37,
+          6.45,
+          6.51,
+          6.71,
+          6.41
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.22,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.54,
+          3.66,
+          3.6,
+          3.62,
+          3.61
+        ],
+        "fairness": [
+          3.54,
+          3.66,
+          3.6,
+          3.62,
+          3.61
+        ],
+        "mixed-compute": [
+          28.17,
+          28.08,
+          28.03,
+          28.16,
+          28.15
+        ],
+        "mixed": [
+          28.2,
+          28.12,
+          28.06,
+          28.19,
+          28.18
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/reorder/bin/kqueuedemo.3aec81d",
+      "benchmark": "gears",
+      "build": {
+        "commit": "3aec81d769989195b2b61b63351443a22ad92e21",
+        "subject": "suspend only for fairness or task would block",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T11:06:36+02:00"
+      },
+      "median": {
+        "pingpong": 8.1,
+        "pingpong-fresh-ops": 8.14,
+        "pingpong-deadline": 8.19,
+        "concurrent": 4.0,
+        "pipelined": 0.67,
+        "blocking": 6.42,
+        "timers": 0.22,
+        "fairness-tick": 3.68,
+        "fairness": 3.68,
+        "mixed-compute": 27.77,
+        "mixed": 27.8
+      },
+      "samples": {
+        "pingpong": [
+          8.01,
+          8.1,
+          8.36,
+          8.1,
+          8.11
+        ],
+        "pingpong-fresh-ops": [
+          8.08,
+          8.32,
+          8.26,
+          8.05,
+          8.14
+        ],
+        "pingpong-deadline": [
+          8.28,
+          8.15,
+          8.19,
+          8.21,
+          8.1
+        ],
+        "concurrent": [
+          4.05,
+          4.0,
+          3.92,
+          4.06,
+          3.89
+        ],
+        "pipelined": [
+          0.67,
+          0.71,
+          0.66,
+          0.7,
+          0.65
+        ],
+        "blocking": [
+          6.39,
+          6.35,
+          6.64,
+          6.42,
+          6.57
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.22,
+          0.22,
+          0.22
+        ],
+        "fairness-tick": [
+          3.77,
+          3.76,
+          3.68,
+          3.63,
+          3.62
+        ],
+        "fairness": [
+          3.77,
+          3.76,
+          3.68,
+          3.63,
+          3.62
+        ],
+        "mixed-compute": [
+          27.75,
+          27.79,
+          27.59,
+          27.79,
+          27.77
+        ],
+        "mixed": [
+          27.78,
+          27.83,
+          27.62,
+          27.82,
+          27.8
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/reorder/bin/kqueuedemo.3aec81d@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "3aec81d769989195b2b61b63351443a22ad92e21",
+        "subject": "suspend only for fairness or task would block",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T11:06:36+02:00"
+      },
+      "median": {
+        "pingpong": 5.19,
+        "pingpong-deadline": 6.27,
+        "concurrent": 1.58,
+        "pipelined": 0.5,
+        "blocking": 4.04,
+        "timers": 0.66
+      },
+      "samples": {
+        "pingpong": [
+          5.16,
+          5.2,
+          5.16,
+          5.31,
+          5.19
+        ],
+        "pingpong-deadline": [
+          6.27,
+          6.43,
+          6.26,
+          6.4,
+          6.22
+        ],
+        "concurrent": [
+          1.62,
+          1.58,
+          1.74,
+          1.47,
+          1.33
+        ],
+        "pipelined": [
+          0.5,
+          0.51,
+          0.53,
+          0.5,
+          0.5
+        ],
+        "blocking": [
+          3.95,
+          4.1,
+          3.99,
+          4.2,
+          4.04
+        ],
+        "timers": [
+          0.67,
+          0.66,
+          0.66,
+          0.64,
+          0.65
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

@@ -59,6 +59,14 @@ trait Reactor extends AutoCloseable {
   /** Sets `op`'s attachment (see `attachment`). */
   def attach(op: Op, value: AnyRef | Null): Unit
 
+  /** Like `submit`, but an op the reactor can finish at once, as it may for an operation that only reports would-block
+    * when not ready, it finishes here: it returns true without ever calling `completion`, and the op's results are
+    * already in the caller's buffers and slots; a failure is thrown. Otherwise the op is submitted as by `submit`,
+    * `completion` runs when it finishes, and this returns false. A caller can then continue at once instead of waiting
+    * for a later turn, but must take care to let other work run if its ops keep finishing at once.
+    */
+  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean
+
   /** Cancels a submitted op that has not finished, and returns true: its completion's `onComplete` and `onFailure` will
     * never run, and its `onCancel` runs once the reactor has stopped using the op's buffers and slots. That is before
     * this returns for most ops, but later, from `run`, for one still running elsewhere, such as a blocking op that has

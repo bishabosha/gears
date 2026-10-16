@@ -111,12 +111,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   // Guards triggering the wake event against `close`, after which the kqueue's descriptor number may be reused.
   private object wakeLock {}
 
-  // The thread that runs the loop: the one that opened the reactor until `runOnce` is called. A promise resolved on it
-  // needs no wake-up, because the loop delivers every resolved promise before it polls again.
+  // The thread that runs the loop: the one that opens the reactor, which owns it, or the one that calls `run`. A promise
+  // resolved on it needs no wake-up, because the loop delivers every resolved promise before it polls again. Not
+  // refreshed by every `runOnce`: on macOS `Thread.currentThread` is a call into thread-local storage.
   @volatile private var loopThread: Thread = Thread.currentThread()
   @volatile private var closed = false
 
-  def submit[C <: Op](op: C, completion: Completion[C]): Unit = {
+  def submit[C <: Op](op: C, completion: Completion[C]): Unit = submitOrFinish(op, completion, finishNow = false): Unit
+
+  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean = submitOrFinish(op, completion, finishNow = true)
+
+  /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
+    * takes the completion back off it uncalled, throws a failure, and returns true.
+    */
+  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean): Boolean = {
+    var finished = false
     op match {
       case _: Repeatable => ()
       case one: KqueueOp =>
@@ -136,11 +145,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           val attempt =
             slot.readReadiness == KqueueReactor.Ready ||
               (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
-          if !(attempt && performedAtOnce(command, slot)) then {
+          if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
+          else {
             slot.read = command
             waitToRead(command, slot)
           }
-        } else if !(command.tryFirst && performedAtOnce(command, null)) then {
+        } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
+        else {
           slot.write = command
           arm(command.fd, read = false)
         }
@@ -165,13 +176,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         }
     }
     op.submitted = true
+    if finished then {
+      op.completion = null // finished here, so the completion is never called
+      val failure = op.atOnceFailure
+      if failure != null then {
+        op.atOnceFailure = null
+        throw failure
+      }
+    }
+    finished
   }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
     * turn rather than run here, and this returns true; if it would block, this returns false. For a read, `slot`
     * records what that taught about the descriptor's readiness.
     */
-  private def performedAtOnce(command: Command, slot: Slot | Null): Boolean = {
+  private def performedAtOnce(command: Command, slot: Slot | Null, queue: Boolean): Boolean = {
     val done =
       try command.perform()
       catch {
@@ -185,7 +205,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         else if !done then KqueueReactor.NotReady
         else readinessAfter(command, available = -1)
       )
-    if done then ready.add(command)
+    if done && queue then ready.add(command)
     done
   }
 
@@ -469,7 +489,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private val events = KqueueLoop.allocateQueue(maxEvents)
 
   def runOnce(block: Boolean): Unit = {
-    loopThread = Thread.currentThread()
     val delivered = deliverReady() | deliverResolved() // both, without short-circuiting
     val polled =
       if !delivered then {
@@ -612,6 +631,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   }
 
   def run(): Unit = {
+    loopThread = Thread.currentThread()
     running = true
     while running do runOnce(block = true)
   }

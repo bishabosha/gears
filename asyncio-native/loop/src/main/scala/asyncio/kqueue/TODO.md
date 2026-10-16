@@ -214,6 +214,33 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
   and building a pending op had to fail. Callers who want no allocation can keep their ops, which the attachment
   already makes free in `perform`.
 
+- Thread-local lookups (`_tlv_get_addr`, 18–20% of CPU in the throughput scenarios) are mostly the safepoint polls
+  Scala Native emits: with trap-based yieldpoints, the default in release builds, every poll is a volatile load of the
+  thread-local `scalanative_GC_yieldpoint_trap`, and on macOS every thread-local access is a call. By caller: safepoint
+  polls 66%, `currentThread` 11%, the allocator 10%, monitors 8%.
+  - Linking with `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0` (conditional yieldpoints, which check a global flag) gained
+    7–14% on the throughput scenarios (release-fast against the nightly, median of 5 runs: `pipelined` −10%,
+    `concurrent` −7%, `blocking` −7%, `timers` −14%, ping-pong −1%), and ran without failure on the nightly. This is
+    not made the default here; it is worth recommending to applications that only use thread-owned reactors, with
+    futures that stay on their reactor's thread and no work-stealing workers.
+  - In our code, `runOnce` no longer calls `Thread.currentThread()` every turn, and `perform` takes its scheduler from
+    its `Async` context instead of a `ThreadLocal`. Simpler, but no measurable difference.
+
+- `perform` no longer suspends for an op that finishes at once. `Reactor.trySubmit` finishes such an op inside the call
+  and returns true without calling its completion; `perform` then returns, skipping the await, the continuation switch
+  and the scheduler round trip. It does so only while no other task is queued (`ReactorScheduler.isIdle`), so a runnable
+  future never waits behind it, and at most `ReactorScheduler.FastPathBudget` (32) times per scheduler round, so the
+  reactor still polls for futures waiting on events. Release-fast, median of 5 runs, µs/op before → after: `pipelined`
+  2.23 → 0.67 (−70%), `concurrent` 4.08 → 4.00 (−2%), ping-pong −2 to −3%, `fairness-tick` 3.61 → 3.68, `mixed-compute`
+  28.2 → 27.8, `blocking` and `timers` unchanged (`kqueue-demo/bench/results/fast-path.json`).
+  - The budget alone was tried first. Fairness is per scheduler turn, not per op, so traffic whose ops finish at once
+    then got a budget's worth of ops per turn of the futures sharing its thread: with a budget of 8, `fairness-tick`
+    3.85 → 8.56 µs (one tick per ~8.6 messages instead of one), and in `mixed` ping-pong took one turn per round trip
+    instead of two, so the compute future's slices went 29.0 → 40.5 µs while ping-pong went 29.1 → 20.4. Budgets of 1,
+    4, 8 and 32 gave `pipelined` −29%, −46%, −66%, −72% and `fairness-tick` +37%, +87%, +122%, +375%
+    (`kqueue-demo/bench/results/fast-path-budgets.json`, 3 runs). Requiring an idle scheduler as well removed the cost
+    to fairness entirely while keeping the gain, which comes from futures that run alone.
+
 Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
 `scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
 matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.
