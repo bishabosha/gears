@@ -83,7 +83,9 @@ See [LICENSE](./LICENSE) for more details.
 The cross-built `asyncio` project (JVM and Native) is interface only: `Op`, `Completion`,
 the `Reactor` trait with `Reactor.Factory`, and the `Ops` factory that each reactor exposes
 as `reactor.ops` for building reads, writes, accepts, connects, timers, custom readiness
-ops, blocking tasks, promises, and name resolution. `nativeAsyncioLoop` implements it in
+ops, blocking tasks, and name resolution. The reactor has no promise op: code written
+against it uses gears promises. A scheduler drives the loop with `runOnce`, and other
+threads wake it with `wakeup`. `nativeAsyncioLoop` implements it in
 `asyncio.kqueue`: `KqueueReactor`, `KqueueOps`, the concrete op classes, and the blocker
 pool. The kqueue demos use those internals directly. The gears demos use only the interface,
 including `reactor.handles` for opening files, sockets, and pipes by `Address`, so they
@@ -182,7 +184,8 @@ run by putting `gears` before the command, for example `kqueueDemo/run gears kv-
 the caller until the op finishes, so the code reads sequentially; wrapping a call in a
 `Future` runs the op alongside other work. Reactors are thread-owned: `ReactorFutures.run` makes the calling
 thread the reactor thread, running the program as a future under a scheduler bound to
-that thread and the reactor's loop as its event loop, so futures submit to the reactor
+that thread, and alternating between the scheduler's queued tasks and turns of the
+reactor's loop, blocking only when no task is queued. So futures submit to the reactor
 directly and everything a program spawns stays on that thread (there is no work stealing
 or balancing yet). The test suites run against both versions.
 

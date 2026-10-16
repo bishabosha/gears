@@ -24,6 +24,23 @@ per drain; so a computation yielding between slices kept the loop from ever poll
 when they start. Nothing else changed beyond noise (release-fast, median of 7 runs, against the start with the same
 scenarios: `blocking` +7%, the rest within 3%; `kqueue-demo/bench/results/starvation-fix.json`).
 
+Median microseconds per operation over 5 runs of release-fast builds on the development machine, before and after items
+1 and 6, with the hand-written reference (`kqueue-demo/bench/results/remove-wakeup-pipe.json`):
+
+| scenario | before | after items 1 and 6 | raw `KqueueLoop` |
+|---|---|---|---|
+| pingpong | 28.5 | 18.6 (−35%) | 6.6 |
+| pingpong-fresh-ops | 28.6 | 18.5 (−35%) | |
+| pingpong-deadline | 31.9 | 20.4 (−36%) | 8.2 |
+| concurrent | 7.7 | 7.4 (−4%) | 2.2 |
+| pipelined | 9.0 | 7.3 (−19%) | 0.8 |
+| blocking | 16.1 | 7.3 (−55%) | 4.7 |
+| timers | 1.33 | 1.33 | 1.14 |
+| fairness, per message | 12.8 | 9.8 (−24%) | |
+| fairness-tick | 12.8 | 9.8 (−24%) | |
+| mixed, per round trip | 45.6 | 37.0 (−19%) | |
+| mixed-compute | 34.8 | 36.7 (+5%) | |
+
 ## What each operation costs now
 
 | Operation | Syscalls | Where |
@@ -40,13 +57,13 @@ scenarios: `blocking` +7%, the rest within 3%; `kqueue-demo/bench/results/starva
 
 ## Proposals, in order of what they save
 
-- [ ] **1. Don't use the wake pipe for work queued on the reactor thread.**
-  `ReactorScheduler.execute` always completes a reactor promise, so every resumed continuation costs a pipe `write`, a
-  `kevent` wake, and draining `read`s, even though nearly every `execute` comes from the reactor thread itself.
-  - When `execute` is called on the owner thread, add the task to the queue and set a plain "work pending" flag.
-  - The loop drains the queue after each batch of events, and polls with a zero timeout while the queue isn't empty.
-  - Only `execute` from another thread needs to wake the loop.
-  - Saves about 4 syscalls per resumed continuation, which is almost every `perform`.
+- [x] **1. Don't use the wake pipe for work queued on the reactor thread.**
+  Done, in two steps. First `KqueueReactor.resolved` stopped writing to the pipe for promises resolved on the loop
+  thread; on the gears key-value client (200,000 pipelined commands, about 400 resumes) that removed all 406 pipe writes
+  and their draining reads, and cut `kevent` waits from 646 to 399. Then the reactor's promise op was removed: gears code
+  uses gears promises, and the scheduler drives the loop itself with `Reactor.runOnce`, running its tasks between turns
+  and blocking only when it has none. `ReactorScheduler.execute` calls `Reactor.wakeup` only from another thread, so
+  resuming a continuation on the reactor thread costs no syscalls and no promise allocation.
 
 - [ ] **2. Try the operation before waiting for readiness.**
   Sockets are usually writable, and a request-response or pipelined peer usually has data waiting already. Go and tokio
@@ -82,11 +99,11 @@ scenarios: `blocking` +7%, the rest within 3%; `kqueue-demo/bench/results/starva
     (`KqueueLoop.pollEventsTimeout` already exists). libuv and tokio work this way.
   - Saves both syscalls per timer.
 
-- [ ] **6. Cheaper wake-ups from other threads** (for what still needs them after item 1).
-  - Coalesce: an atomic "wake pending" flag, so only the first `resolved` since the last drain writes to the pipe.
-  - Replace the pipe with `EVFILT_USER`: waking is one `kevent(NOTE_TRIGGER)` call, and with `EV_CLEAR` there is nothing
-    to drain. That also removes the pipe's two descriptors and `wakeLock`.
-  - If the pipe stays, read it once instead of until `EAGAIN`; with `EV_CLEAR`, any new write triggers another event.
+- [x] **6. Cheaper wake-ups from other threads.**
+  Done: the wake pipe is replaced by an `EVFILT_USER` event, so waking is one `kevent(NOTE_TRIGGER)` call with nothing to
+  drain, and the reactor no longer holds two pipe descriptors. Wake-ups are merged with an atomic flag, which the loop
+  clears when it sees the event, so only the first `wakeup` since then makes the syscall. `wakeLock` remains, so that a
+  trigger cannot reach the kqueue's descriptor number after `close` has released it.
 
 - [ ] **7. Accept with fewer syscalls.**
   - On macOS a socket returned by `accept` inherits `O_NONBLOCK` from the listening socket, so the two `fcntl` calls in

@@ -27,19 +27,17 @@ class KQueueDemoSuite extends DemoSuite {
     assert(output.contains("resolved localhost to"), output)
   }
 
-  demoTest("cancel a pending read, blocking task, promise, and timer") {
+  demoTest("cancel pending ops of each kind") {
     val output = run("cancel")
     val expected = Seq(
       "read cancelled: true",
       "blocking cancelled: true",
-      "promise cancelled: true",
       "timer cancelled: true",
-      "resubmitting the cancelled promise: refused",
+      "resubmitting the cancelled blocking task: refused",
+      "cancel notifications: 3",
       "cancelling after close: true",
-      "completing the promise again: refused",
       "read after cancel: `hello`",
       "blocking interrupted: true",
-      "cancel notifications: 4",
       "a running blocking task had stopped before onCancel: true",
       "the cancelled task left its slot empty: true",
       "close notified the leftover: true",

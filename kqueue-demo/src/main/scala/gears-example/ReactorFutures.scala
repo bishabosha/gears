@@ -11,7 +11,6 @@ import gears.async.native.NativeSuspend
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
@@ -19,12 +18,11 @@ import scala.util.Success
 import scala.util.Try
 
 import asyncio.Completion
-import asyncio.Promise
 import asyncio.Reactor
 
-/** A gears scheduler that runs everything on the thread that created it, using that thread's reactor as its event loop:
-  * queued tasks, such as starting a future or resuming a suspended one, run from a completion on the reactor. So code
-  * running under this scheduler submits ops to the reactor directly.
+/** A gears scheduler that runs everything on the thread that created it, which also drives that thread's reactor:
+  * `ReactorFutures.run` alternates between running queued tasks, such as starting a future or resuming a suspended one,
+  * and turns of the reactor's loop. So code running under this scheduler submits ops to the reactor directly.
   *
   * Futures inherit their parent's scheduler, so a program started here, and everything it spawns, runs on this one
   * thread. There is no work stealing or balancing yet.
@@ -32,19 +30,21 @@ import asyncio.Reactor
 final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extends Scheduler {
   private val owner = Thread.currentThread()
   private val tasks = new ConcurrentLinkedQueue[Runnable]()
-  @volatile private var wakeup: Wakeup | Null = null
 
   ReactorScheduler.current.set(this)
-  arm()
 
   def isCurrent: Boolean = Thread.currentThread() eq owner
 
-  /** Queues `body` to run on the reactor thread, from any thread. */
+  /** Queues `body` to run on the reactor thread, from any thread. Only another thread has to wake the loop: on the
+    * reactor thread itself the loop is not blocked, and the task runs before it next blocks.
+    */
   def execute(body: Runnable): Unit = {
     tasks.add(body)
-    val w = wakeup
-    if w != null then w.fire()
+    if !isCurrent then reactor.wakeup()
   }
+
+  /** Whether no task is queued, so the loop may block. */
+  private[gearsexample] def isIdle: Boolean = tasks.isEmpty
 
   /** Runs `body` after `delay` on the reactor thread, using a reactor timer. */
   def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
@@ -67,32 +67,11 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
 
   def sync(body: => Unit): Unit = onOwner(body)
 
-  /** One pending promise that wakes the loop for queued tasks. It fires at most once. */
-  private final class Wakeup(promise: Promise[Unit]) {
-    private val fired = new AtomicBoolean()
-    def fire(): Unit = if fired.compareAndSet(false, true) then promise.complete(())
-  }
-
-  /** Submits a fresh wakeup and publishes it before draining, so a task queued concurrently is either seen by the drain
-    * or wakes the new promise.
-    */
-  private def arm(): Unit = {
-    val promise = reactor.ops.promise[Unit]()
-    reactor.submit(
-      promise,
-      _ => {
-        arm()
-        drain()
-      }
-    )
-    wakeup = new Wakeup(promise)
-  }
-
   /** Runs the tasks queued when it starts. Tasks they queue wait for the next drain, after the reactor's turn: work
     * that keeps queueing more, such as a computation yielding between slices, would otherwise keep I/O from ever being
     * polled.
     */
-  private def drain(): Unit = {
+  private[gearsexample] def drain(): Unit = {
     var remaining = tasks.size() // traverses the queue, which stays short
     while remaining > 0 do {
       val task = tasks.poll()
@@ -199,12 +178,16 @@ object ReactorFutures {
   def run(program: Reactor => Async.Spawn ?=> Unit)(using factory: Reactor.Factory[Reactor]): Unit = {
     val reactor = factory.open()
     try {
-      given ReactorScheduler = new ReactorScheduler(reactor)
+      val scheduler = new ReactorScheduler(reactor)
+      given ReactorScheduler = scheduler
       given ReactorSupport.type = ReactorSupport
       Async.blocking {
-        val main = Future(program(reactor)) // queued: it starts once the loop runs
-        main.onComplete(Listener((_, _) => reactor.stop()))
-        reactor.run()
+        val main = Future(program(reactor)) // queued: it starts with the first drain
+        while main.poll().isEmpty do {
+          scheduler.drain()
+          // Block for events only with no task left; a task queued from another thread wakes the loop.
+          if main.poll().isEmpty then reactor.runOnce(block = scheduler.isIdle)
+        }
         main.await // already complete, so this only rethrows a failure
       }
     } finally reactor.close() // Pending ops are cancelled, rejecting any futures still waiting on them.

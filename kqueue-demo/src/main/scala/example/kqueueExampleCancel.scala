@@ -11,15 +11,14 @@ import asyncio.kqueue.KqueueOp
 import asyncio.kqueue.KqueueOps
 import asyncio.kqueue.KqueueReactor
 import asyncio.kqueue.KqueueTimer
-import asyncio.kqueue.KqueueValuePromise
 import asyncio.kqueue.ReadIntoBuffer
 import asyncio.unsafe.NativeBuffer
 import KQueueExampleIO.*
 
-/** Cancels one op of each kind while it is still pending: a read on an empty pipe, a blocking task, a plain promise,
-  * and a timer. Then it shows the cancellations held: none of their completions ever run, even once the pipe has data,
-  * the blocking task has finished, the promise is completed, and the timer's deadline has passed; and the freed read
-  * slot accepts a fresh read. Every one of them, the timer included, is cancelled with the same `r.cancel`.
+/** Cancels one op of each kind while it is still pending: a read on an empty pipe, a blocking task, and a timer. Then
+  * it shows the cancellations held: none of their completions ever run, even once the pipe has data, the blocking task
+  * has finished, and the timer's deadline has passed; and the freed read slot accepts a fresh read. Every one of them,
+  * the timer included, is cancelled with the same `r.cancel`.
   */
 object KQueueExampleCancel {
 
@@ -84,10 +83,8 @@ object KQueueExampleCancel {
 
           val read = ReadIntoBuffer(readFd, buf) // nothing has been written yet
           val sleeper = new Sleeper(millis = 1000)
-          val promise = new KqueueValuePromise[Unit] // nobody will complete it before it is cancelled
           r.submit(read, late)
           r.submit(sleeper, late)
-          r.submit(promise, late)
           val timer = new KqueueTimer(milliseconds = 300)
           r.submit(timer, late)
           r.submit(leftover, late) // Left running on purpose: closing the reactor must interrupt it.
@@ -106,24 +103,23 @@ object KQueueExampleCancel {
               }
             }
           )
-          println("submitted a read, a blocking task, a promise, and a timer")
+          println("submitted a read, a blocking task, and a timer")
 
           r.submit(
             new KqueueTimer(milliseconds = 100),
             _ => {
               println(s"read cancelled: ${r.cancel(read)}")
               println(s"blocking cancelled: ${r.cancel(sleeper)}")
-              println(s"promise cancelled: ${r.cancel(promise)}")
               println(s"timer cancelled: ${r.cancel(timer)}")
               println(s"cancelling the read again: ${r.cancel(read)}")
               r.cancel(stubbornTask)
-              // A promise is not Repeatable, so the reactor refuses to take it a second time.
+              // A blocking task is not Repeatable, so the reactor refuses to take it a second time.
               val refused =
                 try {
-                  r.submit(promise, late)
+                  r.submit(sleeper, late)
                   false
                 } catch case _: IllegalStateException => true
-              println(s"resubmitting the cancelled promise: ${if refused then "refused" else "accepted"}")
+              println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
 
               // Closing a descriptor removes its kqueue filters, so a read still pending on it must stay cancellable.
               val (orphanRead, orphanWrite) = KqueueHandles.pipe()
@@ -132,18 +128,6 @@ object KQueueExampleCancel {
               KqueueHandles.close(orphanRead)
               KqueueHandles.close(orphanWrite)
               println(s"cancelling after close: ${r.cancel(orphan)}")
-
-              // Completing the cancelled promise from another thread must not run its completion.
-              val completer = new Thread(() => promise.complete(()))
-              completer.start()
-              completer.join()
-              // Only the first completion counts.
-              val again =
-                try {
-                  promise.complete(())
-                  "accepted"
-                } catch case _: IllegalStateException => "refused"
-              println(s"completing the promise again: $again")
 
               // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
               nioWriteBytes(writeFd, NativeBuffer.of("hello".getBytes(StandardCharsets.UTF_8)))

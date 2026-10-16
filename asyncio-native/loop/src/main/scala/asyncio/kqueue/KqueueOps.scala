@@ -31,7 +31,6 @@ object KqueueOps extends Ops[KqueueOp] {
   def whenReady(fd: Int, interest: Interest)(perform: () => Boolean): WhenReady = new WhenReady(fd, interest, perform)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
-  def promise[A](): KqueueValuePromise[A] = new KqueueValuePromise[A]
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
 }
 
@@ -59,9 +58,9 @@ final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable 
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
-  * thread. `KqueueValuePromise` is the kind callers complete; `KqueueBlocking` completes itself.
+  * thread. `KqueueBlocking`, the only kind, completes itself from the blocker pool.
   */
-abstract class KqueuePromise extends KqueueOp {
+sealed abstract class KqueuePromise extends KqueueOp {
   // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.
   private val outcome = new java.util.concurrent.atomic.AtomicReference[Any](KqueuePromise.Unsettled)
   @volatile private[kqueue] var reactor: KqueueReactor | Null = null
@@ -89,23 +88,11 @@ abstract class KqueuePromise extends KqueueOp {
     owner.resolved(this)
   }
 
-  protected final def settled: Any = outcome.get()
 }
 
 object KqueuePromise {
   private[kqueue] object Unsettled
   private[kqueue] final case class Failed(failure: Throwable)
-}
-
-/** A promise whose completer supplies a value, which it then holds as its result. */
-final class KqueueValuePromise[A] extends KqueuePromise with asyncio.Promise[A] {
-  def complete(value: A): Unit = settle(value)
-
-  def result: A = settled match {
-    case KqueuePromise.Unsettled       => throw new IllegalStateException("The promise has not been completed")
-    case KqueuePromise.Failed(failure) => throw new IllegalStateException("The promise failed", failure)
-    case value                         => value.asInstanceOf[A]
-  }
 }
 
 /** A promise the reactor completes by running `block` on the blocker pool. An exception thrown by `block` is the op's
