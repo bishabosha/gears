@@ -5,18 +5,18 @@
 #
 #   kqueue-demo/bench/build.sh <commit> <output>
 #
-# Then compare executables with kqueue-demo/bench/compare.py. <commit> may be WORKTREE, for the working tree's changes to
-# tracked files on top of HEAD (untracked files are left out).
+# Then compare executables with kqueue-demo/bench/compare.py. <commit> may be WORKTREE, for HEAD with the working tree's
+# changes, untracked files included (ignored ones are not).
 set -euo pipefail
 commit=${1:?usage: build.sh <commit> <output>}
 output=${2:?usage: build.sh <commit> <output>}
 case "$output" in /*) ;; *) output="$PWD/$output" ;; esac
 
 repo=$(git rev-parse --show-toplevel)
+worktree_changes=false
 if [ "$commit" = WORKTREE ]; then
-  # A commit of the tracked changes, made without touching the working tree, the index, or the stash list.
-  commit=$(git -C "$repo" stash create)
-  [ -n "$commit" ] || commit=HEAD # no changes
+  worktree_changes=true
+  commit=HEAD
 fi
 worktree=$(mktemp -d "${TMPDIR:-/tmp}/kqueue-bench-build.XXXXXX")
 cleanup() {
@@ -26,6 +26,11 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$repo" worktree add --quiet --detach "$worktree" "$commit"
+if $worktree_changes; then
+  # Bring over the working tree: changes to tracked files, then untracked files.
+  git -C "$repo" diff HEAD --binary | git -C "$worktree" apply --allow-empty
+  git -C "$repo" ls-files --others --exclude-standard -z | (cd "$repo" && xargs -0 -I{} rsync -R "{}" "$worktree/")
+fi
 cd "$worktree"
 # Commits from before the nightly switch existed get it from the working tree.
 cp "$repo/project/plugins.sbt" project/plugins.sbt

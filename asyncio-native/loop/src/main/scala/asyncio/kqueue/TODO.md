@@ -84,16 +84,26 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
   - Skipping polls cost fairness: `fairness-tick` 9.8 → 53.0 µs, one tick per 17 messages instead of one, as the
     ticker's kernel timers were only seen when a turn polled. Item 5's timers, checked every turn, restored it.
 
-- [ ] **3. Persistent edge-triggered registration instead of one-shot filters.**
-  `EV_ONESHOT` means one `kevent` per submit, and another after each spurious wake-up.
-  - Register each descriptor and direction once with `EV_ADD | EV_CLEAR`, at its first submit or when the handle opens.
-  - Edges set a per-slot "ready" bit; a submit checks the bit and performs at once, and a would-block clears it.
-  - Closing the descriptor removes its filters automatically.
-  - A cancel only clears the slot, so it needs no `EV_DELETE`.
-  - Saves every registration and re-registration in steady state.
-  - With readiness known, item 2 can try a command only when its descriptor is ready, instead of always. Should that not
-    be enough, a caller hint per op (try now, wait for readiness, or let the reactor decide) could cover protocols where
-    the caller knows better, such as a client reading a reply it has just requested.
+- [x] **3. Persistent edge-triggered registration instead of one-shot filters.**
+  Done for reads, in `KqueueReactor`: a read that has to wait registers the descriptor's read filter once, with
+  `EV_ADD | EV_CLEAR`, and later waits cost no syscall; cancelling it only clears the slot. Each slot tracks read
+  readiness (unknown, ready, not ready), so item 2 now tries a read only when it is likely to succeed:
+  - An edge with no read pending marks the descriptor ready. After a read, readiness comes from the bytes it took
+    against the bytes the event reported available, or, for a read tried without an event, from whether it came back
+    short. A read that would block marks it not ready, and the next read waits for an edge.
+  - End of stream (`EV_EOF`) is reported only once by an edge-triggered filter but lasts, so a descriptor stays ready
+    after it.
+  - Only commands whose `false` means "would block" use it (`Command.edgeTriggered`: `ReadIntoBuffer`, `Accept`,
+    `ReceiveFrom`). Other commands, such as the plain demos' own and `whenReady` bodies, may return false meaning
+    "not finished" with data still waiting, and an edge-triggered filter would never fire again for them, so they keep
+    one-shot, level-triggered filters. Writes, which rarely wait, also stay one-shot.
+  - Descriptors must be closed through `PosixSockets.close` on the reactor's thread: its `DescriptorHooks` tell the
+    reactor to forget the registration before the number can be reused.
+  - Release-fast, median of 5 runs, µs/op from item 2 → item 3: `pingpong` 12.2 → 13.6 (+11%), `pingpong-deadline` 17.6
+    → 15.5 (−12%), `concurrent` 6.9 → 4.9 (−30%), `pipelined` 3.1 → 2.8 (−12%), the rest within 2%
+    (`kqueue-demo/bench/results/edge-triggered-reads.json`). Ping-pong is slower because the thread now blocks right
+    after sending, without the syscalls that used to give the reply time to arrive, and so pays a wake-up per round
+    trip; see item 8.
 
 - [ ] **4. Batch remaining changes into the wait call.**
   `kevent` takes a list of changes and an array for events in one call, but the reactor issues a separate call per change.
@@ -123,6 +133,23 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
   - Where they are needed, `ioctl(FIONBIO)` sets the mode in one call instead of two; the same applies to
     `PosixSockets.setNonBlocking`.
   - Saves 2 syscalls per accepted connection.
+
+- [ ] **8. Poll a few times without blocking before sleeping.**
+  Once a turn has nothing to do, the loop blocks in `kevent` straight away. In request/response traffic the reply
+  often arrives microseconds later, and sleeping then costs a thread wake-up per round trip. Polling a few times
+  without blocking first catches it. A trial on top of item 3 (release-fast, median of 5 runs, µs/op), by number of
+  non-blocking polls before blocking:
+
+  | polls | pingpong | pingpong-deadline | concurrent | pipelined |
+  |---|---|---|---|---|
+  | 0 | 14.5 | 16.2 | 5.5 | 3.0 |
+  | 1 | 12.7 | 14.6 | 5.9 | 3.1 |
+  | 4 | 12.3 | 12.4 | 5.3 | 2.8 |
+  | 16 | 11.6 | 14.3 | 5.8 | 3.1 |
+  | 64 | 11.8 | 12.1 | 5.2 | 3.0 |
+
+  The cost is CPU spent polling when nothing arrives. A handful of polls (about 4) gets most of the gain; a
+  time-bounded spin would behave more predictably across machines than a fixed count.
 
 ## Related, not syscalls
 

@@ -25,10 +25,10 @@ import KQueueExampleIO.*
   * each socket has a read and a write request pending at the same time.
   */
 object KQueueExampleKeyValue {
-  private val BufferSize = 8192
+  private inline val BufferSize = 8192
 
   /** Unsent replies (server) or unread replies (client) beyond this many bytes pause reading until they drain. */
-  private val Backlog = 64 * 1024
+  private inline val Backlog = 64 * 1024
 
   /** Executes `SET key value`, `GET key`, and `INCR key` against an in-memory map. */
   private final class Store {

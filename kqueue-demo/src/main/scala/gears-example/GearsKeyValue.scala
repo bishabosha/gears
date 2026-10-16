@@ -23,10 +23,10 @@ import ReactorFutures.*
   * when the channel is full the reader stops reading, which is the back-pressure.
   */
 object GearsKeyValue {
-  private val BufferSize = 8192
+  private inline val BufferSize = 8192
 
   /** Reply batches held for the writer before the reader pauses; about 64 KiB of replies. */
-  private val Backlog = 8
+  private inline val Backlog = 8
 
   /** Executes `SET key value`, `GET key`, and `INCR key` against an in-memory map shared by every session. Sessions run
     * on different threads, so access is synchronised.

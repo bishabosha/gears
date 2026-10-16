@@ -37,8 +37,8 @@ object KQueueExampleIO {
 
   /** The stream demos prefix each message with a four-byte big-endian length. */
   object StreamProtocol {
-    val HeaderLength = 4
-    val MaxMessageLength: Int = 1024 * 1024
+    inline val HeaderLength = 4
+    inline val MaxMessageLength = 1024 * 1024
 
     /** Fills `buf` with the framed message and flips it, ready to send. */
     def frame(message: String, buf: ByteBuffer): Unit = {
@@ -142,8 +142,7 @@ object KQueueExampleIO {
     Bracket.fileResource(fd)(closeFile)(use)
   }
 
-  private def closeFile(fd: Int): Unit =
-    if unistd.close(fd) < 0 then throw new IOException(s"Failed to close file descriptor: ${cError()}")
+  private def closeFile(fd: Int): Unit = PosixSockets.close(fd) // which tells the reactor the descriptor is gone
 
   // Datagrams
 

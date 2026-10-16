@@ -10,14 +10,19 @@ import asyncio.Interest
 import asyncio.Ops
 import asyncio.Reactor
 import asyncio.Repeatable
+import asyncio.unsafe.DescriptorHooks
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
 
 /** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command is performed as soon as it is
-  * submitted when it allows that, and otherwise, or when it would block, waits for readiness with a one-shot filter and
-  * is performed on the loop thread; a timer is a kqueue timer; `wakeup`, and blocking tasks finishing on other threads,
-  * wake the loop with a user event. Each submission is its own kevent call, and each poll returns up to `maxEvents`
-  * events.
+  * submitted when its descriptor is known to be ready, or when readiness is not known yet and the command allows it;
+  * otherwise, or when it would block, it waits for readiness and is performed on the loop thread. The reactor's own
+  * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
+  * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
+  * be closed through `PosixSockets.close` (as `KqueueHandles.close` does) on the reactor's thread, which tells the
+  * reactor to forget them before their numbers are reused; a timer is a kqueue timer; `wakeup`, and blocking tasks
+  * finishing on other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll
+  * returns up to `maxEvents` events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor {
 
@@ -62,7 +67,30 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   private final class Slot {
     var read: Pending[?] | Null = null
     var write: Pending[?] | Null = null
+
+    /** Whether the descriptor's persistent read filter is registered. */
+    var readRegistered = false
+
+    /** What is known of the descriptor's read readiness: `Unknown`, `Ready` or `NotReady` (see `KqueueReactor`). */
+    var readReadiness = KqueueReactor.Unknown
+
+    /** Whether kqueue reported the end of the stream. It lasts, so every later read returns at once, but an
+      * edge-triggered filter reports it only once; after it, the descriptor stays `Ready`.
+      */
+    var readEof = false
+
+    def settleReadiness(readiness: Int): Unit = readReadiness = if readEof then KqueueReactor.Ready else readiness
   }
+
+  // Forgets a descriptor closed on this thread: kqueue drops its filters, and its number may be reused.
+  private val forgetClosed: Int => Unit = fd =>
+    if fd >= 0 && fd < slots.length && slots(fd) != null then {
+      val slot = slots(fd).nn
+      slot.readRegistered = false
+      slot.readReadiness = KqueueReactor.Unknown
+      slot.readEof = false
+    }
+  DescriptorHooks.onClose(forgetClosed)
 
   private var slots = new Array[Slot | Null](64)
   private val timers = scala.collection.mutable.HashMap.empty[Int, Pending[?]]
@@ -97,9 +125,17 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
         // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
         if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
         else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
-        if !(command.tryFirst && performedAtOnce(command, pending)) then {
-          if read then slot.read = pending else slot.write = pending
-          arm(command.fd, read)
+        if read then {
+          val attempt =
+            slot.readReadiness == KqueueReactor.Ready ||
+              (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
+          if !(attempt && performedAtOnce(command, pending, slot)) then {
+            slot.read = pending
+            waitToRead(command, slot)
+          }
+        } else if !(command.tryFirst && performedAtOnce(command, pending, null)) then {
+          slot.write = pending
+          arm(command.fd, read = false)
         }
       case timer: KqueueTimer =>
         require(timer.id < 0 || !timers.contains(timer.id), "This timer is already pending")
@@ -127,9 +163,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
   }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
-    * turn rather than run here, and this returns true; if it would block, this returns false.
+    * turn rather than run here, and this returns true; if it would block, this returns false. For a read, `slot`
+    * records what that taught about the descriptor's readiness.
     */
-  private def performedAtOnce(command: Command, pending: Pending[?]): Boolean = {
+  private def performedAtOnce(command: Command, pending: Pending[?], slot: Slot | Null): Boolean = {
     val done =
       try command.perform()
       catch {
@@ -137,9 +174,40 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
           pending.failure = t
           true
       }
+    if slot != null then
+      slot.settleReadiness(
+        if !command.edgeTriggered || pending.failure != null then KqueueReactor.Unknown
+        else if !done then KqueueReactor.NotReady
+        else readinessAfter(command, available = -1)
+      )
     if done then ready.add(pending)
     done
   }
+
+  /** The read readiness after `command` finished: from how much it read against the bytes the event reported available,
+    * when both are known, or else from the command's own guess.
+    */
+  private def readinessAfter(command: Command, available: Long): Int = {
+    val taken = command.transferred
+    if available >= 0 && taken >= 0 then if taken >= available then KqueueReactor.NotReady else KqueueReactor.Ready
+    else if command.mayStillBeReady then KqueueReactor.Ready
+    else KqueueReactor.NotReady
+  }
+
+  /** Makes a pending read wait for readiness. An edge-triggered command uses the descriptor's persistent filter,
+    * registered once; if data is already waiting, kqueue reports it on the next poll. Any other command arms a one-shot
+    * filter, which replaces a persistent one, and is gone once it fires.
+    */
+  private def waitToRead(command: Command, slot: Slot): Unit =
+    if !command.edgeTriggered then {
+      slot.readRegistered = false
+      arm(command.fd, read = true)
+    } else if !slot.readRegistered then {
+      KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
+        KqueueLoop.addFile(events(0), command.fd, read = true, clear = true)
+      }
+      slot.readRegistered = true
+    }
 
   /** Runs the completions of the commands that finished when submitted, as many as were queued when it started: a
     * completion that submits a command which finishes at once is left for the next turn, so one busy descriptor cannot
@@ -246,6 +314,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       wakeLock.synchronized {
         closed = true
         KqueueLoop.close(kq) // Its filters, timers, and wake event go with it.
+        DescriptorHooks.removeOnClose(forgetClosed)
       }
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
@@ -274,8 +343,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
           val p = if read then slot.read else slot.write
           if p == null || !(p.nn.op.asInstanceOf[AnyRef] eq command) then null
           else {
+            // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
             if read then slot.read = null else slot.write = null
-            deleteFilter(command.fd, read)
+            if !(read && command.edgeTriggered) then {
+              if read then slot.readRegistered = false
+              deleteFilter(command.fd, read)
+            }
             p
           }
         }
@@ -346,7 +419,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
       if slot != null then {
         val write = isWriteEvent(event)
         val pending = if write then slot.write else slot.read
-        if pending != null then {
+        if !write && KqueueLoop.isEOF(event) then slot.readEof = true
+        if pending == null then {
+          if !write then slot.readReadiness = KqueueReactor.Ready // kept for the next read submitted
+        } else {
           if write then slot.write = null else slot.read = null
           val p = pending.nn
           p.op match {
@@ -360,12 +436,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
                     failure = t
                     true
                 }
+              // Readiness is settled before the completion runs, since it may submit the next read at once.
+              if !write then
+                slot.settleReadiness(
+                  if failure != null || !command.edgeTriggered then KqueueReactor.Unknown
+                  else if !done then KqueueReactor.NotReady
+                  else readinessAfter(command, KqueueLoop.data(event).toLong)
+                )
               if failure != null then p.fail(failure.nn)
               else if done then p.complete()
-              else {
+              else if write then {
                 // Not ready after all: wait again, without the completion ever seeing it.
-                if write then slot.write = p else slot.read = p
-                arm(ident, read = !write)
+                slot.write = p
+                arm(ident, read = false)
+              } else {
+                slot.read = p
+                waitToRead(command, slot)
               }
             case _ => () // Only commands live in descriptor slots.
           }
@@ -413,8 +499,15 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
 
 object KqueueReactor {
 
+  // What a slot knows of its descriptor's read readiness. `Ready`: kqueue reported it readable, or the last read
+  // probably left data, so a read is performed at once. `NotReady`: a read would block, so the next waits for an edge.
+  // `Unknown`: a new or reused descriptor, which a read may try first.
+  private inline val Unknown = 0
+  private inline val Ready = 1
+  private inline val NotReady = 2
+
   /** A loop that keeps delivering completions polls kqueue at least once in this many turns. */
-  private val PollEvery = 16
+  private inline val PollEvery = 16
 
   /** Opens a reactor on a new kqueue; each poll returns up to `maxEvents` events. Close it when done. */
   def open(maxEvents: Int = 255): KqueueReactor = new KqueueReactor(KqueueLoop.open(), maxEvents)

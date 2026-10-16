@@ -193,7 +193,7 @@ final class HandleSlot {
 }
 
 object HandleSlot {
-  private final val Empty = -1
+  private inline val Empty = -1
 }
 
 /** Marks an op that may be submitted again after its previous submission finished, instead of building a new one each

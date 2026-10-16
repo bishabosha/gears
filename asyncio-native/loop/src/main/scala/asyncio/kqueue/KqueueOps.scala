@@ -47,6 +47,21 @@ trait Command extends KqueueOp with Repeatable {
     * operations that simply report would-block when not ready, so trying first only saves the wait when they are.
     */
   def tryFirst: Boolean = true
+
+  /** After a perform that finished: how many bytes it took, or -1 when that is not a count of bytes. Against the bytes
+    * a read event reported available, it tells whether the descriptor is still readable afterwards.
+    */
+  def transferred: Int = -1
+
+  /** After a perform that finished, with no event to compare against: whether the descriptor may still be ready. */
+  def mayStillBeReady: Boolean = true
+
+  /** Whether `perform` returns false only when the descriptor would block, as an operation run until it would block
+    * does. Such a read can wait on a persistent edge-triggered filter, which reports only new data. Any other command,
+    * one that may return false to mean "not finished yet" with data still waiting, waits on a one-shot, level-triggered
+    * filter instead, which fires again while the descriptor stays ready.
+    */
+  def edgeTriggered: Boolean = false
 }
 
 /** A command built from a function, for `Ops.whenReady`. */
