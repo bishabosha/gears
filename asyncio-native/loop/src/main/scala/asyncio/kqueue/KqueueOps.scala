@@ -73,9 +73,13 @@ final class WhenReady(val fd: Int, val interest: Interest, body: () => Boolean) 
 /** A one-shot kqueue timer. `id` is the `EVFILT_TIMER` identifier assigned on submission, or -1 before it. */
 final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable {
   require(milliseconds >= 0, "Timer duration must not be negative")
-  @volatile private var _id = -1
-  def id: Int = _id
-  private[kqueue] def assign(id: Int): Unit = _id = id
+
+  // The reactor's bookkeeping for a pending submission, on the loop thread: when it is due (`System.nanoTime`), its
+  // place in submission order, its completion, and its index in the reactor's timer heap (-1 when not pending).
+  private[kqueue] var deadline = 0L
+  private[kqueue] var order = 0L
+  private[kqueue] var pending: AnyRef | Null = null
+  private[kqueue] var heapIndex = -1
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop

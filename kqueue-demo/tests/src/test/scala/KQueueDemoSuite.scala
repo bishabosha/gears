@@ -21,6 +21,14 @@ class KQueueDemoSuite extends DemoSuite {
     assert(elapsed >= 4.5.seconds, s"timer fired after ${elapsed.toMillis} ms:\n$output")
   }
 
+  if (commandPrefix.isEmpty) // the reactor's own timers; the gears demos have no mirror of this one
+    demoTest("many timers: fired in deadline order, cancelled ones never") {
+      val output = run("timers")
+      assert(output.contains("timers fired: 1333 of 1333"), output)
+      assert(output.contains("timers fired in order: true"), output)
+      assert(output.contains("cancelled timers fired: 0"), output)
+    }
+
   demoTest("resolve localhost off the reactor thread") {
     val output = run("resolve", "--host", "localhost")
     assert(output.contains("IPv4 127.0.0.1") || output.contains("IPv6 ::1"), output)

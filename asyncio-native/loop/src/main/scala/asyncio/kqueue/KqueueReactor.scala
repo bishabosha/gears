@@ -20,7 +20,8 @@ import asyncio.unsafe.KqueueLoop.Event
   * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
   * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
   * be closed through `PosixSockets.close` (as `KqueueHandles.close` does) on the reactor's thread, which tells the
-  * reactor to forget them before their numbers are reused; a timer is a kqueue timer; `wakeup`, and blocking tasks
+  * reactor to forget them before their numbers are reused; timers are kept in a heap on the loop thread, by deadline,
+  * and bound how long a poll blocks, so setting or cancelling one costs no syscall; `wakeup`, and blocking tasks
   * finishing on other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll
   * returns up to `maxEvents` events.
   */
@@ -93,8 +94,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   DescriptorHooks.onClose(forgetClosed)
 
   private var slots = new Array[Slot | Null](64)
-  private val timers = scala.collection.mutable.HashMap.empty[Int, Pending[?]]
-  private var nextTimerId = 1
+  private val timers = new TimerHeap
+  private var nextTimerOrder = 0L
   private var running = false
 
   // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
@@ -138,14 +139,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           arm(command.fd, read = false)
         }
       case timer: KqueueTimer =>
-        require(timer.id < 0 || !timers.contains(timer.id), "This timer is already pending")
-        if timer.id < 0 then
-          timer.assign(nextTimerId)
-          nextTimerId += 1
-        timers(timer.id) = pending
-        KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
-          KqueueLoop.addTimerOneShot(events(0), timer.id.toUSize, timer.milliseconds)
-        }
+        require(timer.heapIndex < 0, "This timer is already pending")
+        timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
+        timer.order = nextTimerOrder
+        nextTimerOrder += 1
+        timer.pending = pending
+        timers.add(timer)
       case promise: KqueuePromise =>
         promise match {
           case blocking: KqueueBlocking if blocking.cancelling != null =>
@@ -290,8 +289,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         if slot.nn.write != null then dropped += slot.nn.write.nn
       }
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
-      dropped ++= timers.values
-      timers.clear()
+      while !timers.isEmpty do {
+        val timer = timers.poll()
+        dropped += timer.pending.asInstanceOf[Pending[?]]
+        timer.pending = null
+      }
       while !ready.isEmpty do dropped += ready.poll().nn // finished, but their completions have not run
       val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
       for promise <- pendingPromises.toList do {
@@ -353,13 +355,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           }
         }
       case timer: KqueueTimer =>
-        val p = if timer.id < 0 then None else timers.remove(timer.id)
-        p.foreach { _ =>
-          KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
-            KqueueLoop.deleteTimer(events(0), timer.id.toUSize)
-          }
+        if timer.heapIndex < 0 then null
+        else {
+          timers.remove(timer)
+          val p = timer.pending.asInstanceOf[Pending[?]]
+          timer.pending = null
+          p
         }
-        p.orNull
       case promise: KqueuePromise => detach(promise)
     }
     if pending == null then false
@@ -413,7 +415,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private def dispatch(event: Event): Unit = {
     val ident = fileIdent(event)
     if KqueueLoop.isUserEvent(event) then wakePending.set(false) // resolved promises are delivered by `runOnce` itself
-    else if KqueueLoop.isTimerEvent(event) then timers.remove(ident).foreach(_.complete())
     else {
       val slot = if ident < slots.length then slots(ident) else null
       if slot != null then {
@@ -487,6 +488,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         dispatch(event)
         i += 1
       }
+      fireDueTimers()
       deliverResolved() // including any whose wake-up was merged into an event just dispatched
       ()
     }
@@ -501,7 +503,106 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       polled = KqueueLoop.pollEventsNow(kq, events, maxEvents)
       spins += 1
     }
-    if polled == 0 then KqueueLoop.pollEventsForever(kq, events, maxEvents) else polled
+    if polled != 0 then polled
+    else if timers.isEmpty then KqueueLoop.pollEventsForever(kq, events, maxEvents)
+    else {
+      // Block no longer than until the earliest timer is due, or not at all if it already is.
+      val wait = math.max(0L, timers.peek.deadline - System.nanoTime())
+      KqueueLoop.pollEventsTimeout(kq, events, maxEvents, (wait / 1_000_000_000L).toInt, (wait % 1_000_000_000L).toInt)
+    }
+  }
+
+  /** Completes the timers that are due, earliest first. Only timers submitted before it started fire, so a completion
+    * that submits a zero-length timer leaves it for the next turn.
+    */
+  private def fireDueTimers(): Unit =
+    if !timers.isEmpty then {
+      val now = System.nanoTime()
+      val submittedBefore = nextTimerOrder
+      while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do {
+        val timer = timers.poll()
+        val p = timer.pending.asInstanceOf[Pending[?]]
+        timer.pending = null
+        p.complete()
+      }
+    }
+
+  /** Pending timers in a binary min-heap ordered by deadline, then submission order. Each timer knows its index, so it
+    * can be removed when cancelled.
+    */
+  private final class TimerHeap {
+    private var heap = new Array[KqueueTimer | Null](16)
+    private var size = 0
+
+    def isEmpty: Boolean = size == 0
+    def peek: KqueueTimer = heap(0).nn
+
+    def add(timer: KqueueTimer): Unit = {
+      if size == heap.length then heap = java.util.Arrays.copyOf(heap, size * 2)
+      place(timer, size)
+      size += 1
+      siftUp(size - 1)
+    }
+
+    def poll(): KqueueTimer = {
+      val timer = peek
+      remove(timer)
+      timer
+    }
+
+    def remove(timer: KqueueTimer): Unit = {
+      val index = timer.heapIndex
+      size -= 1
+      val last = heap(size).nn
+      heap(size) = null
+      timer.heapIndex = -1
+      if index != size then {
+        place(last, index)
+        siftDown(index)
+        siftUp(index)
+      }
+    }
+
+    private def before(a: KqueueTimer, b: KqueueTimer): Boolean =
+      a.deadline < b.deadline || (a.deadline == b.deadline && a.order < b.order)
+
+    private def place(timer: KqueueTimer, index: Int): Unit = {
+      heap(index) = timer
+      timer.heapIndex = index
+    }
+
+    private def siftUp(start: Int): Unit = {
+      var index = start
+      val timer = heap(index).nn
+      var moving = true
+      while moving && index > 0 do {
+        val parent = (index - 1) / 2
+        if before(timer, heap(parent).nn) then {
+          place(heap(parent).nn, index)
+          index = parent
+        } else moving = false
+      }
+      place(timer, index)
+    }
+
+    private def siftDown(start: Int): Unit = {
+      var index = start
+      val timer = heap(index).nn
+      var moving = true
+      while moving do {
+        val left = 2 * index + 1
+        if left >= size then moving = false
+        else {
+          val right = left + 1
+          val child = if right < size && before(heap(right).nn, heap(left).nn) then right else left
+          if before(heap(child).nn, timer) then {
+            place(heap(child).nn, index)
+            index = child
+          } else moving = false
+        }
+      }
+      place(timer, index)
+    }
   }
 
   def run(): Unit = {
