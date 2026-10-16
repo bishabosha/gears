@@ -32,3 +32,7 @@ metals.sbt
 .idea_modules
 /.worksheet/
 *.local.json
+
+# Benchmark results and provenance records (see kqueue-demo/bench/compare.py and build.sh)
+kqueue-demo/bench/results/
+kqueue-demo/bench/*.json
