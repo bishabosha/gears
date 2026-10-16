@@ -4,6 +4,14 @@ Most operations pay for a `kevent` call of their own, or a trip through the wake
 right away on the reactor thread. A gears `perform(r, read)` that finds data already waiting costs about 7 syscalls
 today; with items 1–3 below it would cost 1 (just the `read`), and about 2 when the data isn't there yet.
 
+## Measuring
+
+Measure each item with `kqueuedemo gears bench`, comparing saved executables with `kqueue-demo/bench/compare.py`
+(see its header). Its scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path),
+`pingpong-deadline` (item 5), `concurrent` (item 4), `pipelined` (items 2 and 3 on simultaneous reads and writes), and
+`blocking` (item 6). `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a reference for what
+a hand-written loop costs. Medians from the same build differ by about 1% between runs (`blocking` by up to about 6%).
+
 ## What each operation costs now
 
 | Operation | Syscalls | Where |
