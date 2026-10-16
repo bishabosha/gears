@@ -9,7 +9,10 @@ import scala.scalanative.unsigned.*
 
 import PosixErr.cError
 
-/** Non-blocking reads, writes, and accepts that report would-block and EOF as values instead of exceptions. */
+/** Non-blocking reads, writes, and accepts that report would-block and EOF as values instead of exceptions. The
+  * descriptors must be non-blocking: the calls go through `Unblocked`, which tells the GC nothing, as they return at
+  * once.
+  */
 object NonBlocking {
 
   private def wouldBlock: Boolean =
@@ -22,7 +25,7 @@ object NonBlocking {
     * client was accepted.
     */
   def accept(serverFd: Int): Int = {
-    val clientFd = socket.accept(serverFd, null, null)
+    val clientFd = Unblocked.accept(serverFd, null, null)
     if clientFd < 0 then {
       val transient = wouldBlock
       if !transient then throw new IOException(s"Failed to accept connection: ${cError()}")
@@ -37,7 +40,7 @@ object NonBlocking {
     * -1 at EOF.
     */
   def read(fd: Int, buf: ByteBuffer): Int = {
-    val read = unistd.read(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
+    val read = Unblocked.read(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
     if read < 0 then
       if !wouldBlock then throw new IOException(s"Failed to read from descriptor $fd: ${cError()}")
       0
@@ -51,7 +54,7 @@ object NonBlocking {
     * block.
     */
   def write(fd: Int, buf: ByteBuffer): Int = {
-    val written = unistd.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
+    val written = Unblocked.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
     if written < 0 then {
       if !wouldBlock then throw new IOException(s"Failed to write to descriptor $fd: ${cError()}")
       -1

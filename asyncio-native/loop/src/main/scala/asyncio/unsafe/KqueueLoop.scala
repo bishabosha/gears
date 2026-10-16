@@ -221,7 +221,7 @@ object KqueueLoop {
   def deleteFileIfOpen(kq: Int, fd: Int, read: Boolean): Unit =
     pollQueue(1) { events =>
       deleteFile(eventAt(events, 0), fd, read)
-      if (kevent.kevent(kq, events, 1, null, 0, null) < 0) {
+      if (Unblocked.kevent(kq, events, 1, null, 0, null) < 0) { // registers only, so it cannot block
         val code = scala.scalanative.posix.errno.errno
         if (code != scala.scalanative.posix.errno.ENOENT && code != scala.scalanative.posix.errno.EBADF)
           throw new IOException(s"Failed to delete filter: ${cError()}")
@@ -233,18 +233,30 @@ object KqueueLoop {
       events: EventQueue,
       nEvents: Int
   ): Unit = {
-    if (kevent.kevent(kq, events, nEvents, null, 0, null) < 0) {
+    if (Unblocked.kevent(kq, events, nEvents, null, 0, null) < 0) { // registers only, so it cannot block
       throw new IOException(
         s"Failed to register events: ${cError()}"
       )
     }
   }
 
+  /** Polls without waiting, so without telling the GC (see `Unblocked`). */
   def pollEventsNow(
       kq: Int,
       events: EventQueue,
       nEvents: Int
-  ): Int = pollEventsTimeout(kq, events, nEvents, 0, 0)
+  ): Int = {
+    val timeout = stackalloc[timespec]()
+    timeout.tv_sec = 0
+    timeout.tv_nsec = 0
+    val polledEvents = Unblocked.kevent(kq, null, 0, events, nEvents, timeout)
+    if (polledEvents < 0) {
+      throw new IOException(
+        s"Failed to poll events: ${cError()}"
+      )
+    }
+    polledEvents
+  }
 
   def pollEventsForever(
       kq: Int,
@@ -260,6 +272,7 @@ object KqueueLoop {
     polledEvents
   }
 
+  /** Polls for up to the timeout, through posixlib's `@blocking` binding, since it may wait. */
   def pollEventsTimeout(
       kq: Int,
       events: EventQueue,

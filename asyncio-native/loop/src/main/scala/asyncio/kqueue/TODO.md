@@ -165,6 +165,29 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
     (release-fast, median of 5 runs, µs/op): `mixed` 34.4 → 28.8 (−16%) and `mixed-compute` 34.4 → 28.8 (−16%), so the
     compute work got faster rather than slower, alongside `pingpong` 13.1 → 9.5 and `pingpong-deadline` 15.0 → 11.0.
 
+- [x] **9. Skip the GC's state switch for calls that cannot block.**
+  Found by profiling: every posixlib `@blocking` call (`read`, `write`, `accept`, `sendto`, `recvmsg`, `kevent`)
+  switches the thread's GC state, which on arm64 captures registers with libc `setjmp`, and macOS's `setjmp` saves the
+  signal mask and alternate stack, two more system calls each. `asyncio.unsafe.Unblocked` binds those calls without
+  `@blocking` where they cannot block: non-blocking descriptors, and `kevent` calls that only register or poll without
+  waiting. A `kevent` that waits keeps posixlib's binding. Release-fast, median of 5 runs, µs/op before → after:
+  `pingpong` 9.4 → 7.8 (−17%), `pingpong-deadline` 9.5 → 7.9 (−17%), `concurrent` 4.4 → 3.9 (−12%), `pipelined` 2.6 →
+  2.3 (−12%), `blocking` 6.9 → 6.3 (−8%), `fairness` −6%, `mixed` −4%. Saved as
+  `kqueue-demo/bench/results/unblocked-syscalls.json`.
+
+## Profiling findings
+
+Sampling `pipelined` (macOS `sample`, release-fast) after item 9, with Scala Native's continuation resume patched as
+below, self time is: I/O system calls 42%, thread-local lookups in the Scala Native runtime (`_tlv_get_addr`, mostly
+per allocation) 21%, GC 14%, continuation stack copying 8%, gears 3%, and the reactor with the gears bridge about 1.4%.
+What remains is mostly the runtime's cost per allocation, so allocating less per operation is the lever left here:
+the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operation in Scala Native, and the objects
+`perform` creates per call.
+
+Scala Native itself, on macOS arm64, costs two more system calls per continuation resume:
+`scalanative_continuation_resume` calls libc `setjmp`, which saves the signal mask. Patching it to `_setjmp` (and the
+matching `longjmp` in `eh.c` to `_longjmp`) gained 8–13% on the I/O scenarios; this is for Scala Native to fix.
+
 ## Related, not syscalls
 
 - [x] **Read event fields in one call — tried, and decided against.**
