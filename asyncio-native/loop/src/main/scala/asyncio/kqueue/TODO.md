@@ -167,11 +167,23 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
 
 ## Related, not syscalls
 
-- [ ] **Read event fields in one call.** `dispatch` reads each event through about five separate
-  `scalanative_kevent_get` calls, each with its own `stackalloc`. Fetch all fields at once, or read the struct directly
-  (32 bytes on macOS).
-- [ ] **SIGPIPE (correctness).** No socket sets `SO_NOSIGPIPE`, and writes don't pass `MSG_NOSIGNAL`, so writing to a peer
-  that has closed raises `SIGPIPE` and kills the process. Set `SO_NOSIGPIPE` once per socket, at creation or accept.
+- [x] **Read event fields in one call — tried, and decided against.**
+  `dispatch` reads each event through posixlib's `scalanative_kevent_get`, one call per field, each with its own
+  `stackalloc`. Reading `struct kevent` directly instead, at the offsets its leading fields share on 64-bit macOS and
+  FreeBSD (with a start-up check against posixlib, to catch a platform with a different layout), gained only about 1%
+  (release-fast, median of 7 runs, µs/op before → after: `pingpong` 10.6 → 10.5, `concurrent` 5.5 → 5.5, `pipelined`
+  3.1 → 3.1, all −0.6% to −1.6%, at the edge of the noise). Not worth depending on the struct's layout for that, so the
+  accessors stay on posixlib. It also suggests per-event C calls are not where the remaining time goes.
+- [x] **SIGPIPE (correctness).**
+  Done in `PosixSockets`: every socket gets `SO_NOSIGPIPE` when created (posixlib does not define it: 0x1022 on macOS,
+  0x0800 on FreeBSD), so writing to a peer that has gone fails that connection with `EPIPE` instead of raising
+  `SIGPIPE`, which ended the whole process: a client resetting its connection before the reply killed the plain server
+  (exit 141). Accepted sockets inherit it from the listening socket, so `accept` needs no extra call. The stream test
+  now has clients go away before their reply and checks the server still answers. Pipes and FIFOs, which
+  `KqueueHandles.pipe` and `openFile` also open, get macOS's per-descriptor `F_SETNOSIGPIPE` on their write ends (posixlib
+  does not define it: 73), checked by the plain `broken-pipe` demo and its test. FreeBSD has no per-descriptor
+  equivalent, so there a write to a pipe or FIFO whose reader has closed still raises `SIGPIPE`, unless the application
+  ignores the signal process-wide, as the JVM does.
 - [ ] **Move to Scala Native 0.5.13 once it is released.** On 0.5.12, multithreaded release builds of the gears demos
   crash intermittently in `ReactorFutures.perform` just after a continuation resumes: the GC ignored conservative roots
   that point partway into an object, so an object referenced only by such an interior pointer, as optimised code can

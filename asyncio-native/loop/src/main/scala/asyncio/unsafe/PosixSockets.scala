@@ -40,7 +40,26 @@ object PosixSockets {
         s"Failed to open socket: ${cError()}"
       )
     }
+    try setNoSigPipe(fd)
+    catch {
+      case e: IOException =>
+        unistd.close(fd)
+        throw e
+    }
     fd
+  }
+
+  /** posixlib does not expose `SO_NOSIGPIPE`; these are its values on macOS and FreeBSD. */
+  private val SO_NOSIGPIPE: CInt = if (scala.scalanative.meta.LinktimeInfo.isFreeBSD) 0x0800 else 0x1022
+
+  /** Makes writing to a socket whose peer has gone fail with `EPIPE` instead of raising `SIGPIPE`, which would end the
+    * whole process. Every socket created here gets it.
+    */
+  def setNoSigPipe(fd: Int): Unit = {
+    val on = stackalloc[CInt]()
+    !on = 1
+    if (socket.setsockopt(fd, socket.SOL_SOCKET, SO_NOSIGPIPE, on.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0)
+      throw new IOException(s"Failed to set SO_NOSIGPIPE: ${cError()}")
   }
 
   def setNonBlocking(fd: Int): Unit = {

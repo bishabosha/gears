@@ -4,12 +4,15 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.arpa.inet
 import scala.scalanative.posix.fcntl
 import scala.scalanative.posix.netinet.in
 import scala.scalanative.posix.netinet.inOps.{*, given}
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.sys.socketOps.{*, given}
+import scala.scalanative.posix.sys.stat
+import scala.scalanative.posix.sys.statOps.*
 import scala.scalanative.posix.sys.un
 import scala.scalanative.posix.sys.unOps.{*, given}
 import scala.scalanative.posix.unistd
@@ -26,7 +29,9 @@ import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
 
 /** Kqueue's handles are POSIX file descriptors, opened non-blocking. Descriptor numbers are process-wide, so the Unix
-  * paths bound by `listen` and `datagram` are remembered per descriptor and removed when it is closed.
+  * paths bound by `listen` and `datagram` are remembered per descriptor and removed when it is closed. Writing to a
+  * handle whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would end the process: sockets
+  * get `SO_NOSIGPIPE`, and on macOS pipes and FIFOs opened for writing get `F_SETNOSIGPIPE`.
   */
 object KqueueHandles extends Handles {
   private val boundPaths = new ConcurrentHashMap[Integer, String]()
@@ -36,8 +41,33 @@ object KqueueHandles extends Handles {
       fcntl.open(toCString(path), (if write then fcntl.O_WRONLY else fcntl.O_RDONLY) | fcntl.O_NONBLOCK)
     }
     if fd < 0 then throw new IOException(s"Failed to open file: ${cError()}")
+    if write then
+      try if isFifo(fd) then noSigPipe(fd) // a regular file never raises SIGPIPE
+      catch {
+        case e: IOException =>
+          PosixSockets.close(fd)
+          throw e
+      }
     fd
   }
+
+  private def isFifo(fd: Int): Boolean = {
+    val info = stackalloc[stat.stat]()
+    if stat.fstat(fd, info) < 0 then throw new IOException(s"Failed to inspect file: ${cError()}")
+    stat.S_ISFIFO(info.st_mode) != 0
+  }
+
+  /** macOS's `fcntl` command for a pipe or FIFO's write end that makes a write after the reader has closed fail with
+    * `EPIPE` instead of raising `SIGPIPE`. posixlib does not define it.
+    */
+  private inline val F_SETNOSIGPIPE = 73
+
+  /** Stops writes to `fd`, a pipe or FIFO's write end, from raising `SIGPIPE`. On macOS only: FreeBSD has no
+    * per-descriptor equivalent, so there such a write still raises the signal unless the application ignores it.
+    */
+  private def noSigPipe(fd: Int): Unit =
+    if LinktimeInfo.isMac then // a link-time condition, kept apart from the runtime one
+      if fcntl.fcntl(fd, F_SETNOSIGPIPE, 1) < 0 then throw new IOException(s"Failed to set F_SETNOSIGPIPE: ${cError()}")
 
   def connect(address: Address): Int =
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
@@ -65,8 +95,16 @@ object KqueueHandles extends Handles {
   def pipe(): (Int, Int) = {
     val ends = stackalloc[CInt](2)
     if unistd.pipe(ends) < 0 then throw new IOException(s"Failed to create pipe: ${cError()}")
-    PosixSockets.setNonBlocking(ends(0))
-    PosixSockets.setNonBlocking(ends(1))
+    try {
+      PosixSockets.setNonBlocking(ends(0))
+      PosixSockets.setNonBlocking(ends(1))
+      noSigPipe(ends(1))
+    } catch {
+      case e: IOException =>
+        PosixSockets.close(ends(0))
+        PosixSockets.close(ends(1))
+        throw e
+    }
     (ends(0), ends(1))
   }
 
