@@ -1,0 +1,190 @@
+{
+  "benchmark": "gears move-bench",
+  "unit": "microseconds per round trip",
+  "round_trips": 100000,
+  "runs": 5,
+  "builds": {
+    "before": {
+      "project": "kqueueDemo",
+      "commit": "3a29134d8f8c49bcea31133c592c48cfc03ee09d",
+      "subject": "explain where the descriptor table's generation comes from, and why the table is needed",
+      "worktree_changes": true,
+      "worktree_changes_hash": "9347b4724562",
+      "mode": "release-fast",
+      "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+      "yieldpoints": "conditional",
+      "built": "2026-10-17T21:04:24+02:00"
+    },
+    "after": {
+      "project": "kqueueDemo",
+      "commit": "19edff62d6f86a924997ec5f39c3daf60a7f8228",
+      "subject": "measure what moving a descriptor between kqueue reactors costs",
+      "worktree_changes": true,
+      "worktree_changes_hash": "34faa7f27af1",
+      "mode": "release-fast",
+      "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+      "yieldpoints": "conditional",
+      "built": "2026-10-17T21:14:06+02:00"
+    }
+  },
+  "before": {
+    "median": {
+      "stay": 6.41,
+      "hand-off every 1": 9.28,
+      "move every 1": 10.33,
+      "hand-off every 4": 7.83,
+      "move every 4": 8.22,
+      "hand-off every 16": 6.91,
+      "move every 16": 7.16,
+      "hand-off every 64": 6.52,
+      "move every 64": 6.51
+    },
+    "samples": {
+      "stay": [
+        6.5,
+        6.23,
+        6.89,
+        6.22,
+        6.41
+      ],
+      "hand-off every 1": [
+        9.41,
+        9.21,
+        9.62,
+        9.27,
+        9.28
+      ],
+      "move every 1": [
+        11.31,
+        10.33,
+        11.97,
+        9.97,
+        10.03
+      ],
+      "hand-off every 4": [
+        8.95,
+        7.65,
+        8.37,
+        7.61,
+        7.83
+      ],
+      "move every 4": [
+        8.17,
+        7.66,
+        8.27,
+        8.22,
+        8.58
+      ],
+      "hand-off every 16": [
+        6.91,
+        6.82,
+        7.16,
+        7.03,
+        6.89
+      ],
+      "move every 16": [
+        7.16,
+        7.04,
+        7.14,
+        7.19,
+        7.22
+      ],
+      "hand-off every 64": [
+        6.63,
+        6.39,
+        6.52,
+        7.13,
+        6.43
+      ],
+      "move every 64": [
+        6.51,
+        6.45,
+        6.86,
+        6.79,
+        6.49
+      ]
+    }
+  },
+  "after": {
+    "median": {
+      "stay": 6.35,
+      "hand-off every 1": 9.42,
+      "move every 1": 10.2,
+      "hand-off every 4": 7.67,
+      "move every 4": 7.87,
+      "hand-off every 16": 6.99,
+      "move every 16": 7.21,
+      "hand-off every 64": 6.41,
+      "move every 64": 6.55
+    },
+    "samples": {
+      "stay": [
+        6.31,
+        6.26,
+        6.56,
+        6.35,
+        6.68
+      ],
+      "hand-off every 1": [
+        9.25,
+        9.29,
+        9.63,
+        9.42,
+        9.52
+      ],
+      "move every 1": [
+        10.2,
+        9.92,
+        10.92,
+        10.12,
+        10.27
+      ],
+      "hand-off every 4": [
+        7.67,
+        7.61,
+        7.94,
+        7.66,
+        8.65
+      ],
+      "move every 4": [
+        8.24,
+        7.72,
+        7.87,
+        7.7,
+        7.88
+      ],
+      "hand-off every 16": [
+        6.83,
+        6.86,
+        6.99,
+        7.47,
+        7.01
+      ],
+      "move every 16": [
+        7.08,
+        7.19,
+        7.32,
+        7.6,
+        7.21
+      ],
+      "hand-off every 64": [
+        6.41,
+        6.41,
+        6.44,
+        6.38,
+        6.6
+      ],
+      "move every 64": [
+        6.47,
+        7.01,
+        6.45,
+        6.55,
+        6.66
+      ]
+    }
+  },
+  "syscalls_move_every_1_read": {
+    "before": 2.92,
+    "after": 2.0
+  }
+}

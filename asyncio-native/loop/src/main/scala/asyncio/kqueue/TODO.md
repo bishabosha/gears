@@ -525,6 +525,13 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
      of moving work, which favours letting tasks move more than expected; fairness and contention need the pool.
      A descriptor a reactor has just taken over could start out registered and not ready, as after `connect`, since
      kqueue reports data already waiting when a filter is added: that would save the wasted `read`.
+   - **Done: a descriptor taken over starts out not ready.** `currentSlot` forgets it and marks it `NotReady`, so a
+     read registers a filter, claiming the descriptor, before trying anything; a reused number still starts out
+     `Unknown`, as a new descriptor does. `move` every 1 makes 2.0 `read`s per round trip instead of 2.92, and each
+     move costs about 0.8 µs beyond the hand-off instead of 1.05 (every 1) and 1.56 (every 4), release-fast, median of
+     5 runs, the two builds alternating (`kqueue-demo/bench/results/taken-over-not-ready.json`). The bench's scenarios,
+     with one reactor, are within noise (within 3.4% over 7 runs where 5 had shown 4%;
+     `taken-over-not-ready-bench.json`).
 5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
    futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as a second
    strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue pass to a
