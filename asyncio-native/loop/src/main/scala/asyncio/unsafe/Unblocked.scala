@@ -5,8 +5,8 @@ import scala.scalanative.posix.time
 import scala.scalanative.unsafe.*
 
 /** The system calls the loop makes where they cannot block, bound without posixlib's `@blocking`: reads, writes,
-  * accepts and datagram calls on non-blocking descriptors, and `kevent` calls that only register changes or poll
-  * without waiting.
+  * accepts and datagram calls on non-blocking descriptors, `kevent` calls that only register changes or poll without
+  * waiting, and `ioctl` requests that only set a descriptor's mode.
   *
   * A `@blocking` call tells the GC the thread is leaving managed code, so that a collection need not wait for it, and
   * to that end captures the thread's registers. On arm64 Scala Native captures them with `setjmp`, and macOS's `setjmp`
@@ -14,7 +14,8 @@ import scala.scalanative.unsafe.*
   * system calls where one is needed. A call that returns at once never keeps a collection waiting, so it needs none of
   * that. Calls that may wait, a `kevent` that blocks for events, keep posixlib's `@blocking` binding.
   *
-  * The signatures match posixlib's declarations of the same C functions.
+  * The signatures match posixlib's declarations of the same C functions, except `ioctl`, which posixlib declares with a
+  * single pointer argument; it is variadic in C, and declared so here.
   */
 @extern
 private[asyncio] object Unblocked {
@@ -34,6 +35,8 @@ private[asyncio] object Unblocked {
       destination: Ptr[socket.sockaddr],
       destinationLength: socket.socklen_t
   ): CSSize = extern
+
+  def ioctl(fd: CInt, request: CUnsignedLong, args: Any*): CInt = extern
 
   def kevent(
       kq: CInt,
