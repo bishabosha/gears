@@ -9,7 +9,12 @@ each operation costs now, below.
 
 Measure each item with `kqueuedemo gears bench`: build the executables to compare with `kqueue-demo/bench/build.sh`
 (release-fast, against the Scala Native nightly, since 0.5.12's GC can crash multithreaded release builds) and compare
-them with `kqueue-demo/bench/compare.py` (see its header). Debug builds overstate the Scala-side cost, so measure
+them with `kqueue-demo/bench/compare.py` (see its header). From the thread-pool work on, `build.sh` links with
+conditional yieldpoints, since trap-based ones can deadlock a collection on macOS (see the GC's signal blocking, under
+the proposed Scala Native changes); `YIELDPOINTS=trap` links trap-based ones, which every earlier result used, and each
+build's provenance says which. At the switch, conditional against trap-based (release-fast, median of 5 runs, under a
+load average of 10): `timers` −9.5%, `fairness` −7%, `mixed` −4.5%, the rest −1 to −3%, `pingpong-deadline` +0.4%
+(`kqueue-demo/bench/results/conditional-yieldpoints-default.json`). Debug builds overstate the Scala-side cost, so measure
 release builds. The scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path),
 `pingpong-fresh-ops` (the same, building its ops anew for every message), `pingpong-deadline` (item 5), `timers` (item
 5: 1,000 timers pending at a time, half firing and half cancelled), `concurrent` (item 4), `connections` (item 7: a new
