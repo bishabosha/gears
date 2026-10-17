@@ -84,6 +84,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       */
     var readEof = false
 
+    /** What kqueue last reported waiting to be read, bytes or, on a listening socket, connections, less what reads have
+      * taken since; -1 when not known.
+      */
+    var readAvailable = -1L
+
     def settleReadiness(readiness: Int): Unit = readReadiness = if readEof then KqueueReactor.Ready else readiness
   }
 
@@ -94,6 +99,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       slot.readRegistered = false
       slot.readReadiness = KqueueReactor.Unknown
       slot.readEof = false
+      slot.readAvailable = -1
     }
   DescriptorHooks.onClose(forgetClosed)
 
@@ -199,25 +205,31 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           command.atOnceFailure = t
           true
       }
-    if slot != null then
-      slot.settleReadiness(
-        if !command.edgeTriggered || command.atOnceFailure != null then KqueueReactor.Unknown
-        else if !done then KqueueReactor.NotReady
-        else readinessAfter(command, available = -1)
-      )
+    if slot != null then settleAfterRead(command, slot, done, command.atOnceFailure != null, slot.readAvailable)
     if done && queue then ready.add(command)
     done
   }
 
-  /** The read readiness after `command` finished: from how much it read against the bytes the event reported available,
-    * when both are known, or else from the command's own guess.
+  /** Records what a read command's perform taught about its descriptor's read readiness. After one that finished, that
+    * comes from what it took against what was `available`, when both are known, or else from the command's own guess.
+    * Knowing a descriptor drained saves the next read a try that would block: once the count runs out it waits for an
+    * edge, which anything arriving later triggers.
     */
-  private def readinessAfter(command: Command, available: Long): Int = {
-    val taken = command.transferred
-    if available >= 0 && taken >= 0 then if taken >= available then KqueueReactor.NotReady else KqueueReactor.Ready
-    else if command.mayStillBeReady then KqueueReactor.Ready
-    else KqueueReactor.NotReady
-  }
+  private def settleAfterRead(command: Command, slot: Slot, done: Boolean, failed: Boolean, available: Long): Unit =
+    if failed || !command.edgeTriggered then {
+      slot.readAvailable = -1
+      slot.settleReadiness(KqueueReactor.Unknown)
+    } else if !done then {
+      slot.readAvailable = -1
+      slot.settleReadiness(KqueueReactor.NotReady)
+    } else {
+      val taken = command.transferred
+      val left = if available >= 0 && taken >= 0 then math.max(available - taken, 0L) else -1L
+      slot.readAvailable = if left > 0 then left else -1
+      slot.settleReadiness(
+        if left > 0 || (left < 0 && command.mayStillBeReady) then KqueueReactor.Ready else KqueueReactor.NotReady
+      )
+    }
 
   /** Makes a pending read wait for readiness. An edge-triggered command uses the descriptor's persistent filter,
     * registered once; if data is already waiting, kqueue reports it on the next poll. Any other command arms a one-shot
@@ -443,7 +455,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         val pending = if write then slot.write else slot.read
         if !write && KqueueLoop.isEOF(event) then slot.readEof = true
         if pending == null then {
-          if !write then slot.readReadiness = KqueueReactor.Ready // kept for the next read submitted
+          if !write then { // kept for the next read submitted
+            slot.readReadiness = KqueueReactor.Ready
+            slot.readAvailable = KqueueLoop.data(event).toLong
+          }
         } else {
           if write then slot.write = null else slot.read = null
           pending.nn match {
@@ -458,12 +473,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
                     true
                 }
               // Readiness is settled before the completion runs, since it may submit the next read at once.
-              if !write then
-                slot.settleReadiness(
-                  if failure != null || !command.edgeTriggered then KqueueReactor.Unknown
-                  else if !done then KqueueReactor.NotReady
-                  else readinessAfter(command, KqueueLoop.data(event).toLong)
-                )
+              if !write then settleAfterRead(command, slot, done, failure != null, KqueueLoop.data(event).toLong)
               if failure != null then fail(command, failure.nn)
               else if done then complete(command)
               else if write then {

@@ -1,0 +1,94 @@
+{
+  "unit": "system calls per operation, from kqueue-demo/bench/syscalls.py --scenarios connections,pingpong,pipelined",
+  "before": {
+    "connections": {
+      "client": {
+        "__connect": 1.0,
+        "__ioctl": 1.0,
+        "__sigaltstack": 3.31,
+        "close": 0.99,
+        "kevent (changes)": 2.01,
+        "kevent (poll now)": 4.26,
+        "kevent (wait)": 0.31,
+        "read": 1.98,
+        "sigprocmask": 3.31,
+        "write": 1.03
+      },
+      "other": {
+        "__accept": 2.01,
+        "__sigaltstack": 2.06,
+        "close": 0.99,
+        "kevent (changes)": 1.0,
+        "kevent (poll now)": 4.72,
+        "kevent (wait)": 0.04,
+        "read": 2.0,
+        "sigprocmask": 2.01,
+        "write": 0.99
+      }
+    }
+  },
+  "after": {
+    "connections": {
+      "client": {
+        "__connect": 1.0,
+        "__ioctl": 1.0,
+        "__sigaltstack": 3.12,
+        "close": 0.99,
+        "kevent (changes)": 2.0,
+        "kevent (poll now)": 3.4,
+        "kevent (wait)": 0.12,
+        "read": 2.0,
+        "sigprocmask": 3.15,
+        "write": 0.98
+      },
+      "other": {
+        "__accept": 1.0,
+        "__sigaltstack": 2.06,
+        "close": 0.99,
+        "kevent (changes)": 1.0,
+        "kevent (poll now)": 4.52,
+        "kevent (wait)": 0.05,
+        "read": 2.01,
+        "sigprocmask": 2.07,
+        "write": 1.0
+      }
+    },
+    "pingpong": {
+      "client": {
+        "__sigaltstack": 1.27,
+        "kevent (poll now)": 3.66,
+        "kevent (wait)": 0.27,
+        "read": 1.0,
+        "sigprocmask": 1.25,
+        "write": 0.98
+      },
+      "other": {
+        "__sigaltstack": 1.09,
+        "kevent (poll now)": 3.11,
+        "kevent (wait)": 0.09,
+        "read": 0.99,
+        "sigprocmask": 1.08,
+        "write": 0.98
+      }
+    },
+    "pipelined": {
+      "client": {
+        "__sigaltstack": 0.05,
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.01,
+        "read": 0.01,
+        "sigprocmask": 0.05,
+        "write": 1.0
+      },
+      "other": {
+        "__sigaltstack": 0.14,
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.44,
+        "kevent (wait)": -0.01,
+        "read": 0.14,
+        "sigprocmask": 0.14,
+        "write": 0.14
+      }
+    }
+  }
+}
