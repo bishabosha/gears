@@ -159,7 +159,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
         else {
           slot.write = command
-          arm(command.fd, read = false)
+          if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
+          else arm(command.fd, read = false)
         }
       case timer: KqueueTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
@@ -441,6 +442,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
       KqueueLoop.addFile(events(0), fd, read = read, clear = false, oneShot = true)
     }
+
+  /** Arms a one-shot write filter, for a command such as a connect, and adds the descriptor's persistent read filter in
+    * the same call. Nothing can then arrive unreported, so the descriptor starts out not ready to read, and its first
+    * read waits for an edge instead of trying a read that would block; data already waiting is reported as soon as the
+    * filter is added.
+    */
+  private def armWithReads(fd: Int, slot: Slot): Unit = {
+    KqueueLoop.createAndRegisterEvents(kq, 2) { events =>
+      KqueueLoop.addFile(events(0), fd, read = false, clear = false, oneShot = true)
+      KqueueLoop.addFile(events(1), fd, read = true, clear = true)
+    }
+    slot.readRegistered = true
+    slot.readAvailable = -1
+    slot.settleReadiness(KqueueReactor.NotReady)
+  }
 
   /** Finds the command an event is for, performs it, and hands its completion the result. The slot is cleared first so
     * the completion may submit the next command.
