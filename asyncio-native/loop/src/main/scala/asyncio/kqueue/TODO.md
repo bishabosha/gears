@@ -22,7 +22,7 @@ connection for each round trip, so an accept for each), `pipelined` (items 2 and
 simultaneous reads and writes), `blocking` (item 6), and two that check that queued work is not starved: `mixed`,
 ping-pong while a compute future on the same thread works in slices, reporting the compute side as `mixed-compute`, and
 `fairness`, pipelined traffic while a ticker future on the same thread awaits zero-length timers, reporting the time
-between ticks as `fairness-tick`. `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a
+between ticks as `fairness-tick`. `blocking-io` alternates a trivial blocking task with a round trip on one connection. `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a
 reference for what a hand-written loop costs, except the gears-only `pingpong-fresh-ops`, `mixed` and `fairness`.
 Medians from the same build differ by about 1% between runs (`blocking` by up to about 6%).
 
@@ -449,6 +449,13 @@ Release-fast, conditional yieldpoints, median of 5 runs, µs/op (`kqueue-demo/be
   compute slices (1.2 ms); the compute side runs faster for it. gears polls after every round of tasks.
 - Not like for like: `blocking` (`IO.blocking` runs on the calling thread, handing the worker's role to another, so
   a run of them stays put; gears hands each task to a worker thread and back), and `timers` (a fiber per timer).
+- `blocking-io` shows what that hand-over costs when each blocking task is followed by I/O, so each one needs it again.
+  Release-fast, median of 5 runs, µs/op, with the blocking task's share as `blocking-io` minus `pingpong`: gears 15.08
+  (6.96), the hand-written loop 12.57 (7.37), cats-effect 25.89 (1.97) (`kqueue-demo/bench/results/blocking-io.json`).
+  cats-effect's hand-over is off the task's path: the task runs the blocking code at once, while the cached thread
+  that takes over the worker's queue and poller wakes up in parallel. gears' task waits for two hops, to the blocking
+  worker and back through the reactor's wake-up. The pool (step 5 below) could do the same: a worker is a thread, its
+  reactor and its queue, so they can pass to a spare thread while the task blocks on its own.
 - The echo server is a plain read/write loop, as gears' is. Writing it as `reads.through(writes)` cost cats-effect a
   further 18% in ping-pong and 34% in `concurrent`.
 - Its run on more workers is the comparison to make once gears has a pool too.
@@ -474,7 +481,9 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
 4. [ ] Descriptors shared between kqueue reactors: an owner and a generation per descriptor, readiness reset on a move,
    and the old reactor dropping its filter when it next fires.
 5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
-   futures share plain variables, which need to become atomic.
+   futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as a second
+   strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue pass to a
+   spare thread (see `blocking-io`, against cats-effect).
 6. [ ] Compare the policies: balanced, skewed, I/O beside compute, and churning connections, with moves counted.
 
 ## Proposed changes to Scala Native

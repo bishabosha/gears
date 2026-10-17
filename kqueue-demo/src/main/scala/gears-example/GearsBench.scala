@@ -114,6 +114,15 @@ object GearsBench {
       }
     ),
     Scenario(
+      "blocking-io",
+      "a trivial blocking task and a round trip in turn on one connection: moving between blocking work and I/O",
+      50_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
+          pingPong(r, address, count, deadline = false, blockingFirst = true)
+      }
+    ),
+    Scenario(
       "timers",
       s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
       200_000,
@@ -228,11 +237,17 @@ object GearsBench {
   }
 
   /** Sends `count` messages one at a time, waiting for each echo before sending the next. With `deadline`, each round
-    * trip also arms a reactor timer that is cancelled once the echo is back.
+    * trip also arms a reactor timer that is cancelled once the echo is back; with `blockingFirst`, a trivial blocking
+    * task runs before each round trip.
     */
-  private def pingPong(r: Reactor, address: Address, count: Int, deadline: Boolean, freshOps: Boolean = false)(using
-      Async
-  ): Unit =
+  private def pingPong(
+      r: Reactor,
+      address: Address,
+      count: Int,
+      deadline: Boolean,
+      freshOps: Boolean = false,
+      blockingFirst: Boolean = false
+  )(using Async): Unit =
     withConnection(r, address) { fd =>
       val zone = Zone.open()
       try {
@@ -242,6 +257,7 @@ object GearsBench {
         val timer = r.ops.timer(60_000)
         var i = 0
         while i < count do {
+          if blockingFirst then perform(r, r.ops.blocking(() => ()))
           if deadline then r.submit(timer, _ => throw new IOException("A round trip timed out"))
           buf.clear()
           while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)

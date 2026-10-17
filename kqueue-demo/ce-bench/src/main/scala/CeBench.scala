@@ -56,6 +56,11 @@ object CeBench {
     Scenario("connections", 20_000, (address, count, _) => repeat(count)(pingPong(address, 1, deadline = false))),
     Scenario("pipelined", 200_000, (address, count, _) => pipelined(address, count)),
     Scenario("blocking", 100_000, (_, count, _) => repeat(count)(IO.blocking(()))),
+    Scenario(
+      "blocking-io",
+      50_000,
+      (address, count, _) => Network[IO].connect(address).use(s => repeat(count)(IO.blocking(()) >> roundTrip(s)))
+    ),
     Scenario("timers", 200_000, (_, count, _) => timerStress(count)),
     Scenario("fairness", 200_000, (address, count, _) => fairness(address, count)),
     Scenario("mixed", 50_000, (address, count, _) => mixed(address, count))
