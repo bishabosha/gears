@@ -29,7 +29,7 @@ import scala.scalanative.meta.LinktimeInfo
 /** The scenarios of `GearsBench` written with cats-effect and fs2, to compare against: the same echo server, message
   * size, operation counts and result lines, so `kqueue-demo/bench/compare.py` reads them alike (pass the executable as
   * `<label>=<path>@raw`, since it runs as `cebench bench`). As in `GearsBench`, the echo server runs on a runtime of its
-  * own, one worker thread with its own kqueue, and the clients on another, with one worker unless `--workers` says
+  * own and the clients on another, each with one worker thread, polling its own kqueue, unless `--workers` says
   * otherwise. `pingpong-fresh-ops` has no counterpart: fs2 builds no op values to reuse.
   */
 object CeBench {
@@ -212,7 +212,7 @@ object CeBench {
       @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: Flag,
       @arg port: Int = 19876,
-      @arg(doc = "worker threads for the clients; the server always has one") workers: Int = 1
+      @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1
   ): Unit = {
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
     val selected =
@@ -230,7 +230,7 @@ object CeBench {
       if tcp.value then SocketAddress(Host.fromString("127.0.0.1").get, Port.fromInt(port).get)
       else UnixSocketAddress(unixPath)
     Files.deleteIfExists(Paths.get(unixPath))
-    val serverRuntime = runtime(1, "bench-server")
+    val serverRuntime = runtime(workers, "bench-server")
     val clientRuntime = runtime(workers, "bench-client")
     try {
       val listening = new CountDownLatch(1)

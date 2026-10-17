@@ -163,22 +163,18 @@ object GearsBench {
     var done = 0
     while done < count do {
       val batch = math.min(TimerBatch, count - done)
-      var fired = 0
-      val counter: Completion[r.Op] = _ => fired += 1
-      val toCancel = scala.collection.mutable.ArrayBuffer.empty[r.Op]
+      val fired = new java.util.concurrent.atomic.AtomicInteger // counted on the worker the timers went to
+      val counter: Completion[r.Op] = _ => fired.incrementAndGet()
+      val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
       var i = 0
       while i < batch do {
-        if i % 2 == 0 then reactor(r).submit(r.ops.timer(0), counter)
-        else {
-          val timer = r.ops.timer(60_000)
-          reactor(r).submit(timer, counter)
-          toCancel += timer
-        }
+        if i % 2 == 0 then submit(r, r.ops.timer(0), counter)
+        else toCancel += submit(r, r.ops.timer(60_000), counter)
         i += 1
       }
       val firing = (batch + 1) / 2
-      while fired < firing do perform(r, r.ops.timer(0)) // lets the loop turn until the short timers have fired
-      toCancel.foreach(reactor(r).cancel)
+      while fired.get() < firing do perform(r, r.ops.timer(0)) // lets the loops turn until the short timers fire
+      toCancel.foreach(_.cancel())
       done += batch
     }
   }
@@ -208,12 +204,12 @@ object GearsBench {
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
   private def mixed(r: Backend, address: Address, count: Int)(using Async.Spawn): Unit = {
-    var pingPongDone = false
+    val pingPongDone = new java.util.concurrent.atomic.AtomicBoolean // read by the other future, maybe on another worker
     var slices = 0L
     val start = System.nanoTime()
     val compute = Future {
       var result = 0L
-      while !pingPongDone do {
+      while !pingPongDone.get() do {
         result += computeSlice(slices)
         yieldNow()
         slices += 1
@@ -221,7 +217,7 @@ object GearsBench {
       computeSink = result
     }
     pingPong(r, address, count, deadline = false)
-    pingPongDone = true
+    pingPongDone.set(true)
     val seconds = (System.nanoTime() - start) / 1e9
     compute.await
     report("mixed-compute", slices, seconds)
@@ -254,11 +250,12 @@ object GearsBench {
         val buf = NativeBuffer.allocate(MessageSize)(using zone)
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
-        val timer = r.ops.timer(60_000)
+        var timer = r.ops.timer(60_000)
         var i = 0
         while i < count do {
           if blockingFirst then perform(r, r.ops.blocking(() => ()))
-          if deadline then reactor(r).submit(timer, _ => throw new IOException("A round trip timed out"))
+          val pending =
+            if deadline then submit(r, timer, _ => throw new IOException("A round trip timed out")) else null
           buf.clear()
           while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
           buf.clear()
@@ -267,7 +264,9 @@ object GearsBench {
             perform(r, if freshOps then r.ops.read(fd, buf) else read)
             if buf.position() == before then throw new IOException("The server closed the connection")
           }
-          if deadline then reactor(r).cancel(timer)
+          // Cancelled at once if this task is still on the worker the timer went to; otherwise the cancel runs there
+          // soon, and the timer cannot be submitted again before it has, so the next round trip gets a new one.
+          if pending != null && !pending.cancel() then timer = r.ops.timer(60_000)
           i += 1
         }
       } finally zone.close()
@@ -307,17 +306,17 @@ object GearsBench {
     * rarely wait must still let it run.
     */
   private def fairness(r: Backend, address: Address, count: Int)(using Async.Spawn): Unit = {
-    var trafficDone = false
+    val trafficDone = new java.util.concurrent.atomic.AtomicBoolean // read by the ticker, maybe on another worker
     var ticks = 0L
     val start = System.nanoTime()
     val ticker = Future {
-      while !trafficDone do {
+      while !trafficDone.get() do {
         perform(r, r.ops.timer(0))
         ticks += 1
       }
     }
     pipelined(r, address, count)
-    trafficDone = true
+    trafficDone.set(true)
     val seconds = (System.nanoTime() - start) / 1e9
     ticker.await
     report("fairness-tick", math.max(ticks, 1L), seconds)
@@ -347,11 +346,11 @@ object GearsBench {
     }
   }
 
-  /** Starts the echo server on its own reactor thread and returns once it is listening. */
-  private def startServer(address: Address)(using Backend): Unit = {
+  /** Starts the echo server on a pool of `workers` reactor threads of its own and returns once it is listening. */
+  private def startServer(address: Address, workers: Int)(using Backend): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
-    val thread = new Thread(() => serve(address, listening, failure), "bench-server")
+    val thread = new Thread(() => serve(address, listening, failure, workers), "bench-server")
     thread.setDaemon(true) // it serves until the process exits
     thread.start()
     listening.await()
@@ -362,11 +361,14 @@ object GearsBench {
   /** Listens on `address`, counts down `listening`, then echoes every connection until the process exits. A failure to
     * listen is recorded in `failure`.
     */
-  private def serve(address: Address, listening: CountDownLatch, failure: AtomicReference[Throwable | Null])(using
-      Backend
-  ): Unit =
+  private def serve(
+      address: Address,
+      listening: CountDownLatch,
+      failure: AtomicReference[Throwable | Null],
+      workers: Int
+  )(using Backend): Unit =
     try
-      ReactorFutures.run { r =>
+      ReactorFutures.run(workers) { r =>
         val server =
           try r.handles.listen(address)
           finally listening.countDown()
@@ -384,12 +386,15 @@ object GearsBench {
         listening.countDown()
     }
 
-  /** Runs the named scenarios, or all of them, each with its base count times `scale`. */
+  /** Runs the named scenarios, or all of them, each with its base count times `scale`, the clients on a pool of
+    * `workers` workers, and the echo server on another of the same size.
+    */
   def run(
       names: Seq[String],
       scale: Double,
       connections: Int,
-      address: Address
+      address: Address,
+      workers: Int = 1
   )(using Backend): Unit = {
     val selected =
       if names.isEmpty then scenarios
@@ -408,8 +413,8 @@ object GearsBench {
       case _                  => ()
     }
     try {
-      startServer(address)
-      ReactorFutures.run { r =>
+      startServer(address, workers)
+      ReactorFutures.run(workers) { r =>
         println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s")
         for scenario <- selected do {
           val count = math.max(1, (scenario.baseCount * scale).toInt)

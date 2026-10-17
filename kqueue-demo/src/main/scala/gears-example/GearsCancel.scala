@@ -79,7 +79,8 @@ object GearsCancel {
             "timer" -> Future(perform(r, r.ops.timer(300)))
           )
           // Submitted straight to the reactor, with no future to cancel it: only closing the reactor can stop it.
-          reactor(r).submit(
+          submit(
+            r,
             r.ops.blocking(sleeper(10000, leftoverInterrupted)),
             new Completion[r.Op] {
               def onComplete(op: r.Op): Unit = println("unexpected completion of the leftover task")

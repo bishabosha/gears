@@ -106,6 +106,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
   }
 
+  /** For measurement: descriptors this reactor took over from another, and read filters it dropped because another had
+    * taken the descriptor over. On the reactor's thread only; read them once it has stopped.
+    */
+  var takenOver = 0L
+  var filtersDropped = 0L
+
   /** Distinguishes this reactor from the others sharing descriptors with it, in `DescriptorTable`. */
   private val id = KqueueReactor.nextId.incrementAndGet()
 
@@ -460,6 +466,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if owner != 0 && owner != id then {
       slot.forget()
       slot.settleReadiness(KqueueReactor.NotReady)
+      takenOver += 1
     }
     slot
   }
@@ -516,6 +523,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
               // so this reactor no longer wakes for it; it is registered again if a read here needs it.
               KqueueLoop.deleteFileIfOpen(kq, ident, read = true)
               slot.forget()
+              filtersDropped += 1
             } else { // kept for the next read submitted
               if KqueueLoop.isEOF(event) then slot.readEof = true
               slot.readReadiness = KqueueReactor.Ready
