@@ -383,6 +383,22 @@ thread and every op suspends. Each step is measured against the one before (rele
   profile. Doing fewer suspensions would gain more, but taking the fast path for writes under load showed what that
   costs in fairness (see the fast path, under profiling findings).
 
+### Fewer suspensions
+
+Fairness decided per turn of a future rather than per op: each task the scheduler runs is one future's turn, so a
+budget reset before each task bounds how long one future keeps the thread, whatever the other futures are doing. Each
+step is measured against the one before, as above, with `connections` as well.
+
+- A fast path budget per turn (`ReactorScheduler.turnFastPathsLeft`, 1 op): `perform` finishes an op without
+  suspending once in each turn of its caller, even with other tasks queued, and beyond that only as before, while none
+  is. A future whose op has just completed usually issues the next at once: in `concurrent` the write after a read's
+  echo, or the read after a write, so most round trips take one turn instead of two. `concurrent` 3.49 → 2.16 µs
+  (−38%), `fairness` traffic −40%, `mixed` ping-pong −30%, `pingpong` −11%, `pipelined` and `connections` unchanged.
+  The futures beside a busy one get the same share of turns, but a turn now does more: `fairness-tick` +20% (one tick
+  per two messages, the resumed one and the fast one, instead of one per message), and `mixed-compute` +39%, one slice
+  per round trip instead of two (`kqueue-demo/bench/results/turn-fast-path.json`). This is what Tokio's cooperative
+  budget does, per task poll.
+
 ## Proposed changes to Scala Native
 
 Costs found while profiling that only Scala Native can remove, all on macOS arm64. The `scala-native-setjmp-issue`

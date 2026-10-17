@@ -51,10 +51,15 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
       reactor.wakeup()
     }
 
-  /** Ops that `perform` may still finish without suspending in this round, reset by each `drain`. Spent, `perform`
-    * suspends even for an op that could finish at once, so the other futures and the reactor's poll get to run.
+  /** Ops that `perform` may still finish without suspending in this round while no other task is queued, reset by each
+    * `drain`. Spent, `perform` suspends even for an op that could finish at once, so the reactor's poll gets to run.
     */
   private[gearsexample] var fastPathsLeft = ReactorScheduler.FastPathBudget
+
+  /** Ops that `perform` may still finish without suspending in the running task's turn, even with other tasks queued,
+    * reset before each task. Spent, `perform` suspends, so a future whose ops rarely wait still gives up its turn.
+    */
+  private[gearsexample] var turnFastPathsLeft = 0
 
   /** Whether no task is queued, so the loop may block. On the reactor thread only. */
   private[gearsexample] def isIdle: Boolean = local.isEmpty && remote.isEmpty
@@ -95,6 +100,7 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     while remaining > 0 do {
       val task = local.poll()
       remaining -= 1
+      turnFastPathsLeft = ReactorScheduler.TurnFastPathBudget
       try task.run()
       catch case t: Throwable => t.printStackTrace()
     }
@@ -105,6 +111,9 @@ object ReactorScheduler {
 
   /** How many ops `perform` may finish without suspending in one round of the scheduler. */
   inline val FastPathBudget = 32
+
+  /** How many ops `perform` may finish without suspending in one task's turn while other tasks are queued. */
+  inline val TurnFastPathBudget = 1
 
   private val current = new ThreadLocal[ReactorScheduler]()
 
@@ -150,11 +159,16 @@ object ReactorFutures {
     waiter.inUse = true
     try {
       // The fast path: an op the reactor finishes at once returns here without suspending, which skips the whole await
-      // and resume. Taken only while no other task is queued, so a runnable future never waits behind it, and within a
-      // budget per round of the scheduler, so the reactor still polls for futures waiting on events.
+      // and resume. Taken within a small budget per turn of the caller, so a future whose ops rarely wait still gives
+      // the turn to those queued beside it, and beyond that only while no other task is queued, within a budget per
+      // round of the scheduler, so the reactor still polls for futures waiting on events.
       // A refused op, such as a one-shot op submitted twice, throws from either call.
       val finished =
-        if scheduler.fastPathsLeft > 0 && scheduler.isIdle then {
+        if scheduler.turnFastPathsLeft > 0 then {
+          val now = r.trySubmit(op, waiter.completion)
+          if now then scheduler.turnFastPathsLeft -= 1
+          now
+        } else if scheduler.fastPathsLeft > 0 && scheduler.isIdle then {
           val now = r.trySubmit(op, waiter.completion)
           if now then scheduler.fastPathsLeft -= 1
           now
