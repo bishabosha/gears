@@ -12,7 +12,8 @@ Measure each item with `kqueuedemo gears bench`: build the executables to compar
 them with `kqueue-demo/bench/compare.py` (see its header). Debug builds overstate the Scala-side cost, so measure
 release builds. The scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path),
 `pingpong-fresh-ops` (the same, building its ops anew for every message), `pingpong-deadline` (item 5), `timers` (item
-5: 1,000 timers pending at a time, half firing and half cancelled), `concurrent` (item 4), `pipelined` (items 2 and 3 on
+5: 1,000 timers pending at a time, half firing and half cancelled), `concurrent` (item 4), `connections` (item 7: a new
+connection for each round trip, so an accept for each), `pipelined` (items 2 and 3 on
 simultaneous reads and writes), `blocking` (item 6), and two that check that queued work is not starved: `mixed`,
 ping-pong while a compute future on the same thread works in slices, reporting the compute side as `mixed-compute`, and
 `fairness`, pipelined traffic while a ticker future on the same thread awaits zero-length timers, reporting the time

@@ -146,6 +146,28 @@ object KQueueExampleBench {
     }
   }
 
+  /** The `connections` scenario: a new connection for each round trip, on one kqueue. */
+  private def newConnections(address: Address, count: Int): Unit = withLoop { (kq, events) =>
+    val zone = Zone.open()
+    try {
+      val buf = NativeBuffer.allocate(MessageSize)(using zone)
+      var i = 0
+      while i < count do {
+        val fd = connect(kq, events, address)
+        try {
+          buf.clear()
+          writeAll(kq, events, fd, buf)
+          buf.clear()
+          while buf.hasRemaining() do {
+            KqueueLoop.pollEventsForever(kq, events, MaxEvents) // only this socket is registered for reads
+            if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
+          }
+        } finally KqueueHandles.close(fd) // which also removes its filters from the kqueue
+        i += 1
+      }
+    } finally zone.close()
+  }
+
   private def pipelined(address: Address, count: Int): Unit = withLoop { (kq, events) =>
     val fd = connect(kq, events, address)
     val zone = Zone.open()
@@ -274,9 +296,10 @@ object KQueueExampleBench {
       register(kq, server, read = true, oneShot = false)
       val zone = Zone.open() // connection buffers, kept for the life of the process
       val pending = mutable.HashMap.empty[Int, ByteBuffer] // fd -> its buffer; position to limit is not yet echoed
+      val spare = mutable.Stack.empty[ByteBuffer] // buffers of closed connections, for the next ones
 
       def close(fd: Int): Unit = {
-        pending.remove(fd)
+        pending.remove(fd).foreach(spare.push)
         KqueueHandles.close(fd)
       }
 
@@ -300,7 +323,7 @@ object KQueueExampleBench {
             if fd == server then {
               var client = NonBlocking.accept(server)
               while client >= 0 do {
-                val buf = NativeBuffer.allocate(8192)(using zone)
+                val buf = if spare.nonEmpty then spare.pop() else NativeBuffer.allocate(8192)(using zone)
                 buf.limit(0)
                 pending(client) = buf
                 register(kq, client, read = true, oneShot = false)
@@ -366,6 +389,7 @@ object KQueueExampleBench {
           case "pingpong"          => pingPong(address, count, deadline = false)
           case "pingpong-deadline" => pingPong(address, count, deadline = true)
           case "concurrent"        => concurrent(address, count, connections)
+          case "connections"       => newConnections(address, count)
           case "pipelined"         => pipelined(address, count)
           case "blocking"          => blocking(count)
           case "timers"            => timerStress(count)

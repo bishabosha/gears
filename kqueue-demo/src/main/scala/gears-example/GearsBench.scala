@@ -77,6 +77,20 @@ object GearsBench {
       }
     ),
     Scenario(
+      "connections",
+      "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
+      20_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit = {
+          var i = 0
+          while i < count do {
+            pingPong(r, address, 1, deadline = false)
+            i += 1
+          }
+        }
+      }
+    ),
+    Scenario(
       "pipelined",
       "one connection, each message its own write while replies are read at the same time",
       200_000,
