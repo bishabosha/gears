@@ -183,11 +183,12 @@ run by putting `gears` before the command, for example `kqueueDemo/run gears kv-
 --sock /tmp/gears-kv.sock`. Each completion step becomes a call to `ReactorFutures.perform`, which suspends
 the caller until the op finishes, so the code reads sequentially; wrapping a call in a
 `Future` runs the op alongside other work. Reactors are thread-owned: `ReactorFutures.run` makes the calling
-thread the reactor thread, running the program as a future under a scheduler bound to
-that thread, and alternating between the scheduler's queued tasks and turns of the
-reactor's loop, blocking only when no task is queued. So futures submit to the reactor
-directly and everything a program spawns stays on that thread (there is no work stealing
-or balancing yet). The test suites run against both versions.
+thread a reactor thread, running the program as a future on a pool of workers, each a thread
+alternating between its queued tasks and turns of its own reactor's loop, blocking only when
+it has no task to run and none to take from another worker. With one worker, the default,
+everything a program spawns stays on the calling thread; with more, a worker out of work takes
+queued tasks from the others, and a task's ops go to the reactor of whichever worker runs it.
+The test suites run against both versions.
 
 `kqueueDemo/run gears bench` is a stress test to measure reactor changes against: an
 echo server and its clients run on two reactor threads in one process, through five

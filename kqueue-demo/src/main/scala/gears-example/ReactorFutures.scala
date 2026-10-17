@@ -34,7 +34,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   private[gearsexample] val owner = Thread.currentThread()
 
   // Tasks for this worker, almost all of them: resuming a continuation is queued by a completion, which runs here. A
-  // fixed ring that allocates nothing per task, and from which other workers steal when they run out.
+  // fixed ring that allocates nothing per task, and from which other workers take tasks when they run out.
   private[gearsexample] val local = new RunQueue
 
   // Tasks that must run on this worker in particular, queued from other threads, which wake it: cancelling an op
@@ -69,7 +69,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   private[gearsexample] var turnFastPathsLeft = 0
 
   /** For measurement, on this worker's thread only: tasks taken from other workers, and the times it blocked. */
-  private[gearsexample] var stolen = 0L
+  private[gearsexample] var taken = 0L
   private[gearsexample] var blocked = 0L
 
   /** Whether no task is queued here. On this worker's thread only. */
@@ -133,7 +133,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   /** Takes tasks from another worker with some to spare, or from outside the pool, and returns whether it found any. A
     * worker's last queued task is left to it, since it is about to run it, and taking it would only move it.
     */
-  private def steal(): Boolean = {
+  private def takeWork(): Boolean = {
     val injected = pool.injected()
     if injected != null then {
       push(injected)
@@ -146,11 +146,11 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
         val start = java.util.concurrent.ThreadLocalRandom.current().nextInt(workers.length)
         var i = 0
         while i < workers.length do {
-          val victim = workers((start + i) % workers.length)
-          if (victim ne this) && victim.local.size > 1 then {
-            val taken = victim.local.stealInto(local)
-            if taken > 0 then {
-              stolen += taken
+          val source = workers((start + i) % workers.length)
+          if (source ne this) && source.local.size > 1 then {
+            val moved = source.local.moveHalfTo(local)
+            if moved > 0 then {
+              taken += moved
               return true
             }
           }
@@ -167,7 +167,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
       while !pool.stopped do {
         drain()
         if !pool.stopped then
-          if !isIdle || steal() then reactor.runOnce(block = false)
+          if !isIdle || takeWork() then reactor.runOnce(block = false)
           else {
             // About to block: say so first, then look again, so that a worker queueing work meanwhile either sees this
             // one idle and wakes it, or has its work seen here.
@@ -213,14 +213,14 @@ private[gearsexample] final class ReactorWorkerThread(
     worker = mine
     pool.workers(index) = mine
     started.countDown()
-    started.await() // so that every worker this one may steal from is in `workers`
+    started.await() // so that every worker this one may take tasks from is in `workers`
     mine.loop()
   }
 }
 
 /** A gears scheduler over a pool of workers, each a thread driving a reactor of `backend`'s (see `ReactorWorker`).
   * Futures inherit their parent's scheduler, so a program started by `ReactorFutures.run`, and everything it spawns,
-  * runs on the pool. A task queued on a worker runs there unless another worker, out of work, steals it; queued from
+  * runs on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
   */
@@ -566,9 +566,10 @@ object ReactorFutures {
     def kqueue(f: asyncio.kqueue.KqueueReactor => Long): String =
       workers.map(_.reactor match { case k: asyncio.kqueue.KqueueReactor => f(k); case _ => 0L }).mkString(" ")
     System.err.println(
-      s"pool stats (${workers.length} workers, per worker): stolen ${workers.map(_.stolen).mkString(" ")}; " +
+      s"pool stats (${workers.length} workers, per worker): taken ${workers.map(_.taken).mkString(" ")}; " +
         s"blocked ${workers.map(_.blocked).mkString(" ")}; taken over ${kqueue(_.takenOver)}; " +
-        s"filters dropped ${kqueue(_.filtersDropped)}; wake-ups ${pool.wakeUps.get()}; injected ${pool.injections.get()}"
+        s"filters dropped ${kqueue(_.filtersDropped)}; wake-ups ${pool.wakeUps.get()}; " +
+        s"injected ${pool.injections.get()}"
     )
   }
 }

@@ -325,7 +325,7 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
     `concurrent` −7%, `blocking` −7%, `timers` −14%, ping-pong −1%;
     `kqueue-demo/bench/results/conditional-yieldpoints.json`), and ran without failure on the nightly. This is
     not made the default here; it is worth recommending to applications that only use thread-owned reactors, with
-    futures that stay on their reactor's thread and no work-stealing workers.
+    futures that stay on their reactor's thread and no workers taking tasks from one another.
   - In our code, `runOnce` no longer calls `Thread.currentThread()` every turn, and `perform` takes its scheduler from
     its `Async` context instead of a `ThreadLocal`. Simpler, but no measurable difference
     (`kqueue-demo/bench/results/fewer-current-thread.json`).
@@ -420,10 +420,10 @@ step is measured against the one before, as above, with `connections` as well.
 ## Against cats-effect and fs2
 
 `kqueue-demo/ce-bench` writes the same scenarios with cats-effect 3.7.1 and fs2-io 3.14.0, the current releases, whose
-Scala Native runtime has the design planned below: a work-stealing pool whose workers each poll their own kqueue
-(`KqueueSystem`). Same message size, counts and result lines; the echo server runs on a runtime of its own with one
-worker, and the clients on another, one worker unless `--workers` says otherwise. Build it with
-`PROJECT=ceBench kqueue-demo/bench/build.sh` and compare it as `<label>=<path>@raw`.
+Scala Native runtime has the design planned below: a pool whose workers take tasks from one another and each poll their
+own kqueue (`KqueueSystem`). Same message size, counts and result lines; the echo server runs on a runtime of its own
+and the clients on another, each with one worker unless `--workers` says otherwise. Build it with `PROJECT=ceBench
+kqueue-demo/bench/build.sh` and compare it as `<label>=<path>@raw`.
 
 Release-fast, conditional yieldpoints, median of 5 runs, µs/op (`kqueue-demo/bench/results/vs-cats-effect.json`):
 
@@ -463,11 +463,11 @@ Release-fast, conditional yieldpoints, median of 5 runs, µs/op (`kqueue-demo/be
 ## A thread-pooled scheduler
 
 Planned: a pool of worker threads, each owning a reactor and running futures as `ReactorScheduler` does now, which
-steal runnable tasks from one another. A task's next op goes to the reactor of whichever worker runs it, rather than a
+take runnable tasks from one another. A task's next op goes to the reactor of whichever worker runs it, rather than a
 reactor it is pinned to, so a moved task's descriptors follow it; pinning stays for what cannot move, such as
-io_uring's ring-bound ops. Stealing lives in the scheduler, above the `Reactor` interface, the same for every backend.
+io_uring's ring-bound ops. Taking tasks lives in the scheduler, above the `Reactor` interface, the same for every backend.
 Whether moving tasks that are doing I/O costs more than keeping them where they are is to be measured, with a policy
-switch: steal any task, steal only tasks not resumed by I/O, or those too once a worker's backlog persists.
+switch: take any task, take only tasks not resumed by I/O, or those too once a worker's backlog persists.
 
 1. [x] **A task resumed on another thread.** `kqueuedemo gears migrate` hands every resume to the other of two threads
    and checks, after each: the locals of the frames the resume restored, an exception thrown after the move and caught
@@ -475,17 +475,18 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
    alternate signal stack and mask. No failures in 4 million moved resumes in a release-fast build, nor in debug. The
    one thing it found is Scala Native's GC blocking signals process-wide (see the proposed Scala Native changes), which
    happens whether tasks move or not; the check ignores those two signals.
-2. [x] **A local run queue that other workers can steal from.** `RunQueue`, after Tokio's: a fixed ring of 256 tasks,
-   first in first out for its owner, from which a thief claims about half with one compare-and-swap on the head, which
-   packs two indices so that the owner can go on taking tasks while a thief copies. `ReactorScheduler` uses it in place
-   of its `ArrayDeque`; a task that finds it full goes to the shared queue. `kqueuedemo gears runqueue` checks it: an
-   owner pushing and taking tasks while three thieves steal, every task run exactly once and seeing what the owner wrote
-   before queueing it (5 million tasks, ten release-fast runs, no failures). With one worker it costs little:
-   release-fast, median of 5 runs, the scenarios within noise except `pipelined` +3% and +6.3% over 7 runs (0.64 →
-   0.68 µs), the scenario that queues the most tasks per message; each pop is a compare-and-swap and each push a
-   volatile write, where the `ArrayDeque` had neither (`kqueue-demo/bench/results/run-queue.json`, `run-queue-check.json`).
-   Tokio pays the same. Claiming a drain's tasks with one compare-and-swap would save most of it, but would also keep
-   thieves from them for the whole drain, a trade to measure with the pool.
+2. [x] **A local run queue that other workers can take tasks from.** `RunQueue`, after Tokio's: a fixed ring of 256
+   tasks, first in first out for its owner, from which another thread claims about half with one compare-and-swap on the
+   head, which packs two indices so that the owner can go on taking tasks while the other thread copies.
+   `ReactorScheduler` uses it in place of its `ArrayDeque`; a task that finds it full goes to the shared queue.
+   `kqueuedemo gears runqueue` checks it: an owner pushing and taking tasks while three other threads take tasks from
+   it, every task run exactly once and seeing what the owner wrote before queueing it (5 million tasks, ten release-fast
+   runs, no failures). With one worker it costs little: release-fast, median of 5 runs, the scenarios within noise
+   except `pipelined` +3% and +6.3% over 7 runs (0.64 → 0.68 µs), the scenario that queues the most tasks per message;
+   each pop is a compare-and-swap and each push a volatile write, where the `ArrayDeque` had neither
+   (`kqueue-demo/bench/results/run-queue.json`, `run-queue-check.json`). Tokio pays the same. Claiming a drain's tasks
+   with one compare-and-swap would save most of it, but would also keep other workers from them for the whole drain, a
+   trade to measure with the pool.
 3. [x] **Ops built by the backend rather than one reactor.** The interface has a `Backend` (kqueue's is
    `KqueueBackend`): it builds the ops, names the handles, keeps the attachments and opens reactors of type
    `Reactor.Of[Op]`, so an op it builds may go to any of its reactors, one submission at a time; ops of another backend
@@ -532,10 +533,10 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
      5 runs, the two builds alternating (`kqueue-demo/bench/results/taken-over-not-ready.json`). The bench's scenarios,
      with one reactor, are within noise (within 3.4% over 7 runs where 5 had shown 4%;
      `taken-over-not-ready-bench.json`).
-5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
-   futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as a second
-   strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue pass to a
-   spare thread (see `blocking-io`, against cats-effect).
+5. [ ] The pool: a shared queue, parking and waking idle workers, taking tasks from one another, and the policy switch.
+   The benchmarks' futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as
+   a second strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue
+   pass to a spare thread (see `blocking-io`, against cats-effect).
 6. [ ] Compare the policies: balanced, skewed, I/O beside compute, and churning connections, with moves counted.
 
 ## Proposed changes to Scala Native
