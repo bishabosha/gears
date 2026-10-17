@@ -441,9 +441,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   def stop(): Unit = running = false
 
   /** `fd`'s slot, brought up to date for a submission. What it knew no longer holds if the descriptor's number was closed
-    * and reused since, on any thread, or if another reactor has registered a read filter for it since this one did; it
-    * then starts over, as for a new descriptor. A filter of this reactor's that is still registered is harmless: a new
-    * registration replaces it, and an event it reports first is dropped by `dispatch`.
+    * and reused since, on any thread: it then starts over, as for a new descriptor. Nor does it if another reactor reads
+    * the descriptor now, having registered a read filter since this one did: then it starts over not ready, so that a
+    * read registers a filter here before trying anything, since kqueue reports data already waiting as soon as a filter
+    * is added, and trying a read first would only find out what the filter will. A filter of this reactor's that is
+    * still registered is harmless: a new registration replaces it, and an event it reports first is dropped by
+    * `dispatch`.
     */
   private def currentSlot(fd: Int): Slot = {
     val slot = slotFor(fd)
@@ -452,7 +455,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if generation != slot.generation then {
       slot.forget()
       slot.generation = generation
-    } else if slot.readRegistered && DescriptorTable.readOwner(entry) != id then slot.forget()
+    }
+    val owner = DescriptorTable.readOwner(entry)
+    if owner != 0 && owner != id then {
+      slot.forget()
+      slot.settleReadiness(KqueueReactor.NotReady)
+    }
     slot
   }
 
