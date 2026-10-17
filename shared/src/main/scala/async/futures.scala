@@ -227,9 +227,9 @@ object Future:
       override def await[U](src: Async.Source[U]): U =
         if group.isCancelled then throw new CancellationException()
 
-        src
-          .poll()
-          .getOrElse:
+        src.poll() match // matched rather than `getOrElse`, which would allocate a closure on every await
+          case Some(value) => value
+          case None        =>
             if group eq CompletionGroup.Unlinked then ac.support.suspend(UnlinkedAwaitListener[U](src))
             else
               val listener = AwaitListener[U](src)
