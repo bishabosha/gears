@@ -124,6 +124,14 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
+  @main(name = "move-bench", doc = "Measures what moving a descriptor between kqueue reactors costs")
+  def moveBench(
+      @arg(name = "round-trips") roundTrips: Int = 100_000,
+      @arg(doc = "stay, hand-off or move alone, instead of every way") only: String = "",
+      @arg(doc = "with --only, how many round trips between turns") every: Int = 1
+  ): Unit = {
+    GearsMoveBench.run(roundTrips, only, every)
+  }
   @main(doc = "Checks that kqueue reactors on different threads can share a descriptor, as a pool's workers will")
   def share(): Unit = {
     GearsShare.run()
