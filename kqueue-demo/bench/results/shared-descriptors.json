@@ -1,0 +1,270 @@
+{
+  "started": "2026-10-17T20:23:14+02:00",
+  "finished": "2026-10-17T20:24:09+02:00",
+  "load_average": {
+    "before": [
+      12.8330078125,
+      6.2744140625,
+      4.6513671875
+    ],
+    "after": [
+      7.294921875,
+      5.83935546875,
+      4.5908203125
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.backend",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "e2f5b6bb24fe002d4bd363eea15355bc3d311e31",
+        "subject": "give the reactor scheduler a run queue that other threads can steal from",
+        "worktree_changes": true,
+        "worktree_changes_hash": "c8fdd67a985e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:56:27+02:00"
+      },
+      "median": {
+        "pingpong": 7.66,
+        "pingpong-fresh-ops": 7.65,
+        "pingpong-deadline": 7.57,
+        "concurrent": 2.09,
+        "connections": 42.26,
+        "pipelined": 0.67,
+        "blocking": 6.03,
+        "blocking-io": 14.43,
+        "timers": 0.19,
+        "fairness-tick": 3.31,
+        "fairness": 1.66,
+        "mixed-compute": 27.11,
+        "mixed": 27.16
+      },
+      "samples": {
+        "pingpong": [
+          7.7,
+          7.59,
+          7.34,
+          8.12,
+          7.66
+        ],
+        "pingpong-fresh-ops": [
+          7.72,
+          7.62,
+          7.42,
+          8.31,
+          7.65
+        ],
+        "pingpong-deadline": [
+          7.87,
+          7.67,
+          7.51,
+          7.54,
+          7.57
+        ],
+        "concurrent": [
+          2.14,
+          2.09,
+          2.24,
+          2.09,
+          2.08
+        ],
+        "connections": [
+          42.81,
+          45.05,
+          42.26,
+          42.14,
+          42.19
+        ],
+        "pipelined": [
+          0.64,
+          0.68,
+          0.67,
+          0.63,
+          0.69
+        ],
+        "blocking": [
+          6.02,
+          6.18,
+          5.89,
+          6.06,
+          6.03
+        ],
+        "blocking-io": [
+          15.84,
+          14.8,
+          14.3,
+          14.2,
+          14.43
+        ],
+        "timers": [
+          0.19,
+          0.19,
+          0.19,
+          0.19,
+          0.21
+        ],
+        "fairness-tick": [
+          3.31,
+          3.31,
+          3.95,
+          3.28,
+          3.7
+        ],
+        "fairness": [
+          1.66,
+          1.66,
+          1.97,
+          1.64,
+          1.85
+        ],
+        "mixed-compute": [
+          27.82,
+          27.37,
+          26.92,
+          27.06,
+          27.11
+        ],
+        "mixed": [
+          27.89,
+          27.42,
+          26.96,
+          27.1,
+          27.16
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.share",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "6beb84ddb7a63023ee9e9871edf91972f4c7cadf",
+        "subject": "build ops with a backend, so that any of its reactors can run them, and perform them on the current worker's reactor",
+        "worktree_changes": true,
+        "worktree_changes_hash": "b4621ad525e7",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T20:23:12+02:00"
+      },
+      "median": {
+        "pingpong": 7.46,
+        "pingpong-fresh-ops": 7.5,
+        "pingpong-deadline": 7.55,
+        "concurrent": 2.09,
+        "connections": 42.86,
+        "pipelined": 0.65,
+        "blocking": 5.92,
+        "blocking-io": 14.4,
+        "timers": 0.19,
+        "fairness-tick": 3.33,
+        "fairness": 1.66,
+        "mixed-compute": 27.84,
+        "mixed": 27.98
+      },
+      "samples": {
+        "pingpong": [
+          7.65,
+          8.8,
+          7.46,
+          7.42,
+          7.43
+        ],
+        "pingpong-fresh-ops": [
+          7.75,
+          7.44,
+          7.48,
+          8.58,
+          7.5
+        ],
+        "pingpong-deadline": [
+          7.68,
+          7.49,
+          7.5,
+          7.55,
+          7.66
+        ],
+        "concurrent": [
+          2.64,
+          2.08,
+          2.08,
+          2.09,
+          2.77
+        ],
+        "connections": [
+          43.73,
+          42.31,
+          45.57,
+          42.86,
+          42.6
+        ],
+        "pipelined": [
+          0.65,
+          0.65,
+          0.65,
+          0.66,
+          0.67
+        ],
+        "blocking": [
+          5.92,
+          5.76,
+          5.94,
+          5.98,
+          5.85
+        ],
+        "blocking-io": [
+          14.9,
+          14.3,
+          14.32,
+          14.43,
+          14.4
+        ],
+        "timers": [
+          0.19,
+          0.19,
+          0.19,
+          0.2,
+          0.19
+        ],
+        "fairness-tick": [
+          3.4,
+          3.27,
+          3.33,
+          4.28,
+          3.28
+        ],
+        "fairness": [
+          1.7,
+          1.63,
+          1.66,
+          2.14,
+          1.64
+        ],
+        "mixed-compute": [
+          27.93,
+          27.84,
+          27.06,
+          27.45,
+          28.19
+        ],
+        "mixed": [
+          27.98,
+          28.08,
+          27.09,
+          27.52,
+          28.5
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

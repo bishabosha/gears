@@ -124,6 +124,10 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
+  @main(doc = "Checks that kqueue reactors on different threads can share a descriptor, as a pool's workers will")
+  def share(): Unit = {
+    GearsShare.run()
+  }
   @main(doc = "Checks the run queue under contention: every task runs once, stolen or not")
   def runqueue(@arg tasks: Int = 2_000_000, @arg thieves: Int = 3): Unit = {
     GearsRunQueue.run(tasks, thieves)

@@ -4,6 +4,12 @@ package example.tests
 class GearsKQueueDemoSuite extends KQueueDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")
 
+  demoTest("kqueue reactors on different threads share a descriptor, dropping stale filters and reused numbers") {
+    val output = run("share")
+    assert(output.contains("share: 0 failures"), output)
+    assert(!output.contains("reuse was not checked"), output)
+  }
+
   demoTest("the run queue runs every task once while other threads steal from it") {
     val output = run("runqueue")
     assert(output.contains("; 0 failures"), output)
