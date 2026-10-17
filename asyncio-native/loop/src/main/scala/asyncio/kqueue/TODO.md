@@ -164,7 +164,7 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
     after sending, without the syscalls that used to give the reply time to arrive, and so pays a wake-up per round
     trip; see item 8.
 
-- [ ] **4. Batch remaining changes into the wait call.**
+- [x] **4. Batch remaining changes into the wait call — decided against, for now.**
   `kevent` takes a list of changes and an array for events in one call, but the reactor issues a separate call per change.
   - Append `EV_ADD`/`EV_DELETE` entries (and timers, if kernel timers stay) to a pending change list, and pass it to the
     next waiting `kevent`.
@@ -172,6 +172,14 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
     `EV_ERROR`: dispatch must instead fail the matching op, and ignore `ENOENT`/`EBADF` from deletes on closed
     descriptors.
   - Saves one syscall per change that items 2 and 3 don't remove (cancels, timers, first registrations).
+  - Counted after items 2, 3 and 5 (see what each operation costs now), there is almost nothing left to batch:
+    registration changes are about 0 per operation in every steady-state scenario, as reads register once per
+    descriptor, timers never reach the kernel, and ops that can proceed never register. Only new connections still make
+    them: the client registers twice per connection (the connect's write filter and the first read's filter) and the
+    server once, each just before the loop waits, so batching would save about 2 of the client's roughly 20 system calls
+    per connection in `connections`, and 1 of the server's.
+  - Not worth the error handling it needs for that. Worth revisiting for workloads dominated by short connections, or by
+    cancelling one-shot waits (writes, connects), each of which still costs an `EV_DELETE`.
 
 - [x] **5. Timers in user space.**
   Done in `KqueueReactor`: a timer gets a deadline from `System.nanoTime` and goes into a binary min-heap on the loop
