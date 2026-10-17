@@ -347,10 +347,10 @@ object GearsBench {
   }
 
   /** Starts the echo server on a pool of `workers` reactor threads of its own and returns once it is listening. */
-  private def startServer(address: Address, workers: Int)(using Backend): Unit = {
+  private def startServer(address: Address, workers: Int, policy: TakePolicy)(using Backend): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
-    val thread = new Thread(() => serve(address, listening, failure, workers), "bench-server")
+    val thread = new Thread(() => serve(address, listening, failure, workers, policy), "bench-server")
     thread.setDaemon(true) // it serves until the process exits
     thread.start()
     listening.await()
@@ -365,10 +365,11 @@ object GearsBench {
       address: Address,
       listening: CountDownLatch,
       failure: AtomicReference[Throwable | Null],
-      workers: Int
+      workers: Int,
+      policy: TakePolicy
   )(using Backend): Unit =
     try
-      ReactorFutures.run(workers) { r =>
+      ReactorFutures.run(workers, policy) { r =>
         val server =
           try r.handles.listen(address)
           finally listening.countDown()
@@ -387,14 +388,15 @@ object GearsBench {
     }
 
   /** Runs the named scenarios, or all of them, each with its base count times `scale`, the clients on a pool of
-    * `workers` workers, and the echo server on another of the same size.
+    * `workers` workers, and the echo server on another of the same size, both taking tasks by `policy`.
     */
   def run(
       names: Seq[String],
       scale: Double,
       connections: Int,
       address: Address,
-      workers: Int = 1
+      workers: Int = 1,
+      policy: TakePolicy = TakePolicy.Free
   )(using Backend): Unit = {
     val selected =
       if names.isEmpty then scenarios
@@ -413,8 +415,8 @@ object GearsBench {
       case _                  => ()
     }
     try {
-      startServer(address, workers)
-      ReactorFutures.run(workers) { r =>
+      startServer(address, workers, policy)
+      ReactorFutures.run(workers, policy) { r =>
         println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s")
         for scenario <- selected do {
           val count = math.max(1, (scenario.baseCount * scale).toInt)
