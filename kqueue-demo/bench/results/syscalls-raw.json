@@ -1,0 +1,104 @@
+{
+  "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/reorder/bin/kqueuedemo.3aec81d",
+  "benchmark": "raw",
+  "build": {
+    "commit": "3aec81d769989195b2b61b63351443a22ad92e21",
+    "subject": "suspend only for fairness or task would block",
+    "worktree_changes": false,
+    "worktree_changes_hash": null,
+    "mode": "release-fast",
+    "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+    "built": "2026-10-17T11:06:36+02:00"
+  },
+  "unit": "system calls per operation",
+  "scenarios": {
+    "pingpong": {
+      "client": {
+        "__sigaltstack": 1.0,
+        "kevent (wait)": 1.0,
+        "read": 1.0,
+        "sigprocmask": 1.0,
+        "write": 1.01
+      },
+      "other": {
+        "__sigaltstack": 1.0,
+        "kevent (wait)": 1.02,
+        "read": 1.01,
+        "sigprocmask": 1.01,
+        "write": 1.0
+      }
+    },
+    "pingpong-deadline": {
+      "client": {
+        "__sigaltstack": 1.0,
+        "kevent (changes)": 1.99,
+        "kevent (wait)": 1.0,
+        "read": 1.0,
+        "sigprocmask": 1.0,
+        "write": 1.0
+      },
+      "other": {
+        "__sigaltstack": 1.0,
+        "kevent (wait)": 1.0,
+        "read": 0.98,
+        "sigprocmask": 1.0,
+        "write": 0.97
+      }
+    },
+    "concurrent": {
+      "client": {
+        "__sigaltstack": 0.13,
+        "kevent (wait)": 0.13,
+        "read": 1.0,
+        "sigprocmask": 0.13,
+        "write": 1.0
+      },
+      "other": {
+        "__sigaltstack": 0.03,
+        "kevent (wait)": 0.03,
+        "read": 1.0,
+        "sigprocmask": 0.03,
+        "write": 1.0
+      }
+    },
+    "pipelined": {
+      "client": {
+        "__sigaltstack": 0.03,
+        "kevent (changes)": 0.01,
+        "kevent (wait)": 0.03,
+        "read": 0.01,
+        "sigprocmask": 0.03,
+        "write": 1.01
+      },
+      "other": {
+        "__accept": -0.01,
+        "__sigaltstack": 0.02,
+        "kevent (changes)": 0.03,
+        "kevent (wait)": 0.03,
+        "read": 0.01,
+        "sigprocmask": 0.02,
+        "write": 0.02
+      }
+    },
+    "blocking": {
+      "client": {
+        "__psynch_cvsignal": 1.0,
+        "__sigaltstack": 2.01,
+        "kevent (wait)": 1.0,
+        "read": 1.0,
+        "sigprocmask": 2.01
+      },
+      "other": {
+        "__sigaltstack": 1.0,
+        "sigprocmask": 1.01,
+        "write": 0.99
+      }
+    },
+    "timers": {
+      "client": {
+        "kevent (changes)": 1.5
+      },
+      "other": {}
+    }
+  }
+}

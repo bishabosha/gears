@@ -1,8 +1,9 @@
 # Kqueue reactor: syscall reduction TODO
 
-Most operations pay for a `kevent` call of their own, or a trip through the wake pipe, even when the work could be done
-right away on the reactor thread. A gears `perform(r, read)` that finds data already waiting costs about 7 syscalls
-today; with items 1–3 below it would cost 1 (just the `read`), and about 2 when the data isn't there yet.
+Most operations used to pay for a `kevent` call of their own, or a trip through the wake pipe, even when the work could
+be done right away on the reactor thread: a gears `perform(r, read)` that found data already waiting cost about 7
+syscalls. Now it costs 1, the `read` itself, and an op that has to wait costs no `kevent` of its own either; see what
+each operation costs now, below.
 
 ## Measuring
 
@@ -69,17 +70,49 @@ timers. The ticker in `fairness` still gets one tick per message, as at the star
 
 ## What each operation costs now
 
+By design, on the reactor thread:
+
 | Operation | Syscalls | Where |
 |---|---|---|
-| Submit a read, write, accept, or connect | 1 `kevent` to register a one-shot filter | `KqueueReactor.arm` |
-| Each pass of the loop | 1 `kevent` to wait | `KqueueReactor.run` |
-| Perform the op | 1 `read`/`write`/`accept`/… | `Command.perform` |
-| Not ready after all (would-block) | 1 more `kevent` to register again | `KqueueReactor.dispatch` |
-| Cancel a command or timer | 1 `kevent` (`EV_DELETE`) | `KqueueReactor.cancel` |
-| Submit a timer | 1 `kevent` | `KqueueReactor.submit` |
-| Complete a promise or blocker | 1 `write` to the wake pipe, then 2+ `read`s to drain it (the last returns `EAGAIN`) | `KqueueReactor.resolved`, `drainWakePipe` |
-| Gears task queued with `ReactorScheduler.execute`, even from the reactor thread | the promise path above: `write` + a `kevent` wake + 2 `read`s | `ReactorScheduler.arm`/`execute` |
-| Accept a connection | `accept` + `fcntl(F_GETFL)` + `fcntl(F_SETFL)` | `NonBlocking.accept` |
+| Read, write, accept, receive or send that can proceed | 1 `read`/`write`/`accept`/…, tried before waiting | `KqueueReactor.submit` |
+| A reactor read that has to wait | none, after the first on a descriptor, which adds its edge-triggered read filter (1 `kevent`); then the read when ready | `waitToRead` |
+| Any other command that has to wait (writes, connects, `whenReady`) | 1 `kevent` to arm a one-shot filter, then the command when ready | `arm` |
+| Each turn of the loop | none after a turn that delivered completions (it polls at least every 16 turns); otherwise up to 4 polls that return at once, then 1 waiting `kevent` | `runOnce`, `pollBeforeBlocking` |
+| Set, fire or cancel a timer | none | `TimerHeap` |
+| Cancel a reactor read | none; other commands: 1 `kevent` (`EV_DELETE`) | `cancel` |
+| Close a descriptor | 1 `close`; the kernel drops its filters | `PosixSockets.close` |
+| Gears task queued from the reactor thread, or a promise resolved there | none | `ReactorScheduler.execute`, `resolved` |
+| Wake the loop from another thread | 1 `kevent(NOTE_TRIGGER)`, merged with any already pending | `wakeup` |
+| Accept a connection | `accept` + `fcntl(F_GETFL)` + `fcntl(F_SETFL)` (item 7) | `NonBlocking.accept` |
+| Scala Native: each continuation resume, so each `perform` that suspends | `sigprocmask` + `sigaltstack`, from `setjmp` | see the proposed Scala Native changes |
+| Scala Native: each `@blocking` call, here only the waiting `kevent` | `sigprocmask` + `sigaltstack`, from `setjmp` | the same |
+
+Measured with `kqueue-demo/bench/syscalls.py` (lldb breakpoints on the system call wrappers; see its header), on the
+client thread, per operation: per round trip for ping-pong and `mixed`, per message for `concurrent`, `pipelined` and
+`fairness`, per task for `blocking` and per timer for `timers`. `kevent` counts both polls and waits; under the
+debugger replies are slow, so the loop spins more than at full speed, and those counts are only indicative. The
+signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
+(`kqueue-demo/bench/results/syscalls-gears.json`, `syscalls-raw.json`):
+
+| scenario | I/O calls | `kevent` changes | `kevent` polls and waits | signal pairs | raw: I/O, changes, polls and waits, signal pairs |
+|---|---|---|---|---|---|
+| pingpong | 2 | 0 | 4.1 | 1.3 | 2, 0, 1, 1 |
+| pingpong-deadline | 2 | 0 | 4.1 | 1.3 | 2, 2, 1, 1 |
+| concurrent | 2 | 0 | 0.2 | 1.9 | 2, 0, 0.13, 0.13 |
+| pipelined | 1 | 0.01 | 0.03 | 0.06 | 1, 0.01, 0.03, 0.03 |
+| blocking | 0, and 1 wake of the worker | 0 | 0.4 | 2 | 1, 0, 1, 2, and 1 wake |
+| timers | 0 | 0 | 0.01 | 0 | 0, 1.5, 0, 0 |
+| fairness | 1.1 | 0 | 0.07 | 2.1 | |
+| mixed | 2 | 0 | 1.4 | 3.2 | |
+
+- Registration changes are gone from every scenario: reads register once per descriptor, timers never reach the
+  kernel, and ops that can proceed never register. Item 4 has nothing left to batch here.
+- Most of what remains beyond the I/O itself is Scala Native's: the signal pairs, two syscalls each, outnumber the
+  I/O calls in ping-pong (2.6 against 2), `concurrent` (3.7 against 2) and `mixed`. One pair comes per continuation
+  resume. The fast path avoids it only for a future running alone, so in `concurrent`, with 64 connections, both the
+  write and the read of each message still suspend, and in `mixed` the compute slices add theirs.
+- The raw loop needs a waiting `kevent` per round trip, and its `@blocking` binding a signal pair; the reactor mostly
+  spins instead, in polls that cost no signal pair.
 
 ## Proposals, in order of what they save
 
