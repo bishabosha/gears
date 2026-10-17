@@ -511,6 +511,20 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
    one worker: release-fast, median of 5 runs, every scenario within 3% (`kqueue-demo/bench/results/shared-descriptors.json`).
    Left to measure with the pool: deleting the filter eagerly instead, by message to the old reactor, and `EV_DISPATCH`
    filters, which disable themselves after each event, so that a moved descriptor leaves nothing that can wake anyone.
+   - **What a move costs, before the pool.** `kqueuedemo gears move-bench` ping-pongs against an echo server on its
+     own reactor thread, driven by completions on two client reactors directly: `stay` on one; `hand-off`, taking
+     turns every N round trips with a connection each, so work changes thread but no descriptor moves; and `move`,
+     taking turns on one shared connection. Release-fast, median of 5 runs of 100,000 round trips, µs per round trip:
+     `stay` 6.32; every 1, `hand-off` 9.18 and `move` 10.17; every 4, 7.65 and 7.87; every 16, 6.83 and 7.06; every
+     64, 6.37 and 6.48 (`kqueue-demo/bench/results/move-descriptors.json`). So handing work to another thread costs
+     about 2.9 µs, and moving the descriptor with it about 1 µs more (0.99 at every 1, 0.88 per move at every 4; at
+     16 and 64 the difference is within the noise). System calls per round trip at every 1, all threads: `stay` 8.6,
+     `hand-off` 19.1, `move` 19.9. A move adds one `read`, the new reactor's first try finding nothing yet, and two
+     registration changes, the new reactor's filter and the old one's deletion; a hand-off adds the cross-thread
+     wake-up and the spinning and blocking waits around it. The wake-up, not the descriptor, is the expensive part
+     of moving work, which favours letting tasks move more than expected; fairness and contention need the pool.
+     A descriptor a reactor has just taken over could start out registered and not ready, as after `connect`, since
+     kqueue reports data already waiting when a filter is added: that would save the wasted `read`.
 5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
    futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as a second
    strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue pass to a

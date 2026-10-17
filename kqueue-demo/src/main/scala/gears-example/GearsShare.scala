@@ -51,6 +51,12 @@ object GearsShare {
       reactor.close()
     }
 
+    /** Runs `body` on the reactor's thread, without waiting for it. */
+    def post(body: => Unit): Unit = {
+      tasks.add(() => body)
+      reactor.wakeup()
+    }
+
     /** Runs `body` on the reactor's thread, and waits until it has. */
     def onThread(body: => Unit): Unit = {
       val ran = new CountDownLatch(1)
