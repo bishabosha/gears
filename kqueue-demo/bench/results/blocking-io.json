@@ -1,0 +1,157 @@
+{
+  "started": "2026-10-17T19:30:32+02:00",
+  "finished": "2026-10-17T19:31:00+02:00",
+  "load_average": {
+    "before": [
+      5.53662109375,
+      12.92529296875,
+      9.37158203125
+    ],
+    "after": [
+      5.7802734375,
+      12.39794921875,
+      9.2841796875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,blocking,blocking-io"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "gears",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.bio",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "298d3b650be9c92b4190872445d421a86d4bcb1a",
+        "subject": "compare the bench scenarios against cats-effect and fs2",
+        "worktree_changes": true,
+        "worktree_changes_hash": "1803bf6b8e58",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:25:23+02:00"
+      },
+      "median": {
+        "pingpong": 8.12,
+        "blocking": 5.93,
+        "blocking-io": 15.08
+      },
+      "samples": {
+        "pingpong": [
+          7.31,
+          8.12,
+          8.03,
+          8.37,
+          8.33
+        ],
+        "blocking": [
+          5.93,
+          6.41,
+          5.91,
+          6.48,
+          5.9
+        ],
+        "blocking-io": [
+          14.44,
+          15.46,
+          15.08,
+          17.06,
+          14.97
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.bio@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "298d3b650be9c92b4190872445d421a86d4bcb1a",
+        "subject": "compare the bench scenarios against cats-effect and fs2",
+        "worktree_changes": true,
+        "worktree_changes_hash": "1803bf6b8e58",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:25:23+02:00"
+      },
+      "median": {
+        "pingpong": 5.2,
+        "blocking": 4.0,
+        "blocking-io": 12.57
+      },
+      "samples": {
+        "pingpong": [
+          5.02,
+          5.49,
+          5.06,
+          5.98,
+          5.2
+        ],
+        "blocking": [
+          3.72,
+          4.0,
+          4.34,
+          3.91,
+          4.15
+        ],
+        "blocking-io": [
+          11.99,
+          12.11,
+          13.32,
+          12.99,
+          12.57
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/cebench.bio@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "298d3b650be9c92b4190872445d421a86d4bcb1a",
+        "subject": "compare the bench scenarios against cats-effect and fs2",
+        "worktree_changes": true,
+        "worktree_changes_hash": "1803bf6b8e58",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:26:23+02:00"
+      },
+      "median": {
+        "pingpong": 23.92,
+        "blocking": 0.07,
+        "blocking-io": 25.89
+      },
+      "samples": {
+        "pingpong": [
+          24.82,
+          23.41,
+          23.74,
+          30.02,
+          23.92
+        ],
+        "blocking": [
+          0.07,
+          0.07,
+          0.08,
+          0.08,
+          0.07
+        ],
+        "blocking-io": [
+          26.02,
+          23.5,
+          23.93,
+          28.43,
+          25.89
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

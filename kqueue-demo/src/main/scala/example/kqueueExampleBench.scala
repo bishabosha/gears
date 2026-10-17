@@ -246,8 +246,8 @@ object KQueueExampleBench {
     }
   }
 
-  private def blocking(count: Int): Unit = withLoop { (kq, events) =>
-    val (readEnd, writeEnd) = KqueueHandles.pipe()
+  /** Starts a worker thread that runs the tasks queued on the returned queue, writing a byte to `writeEnd` after each. */
+  private def blockingWorker(writeEnd: Int): LinkedBlockingQueue[Runnable] = {
     val tasks = new LinkedBlockingQueue[Runnable]()
     val worker = new Thread(
       () => {
@@ -262,23 +262,70 @@ object KQueueExampleBench {
     )
     worker.setDaemon(true)
     worker.start()
+    tasks
+  }
+
+  /** Runs a trivial task on the worker and polls `kq`, which has `readEnd` registered, until the worker signals. */
+  private def runBlocking(
+      kq: Int,
+      events: EventQueue,
+      tasks: LinkedBlockingQueue[Runnable],
+      readEnd: Int,
+      drain: ByteBuffer
+  ): Unit = {
+    tasks.put(() => ())
+    var signalled = false
+    while !signalled do {
+      KqueueLoop.pollEventsForever(kq, events, MaxEvents)
+      drain.clear()
+      signalled = NonBlocking.read(readEnd, drain) > 0
+    }
+  }
+
+  private def blocking(count: Int): Unit = withLoop { (kq, events) =>
+    val (readEnd, writeEnd) = KqueueHandles.pipe()
+    val tasks = blockingWorker(writeEnd)
     register(kq, readEnd, read = true, oneShot = false)
     val zone = Zone.open()
     try {
       val drain = NativeBuffer.allocate(64)(using zone)
       var done = 0
       while done < count do {
-        tasks.put(() => ())
-        var signalled = false
-        while !signalled do {
-          KqueueLoop.pollEventsForever(kq, events, MaxEvents)
-          drain.clear()
-          signalled = NonBlocking.read(readEnd, drain) > 0
-        }
+        runBlocking(kq, events, tasks, readEnd, drain)
         done += 1
       }
     } finally {
       zone.close()
+      KqueueHandles.close(readEnd)
+      KqueueHandles.close(writeEnd)
+    }
+  }
+
+  /** A trivial blocking task on the worker thread and a round trip in turn, on one kqueue. */
+  private def blockingIo(address: Address, count: Int): Unit = withLoop { (kq, events) =>
+    val fd = connect(kq, events, address)
+    val (readEnd, writeEnd) = KqueueHandles.pipe()
+    val tasks = blockingWorker(writeEnd)
+    register(kq, readEnd, read = true, oneShot = false)
+    val zone = Zone.open()
+    try {
+      val drain = NativeBuffer.allocate(64)(using zone)
+      val buf = NativeBuffer.allocate(MessageSize)(using zone)
+      var i = 0
+      while i < count do {
+        runBlocking(kq, events, tasks, readEnd, drain)
+        buf.clear()
+        writeAll(kq, events, fd, buf)
+        buf.clear()
+        while buf.hasRemaining() do {
+          KqueueLoop.pollEventsForever(kq, events, MaxEvents)
+          if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
+        }
+        i += 1
+      }
+    } finally {
+      zone.close()
+      KqueueHandles.close(fd)
       KqueueHandles.close(readEnd)
       KqueueHandles.close(writeEnd)
     }
@@ -392,6 +439,7 @@ object KQueueExampleBench {
           case "connections"       => newConnections(address, count)
           case "pipelined"         => pipelined(address, count)
           case "blocking"          => blocking(count)
+          case "blocking-io"       => blockingIo(address, count)
           case "timers"            => timerStress(count)
         }
         val seconds = (System.nanoTime() - start) / 1e9
