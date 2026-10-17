@@ -13,8 +13,8 @@
  * messages over its own non-blocking Unix socket pair, each side polling without blocking rather than sleeping:
  *
  *   pingpong     retries `read` until the message is there
- *   kqueue       macOS: a kqueue per thread with an edge-triggered read filter, polled with kevent, then `read`, as
- *                gears' reactor does
+ *   kqueue       macOS and FreeBSD: a kqueue per thread with an edge-triggered read filter, polled with kevent,
+ *                then `read`, as gears' reactor does
  *   epoll        Linux: the same with an epoll instance per thread and EPOLLET
  *   uring        Linux: an io_uring per thread (single issuer, task work deferred to the thread's own
  *                io_uring_enter calls); each side submits its write and its next read together, one
@@ -31,7 +31,7 @@
  * does. See "macOS serialises descriptor system calls per process" in asyncio/kqueue/TODO.md.
  */
 #include <fcntl.h>
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/event.h>
 #endif
 #ifdef __linux__
@@ -83,7 +83,7 @@ static void *calls(void *unused) {
 /* One side of a ping-pong pair: its socket, and whatever it polls with. */
 struct side {
   int fd;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
   int kq;
 #endif
 #ifdef __linux__
@@ -95,7 +95,7 @@ struct side {
 
 static void side_open(struct side *s, int fd) {
   s->fd = fd;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
   if (!strcmp(what, "kqueue")) {
     s->kq = kqueue();
     struct kevent change;
@@ -151,7 +151,7 @@ static void uring_await_read(struct side *s) {
 /* Reads one 64-byte message, polling as the mode says until it is there. */
 static void side_read(struct side *s, char *b) {
   while (read(s->fd, b, 64) != 64) {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
     if (!strcmp(what, "kqueue")) {
       struct kevent ev;
       struct timespec zero = {0, 0};
@@ -245,8 +245,8 @@ int main(int argc, char **argv) {
     return 2;
   }
   what = argv[1];
-#ifndef __APPLE__
-  if (!strcmp(what, "kqueue")) return fprintf(stderr, "kqueue is macOS only\n"), 2;
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+  if (!strcmp(what, "kqueue")) return fprintf(stderr, "kqueue is macOS and FreeBSD only\n"), 2;
 #endif
 #ifndef __linux__
   if (!strcmp(what, "epoll") || !strncmp(what, "uring", 5)) return fprintf(stderr, "%s is Linux only\n", what), 2;
