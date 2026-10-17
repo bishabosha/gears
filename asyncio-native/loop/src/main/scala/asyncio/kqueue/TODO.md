@@ -466,15 +466,24 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   Conditional yieldpoints, which poll a global, show what is at stake: 7–14% on the throughput scenarios
   (`kqueue-demo/bench/results/conditional-yieldpoints.json`). Our workaround is only a recommendation: link with
   `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0` when using thread-owned reactors only.
-- **The GC's signal blocking: `pthread_sigmask` instead of `sigprocmask`.**
-  Problem: every collection blocks SIGINT and SIGTERM in every thread, not only the collecting one, and for longer than
-  the collection. `Synchronizer_acquire` and `Synchronizer_release` (`gc/immix` and `gc/commix`, `Synchronizer.c`) call
-  `sigprocmask`, which on macOS applies to every thread of the process, unlike glibc's in practice; and release resumes
-  the stopped threads before unblocking, so they run with the signals blocked for a moment. Found by `kqueuedemo gears
-  migrate`, which saw them blocked after about 1 in 5,000 resumes while collections ran. It also makes the continuation
-  resume's `setjmp` riskier: an exception escaping a resumed continuation longjmps back, restoring the mask saved at
-  the resume, process-wide, so one saved during a collection would leave the signals blocked. Fix: `pthread_sigmask`
-  in both, which also confines the mask to the collecting thread as intended.
+- **The GC's signal blocking: `pthread_sigmask` instead of `sigprocmask` (deadlocks collections).**
+  Problem: on macOS, multithreaded release builds can deadlock in a collection, and debug builds block SIGINT and
+  SIGTERM in every thread for longer than a collection. `Synchronizer_acquire` and `Synchronizer_release` (`gc/immix`
+  and `gc/commix`, `Synchronizer.c`) call `sigprocmask`, which on macOS changes every thread's mask, and does so without
+  synchronising with another thread's return from a signal handler: even with an empty set, it can write back a
+  thread's mask as it was inside the handler. With trap-based yieldpoints, the default in release builds, the set is
+  empty (`Synchronizer_init` fills it only on the conditional-yieldpoint path), so the calls do nothing but race. A
+  thread returning from the safepoint trap handler at that moment keeps SIGBUS blocked; at the next collection its trap
+  fault cannot be delivered, it faults forever on the poll, and the GC waits until `SCALANATIVE_GC_SYNC_TIMEOUT_MS`
+  aborts. Three threads calling `sched_yield` in a loop beside an allocating one hang 4 runs in 5, on 0.5.12 and the
+  nightly; not at all with conditional yieldpoints, nor with the calls redirected to `pthread_sigmask`. A C program
+  racing `sigprocmask(SIG_BLOCK/SIG_UNBLOCK, empty)` against handler returns leaves the handler's signal blocked in 552
+  of 948k returns, and in none with `pthread_sigmask`. Found by `kqueuedemo gears migrate`, which saw SIGINT and SIGTERM
+  blocked after about 1 in 5,000 resumes in a debug build. libc `longjmp` also restores its mask with `sigprocmask`, so
+  the continuation resume's `setjmp`, when an exception escapes, resets every thread's mask. Fix: `pthread_sigmask` in
+  both synchronizers; the draft issue has the analysis and both repros. Until then a pool of reactor threads, all
+  making `@blocking` calls, risks this in release builds; linking with `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0`
+  avoids it, and measured faster here anyway (see the safepoint polls above).
 - **The GC's interior-pointer roots** were fixed upstream ([scala-native#5080](https://github.com/scala-native/scala-native/pull/5080)).
   The problem: release builds crashed on 0.5.12. Waiting for 0.5.13; see the last item below.
 
