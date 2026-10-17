@@ -124,6 +124,14 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
+  @main(doc = "Checks that a suspended future resumes correctly on another thread, as work stealing will make it")
+  def migrate(
+      @arg futures: Int = 4,
+      @arg resumes: Int = 20_000,
+      @arg(doc = "keep each future on the thread it started on, to compare") stay: mainargs.Flag
+  ): Unit = {
+    GearsMigrate.run(futures, resumes, stay.value)
+  }
   @main(doc = "Stress tests to measure reactor changes against; see kqueue-demo/bench/compare.py")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
