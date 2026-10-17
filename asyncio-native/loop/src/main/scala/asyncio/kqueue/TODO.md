@@ -43,6 +43,30 @@ Median microseconds per operation over 5 runs of release-fast builds on the deve
 | mixed, per round trip | 45.6 | 37.0 (−19%) | |
 | mixed-compute | 34.8 | 36.7 (+5%) | |
 
+## Overall
+
+From the first measurement (with the starvation fix) to now, release-fast, median of 5 runs, µs/op, with the
+hand-written reference at each end (`kqueue-demo/bench/results/overall.json`):
+
+| scenario | start | now | raw `KqueueLoop` at start | raw now |
+|---|---|---|---|---|
+| pingpong | 28.6 | 8.1 (−72%) | 6.6 | 5.4 |
+| pingpong-fresh-ops | 28.6 | 8.2 (−71%) | | |
+| pingpong-deadline | 32.0 | 8.2 (−74%) | 8.3 | 6.3 |
+| concurrent | 8.1 | 4.0 (−50%) | 2.2 | 1.5 |
+| pipelined | 9.5 | 0.67 (−93%) | 0.87 | 0.49 |
+| blocking | 16.3 | 6.4 (−61%) | 4.8 | 4.0 |
+| timers | 1.33 | 0.22 (−83%) | 1.15 | 0.66 |
+| fairness, per message | 13.4 | 3.6 (−73%) | | |
+| fairness-tick | 13.4 | 3.6 (−73%) | | |
+| mixed, per round trip | 46.2 | 27.8 (−40%) | | |
+| mixed-compute | 35.0 | 27.8 (−21%) | | |
+
+Gears over the reactor went from 3.4–11× the hand-written loop's time to 1.3–2.6× (pingpong 4.3× → 1.5×, pipelined
+11× → 1.4×, concurrent 3.7× → 2.6×). Pipelined traffic and timers now beat the hand-written loop as it was at the start,
+and the timers scenario beats it as it is now, since user-space timers make no syscalls where the raw loop uses kernel
+timers. The ticker in `fairness` still gets one tick per message, as at the start.
+
 ## What each operation costs now
 
 | Operation | Syscalls | Where |
