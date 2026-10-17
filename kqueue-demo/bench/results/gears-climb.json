@@ -1,0 +1,324 @@
+{
+  "started": "2026-10-17T13:26:17+02:00",
+  "finished": "2026-10-17T13:27:19+02:00",
+  "load_average": {
+    "before": [
+      10.20556640625,
+      8.3818359375,
+      6.4921875
+    ],
+    "after": [
+      6.29150390625,
+      7.63037109375,
+      6.341796875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.base",
+      "benchmark": "gears",
+      "build": {
+        "commit": "6db7e97bccbdda6eca77b39a9c374170dd3120ff",
+        "subject": "know when a descriptor has drained from kqueue's counts, saving the server's second accept",
+        "worktree_changes": true,
+        "worktree_changes_hash": "de029cbaf1bc",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T12:44:43+02:00"
+      },
+      "median": {
+        "pingpong": 7.87,
+        "pingpong-fresh-ops": 8.0,
+        "pingpong-deadline": 7.92,
+        "concurrent": 3.69,
+        "connections": 40.57,
+        "pipelined": 0.67,
+        "blocking": 7.34,
+        "timers": 0.21,
+        "fairness-tick": 3.45,
+        "fairness": 3.45,
+        "mixed-compute": 26.91,
+        "mixed": 26.93
+      },
+      "samples": {
+        "pingpong": [
+          7.85,
+          7.9,
+          8.12,
+          7.87,
+          7.82
+        ],
+        "pingpong-fresh-ops": [
+          8.0,
+          7.96,
+          8.3,
+          8.0,
+          7.97
+        ],
+        "pingpong-deadline": [
+          7.95,
+          7.89,
+          7.92,
+          7.93,
+          7.87
+        ],
+        "concurrent": [
+          3.7,
+          3.71,
+          3.63,
+          3.69,
+          3.6
+        ],
+        "connections": [
+          40.84,
+          40.57,
+          40.28,
+          40.41,
+          41.99
+        ],
+        "pipelined": [
+          0.67,
+          0.67,
+          0.69,
+          0.67,
+          0.66
+        ],
+        "blocking": [
+          7.43,
+          7.28,
+          7.34,
+          7.45,
+          6.06
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.52,
+          3.45,
+          3.38,
+          3.64,
+          3.32
+        ],
+        "fairness": [
+          3.53,
+          3.45,
+          3.38,
+          3.64,
+          3.32
+        ],
+        "mixed-compute": [
+          27.04,
+          26.82,
+          26.91,
+          27.01,
+          26.45
+        ],
+        "mixed": [
+          27.06,
+          26.83,
+          26.93,
+          27.01,
+          26.46
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.single-member",
+      "benchmark": "gears",
+      "build": {
+        "commit": "1d12a0134faeb00bfa67a6f6c4a1e2dfa0378640",
+        "subject": "keep the op waiter's state in a plain field, used on the reactor thread only",
+        "worktree_changes": true,
+        "worktree_changes_hash": "934122ab3d2f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T13:24:55+02:00"
+      },
+      "median": {
+        "pingpong": 7.72,
+        "pingpong-fresh-ops": 7.75,
+        "pingpong-deadline": 7.73,
+        "concurrent": 3.2,
+        "connections": 40.55,
+        "pipelined": 0.7,
+        "blocking": 7.18,
+        "timers": 0.21,
+        "fairness-tick": 2.94,
+        "fairness": 2.94,
+        "mixed-compute": 26.55,
+        "mixed": 26.56
+      },
+      "samples": {
+        "pingpong": [
+          7.77,
+          7.71,
+          8.0,
+          7.72,
+          7.65
+        ],
+        "pingpong-fresh-ops": [
+          7.75,
+          7.72,
+          7.87,
+          7.88,
+          7.69
+        ],
+        "pingpong-deadline": [
+          7.76,
+          7.73,
+          7.98,
+          7.72,
+          7.66
+        ],
+        "concurrent": [
+          3.2,
+          3.2,
+          3.2,
+          3.07,
+          3.16
+        ],
+        "connections": [
+          40.55,
+          40.3,
+          39.68,
+          40.96,
+          41.7
+        ],
+        "pipelined": [
+          0.7,
+          0.71,
+          0.7,
+          0.65,
+          0.69
+        ],
+        "blocking": [
+          7.25,
+          7.18,
+          7.48,
+          5.87,
+          5.86
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          2.94,
+          2.96,
+          2.94,
+          3.04,
+          2.89
+        ],
+        "fairness": [
+          2.94,
+          2.96,
+          2.94,
+          3.04,
+          2.89
+        ],
+        "mixed-compute": [
+          26.78,
+          26.54,
+          26.55,
+          26.8,
+          26.25
+        ],
+        "mixed": [
+          26.8,
+          26.55,
+          26.56,
+          26.82,
+          26.26
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.single-member@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "1d12a0134faeb00bfa67a6f6c4a1e2dfa0378640",
+        "subject": "keep the op waiter's state in a plain field, used on the reactor thread only",
+        "worktree_changes": true,
+        "worktree_changes_hash": "934122ab3d2f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T13:24:55+02:00"
+      },
+      "median": {
+        "pingpong": 6.58,
+        "pingpong-deadline": 7.71,
+        "concurrent": 1.15,
+        "connections": 19.36,
+        "pipelined": 0.51,
+        "blocking": 5.12,
+        "timers": 0.63
+      },
+      "samples": {
+        "pingpong": [
+          6.79,
+          6.88,
+          6.25,
+          6.58,
+          5.0
+        ],
+        "pingpong-deadline": [
+          7.78,
+          8.05,
+          7.59,
+          7.71,
+          6.01
+        ],
+        "concurrent": [
+          1.15,
+          1.15,
+          1.15,
+          1.21,
+          1.15
+        ],
+        "connections": [
+          18.69,
+          19.36,
+          18.66,
+          19.88,
+          19.41
+        ],
+        "pipelined": [
+          0.54,
+          0.49,
+          0.49,
+          0.52,
+          0.51
+        ],
+        "blocking": [
+          5.12,
+          7.13,
+          6.41,
+          3.96,
+          3.97
+        ],
+        "timers": [
+          0.64,
+          0.64,
+          0.63,
+          0.63,
+          0.63
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
