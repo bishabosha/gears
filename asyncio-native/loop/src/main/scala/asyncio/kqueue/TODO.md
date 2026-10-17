@@ -412,6 +412,30 @@ step is measured against the one before, as above, with `connections` as well.
   `turns-combined-mixed-check.json`). The ticker's cost is the trade the turn budget makes: the futures beside a busy
   one get as many turns as before, each a little further apart.
 
+## A thread-pooled scheduler
+
+Planned: a pool of worker threads, each owning a reactor and running futures as `ReactorScheduler` does now, which
+steal runnable tasks from one another. A task's next op goes to the reactor of whichever worker runs it, rather than a
+reactor it is pinned to, so a moved task's descriptors follow it; pinning stays for what cannot move, such as
+io_uring's ring-bound ops. Stealing lives in the scheduler, above the `Reactor` interface, the same for every backend.
+Whether moving tasks that are doing I/O costs more than keeping them where they are is to be measured, with a policy
+switch: steal any task, steal only tasks not resumed by I/O, or those too once a worker's backlog persists.
+
+1. [x] **A task resumed on another thread.** `kqueuedemo gears migrate` hands every resume to the other of two threads
+   and checks, after each: the locals of the frames the resume restored, an exception thrown after the move and caught
+   in one of those frames, one that ends the future, a `@blocking` call and an allocation, and the new thread's own
+   alternate signal stack and mask. No failures in 4 million moved resumes in a release-fast build, nor in debug. The
+   one thing it found is Scala Native's GC blocking signals process-wide (see the proposed Scala Native changes), which
+   happens whether tasks move or not; the check ignores those two signals.
+2. [ ] A local run queue that other workers can steal from, with one worker: no regression expected.
+3. [ ] Ops built by the backend rather than one reactor, and `perform(op)` on the current worker's reactor, still with
+   one worker.
+4. [ ] Descriptors shared between kqueue reactors: an owner and a generation per descriptor, readiness reset on a move,
+   and the old reactor dropping its filter when it next fires.
+5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
+   futures share plain variables, which need to become atomic.
+6. [ ] Compare the policies: balanced, skewed, I/O beside compute, and churning connections, with moves counted.
+
 ## Proposed changes to Scala Native
 
 Costs found while profiling that only Scala Native can remove, all on macOS arm64. The `scala-native-setjmp-issue`
@@ -442,6 +466,15 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   Conditional yieldpoints, which poll a global, show what is at stake: 7–14% on the throughput scenarios
   (`kqueue-demo/bench/results/conditional-yieldpoints.json`). Our workaround is only a recommendation: link with
   `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0` when using thread-owned reactors only.
+- **The GC's signal blocking: `pthread_sigmask` instead of `sigprocmask`.**
+  Problem: every collection blocks SIGINT and SIGTERM in every thread, not only the collecting one, and for longer than
+  the collection. `Synchronizer_acquire` and `Synchronizer_release` (`gc/immix` and `gc/commix`, `Synchronizer.c`) call
+  `sigprocmask`, which on macOS applies to every thread of the process, unlike glibc's in practice; and release resumes
+  the stopped threads before unblocking, so they run with the signals blocked for a moment. Found by `kqueuedemo gears
+  migrate`, which saw them blocked after about 1 in 5,000 resumes while collections ran. It also makes the continuation
+  resume's `setjmp` riskier: an exception escaping a resumed continuation longjmps back, restoring the mask saved at
+  the resume, process-wide, so one saved during a collection would leave the signals blocked. Fix: `pthread_sigmask`
+  in both, which also confines the mask to the collecting thread as intended.
 - **The GC's interior-pointer roots** were fixed upstream ([scala-native#5080](https://github.com/scala-native/scala-native/pull/5080)).
   The problem: release builds crashed on 0.5.12. Waiting for 0.5.13; see the last item below.
 
