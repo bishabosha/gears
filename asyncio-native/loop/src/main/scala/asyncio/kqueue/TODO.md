@@ -371,6 +371,17 @@ thread and every op suspends. Each step is measured against the one before (rele
   `Option` instead of passing a closure to `getOrElse`. `concurrent` 3.32 → 3.28 µs (−1.2%), `fairness` −3%, the rest
   within 3% either way (`kqueue-demo/bench/results/gears-single-member.json`). Marginal, but it removes two allocations
   per op.
+- Together, against every scenario (release-fast, median of 5 runs): `concurrent` 3.69 → 3.20 µs (−13%; −13.1% again
+  over 7 runs), `fairness` −15%, ping-pong −2 to −3%, `blocking` −2%, `mixed` −1%, `connections` and `timers` unchanged,
+  and `pipelined` +4.5%, which 7 runs put at +1.5%, one step of the benchmark's resolution
+  (`kqueue-demo/bench/results/gears-climb.json`).
+- What is left per suspension is mostly Scala Native's: about 8 allocations in `Continuations.suspend` (the
+  `Continuation`, its `ArrayBuffer` of stack fragments and the fragments, closures and `Try`s), the signal-state system
+  calls of each resume, and thread-local lookups, against about 3 allocations in gears (the listener, the
+  `NativeContinuation` wrapper and the suspend closure). Gears' own remaining cost is small: `perform` linking its
+  waiter into the caller's group and out again takes four uncontended monitors per op, worth at most about 2% by the
+  profile. Doing fewer suspensions would gain more, but taking the fast path for writes under load showed what that
+  costs in fairness (see the fast path, under profiling findings).
 
 ## Proposed changes to Scala Native
 
