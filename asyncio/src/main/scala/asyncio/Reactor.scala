@@ -30,16 +30,19 @@ trait Completion[-C] {
   */
 trait Reactor extends AutoCloseable {
 
-  /** Something submitted to this reactor that later completes. The type belongs to the reactor value, so an op built by
-    * one reactor cannot be submitted to another: given `a, b: Reactor`, `a.Op` and `b.Op` are different types.
+  /** Something submitted to this reactor that later completes. The reactors one `Backend` opens share it, so an op
+    * built by the backend may go to any of them (see `Backend`); otherwise the type belongs to the reactor value: given
+    * `a, b: Reactor`, `a.Op` and `b.Op` are different types.
     */
   type Op
 
-  /** Builds this reactor's ops. Building an op does not touch the reactor, so `ops` may be used from any thread. */
+  /** Builds this reactor's ops, as its backend's `ops` does. Building an op does not touch the reactor, so `ops` may be
+    * used from any thread.
+    */
   def ops: Ops[Op]
 
-  /** Opens, uses without waiting, and closes this reactor's handles. It does not touch the reactor either, so it may be
-    * used from any thread.
+  /** Opens, uses without waiting, and closes this reactor's handles, as its backend's `handles` does. It does not touch
+    * the reactor either, so it may be used from any thread.
     */
   def handles: Handles
 
@@ -50,13 +53,10 @@ trait Reactor extends AutoCloseable {
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
-  /** The caller's own data for `op`, kept across submissions and never read by the reactor, like kqueue's `udata` or
-    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
-    * again allocates nothing. Null until set. On the reactor's thread only.
-    */
+  /** `op`'s attachment, as its backend's `attachment` returns it. */
   def attachment(op: Op): AnyRef | Null
 
-  /** Sets `op`'s attachment (see `attachment`). */
+  /** Sets `op`'s attachment, as its backend's `attach` does. */
   def attach(op: Op, value: AnyRef | Null): Unit
 
   /** Like `submit`, but an op the reactor can finish at once, as it may for an operation that only reports would-block
@@ -100,6 +100,9 @@ trait Reactor extends AutoCloseable {
 
 object Reactor {
 
+  /** A reactor that runs ops of type `O`: one that a backend whose `Op` is `O` opened. */
+  type Of[O] = Reactor { type Op = O }
+
   /** Opens reactors of kind `R`. Code written against the interface asks for one of these instead of naming an
     * implementation, and states what it needs of the reactor through `R`.
     */
@@ -114,6 +117,37 @@ object Reactor {
     try body(reactor)
     finally reactor.close()
   }
+}
+
+/** A kind of reactor, such as kqueue's, and what its reactors share: the ops they run and the handles those ops name.
+  * An op built by `ops` may be submitted to any reactor this backend opens, one submission at a time, so that a task
+  * moving from one reactor's thread to another's can take its ops along: once a submission has completed, failed or
+  * been cancelled on one reactor, a `Repeatable` op may go to another. Ops of another backend are a different type.
+  * Building an op or using a handle touches no reactor, so either may be done from any thread.
+  */
+trait Backend extends Reactor.Factory[Reactor] {
+
+  /** The ops of every reactor this backend opens. */
+  type Op
+
+  /** Builds ops for any of this backend's reactors. */
+  def ops: Ops[Op]
+
+  /** Opens, uses without waiting, and closes the handles this backend's ops name. */
+  def handles: Handles
+
+  /** The caller's own data for `op`, kept across submissions and never read by a reactor, like kqueue's `udata` or
+    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
+    * again allocates nothing. Null until set. Used by one thread at a time: the one submitting the op, which hands it
+    * over, attachment included, when the op moves to another reactor's thread.
+    */
+  def attachment(op: Op): AnyRef | Null
+
+  /** Sets `op`'s attachment (see `attachment`). */
+  def attach(op: Op, value: AnyRef | Null): Unit
+
+  /** Opens a reactor that runs this backend's ops. Close it when done. */
+  def open(): Reactor.Of[Op]
 }
 
 /** The readiness a custom op waits for before it runs. */

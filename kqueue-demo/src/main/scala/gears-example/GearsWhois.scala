@@ -3,9 +3,9 @@ package gearsexample
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
+import asyncio.Backend
 import asyncio.Address
 import asyncio.AddressFamily
-import asyncio.Reactor
 import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
@@ -14,7 +14,7 @@ import ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleWhois`: resolve, connect to port 43, send one query line, print the raw reply. */
 object GearsWhois {
-  def run(host: String, port: Int, query: String)(using Reactor.Factory[Reactor]): Unit = {
+  def run(host: String, port: Int, query: String)(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val buf = NativeBuffer.allocate(8192)
       ReactorFutures.run { r =>
@@ -56,7 +56,7 @@ object GearsWhois {
   }
 
   /** Resolves a host through the reactor's blocker pool and prints every address. */
-  def resolve(host: String)(using Reactor.Factory[Reactor]): Unit = {
+  def resolve(host: String)(using Backend): Unit = {
     ReactorFutures.run { r =>
       val addresses = Slot[List[ResolvedAddress]]()
       perform(r, r.ops.resolve(host, addresses)) // a failed lookup throws

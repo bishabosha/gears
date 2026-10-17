@@ -4,17 +4,17 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
+import asyncio.Backend
 import asyncio.Address
-import asyncio.Reactor
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
 import ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF. */
 object GearsSocket {
-  def run(sock: String)(using Reactor.Factory[Reactor]): Unit = run(Address.Unix(sock))
+  def run(sock: String)(using Backend): Unit = run(Address.Unix(sock))
 
-  def run(address: Address)(using Reactor.Factory[Reactor]): Unit = {
+  def run(address: Address)(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val buf = NativeBuffer.allocate(8192)
       val response = new ByteArrayOutputStream()

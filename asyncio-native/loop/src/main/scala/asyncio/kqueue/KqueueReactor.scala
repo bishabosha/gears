@@ -27,8 +27,8 @@ import asyncio.unsafe.KqueueLoop.Event
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) extends Reactor {
 
-  /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly. Code that only
-    * sees the `Reactor` interface still cannot mix ops between reactors.
+  /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go to
+    * any kqueue reactor in turn (see `KqueueBackend`).
     */
   type Op = KqueueOp
 

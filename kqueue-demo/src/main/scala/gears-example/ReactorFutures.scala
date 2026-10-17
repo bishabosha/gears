@@ -17,6 +17,7 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import asyncio.Backend
 import asyncio.Completion
 import asyncio.Reactor
 
@@ -25,9 +26,10 @@ import asyncio.Reactor
   * and turns of the reactor's loop. So code running under this scheduler submits ops to the reactor directly.
   *
   * Futures inherit their parent's scheduler, so a program started here, and everything it spawns, runs on this one
-  * thread. There is no work stealing or balancing yet.
+  * thread. There is no work stealing or balancing yet. `reactor` is one of `backend`'s, so it runs any op the backend
+  * builds.
   */
-final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extends Scheduler {
+final class ReactorScheduler private[gearsexample] (val backend: Backend, val reactor: Reactor) extends Scheduler {
   private val owner = Thread.currentThread()
 
   // Tasks queued on the reactor thread, almost all of them: resuming a continuation is queued by a completion, which
@@ -140,31 +142,29 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
 /** Gears futures over a thread-owned reactor. */
 object ReactorFutures {
 
-  /** Submits `op`, which must have been built by `r.ops`, and suspends the caller until the reactor finishes with it:
-    * it returns when the op completes, throws its failure, or throws `CancellationException` when it is cancelled. It
-    * must be called on the thread that owns `r`, which is where a program started by `run` executes. To run an op
-    * alongside other work, call this inside a `Future`.
+  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, and
+    * suspends the caller until the reactor finishes with it: it returns when the op completes, throws its failure, or
+    * throws `CancellationException` when it is cancelled. It must be called from a program started by `run` with `b`.
+    * `b` only says what the op is; which reactor runs it depends on where the caller runs, so a repeatable op may go to
+    * a different reactor each time. To run an op alongside other work, call this inside a `Future`.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def perform(r: Reactor, op: r.Op)(using ac: Async): Unit = {
-    // The caller's scheduler, if it is the reactor's, runs everything on the reactor's thread, so the caller is on it
-    // too; asking it saves a thread-local lookup, which on macOS is a call.
-    val scheduler = ac.scheduler match {
-      case own: ReactorScheduler if own.reactor eq r => own
-      case _ => throw new IllegalStateException("Ops must be submitted on the thread that owns the reactor")
-    }
+  def perform(b: Backend, op: b.Op)(using ac: Async): Unit = {
+    val scheduler = schedulerFor(b)
+    val r = scheduler.reactor
     if ac.group.isCancelled then throw new CancellationException()
-    // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here.
-    // A waiter still in use (the op performed twice at once, which the reactor refuses) is left alone.
-    val waiter = r.attachment(op) match {
-      case reused: OpWaiter if !reused.inUse && (reused.scheduler eq scheduler) =>
-        reused.reset()
+    // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
+    // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
+    // reactor refuses) is left alone.
+    val waiter = b.attachment(op) match {
+      case reused: OpWaiter if !reused.inUse =>
+        reused.reset(scheduler)
         reused
       case _ =>
-        val fresh = new OpWaiter(scheduler, r, op)
-        r.attach(op, fresh)
+        val fresh = new OpWaiter(scheduler, op)
+        b.attach(op, fresh)
         fresh
     }
     waiter.inUse = true
@@ -196,6 +196,22 @@ object ReactorFutures {
     } finally waiter.inUse = false
   }
 
+  /** The reactor of the worker running the caller, for submitting `b`'s ops directly with a completion of one's own
+    * instead of performing them. It is only the caller's until the caller next suspends, since a task may resume on
+    * another worker, and an op submitted to it must be cancelled on it. With one worker, as now, it is always the same.
+    */
+  def reactor(b: Backend)(using Async): Reactor.Of[b.Op] =
+    schedulerFor(b).reactor.asInstanceOf[Reactor.Of[b.Op]] // one of `b`'s, as `schedulerFor` checked
+
+  /** The caller's scheduler, which must be a reactor scheduler of `b`'s. Asking the caller's context, rather than the
+    * thread, saves a thread-local lookup, which on macOS is a call.
+    */
+  private def schedulerFor(b: Backend)(using ac: Async): ReactorScheduler { val backend: b.type; val reactor: Reactor.Of[b.Op] } =
+    ac.scheduler match {
+      case own: ReactorScheduler if own.backend eq b => own.asInstanceOf[ReactorScheduler { val backend: b.type; val reactor: Reactor.Of[b.Op] }]
+      case _ => throw new IllegalStateException("Ops must be performed by a program that ReactorFutures.run started")
+    }
+
   /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued, so the futures
     * sharing its thread run first, as a long computation should between slices. Cheaper than awaiting a future spawned
     * to the same end. Throws `CancellationException` if the caller has been cancelled by the time it resumes.
@@ -219,20 +235,25 @@ object ReactorFutures {
 
   /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the
     * caller's cancellation group. It has at most one listener, the suspended caller. Kept as the op's attachment and
-    * reset for each submission, so it, its state and its completion are allocated once per op.
+    * reset for each submission, so it, its state and its completion are allocated once per op. Each submission may be
+    * on a different worker; `scheduler` is the current one's.
     */
-  private final class OpWaiter(val scheduler: ReactorScheduler, reactor: Reactor, op: Any)
-      extends Async.Source[Try[Unit]]
-      with Cancellable {
+  private final class OpWaiter(first: ReactorScheduler, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
 
-    /** Whether a `perform` is using it. On the reactor thread only. */
+    /** Whether a `perform` is using it. On the thread performing the op only. */
     var inUse = false
+
+    /** The scheduler, and so the reactor, of the current submission. Read by `cancel` from any thread. */
+    @volatile private var scheduler = first
 
     // Counts submissions, so that a cancel requested from another thread for one cannot reach the next.
     @volatile private var generation = 0
 
-    /** Readies it for the op's next submission, after the previous one has finished. */
-    def reset(): Unit = {
+    /** Readies it for the op's next submission, on `next`'s reactor, after the previous one has finished. The scheduler
+      * changes before the generation, so a `cancel` that reads the new generation also finds the new scheduler.
+      */
+    def reset(next: ReactorScheduler): Unit = {
+      if scheduler ne next then scheduler = next // usually the same, and a volatile write costs more than a read
       generation += 1
       state = OpWaiter.Empty
     }
@@ -283,13 +304,15 @@ object ReactorFutures {
 
     def dropListener(k: Listener[Try[Unit]]): Unit = if state eq k then state = OpWaiter.Empty
 
-    // Cancellation can come from any thread, so it is carried out on the reactor's own. By then the op may have
-    // finished, and a repeatable op may even have been submitted again, which must not be cancelled.
+    // Cancellation can come from any thread, so it is carried out on the thread of the reactor the op was submitted to.
+    // By then the op may have finished, and a repeatable op may even have been submitted again, there or elsewhere,
+    // which must not be cancelled.
     def cancel(): Unit = {
       val submission = generation
-      scheduler.sync(
+      val target = scheduler
+      target.sync(
         if submission == generation && !state.isInstanceOf[Try[?]] then
-          reactor.cancel(op.asInstanceOf[reactor.Op]) // `op` was built by `reactor`, as `perform` requires
+          target.reactor.cancel(op.asInstanceOf[target.reactor.Op]) // built by its backend, as `perform` requires
       )
     }
   }
@@ -298,18 +321,19 @@ object ReactorFutures {
     private val Empty = new Object
   }
 
-  /** Runs `program` on the calling thread, which becomes the reactor thread: it opens a reactor from the factory,
-    * starts the program as a future under a scheduler bound to this thread, and runs the reactor's loop until the
-    * program finishes. The reactor is closed afterwards, and a failure of the program is rethrown.
+  /** Runs `program` on the calling thread, which becomes the reactor thread: it opens a reactor of `backend`'s, starts
+    * the program as a future under a scheduler bound to this thread, and runs the reactor's loop until the program
+    * finishes. The program builds its ops and uses its handles through the backend it is given, and performs them with
+    * `perform`. The reactor is closed afterwards, and a failure of the program is rethrown.
     */
-  def run(program: Reactor => Async.Spawn ?=> Unit)(using factory: Reactor.Factory[Reactor]): Unit = {
-    val reactor = factory.open()
+  def run(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = {
+    val reactor = backend.open()
     try {
-      val scheduler = new ReactorScheduler(reactor)
+      val scheduler = new ReactorScheduler(backend, reactor)
       given ReactorScheduler = scheduler
       given ReactorSupport.type = ReactorSupport
       Async.blocking {
-        val main = Future(program(reactor)) // queued: it starts with the first drain
+        val main = Future(program(backend)) // queued: it starts with the first drain
         // Set once, by the reactor thread, when the program completes; polling `main` would allocate every turn.
         var finished = false
         main.onComplete(Listener((_, _) => finished = true))

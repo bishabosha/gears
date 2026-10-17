@@ -7,8 +7,8 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
+import asyncio.Backend
 import asyncio.Address
-import asyncio.Reactor
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.text
@@ -21,13 +21,13 @@ object GearsDatagram {
 
   // Client
 
-  def run(sock: String, localSock: String, message: String)(using Reactor.Factory[Reactor]): Unit = {
+  def run(sock: String, localSock: String, message: String)(using Backend): Unit = {
     require(sock != localSock, "The client and server socket paths must be different")
     // Unix datagram clients need their own bound address for the server's reply.
     exchange(Address.Unix(localSock), Address.Unix(sock), message)
   }
 
-  def run(address: Address, message: String)(using Reactor.Factory[Reactor]): Unit = {
+  def run(address: Address, message: String)(using Backend): Unit = {
     require(!address.isInstanceOf[Address.Unix], "Unix datagrams need a local socket path")
     // Connecting an IP datagram socket also assigns it an ephemeral local port.
     exchange(null, address, message)
@@ -37,7 +37,7 @@ object GearsDatagram {
       local: Address | Null,
       remote: Address,
       message: String
-  )(using Reactor.Factory[Reactor]): Unit = {
+  )(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val request = NativeBuffer.of(message.getBytes(StandardCharsets.UTF_8))
       val response = NativeBuffer.allocate(65536)
@@ -70,7 +70,7 @@ object GearsDatagram {
   // Server
 
   /** Echoes each packet to its sender, keeping the packet until the whole echo has gone. */
-  def serve(address: Address)(using Reactor.Factory[Reactor]): Unit = {
+  def serve(address: Address)(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val packet = NativeBuffer.allocate(65536)
       ReactorFutures.run { r =>

@@ -1,16 +1,16 @@
 package gearsexample
 
 import mainargs.{ParserForMethods, arg, main}
+import asyncio.Backend
 import asyncio.Address
-import asyncio.Reactor
-import asyncio.kqueue.KqueueReactor
+import asyncio.kqueue.KqueueBackend
 
 /** The gears mirrors, run as `kqueuedemo gears <command>` with the same commands and flags as the plain demos.
   *
   * This is the edge: the demos only know the `asyncio` interface, and this is the one place that chooses kqueue.
   */
 object Main {
-  given Reactor.Factory[Reactor] = () => KqueueReactor.open()
+  given Backend = KqueueBackend
 
   @main
   def fileRead(@arg fifo: String): Unit = {

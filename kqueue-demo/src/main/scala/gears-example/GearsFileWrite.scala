@@ -3,13 +3,13 @@ package gearsexample
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Reactor
+import asyncio.Backend
 import asyncio.unsafe.NativeBuffer
 import ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {
-  def run(fifo: String, message: String)(using Reactor.Factory[Reactor]): Unit = {
+  def run(fifo: String, message: String)(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
       val buf = NativeBuffer.allocate(math.max(bytes.length, 1))
