@@ -49,6 +49,8 @@ final case class Accept(fd: Int, into: HandleSlot) extends Command {
     if client >= 0 then into.set(client)
     client >= 0
   }
+  override def transferred: Int =
+    1 // one connection, against the pending connections a listening socket's event reports
 }
 
 /** Waits for a non-blocking connect to finish and checks its outcome. Done once connected; throws if it failed. */

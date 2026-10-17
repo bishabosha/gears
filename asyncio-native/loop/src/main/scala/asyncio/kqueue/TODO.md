@@ -212,10 +212,11 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
     and the client from 2 `fcntl` to 1 `ioctl` (`kqueue-demo/bench/results/accept-fewer-syscalls-counts.json`).
     Release-fast, median of 5 runs: `connections` 46.6 → 45.1 µs (−3%), everything else unchanged
     (`kqueue-demo/bench/results/accept-fewer-syscalls.json`).
-  - What remains per connection is mostly elsewhere: the raw loop takes 20.4 µs to gears' 45.1. The server makes a
-    second `accept` per connection, the next accept tried at once and finding none; the client makes two registrations
-    (the connect's one-shot write filter and the first read's edge-triggered filter) and a read tried before the echo
-    arrives; and each side resumes several continuations, about 3.5 signal pairs on the client and 2 on the server.
+  - What remained per connection was mostly elsewhere: the raw loop took 20.4 µs to gears' 45.1. The server made a
+    second `accept` per connection, the next accept tried at once and finding none (item 10 removed it); the client made
+    two registrations (the connect's one-shot write filter and the first read's edge-triggered filter) and a read tried
+    before the echo arrived; and each side resumes several continuations, about 3.5 signal pairs on the client and 2 on
+    the server.
 
 - [x] **8. Poll a few times without blocking before sleeping.**
   Done in `KqueueReactor.runOnce`: before blocking, it polls without blocking up to `spinPolls` times
@@ -249,6 +250,17 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
   `pingpong` 9.4 → 7.8 (−17%), `pingpong-deadline` 9.5 → 7.9 (−17%), `concurrent` 4.4 → 3.9 (−12%), `pipelined` 2.6 →
   2.3 (−12%), `blocking` 6.9 → 6.3 (−8%), `fairness` −6%, `mixed` −4%. Saved as
   `kqueue-demo/bench/results/unblocked-syscalls.json`.
+
+- [x] **10. Know when a descriptor has drained, from kqueue's counts.**
+  Done in `KqueueReactor.settleAfterRead`. A read event reports how much is waiting, bytes or, on a listening socket,
+  pending connections. The slot keeps that count (`Slot.readAvailable`), from the event that delivered a read or that
+  came with no read pending, less what each read or accept takes since (`Command.transferred`, one for `Accept`), and
+  marks the descriptor not ready once it runs out, so the next read waits for an edge instead of trying a call that
+  would block. Anything arriving later triggers the edge-triggered filter again, so nothing is missed. Before, a read
+  with no event to compare against guessed from its own result, and an accept always guessed there might be more.
+  - The server's accept loop made two `accept` calls per connection, the second finding none; now one
+    (`kqueue-demo/bench/results/readable-counts-counts.json`). Release-fast, median of 5 runs: `connections` 47.5 → 45.8
+    µs (−3.5%), the rest unchanged or slightly faster, within 3.5% (`kqueue-demo/bench/results/readable-counts.json`).
 
 ## Profiling findings
 
