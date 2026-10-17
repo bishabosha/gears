@@ -361,6 +361,10 @@ thread and every op suspends. Each step is measured against the one before (rele
   that resumes the suspension. A future's `Unlinked` view of its context is also made once, instead of on every
   `withGroup`. `concurrent` 4.30 → 3.85 µs (−10.5%), `fairness` −11%, the rest −1 to −3%
   (`kqueue-demo/bench/results/gears-unlinked-await.json`).
+- Keep `perform`'s `OpWaiter` state in a plain field: every access is on the reactor thread (completions, the awaiting
+  future, and a cancel, which hops there first), and Scala Native's `AtomicReference` computes a `ClassTag` on every
+  operation, which showed in the profile. `concurrent` 3.95 → 3.85 µs (−2.5%), `fairness` −4.7%, the rest within 3%
+  (`kqueue-demo/bench/results/gears-plain-waiter.json`).
 
 ## Proposed changes to Scala Native
 

@@ -190,13 +190,14 @@ object ReactorFutures {
     /** Readies it for the op's next submission, after the previous one has finished. */
     def reset(): Unit = {
       generation += 1
-      state.set(OpWaiter.Empty)
+      state = OpWaiter.Empty
     }
 
-    // Empty, then either the suspended caller's listener or the outcome, and finally the outcome. Each transition is
-    // one atomic step, so exactly one side delivers the outcome: `finish` to a listener it swaps out, or `onComplete`
-    // to itself when it finds the outcome already there.
-    private val state = new AtomicReference[AnyRef](OpWaiter.Empty)
+    // Empty, then either the suspended caller's listener or the outcome, and finally the outcome, so exactly one side
+    // delivers the outcome: `finish` to a listener it finds, or `onComplete` to itself when it finds the outcome
+    // already there. On the reactor thread only, where completions run, where the caller awaits, and where `cancel`
+    // reads it, so a plain field: Scala Native's `AtomicReference` computes a `ClassTag` on every operation.
+    private var state: AnyRef = OpWaiter.Empty
 
     // Completions are contravariant, so this one fits the op of any reactor.
     val completion: Completion[Any] = new Completion[Any] {
@@ -205,21 +206,24 @@ object ReactorFutures {
       override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
     }
 
-    private def finish(outcome: Try[Unit]): Unit =
-      state.getAndSet(outcome) match {
+    private def finish(outcome: Try[Unit]): Unit = {
+      val previous = state
+      state = outcome
+      previous match {
         case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
         case _                                 => ()
       }
+    }
 
     // gears' `await` calls this first; the default builds a listener and an `Option` to find out.
     override def poll(): Option[Try[Unit]] =
-      state.get() match {
+      state match {
         case outcome: Try[Unit] @unchecked => Some(outcome)
         case _                             => None
       }
 
     def poll(k: Listener[Try[Unit]]): Boolean =
-      state.get() match {
+      state match {
         case outcome: Try[Unit] @unchecked =>
           k.completeNow(outcome, this)
           true
@@ -227,20 +231,20 @@ object ReactorFutures {
       }
 
     def onComplete(k: Listener[Try[Unit]]): Unit =
-      if !state.compareAndSet(OpWaiter.Empty, k) then
-        state.get() match {
-          case outcome: Try[Unit] @unchecked => k.completeNow(outcome, this)
-          case _                             => () // Only the one caller ever waits.
-        }
+      state match {
+        case outcome: Try[Unit] @unchecked => k.completeNow(outcome, this)
+        case OpWaiter.Empty                => state = k
+        case _                             => () // Only the one caller ever waits.
+      }
 
-    def dropListener(k: Listener[Try[Unit]]): Unit = state.compareAndSet(k, OpWaiter.Empty)
+    def dropListener(k: Listener[Try[Unit]]): Unit = if state eq k then state = OpWaiter.Empty
 
     // Cancellation can come from any thread, so it is carried out on the reactor's own. By then the op may have
     // finished, and a repeatable op may even have been submitted again, which must not be cancelled.
     def cancel(): Unit = {
       val submission = generation
       scheduler.sync(
-        if submission == generation && !state.get().isInstanceOf[Try[?]] then
+        if submission == generation && !state.isInstanceOf[Try[?]] then
           reactor.cancel(op.asInstanceOf[reactor.Op]) // `op` was built by `reactor`, as `perform` requires
       )
     }
