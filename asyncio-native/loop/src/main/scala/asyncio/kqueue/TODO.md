@@ -475,7 +475,17 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
    alternate signal stack and mask. No failures in 4 million moved resumes in a release-fast build, nor in debug. The
    one thing it found is Scala Native's GC blocking signals process-wide (see the proposed Scala Native changes), which
    happens whether tasks move or not; the check ignores those two signals.
-2. [ ] A local run queue that other workers can steal from, with one worker: no regression expected.
+2. [x] **A local run queue that other workers can steal from.** `RunQueue`, after Tokio's: a fixed ring of 256 tasks,
+   first in first out for its owner, from which a thief claims about half with one compare-and-swap on the head, which
+   packs two indices so that the owner can go on taking tasks while a thief copies. `ReactorScheduler` uses it in place
+   of its `ArrayDeque`; a task that finds it full goes to the shared queue. `kqueuedemo gears runqueue` checks it: an
+   owner pushing and taking tasks while three thieves steal, every task run exactly once and seeing what the owner wrote
+   before queueing it (5 million tasks, ten release-fast runs, no failures). With one worker it costs little:
+   release-fast, median of 5 runs, the scenarios within noise except `pipelined` +3% and +6.3% over 7 runs (0.64 →
+   0.68 µs), the scenario that queues the most tasks per message; each pop is a compare-and-swap and each push a
+   volatile write, where the `ArrayDeque` had neither (`kqueue-demo/bench/results/run-queue.json`, `run-queue-check.json`).
+   Tokio pays the same. Claiming a drain's tasks with one compare-and-swap would save most of it, but would also keep
+   thieves from them for the whole drain, a trade to measure with the pool.
 3. [ ] Ops built by the backend rather than one reactor, and `perform(op)` on the current worker's reactor, still with
    one worker.
 4. [ ] Descriptors shared between kqueue reactors: an owner and a generation per descriptor, readiness reset on a move,

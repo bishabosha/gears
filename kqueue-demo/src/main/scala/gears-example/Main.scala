@@ -124,6 +124,10 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
+  @main(doc = "Checks the run queue under contention: every task runs once, stolen or not")
+  def runqueue(@arg tasks: Int = 2_000_000, @arg thieves: Int = 3): Unit = {
+    GearsRunQueue.run(tasks, thieves)
+  }
   @main(doc = "Checks that a suspended future resumes correctly on another thread, as work stealing will make it")
   def migrate(
       @arg futures: Int = 4,
