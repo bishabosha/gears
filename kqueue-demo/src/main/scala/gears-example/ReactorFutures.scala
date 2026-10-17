@@ -41,14 +41,31 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   // pending on its reactor, or arming a timer there. `drain` moves them to `local`.
   private val inbox = new ConcurrentLinkedQueue[Runnable]()
 
+  // Under the affine and hybrid policies, tasks resumed by this worker's reactor, which no other worker may take: a
+  // task doing I/O here stays, with its descriptors. On this worker's thread only.
+  private val home = new java.util.ArrayDeque[Runnable]()
+
+  // Whether this worker is in a turn of its reactor, which runs completions: a task queued meanwhile from this thread
+  // is a resume from the reactor, of an op finished there.
+  private var inTurn = false
+
   def isCurrent: Boolean = Thread.currentThread() eq owner
 
-  /** Queues `task` here, on this worker's thread only. A full queue overflows to the pool's shared queue. With more
-    * queued than this worker is about to run, an idle worker is woken to take some.
+  /** Queues `task` here, on this worker's thread only. A resume from this worker's reactor stays here under the affine
+    * and hybrid policies; anything else goes where other workers may take it, a full queue overflowing to the pool's
+    * shared queue, and with more queued there than this worker is about to run, an idle worker is woken to take some.
     */
   private[gearsexample] def push(task: Runnable): Unit =
-    if !local.push(task) then pool.inject(task, index)
+    if inTurn && pool.policy != TakePolicy.Free then home.add(task)
+    else if !local.push(task) then pool.inject(task, index)
     else if local.size > 1 then pool.offerWork(index)
+
+  /** A turn of this worker's reactor. */
+  private def turn(block: Boolean): Unit = {
+    inTurn = true
+    try reactor.runOnce(block)
+    finally inTurn = false
+  }
 
   /** Runs `body` on this worker's thread: now if called there, or queued and the worker woken otherwise. */
   def sync(body: => Unit): Unit =
@@ -73,7 +90,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   private[gearsexample] var blocked = 0L
 
   /** Whether no task is queued here. On this worker's thread only. */
-  private[gearsexample] def isIdle: Boolean = local.isEmpty && inbox.isEmpty
+  private[gearsexample] def isIdle: Boolean = local.isEmpty && home.isEmpty && inbox.isEmpty
 
   /** Runs `body` after `delay`, using a timer of this worker's reactor; the returned cancel may be called anywhere. */
   private[gearsexample] def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
@@ -115,6 +132,18 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
         runTask(task)
         task = null
       } else task = if fromOutside > 0 then pool.injected() else null
+    }
+    // Under the hybrid policy, a backlog of resumes here is shared: half of it goes where idle workers may take it.
+    if pool.policy == TakePolicy.Hybrid && home.size > ReactorWorker.HybridBacklog then {
+      var shared = home.size / 2
+      while shared > 0 && local.push(home.poll()) do shared -= 1
+      pool.offerWork(index)
+    }
+    // Resumes from this worker's reactor first, then the rest.
+    var resumes = home.size
+    while resumes > 0 do {
+      runTask(home.poll())
+      resumes -= 1
     }
     var remaining = local.size
     while remaining > 0 do {
@@ -167,17 +196,17 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
       while !pool.stopped do {
         drain()
         if !pool.stopped then
-          if !isIdle || takeWork() then reactor.runOnce(block = false)
+          if !isIdle || takeWork() then turn(block = false)
           else {
             // About to block: say so first, then look again, so that a worker queueing work meanwhile either sees this
             // one idle and wakes it, or has its work seen here.
             pool.markIdle(index)
             if !isIdle || pool.hasWorkFor(this) then {
               pool.unmarkIdle(index)
-              reactor.runOnce(block = false)
+              turn(block = false)
             } else {
               blocked += 1
-              reactor.runOnce(block = true)
+              turn(block = true)
               pool.unmarkIdle(index)
             }
           }
@@ -196,6 +225,24 @@ object ReactorWorker {
 
   /** How many tasks from outside the pool a worker takes into each round, at most. */
   inline val InjectedPerDrain = 32
+
+  /** Under the hybrid policy, how many resumes a worker keeps to itself before sharing half of them. */
+  inline val HybridBacklog = 16
+}
+
+/** Which of a worker's tasks other workers may take when they run out of work. */
+enum TakePolicy {
+
+  /** Any queued task. */
+  case Free
+
+  /** Only tasks that are not resumes from the worker's own reactor, such as new futures and yields: a task doing I/O
+    * stays on the worker whose reactor has its descriptors.
+    */
+  case Affine
+
+  /** As `Affine`, except that a worker with a backlog of resumes shares half of it. */
+  case Hybrid
 }
 
 /** The thread of a pool's worker other than the first, which runs on the thread that started the pool. It holds its
@@ -224,7 +271,8 @@ private[gearsexample] final class ReactorWorkerThread(
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
   */
-final class ReactorPool private[gearsexample] (val backend: Backend, size: Int) extends Scheduler {
+final class ReactorPool private[gearsexample] (val backend: Backend, size: Int, val policy: TakePolicy)
+    extends Scheduler {
   require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
 
   /** The workers, by index; filled in as each starts on its own thread. */
@@ -536,10 +584,13 @@ object ReactorFutures {
   /** Runs `program` on a pool of `workers` workers (see `ReactorPool`), each with a reactor of `backend`'s: the calling
     * thread becomes the first, and the others get threads of their own. The program starts as a future, builds its ops
     * and uses its handles through the backend it is given, and performs them with `perform`; the workers run until it
-    * finishes. Each reactor is closed afterwards, on its own thread, and a failure of the program is rethrown.
+    * finishes. `policy` says which tasks a worker out of work may take from another. Each reactor is closed afterwards,
+    * on its own thread, and a failure of the program is rethrown.
     */
-  def run(workers: Int)(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = {
-    val pool = new ReactorPool(backend, workers)
+  def run(workers: Int, policy: TakePolicy = TakePolicy.Free)(program: Backend => Async.Spawn ?=> Unit)(using
+      backend: Backend
+  ): Unit = {
+    val pool = new ReactorPool(backend, workers, policy)
     // Each worker opens its reactor on its own thread, where the reactor hears of descriptors closed (see
     // `DescriptorHooks`).
     pool.workers(0) = new ReactorWorker(pool, 0, backend.open())

@@ -155,12 +155,16 @@ object Main {
       @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: mainargs.Flag,
       @arg port: Int = 19876,
-      @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1
+      @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
+      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "free"
   ): Unit = {
     val address =
       if tcp.value then Address.IPv4("127.0.0.1", port)
       else Address.Unix(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")
-    GearsBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address, workers)
+    val takePolicy = TakePolicy.values
+      .find(_.toString.equalsIgnoreCase(policy))
+      .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
+    GearsBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address, workers, takePolicy)
   }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)
