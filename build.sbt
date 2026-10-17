@@ -99,6 +99,21 @@ lazy val kqueueDemo =
     )
     .dependsOn(nativeAsyncioLoop, root.native)
 
+// The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py
+lazy val ceBench =
+  (project in file("kqueue-demo/ce-bench"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      Compile / mainClass := Some("cebench.CeBench"),
+      libraryDependencies ++= Seq(
+        "org.typelevel" %% "cats-effect" % "3.7.1",
+        "co.fs2" %% "fs2-io" % "3.14.0",
+        "com.lihaoyi" %% "mainargs" % "0.7.8"
+      ),
+      nativeConfig ~= { _.withMultithreading(true) }
+    )
+
 // JVM tests that drive the linked kqueueDemo executable as a subprocess (macOS only)
 lazy val kqueueDemoTests =
   (project in file("kqueue-demo/tests"))
