@@ -614,27 +614,163 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      benches as threads of one process run at 15.5 µs a round trip with 39.5 s in the kernel, whereas as four processes
      they run at 3.4–3.9 µs: one process tops out at about 260,000 round trips a second however its threads share the
      work, below one worker alone (470,000), and separate processes reach about 1.1 million. Plain C shows the same,
-     so it is neither gears nor Scala Native: per call, on threads of one process against separate processes (µs,
-     Darwin 27.0, 10 cores):
+     so it is neither gears nor Scala Native: `kqueue-demo/bench/descriptor-contention.c`, each thread or process on
+     descriptors of its own that nothing else touches, µs per call (macOS 27.0.1, `xnu-13432.1.9`, M1 Pro, 10
+     cores):
 
-     | call | 1 | 4 threads | 8 threads | 8 processes |
-     |---|---|---|---|---|
-     | `getppid`, no descriptor | 0.17 | 0.17 | 0.17 | 0.14 |
-     | `fstat` of its own descriptor | 0.23 | 2.06 | 6.88 | 0.27 |
-     | 1-byte `write` and `read` on its own socket pair | 0.61 | 4.20 | 14.0 | 0.66 |
+     | call | 1 | 2 threads | 4 threads | 8 threads | 2 processes | 4 processes | 8 processes |
+     |---|---|---|---|---|---|---|---|
+     | `getppid`, no descriptor | 0.16 | 0.13 | 0.18 | 0.25 | 0.13 | 0.13 | 0.14 |
+     | `fstat` of its own descriptor | 0.23 | 0.51 | 2.69 | 6.51 | 0.24 | 0.24 | 0.41 |
+     | 1-byte `write` and `read` on its own socket pair | 0.61 | 0.94 | 5.33 | 14.8 | 0.62 | 0.64 | 0.81 |
 
-     Non-blocking 64-byte ping-pong over socket pairs, busy-polling: 504k, 277k and 183k round trips a second in
-     total on 1, 2 and 4 pairs of threads, against 544k, 790k and 1.11M as processes. Every call naming a descriptor
-     contends on something per process, presumably the descriptor table's lock, `kevent` included, since it names
-     the kqueue. So on macOS, a pool of reactors in one process cannot scale I/O beyond about one busy thread, and
-     each extra thread making descriptor calls slows all the others: a worker spinning on `kevent` with nothing to do
-     slows the busy ones, and is itself slowed by them, which may be the lone worker's slow polls (step 5). Cats-effect
-     is under the same limit.
-     - What this changes: on macOS, the pool helps computation, as in `mixed`, and not I/O. Fewer descriptor calls
-       per op (registrations batched into one `kevent`, no wasted `read`) are worth more than before, since each saves
-       the others' time too; so are fewer threads making them, such as idle workers blocking at once rather than
-       spinning, or I/O on fewer workers than compute. Whether the pool scales I/O needs measuring on Linux, whose
-       descriptor lookups take no lock, and io_uring's registered descriptors need no lookup at all.
+     Non-blocking 64-byte ping-pong over socket pairs, busy-polling: 510k, 297k and 185k round trips a second in all
+     on 1, 2 and 4 pairs of threads, against 510k, 835k and 1.36M as processes. The calls do not just queue: 8
+     threads make 1.2 million `fstat`s a second between them, where one thread alone makes 4.3 million.
+   - **Why: one lock per process, taken twice by every call on a descriptor.** In XNU's source (the latest
+     published, `xnu-12377`, macOS 26; the running `xnu-13432` is not published yet, but behaves the same):
+     - `fp_lookup` and `fp_get_ftype` (`bsd/kern/kern_descrip.c`), which turn a descriptor into its file and take a
+       reference to it, hold `proc_fdlock_spin(p)`, which is `lck_mtx_lock_spin(&p->p_fd.fd_lock)`: one mutex per
+       process over the whole descriptor table. `fp_drop`, which gives the reference back when the call ends, takes
+       it again.
+     - `read` and `write` go through `preparefileread` and its write counterpart (`bsd/kern/sys_generic.c`), which
+       take that lock and call `fp_lookup` under it; `kevent` finds its kqueue with `kevent_get_kqfile`, which calls
+       `fp_get_ftype` (`bsd/kern/kern_event.c`), and registering a filter looks up its descriptor with `fp_lookup`
+       too. So a round trip's `write`, `read` and `kevent` take the same lock six times, more with registrations.
+     - Nothing in that code finds a file without the lock, and there is no sysctl or flag for it. Linux finds files
+       without a lock shared by the process (RCU over the descriptor table, and a cheaper path still while a process
+       has one thread), and FreeBSD with `fget_unlocked`, so a pool there would not meet this.
+     - Kqueues without a descriptor, the workloops of `kevent_id` that libdispatch uses, are looked up under another
+       lock, `fd_kqhashlock`, also one per process, so they would only take `kevent`'s own lookup off `fd_lock`, not
+       those of `read` and `write`; and they are a private interface, made for libdispatch's threads. Not pursued.
+     - Searching found no current account of this for macOS; older notes say `fp_lookup` takes `proc_fdlock`, and
+       there are anecdotal reports of multithreaded socket I/O on macOS behaving badly. The source and these
+       measurements are the evidence.
+   - **A second per-process lock: setting the signal mask.** `sigprocmask` that sets a mask (`kern_sig.c`:
+     `block_procsigmask`, `unblock_procsigmask`, `set_procsigmask`) takes `proc_lock(p)` and rewrites the mask of
+     every thread in the process, not only the caller's; reading the mask takes no lock. libc's `longjmp` sets the
+     mask it saved, so each `setjmp`/`longjmp` pair contends on that lock, and every continuation resume in Scala
+     Native makes one (the first proposed Scala Native change below): about 1.9 per round trip in `concurrent`, as
+     many as its descriptor calls. This is also why the masks seen in step 1 changed on threads that had not touched
+     them. `descriptor-contention.c`, µs per call:
+
+     | call | 1 | 2 threads | 4 threads | 8 threads | 8 processes |
+     |---|---|---|---|---|---|
+     | `sigprocmask`, reading the mask | 0.16 | 0.17 | 0.17 | 0.29 | 0.16 |
+     | `sigprocmask(SIG_SETMASK)`, to the same mask | 0.16 | 0.27 | 1.63 | 7.53 | 0.22 |
+     | `setjmp` then `longjmp` | 0.59 | 0.78 | 1.54 | 7.17 | 0.65 |
+     | `_setjmp` then `_longjmp` | 0.022 | 0.021 | 0.024 | 0.024 | 0.029 |
+
+   - **Done: `setjmp` and `longjmp` overridden in the demo's binary.**
+     `kqueue-demo/src/main/resources/scala-native/setjmp_override.S` defines `setjmp` and `longjmp` as branches to
+     `_setjmp` and `_longjmp`; references within the binary bind to them before libc's, so Scala Native's
+     continuation resume, its exceptions and the GC's register capture all skip the mask and the alternate stack.
+     This is the workaround that the first proposed Scala Native change said we did not have. Release-fast, median of
+     5 runs, µs/op, affine, without → with it (`kqueue-demo/bench/results/pool-setjmp-override.json`):
+
+     | scenario | 1 worker | 2 workers | 4 workers |
+     |---|---|---|---|
+     | pingpong | 7.39 → 6.72 (−9%) | 7.44 → 6.79 (−9%) | 7.37 → 6.77 (−8%) |
+     | concurrent | 2.15 → 1.84 (−14%) | 2.32 → 2.10 (−9%) | 3.73 → 3.75 |
+     | connections | 23.5 → 22.3 (−5%) | 24.2 → 22.7 (−6%) | 24.1 → 22.9 (−5%) |
+     | pipelined | 0.67 → 0.69 | 0.65 → 0.63 | 0.67 → 0.62 (−7%) |
+     | blocking | 5.58 → 5.09 (−9%) | 6.20 → 5.40 (−13%) | 6.24 → 5.47 (−12%) |
+     | blocking-io | 14.1 → 13.0 (−8%) | 14.1 → 13.0 (−8%) | 14.0 → 13.1 (−7%) |
+     | fairness (tick) | 1.72 → 1.38 (3.43 → 2.75) | 1.73 → 1.41 (3.46 → 2.81) | 1.75 → 1.47 (3.51 → 2.95) |
+     | mixed | 23.2 → 22.7 | 8.21 → 7.65 (−7%) | 8.23 → 7.68 (−7%) |
+
+     `timers` is unchanged. `concurrent` on 4 workers does not move, being held by the descriptor lock. The pool's
+     checks (`migrate`, which throws after moves and checks signal masks, `runqueue`, `share`) and
+     `kqueueDemoTests/testFull` pass with it. It changes what `setjmp` means for all code in the binary: anything
+     relying on `longjmp` restoring the signal mask would break, which nothing in Scala Native's runtime or the demo
+     does. The fix belongs in Scala Native (`_setjmp` in `delimcc.c` and `RegistersCapture.h`, `_longjmp` in `eh.c`
+     and `eh.cpp`); until then, the override is the workaround.
+   - **Linux does not have either lock.** The same program on Linux 7.0.14 (Docker Desktop's VM on the same M1 Pro,
+     10 virtual CPUs, so virtualised, and the host under load about 7): threads and processes cost the same in every
+     mode. µs per call, 1 → 8 threads: `fstat` 0.21 → 0.25 (macOS 0.23 → 6.5), `write` and `read` 0.73 → 0.90,
+     setting the signal mask 0.16 → 0.17; `setjmp` and `longjmp` 0.043, the same as `_setjmp`, since glibc's leave
+     the mask alone. Ping-pong over socket pairs, median of 3 runs, µs a round trip and round trips a second in all,
+     on 1, 2 and 4 pairs:
+
+     | mode | 1 pair | 2 pairs, threads | 4 pairs, threads | 2 pairs, processes | 4 pairs, processes |
+     |---|---|---|---|---|---|
+     | busy `read` | 1.77 (563k) | 2.35 (851k) | 2.51 (1.59M) | 2.28 (876k) | 3.28 (1.22M) |
+     | epoll, edge-triggered | 2.48 (404k) | 3.73 (536k) | 4.39 (911k) | 3.53 (566k) | 4.89 (818k) |
+     | io_uring | 2.41 (415k) | 3.14 (637k) | 4.90 (816k) | 3.00 (668k) | 4.34 (921k) |
+     | io_uring, registered descriptors | 2.32 (432k) | 2.92 (685k) | 4.29 (933k) | 2.74 (730k) | 3.96 (1.01M) |
+
+     The time per round trip grows with pairs for processes as much as for threads, so on Linux it is the shared
+     machine (8 threads spinning on 10 virtual CPUs), not a lock. io_uring, submitting each side's write with its
+     next read in one `io_uring_enter` and reaping with deferred task work, is level with epoll, and 5–10% ahead
+     with its descriptors and ring registered. A first version, one `io_uring_enter` per read and per write and
+     spinning on more to reap, was 2–4 µs slower a round trip than epoll; how io_uring is driven matters more than
+     using it.
+   - **On macOS, spinning on `kevent` is costly to the rest of the process.** The same ping-pong with a kqueue per
+     thread, polled without blocking, then `read`, as gears' reactor does but spinning without limit: 5.93 µs a
+     round trip on one pair (busy `read`, 1.87; Linux's epoll, 2.48), 7.86 and 24.6 on 2 and 4 pairs of threads,
+     and even as processes only 7.67 and 18.6, each process's two threads spinning on its one descriptor lock
+     (median of 3 runs, host under load about 7). Gears spins 4 polls and then blocks. Re-running the trial of spin
+     counts (0, 1, 2, 4, 8) with the `setjmp` override on 1 and 2 workers was too noisy to use, the machine's load
+     rising from 3.7 to 13.8 during it (`kqueue-demo/bench/results/spin-polls-retrial.json`): only 0 polls stood
+     out, `connections` 30% slower; to repeat on a quiet machine.
+   - **Nothing else in XNU carries socket I/O without the lock.** From the same source, what a reactor could be built
+     on instead:
+
+     | mechanism | per-process lock | usable by a reactor |
+     |---|---|---|
+     | `read`, `write`, `readv`, `sendmsg` on sockets | `fd_lock`, twice a call | unavoidable for socket data |
+     | `sendmsg_x`, `recvmsg_x` (private) | `fd_lock`, once a call | batch within one socket only, and truly only for connected datagram sockets; on a stream socket they loop over the messages; no help at one message a round trip |
+     | `kevent` on a kqueue | `fd_lock`, to find the kqueue | what the reactor does now |
+     | workloops, `kevent_id` | none for the thread the kernel has bound to the workloop; otherwise a hash lookup under `fd_kqhashlock`, also per process | only that bound thread may poll (others get `EXDEV`); the kernel's workqueue creates and binds such threads, libdispatch's model, through private interfaces |
+     | the workqueue's kqueue, `KEVENT_FLAG_WORKQ` | none, a plain pointer | registration only: polling it returns `EINVAL`, events going to the workqueue's threads |
+     | Mach ports, `mach_msg` | none per task: rights are looked up under SMR (`ipc_right_lookup_read`), with locks per port | carry no socket data; could wake workers, and a kqueue can watch one (`EVFILT_MACHPORT`) |
+     | `os_sync_wait_on_address` (ulock) | none: a global hash with a lock per bucket | waits without a descriptor, but a thread waiting there cannot also wait for I/O |
+     | Skywalk channels | `__channel_sync` finds its channel with `fp_get_ftype`, `fd_lock`, but once per batch of packets | shared-memory rings that could spread the lock over many packets; private, and where the entitlement is checked was not found |
+
+     So socket data always pays the lock, once a call at least, and no call does I/O on more than one socket. What
+     can avoid it is around the I/O: polling, by letting the kernel's workqueue drive bound workloop threads (that is,
+     libdispatch, whose `read` and `write` still pay), and wake-ups between workers. Sources: `bsd/kern/kern_event.c`
+     (`kevent_id`, `kevent_get_kqwq`, `kqworkloop_get_or_create`), `bsd/kern/uipc_syscalls.c`, `osfmk/ipc/ipc_right.c`,
+     `bsd/kern/sys_ulock.c`, `bsd/skywalk/channel/channel_syscalls.c`.
+   - **Waking workers by Mach port gains nothing.** `kqueue-demo/bench/wakeup-contention.c` ping-pongs a wake-up
+     between the two threads of each of N pairs, as threads of one process or a process per pair: by `EVFILT_USER`
+     triggered with `kevent`, as the pool wakes workers now (`user`); by a message to a Mach port that the waiter's
+     kqueue watches (`port`); by `mach_msg` alone, no kqueue (`mach`); and by `os_sync_wait_on_address` (`ulock`);
+     each blocking, or polling (`-poll`). Median of 3 runs, µs a round trip (the load rising from 2.8 to 12 during
+     them; 8 pairs, 16 threads on 10 cores, oversubscribe the polling modes):
+
+     | mode | 1 pair | 2 threads | 4 threads | 8 threads | 2 processes | 4 processes | 8 processes |
+     |---|---|---|---|---|---|---|---|
+     | user | 3.00 | 5.74 | 16.4 | 30.5 | 5.55 | 15.1 | 28.1 |
+     | user-poll | 3.87 | 6.52 | 17.7 | 50.2 | 6.06 | 17.4 | 28.0 |
+     | port | 4.01 | 6.43 | 17.1 | 27.2 | 6.27 | 16.9 | 28.5 |
+     | port-poll | 5.55 | 7.66 | 18.1 | 31.0 | 7.04 | 18.1 | 30.1 |
+     | mach | 3.01 | 6.55 | 15.4 | 27.9 | 5.51 | 16.2 | 27.6 |
+     | mach-poll | 1.32 | 2.41 | 5.28 | 13.8 | 1.95 | 2.61 | 7.45 |
+     | ulock | 2.78 | 5.52 | 14.6 | 27.4 | 5.32 | 14.6 | 27.0 |
+
+     Blocking wake-ups cost the same whatever carries them, and as much between processes as between threads: what
+     limits them is system-wide, presumably the scheduler's wake-up path, not a lock per process. A Mach port watched
+     by the kqueue is slower than `EVFILT_USER` (4.01 against 3.00 µs on one pair), so the pool's wake-ups stay as
+     they are. Only polling tells the mechanisms apart: polling `mach_msg` is three times cheaper than polling
+     `kevent` (1.32 against 3.87 µs on one pair), and the per-process lock shows in polled `kevent` on 8 threads
+     (50.2 against 28.0 µs as processes). But a reactor must poll its kqueue for sockets anyway.
+   - **What this changes.** On macOS, a pool of reactors in one process cannot scale I/O beyond about one busy thread,
+     and each extra thread making descriptor calls slows all the others: a worker spinning on `kevent` with nothing
+     to do slows the busy ones, and is itself slowed by them, which may be the lone worker's slow polls (step 5).
+     Cats-effect is under the same limit. The pool helps computation on macOS, as in `mixed`, not I/O. What would
+     help, in order:
+     - Several processes, each with its own pool, sharing the listening socket, inherited across `fork` or passed
+       over a Unix socket: the only way measured to scale (510k → 1.36M round trips a second on 1 → 4 processes).
+       Futures cannot move between them, so it is sharding, not one pool.
+     - Fewer descriptor calls per op, each now saving two takes of the lock for every thread: registrations batched
+       into one `kevent`, no wasted `read`, `readv` and `writev` where several messages wait. Worth it with one worker
+       too.
+     - Fewer threads making them: I/O on one or two workers and computation on the rest, and idle workers blocking at
+       once rather than spinning on `kevent`.
+     - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
+       which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
+       to build.
      - Left as is: four client workers connecting 512 sockets at once fill the server's listen backlog
        (`kern.ipc.somaxconn`, 128) faster than it accepts, and a Unix socket with a full backlog refuses the
        connection; the bench's `--connections` should stay at or under 128 with more than one worker.
@@ -651,7 +787,10 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   Fix: `_setjmp` in `delimcc.c`, with the matching `_longjmp` in `eh.c` and `eh.cpp`. Measured by patching the
   nightly's `delimcc.c` and `eh.c` in the link output (release-fast, median of 5 runs): `pipelined` −13%,
   `concurrent` −10%, `pingpong-deadline` −11%, `pingpong` −8%, `blocking` −2%
-  (`kqueue-demo/bench/results/patched-setjmp.json`). No workaround on our side.
+  (`kqueue-demo/bench/results/patched-setjmp.json`). It matters more with threads: `longjmp`'s `sigprocmask` takes the
+  process lock and rewrites every thread's mask, so the calls slow each other down (7.2 µs a pair on 8 threads against
+  0.6 on one). Workaround on our side since: overriding `setjmp` and `longjmp` in the binary (see step 6 of the pool),
+  5–20% on most scenarios.
 - **GC register capture on arm64: `_setjmp` or inline assembly instead of `setjmp`.**
   Problem: every `@blocking` extern call costs two extra system calls, so posixlib's `read`, `write` and `kevent` cost
   three each. Around every `@blocking` call the thread's GC state switches, and `RegistersCapture`

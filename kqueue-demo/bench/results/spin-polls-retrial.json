@@ -1,0 +1,845 @@
+{
+  "started": "2026-10-18T00:39:06+02:00",
+  "finished": "2026-10-18T00:41:38+02:00",
+  "load_average": {
+    "before": [
+      3.74609375,
+      7.3154296875,
+      7.11328125
+    ],
+    "after": [
+      13.8291015625,
+      9.46533203125,
+      7.95263671875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,pingpong-deadline,concurrent,pipelined,fairness,mixed,connections"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "4-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin4-1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.33,
+        "pingpong-deadline": 7.93,
+        "concurrent": 2.4,
+        "pipelined": 0.75,
+        "fairness-tick": 4.03,
+        "fairness": 2.01,
+        "mixed-compute": 23.85,
+        "mixed": 23.88,
+        "connections": 22.16
+      },
+      "samples": {
+        "pingpong": [
+          7.18,
+          6.86,
+          7.77,
+          8.74,
+          7.33
+        ],
+        "pingpong-deadline": [
+          7.08,
+          7.22,
+          7.93,
+          9.17,
+          11.73
+        ],
+        "concurrent": [
+          1.85,
+          2.61,
+          2.32,
+          2.9,
+          2.4
+        ],
+        "pipelined": [
+          0.66,
+          0.73,
+          0.75,
+          0.78,
+          0.82
+        ],
+        "fairness-tick": [
+          2.79,
+          2.83,
+          4.06,
+          4.03,
+          4.76
+        ],
+        "fairness": [
+          1.4,
+          1.41,
+          2.03,
+          2.01,
+          2.38
+        ],
+        "mixed-compute": [
+          23.03,
+          22.91,
+          24.44,
+          23.85,
+          25.51
+        ],
+        "mixed": [
+          23.05,
+          22.92,
+          24.5,
+          23.88,
+          25.7
+        ],
+        "connections": [
+          24.84,
+          21.5,
+          22.09,
+          22.16,
+          33.36
+        ]
+      }
+    },
+    {
+      "label": "0-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin0-1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.8,
+        "pingpong-deadline": 7.89,
+        "concurrent": 1.98,
+        "pipelined": 0.65,
+        "fairness-tick": 2.97,
+        "fairness": 1.49,
+        "mixed-compute": 25.19,
+        "mixed": 25.53,
+        "connections": 28.95
+      },
+      "samples": {
+        "pingpong": [
+          7.8,
+          7.12,
+          7.3,
+          7.82,
+          16.39
+        ],
+        "pingpong-deadline": [
+          6.98,
+          7.24,
+          8.31,
+          7.89,
+          11.55
+        ],
+        "concurrent": [
+          1.87,
+          1.86,
+          2.32,
+          1.98,
+          2.61
+        ],
+        "pipelined": [
+          0.65,
+          0.61,
+          0.68,
+          0.66,
+          0.64
+        ],
+        "fairness-tick": [
+          2.81,
+          2.74,
+          3.44,
+          2.97,
+          3.06
+        ],
+        "fairness": [
+          1.4,
+          1.37,
+          1.72,
+          1.49,
+          1.53
+        ],
+        "mixed-compute": [
+          24.02,
+          25.55,
+          25.19,
+          24.89,
+          35.55
+        ],
+        "mixed": [
+          24.15,
+          26.1,
+          25.53,
+          25.12,
+          37.91
+        ],
+        "connections": [
+          28.95,
+          30.45,
+          30.54,
+          22.97,
+          24.05
+        ]
+      }
+    },
+    {
+      "label": "1-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin1-1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.19,
+        "pingpong-deadline": 7.02,
+        "concurrent": 2.0,
+        "pipelined": 0.7,
+        "fairness-tick": 3.01,
+        "fairness": 1.5,
+        "mixed-compute": 24.33,
+        "mixed": 24.39,
+        "connections": 22.54
+      },
+      "samples": {
+        "pingpong": [
+          7.14,
+          7.09,
+          10.17,
+          7.93,
+          7.19
+        ],
+        "pingpong-deadline": [
+          6.92,
+          6.91,
+          9.26,
+          8.23,
+          7.02
+        ],
+        "concurrent": [
+          2.11,
+          1.86,
+          2.15,
+          1.9,
+          2.0
+        ],
+        "pipelined": [
+          0.7,
+          0.7,
+          0.72,
+          0.69,
+          0.7
+        ],
+        "fairness-tick": [
+          3.53,
+          2.98,
+          3.22,
+          2.85,
+          3.01
+        ],
+        "fairness": [
+          1.76,
+          1.49,
+          1.61,
+          1.43,
+          1.5
+        ],
+        "mixed-compute": [
+          24.4,
+          24.05,
+          25.25,
+          24.33,
+          23.93
+        ],
+        "mixed": [
+          24.52,
+          24.09,
+          25.54,
+          24.39,
+          24.04
+        ],
+        "connections": [
+          22.7,
+          22.44,
+          30.13,
+          20.31,
+          22.54
+        ]
+      }
+    },
+    {
+      "label": "2-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin2-1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.16,
+        "pingpong-deadline": 7.34,
+        "concurrent": 2.13,
+        "pipelined": 0.71,
+        "fairness-tick": 3.2,
+        "fairness": 1.6,
+        "mixed-compute": 23.73,
+        "mixed": 23.83,
+        "connections": 22.54
+      },
+      "samples": {
+        "pingpong": [
+          7.16,
+          7.11,
+          9.84,
+          7.26,
+          7.05
+        ],
+        "pingpong-deadline": [
+          6.98,
+          7.34,
+          12.39,
+          8.3,
+          7.0
+        ],
+        "concurrent": [
+          1.92,
+          2.13,
+          3.21,
+          2.59,
+          2.02
+        ],
+        "pipelined": [
+          0.71,
+          0.66,
+          1.04,
+          0.81,
+          0.66
+        ],
+        "fairness-tick": [
+          2.88,
+          3.42,
+          5.26,
+          3.2,
+          3.06
+        ],
+        "fairness": [
+          1.44,
+          1.71,
+          2.63,
+          1.6,
+          1.53
+        ],
+        "mixed-compute": [
+          23.73,
+          22.98,
+          29.91,
+          23.83,
+          22.94
+        ],
+        "mixed": [
+          23.83,
+          22.99,
+          31.13,
+          23.87,
+          22.96
+        ],
+        "connections": [
+          22.47,
+          22.22,
+          49.24,
+          23.9,
+          22.54
+        ]
+      }
+    },
+    {
+      "label": "8-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin8-1",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 6.96,
+        "pingpong-deadline": 7.04,
+        "concurrent": 1.97,
+        "pipelined": 0.69,
+        "fairness-tick": 3.0,
+        "fairness": 1.5,
+        "mixed-compute": 23.52,
+        "mixed": 23.55,
+        "connections": 22.74
+      },
+      "samples": {
+        "pingpong": [
+          6.96,
+          6.78,
+          15.73,
+          7.41,
+          6.84
+        ],
+        "pingpong-deadline": [
+          6.95,
+          6.9,
+          11.85,
+          7.24,
+          7.04
+        ],
+        "concurrent": [
+          1.99,
+          1.91,
+          2.98,
+          1.97,
+          1.82
+        ],
+        "pipelined": [
+          0.67,
+          0.71,
+          0.88,
+          0.69,
+          0.66
+        ],
+        "fairness-tick": [
+          2.9,
+          3.0,
+          4.25,
+          3.1,
+          2.77
+        ],
+        "fairness": [
+          1.45,
+          1.5,
+          2.13,
+          1.55,
+          1.39
+        ],
+        "mixed-compute": [
+          22.93,
+          23.06,
+          30.25,
+          23.66,
+          23.52
+        ],
+        "mixed": [
+          22.94,
+          23.09,
+          31.42,
+          23.68,
+          23.55
+        ],
+        "connections": [
+          21.18,
+          23.61,
+          40.14,
+          19.31,
+          22.74
+        ]
+      }
+    },
+    {
+      "label": "4-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin4-2",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.05,
+        "pingpong-deadline": 7.04,
+        "concurrent": 2.49,
+        "pipelined": 0.69,
+        "fairness-tick": 3.05,
+        "fairness": 1.53,
+        "mixed-compute": 35.73,
+        "mixed": 8.19,
+        "connections": 23.3
+      },
+      "samples": {
+        "pingpong": [
+          6.88,
+          6.95,
+          16.48,
+          9.79,
+          7.05
+        ],
+        "pingpong-deadline": [
+          6.96,
+          6.98,
+          16.66,
+          7.95,
+          7.04
+        ],
+        "concurrent": [
+          2.09,
+          2.49,
+          3.56,
+          2.54,
+          2.17
+        ],
+        "pipelined": [
+          0.64,
+          0.69,
+          0.86,
+          0.67,
+          0.69
+        ],
+        "fairness-tick": [
+          3.01,
+          2.83,
+          3.05,
+          3.11,
+          3.78
+        ],
+        "fairness": [
+          1.5,
+          1.42,
+          1.53,
+          1.56,
+          1.89
+        ],
+        "mixed-compute": [
+          34.53,
+          35.72,
+          35.73,
+          35.79,
+          36.16
+        ],
+        "mixed": [
+          8.19,
+          7.68,
+          8.48,
+          10.6,
+          7.88
+        ],
+        "connections": [
+          23.46,
+          24.93,
+          23.3,
+          23.2,
+          22.61
+        ]
+      }
+    },
+    {
+      "label": "0-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin0-2",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 6.95,
+        "pingpong-deadline": 7.16,
+        "concurrent": 2.16,
+        "pipelined": 0.65,
+        "fairness-tick": 3.11,
+        "fairness": 1.55,
+        "mixed-compute": 34.69,
+        "mixed": 10.93,
+        "connections": 30.58
+      },
+      "samples": {
+        "pingpong": [
+          6.93,
+          6.91,
+          7.99,
+          7.02,
+          6.95
+        ],
+        "pingpong-deadline": [
+          7.14,
+          7.16,
+          9.01,
+          7.08,
+          7.31
+        ],
+        "concurrent": [
+          2.11,
+          2.21,
+          3.22,
+          1.95,
+          2.16
+        ],
+        "pipelined": [
+          0.65,
+          0.62,
+          0.76,
+          0.63,
+          0.69
+        ],
+        "fairness-tick": [
+          2.91,
+          2.89,
+          3.11,
+          3.17,
+          3.19
+        ],
+        "fairness": [
+          1.46,
+          1.45,
+          1.55,
+          1.59,
+          1.59
+        ],
+        "mixed-compute": [
+          33.71,
+          33.63,
+          43.04,
+          34.69,
+          44.16
+        ],
+        "mixed": [
+          10.99,
+          10.93,
+          9.78,
+          11.4,
+          10.36
+        ],
+        "connections": [
+          30.06,
+          30.71,
+          30.11,
+          30.58,
+          31.06
+        ]
+      }
+    },
+    {
+      "label": "1-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin1-2",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.68,
+        "pingpong-deadline": 7.85,
+        "concurrent": 2.78,
+        "pipelined": 0.72,
+        "fairness-tick": 3.55,
+        "fairness": 1.78,
+        "mixed-compute": 36.61,
+        "mixed": 8.55,
+        "connections": 23.02
+      },
+      "samples": {
+        "pingpong": [
+          7.07,
+          8.68,
+          7.97,
+          7.0,
+          7.68
+        ],
+        "pingpong-deadline": [
+          7.04,
+          9.52,
+          7.85,
+          7.04,
+          9.26
+        ],
+        "concurrent": [
+          2.23,
+          3.3,
+          2.78,
+          1.99,
+          3.23
+        ],
+        "pipelined": [
+          0.69,
+          0.8,
+          0.72,
+          0.69,
+          0.84
+        ],
+        "fairness-tick": [
+          2.92,
+          4.9,
+          2.96,
+          3.55,
+          7.75
+        ],
+        "fairness": [
+          1.46,
+          2.45,
+          1.48,
+          1.78,
+          3.89
+        ],
+        "mixed-compute": [
+          35.88,
+          36.61,
+          35.68,
+          37.14,
+          45.81
+        ],
+        "mixed": [
+          7.72,
+          10.25,
+          8.55,
+          8.46,
+          15.86
+        ],
+        "connections": [
+          22.18,
+          24.95,
+          21.3,
+          23.02,
+          26.29
+        ]
+      }
+    },
+    {
+      "label": "2-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin2-2",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.02,
+        "pingpong-deadline": 7.92,
+        "concurrent": 2.76,
+        "pipelined": 0.77,
+        "fairness-tick": 3.99,
+        "fairness": 2.0,
+        "mixed-compute": 37.87,
+        "mixed": 9.77,
+        "connections": 23.24
+      },
+      "samples": {
+        "pingpong": [
+          8.6,
+          8.48,
+          7.54,
+          7.61,
+          8.02
+        ],
+        "pingpong-deadline": [
+          7.07,
+          10.61,
+          7.63,
+          7.92,
+          8.33
+        ],
+        "concurrent": [
+          2.07,
+          4.45,
+          2.76,
+          2.94,
+          2.39
+        ],
+        "pipelined": [
+          0.7,
+          4.1,
+          0.77,
+          0.8,
+          0.7
+        ],
+        "fairness-tick": [
+          3.0,
+          7.08,
+          3.73,
+          3.99,
+          4.33
+        ],
+        "fairness": [
+          1.5,
+          3.54,
+          1.86,
+          2.0,
+          2.17
+        ],
+        "mixed-compute": [
+          35.86,
+          55.99,
+          36.74,
+          37.87,
+          39.12
+        ],
+        "mixed": [
+          7.76,
+          24.03,
+          8.84,
+          9.77,
+          11.62
+        ],
+        "connections": [
+          21.42,
+          28.27,
+          20.92,
+          28.28,
+          23.24
+        ]
+      }
+    },
+    {
+      "label": "8-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/spin8-2",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 8.3,
+        "pingpong-deadline": 8.11,
+        "concurrent": 2.72,
+        "pipelined": 0.7,
+        "fairness-tick": 4.14,
+        "fairness": 2.07,
+        "mixed-compute": 35.9,
+        "mixed": 8.78,
+        "connections": 26.75
+      },
+      "samples": {
+        "pingpong": [
+          7.19,
+          9.74,
+          8.37,
+          8.3,
+          7.49
+        ],
+        "pingpong-deadline": [
+          7.06,
+          10.95,
+          7.77,
+          8.89,
+          8.11
+        ],
+        "concurrent": [
+          2.21,
+          3.28,
+          2.65,
+          2.72,
+          3.07
+        ],
+        "pipelined": [
+          0.64,
+          0.93,
+          0.7,
+          0.7,
+          0.76
+        ],
+        "fairness-tick": [
+          2.94,
+          4.38,
+          3.07,
+          4.14,
+          4.31
+        ],
+        "fairness": [
+          1.47,
+          2.19,
+          1.53,
+          2.07,
+          2.16
+        ],
+        "mixed-compute": [
+          34.11,
+          39.57,
+          36.63,
+          35.9,
+          35.75
+        ],
+        "mixed": [
+          7.72,
+          11.27,
+          8.78,
+          8.48,
+          9.64
+        ],
+        "connections": [
+          21.34,
+          31.22,
+          29.14,
+          21.62,
+          26.75
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
