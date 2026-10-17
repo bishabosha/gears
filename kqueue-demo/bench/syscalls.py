@@ -24,7 +24,7 @@ SYMBOLS = ['kevent', 'read', 'write', '__recvfrom', '__recvmsg', '__sendto', '__
 # Operations at scale 1, and how many to count with (the second run counts twice as many).
 SCENARIOS = {
     'pingpong': (50_000, 100), 'pingpong-fresh-ops': (50_000, 100), 'pingpong-deadline': (50_000, 100),
-    'concurrent': (100_000, 640), 'pipelined': (200_000, 200), 'blocking': (100_000, 100),
+    'concurrent': (100_000, 640), 'connections': (20_000, 100), 'pipelined': (200_000, 200), 'blocking': (100_000, 100),
     'timers': (200_000, 2000), 'fairness': (200_000, 200), 'mixed': (50_000, 100),
 }
 GEARS_ONLY = {'pingpong-fresh-ops', 'fairness', 'mixed'}
