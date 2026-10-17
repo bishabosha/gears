@@ -533,11 +533,46 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      5 runs, the two builds alternating (`kqueue-demo/bench/results/taken-over-not-ready.json`). The bench's scenarios,
      with one reactor, are within noise (within 3.4% over 7 runs where 5 had shown 4%;
      `taken-over-not-ready-bench.json`).
-5. [ ] The pool: a shared queue, parking and waking idle workers, taking tasks from one another, and the policy switch.
-   The benchmarks' futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as
-   a second strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue
-   pass to a spare thread (see `blocking-io`, against cats-effect).
-6. [ ] Compare the policies: balanced, skewed, I/O beside compute, and churning connections, with moves counted.
+5. [x] **The pool.** `ReactorPool` is the scheduler futures see; each `ReactorWorker` is a thread with its own
+   reactor, a `RunQueue` other workers may take from, and an inbox for tasks that must run there (cancels, timers).
+   The thread calling `ReactorFutures.run` is worker 0; worker threads hold their worker, so finding it costs
+   `Thread.currentThread()` and a type test (a `ThreadLocal`, a map lookup on Scala Native, had cost 5–10% in
+   `fairness` and `timers`). Tasks from outside go to a shared queue. A worker out of work takes from the shared
+   queue, then half of another's queue, never its last task; an idle worker is woken only when a queue holds more
+   than one task and none is searching. Ops submitted directly use `ReactorFutures.submit`, whose handle cancels on
+   the right worker. The benchmarks take `--workers` (clients and server alike) and `--policy`; `GEARS_POOL_STATS=1`
+   prints per-worker counters. One worker costs nothing against the single-threaded scheduler (within 2%,
+   `kqueue-demo/bench/results/pool-one-worker.json`). Two fixes found on the way:
+   - A worker runs completions in the turn it blocked in, still marked idle, so offering the work they queued woke
+     itself, a wasted `kevent` per resume, and used up the wake-up meant for another worker. It now skips itself.
+   - The `fairness` ticker, alone on a worker, took 60–100 µs a tick: that worker's four spin polls before blocking
+     each took 10–20 µs, against about 1 µs on busy workers (not GC, thread priority, oversubscription or stale
+     filters, each ruled out; why the kernel call is slower there is not established). A turn with a timer already
+     due now skips the spin polls: ticks on 2 and 4 workers 72 → 20 and 103 → 31 µs (debug), and `timers` 0.19 →
+     0.16 µs on one worker.
+6. [ ] **Compare the policies.** First comparison, release-fast, median of 5 runs, µs/op, workers-policy
+   (`kqueue-demo/bench/results/pool-policies.json`):
+
+   | scenario | 1-free | 1-affine | 2-free | 2-affine | 2-hybrid | 4-free | 4-affine | 4-hybrid |
+   |---|---|---|---|---|---|---|---|---|
+   | pingpong | 7.74 | 7.41 | 7.77 | 7.46 | 7.63 | 7.86 | 7.46 | 7.61 |
+   | concurrent | 2.38 | 2.14 | 2.76 | 2.84 | 2.51 | 5.92 | 3.40 | 3.92 |
+   | connections | 41.9 | 23.5 | 42.5 | 21.1 | 24.2 | 42.7 | 23.1 | 23.6 |
+   | pipelined | 0.70 | 0.69 | 0.87 | 0.71 | 0.69 | 0.77 | 0.69 | 0.66 |
+   | fairness (tick) | 1.71 (3.42) | 1.84 (3.68) | 0.71 (12.0) | 1.85 (3.70) | 1.78 (3.57) | 0.82 (14.4) | 1.85 (3.71) | 1.78 (3.55) |
+   | mixed (compute) | 26.8 (26.8) | 24.0 (24.0) | 9.71 (33.9) | 23.7 (23.7) | 24.2 (24.2) | 8.73 (34.6) | 24.0 (24.0) | 23.6 (23.6) |
+
+   - On one worker, affine is simply better: resumes go to an owner-only `ArrayDeque`, with no compare-and-swap,
+     and run first; `connections` −44%, `concurrent` −10%, `mixed` −10%.
+   - Free spreads work, which pays where work is independent (`mixed` ping-pong 26.8 → 9.7 with the computation on
+     another worker; `fairness` traffic 2.4 times faster), but moves tasks and descriptors constantly (on 2 workers,
+     about half of `concurrent`'s round trips involve a task taken), so `concurrent` gets slower with more workers.
+   - Affine barely spreads: a burst of new futures starts and suspends on its first I/O before an idle worker wakes,
+     and afterwards they are resumes, which stay; and a lone takeable task, like `mixed`'s computation, is never
+     taken, since a worker's last task is left to it. Hybrid spreads a little more.
+   - None yet makes `concurrent` faster on more workers. Next: let a worker's last takeable task be taken when it
+     also has resumes queued (publishing that count), so new work and computations spread under affine; then
+     compare again, with cats-effect on the same worker counts.
 
 ## Proposed changes to Scala Native
 

@@ -1,0 +1,934 @@
+{
+  "started": "2026-10-17T22:51:43+02:00",
+  "finished": "2026-10-17T22:55:03+02:00",
+  "load_average": {
+    "before": [
+      4.15185546875,
+      5.46435546875,
+      5.98388671875
+    ],
+    "after": [
+      4.06494140625,
+      5.02734375,
+      5.69873046875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "1-free",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-1-free",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.74,
+        "pingpong-fresh-ops": 7.74,
+        "pingpong-deadline": 7.79,
+        "concurrent": 2.38,
+        "connections": 41.9,
+        "pipelined": 0.7,
+        "blocking": 5.85,
+        "blocking-io": 14.05,
+        "timers": 0.16,
+        "fairness-tick": 3.42,
+        "fairness": 1.71,
+        "mixed-compute": 26.82,
+        "mixed": 26.84
+      },
+      "samples": {
+        "pingpong": [
+          8.1,
+          7.79,
+          7.71,
+          7.74,
+          7.67
+        ],
+        "pingpong-fresh-ops": [
+          7.59,
+          7.79,
+          7.72,
+          7.74,
+          7.74
+        ],
+        "pingpong-deadline": [
+          7.78,
+          7.76,
+          7.84,
+          7.79,
+          7.8
+        ],
+        "concurrent": [
+          2.38,
+          2.15,
+          2.5,
+          2.25,
+          2.44
+        ],
+        "connections": [
+          40.5,
+          41.73,
+          42.07,
+          41.9,
+          42.08
+        ],
+        "pipelined": [
+          0.71,
+          0.68,
+          0.69,
+          0.73,
+          0.7
+        ],
+        "blocking": [
+          6.21,
+          6.1,
+          5.6,
+          5.61,
+          5.85
+        ],
+        "blocking-io": [
+          14.64,
+          13.99,
+          14.02,
+          14.16,
+          14.05
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.44,
+          3.35,
+          3.42,
+          3.52,
+          3.42
+        ],
+        "fairness": [
+          1.72,
+          1.68,
+          1.71,
+          1.76,
+          1.71
+        ],
+        "mixed-compute": [
+          27.19,
+          26.74,
+          26.82,
+          26.81,
+          26.82
+        ],
+        "mixed": [
+          27.27,
+          26.75,
+          26.84,
+          26.82,
+          26.85
+        ]
+      }
+    },
+    {
+      "label": "1-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-1-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.41,
+        "pingpong-fresh-ops": 7.38,
+        "pingpong-deadline": 7.53,
+        "concurrent": 2.14,
+        "connections": 23.49,
+        "pipelined": 0.69,
+        "blocking": 5.87,
+        "blocking-io": 14.54,
+        "timers": 0.16,
+        "fairness-tick": 3.68,
+        "fairness": 1.84,
+        "mixed-compute": 24.02,
+        "mixed": 24.04
+      },
+      "samples": {
+        "pingpong": [
+          7.67,
+          7.29,
+          7.41,
+          7.36,
+          7.49
+        ],
+        "pingpong-fresh-ops": [
+          7.44,
+          7.33,
+          7.41,
+          7.36,
+          7.38
+        ],
+        "pingpong-deadline": [
+          7.54,
+          7.38,
+          7.53,
+          7.43,
+          7.57
+        ],
+        "concurrent": [
+          2.27,
+          2.14,
+          2.13,
+          2.09,
+          2.21
+        ],
+        "connections": [
+          23.87,
+          23.32,
+          23.72,
+          23.23,
+          23.49
+        ],
+        "pipelined": [
+          0.67,
+          0.69,
+          0.69,
+          0.69,
+          0.66
+        ],
+        "blocking": [
+          5.47,
+          5.42,
+          6.07,
+          5.97,
+          5.87
+        ],
+        "blocking-io": [
+          14.35,
+          14.54,
+          15.34,
+          14.49,
+          14.62
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.68,
+          3.61,
+          3.81,
+          3.53,
+          3.69
+        ],
+        "fairness": [
+          1.84,
+          1.81,
+          1.9,
+          1.76,
+          1.85
+        ],
+        "mixed-compute": [
+          24.0,
+          23.93,
+          24.26,
+          24.02,
+          24.2
+        ],
+        "mixed": [
+          24.02,
+          23.94,
+          24.29,
+          24.04,
+          24.23
+        ]
+      }
+    },
+    {
+      "label": "2-free",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-2-free",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.77,
+        "pingpong-fresh-ops": 7.56,
+        "pingpong-deadline": 7.45,
+        "concurrent": 2.76,
+        "connections": 42.5,
+        "pipelined": 0.87,
+        "blocking": 5.75,
+        "blocking-io": 14.01,
+        "timers": 0.16,
+        "fairness-tick": 11.96,
+        "fairness": 0.71,
+        "mixed-compute": 33.85,
+        "mixed": 9.71
+      },
+      "samples": {
+        "pingpong": [
+          7.76,
+          7.77,
+          7.74,
+          7.78,
+          7.9
+        ],
+        "pingpong-fresh-ops": [
+          7.83,
+          7.85,
+          7.56,
+          7.42,
+          7.47
+        ],
+        "pingpong-deadline": [
+          8.25,
+          7.43,
+          7.42,
+          7.49,
+          7.45
+        ],
+        "concurrent": [
+          2.8,
+          2.81,
+          2.73,
+          2.76,
+          2.74
+        ],
+        "connections": [
+          42.32,
+          42.57,
+          43.2,
+          42.5,
+          42.31
+        ],
+        "pipelined": [
+          0.79,
+          0.87,
+          0.9,
+          0.87,
+          0.78
+        ],
+        "blocking": [
+          5.54,
+          5.75,
+          5.59,
+          5.85,
+          6.17
+        ],
+        "blocking-io": [
+          13.95,
+          14.01,
+          14.17,
+          14.39,
+          13.97
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          12.76,
+          8.57,
+          11.96,
+          8.97,
+          12.16
+        ],
+        "fairness": [
+          0.69,
+          0.71,
+          0.75,
+          0.76,
+          0.68
+        ],
+        "mixed-compute": [
+          33.85,
+          33.72,
+          34.8,
+          32.85,
+          36.03
+        ],
+        "mixed": [
+          11.47,
+          9.71,
+          8.52,
+          17.66,
+          8.59
+        ]
+      }
+    },
+    {
+      "label": "2-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-2-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.46,
+        "pingpong-fresh-ops": 7.61,
+        "pingpong-deadline": 7.85,
+        "concurrent": 2.84,
+        "connections": 21.11,
+        "pipelined": 0.71,
+        "blocking": 6.21,
+        "blocking-io": 14.65,
+        "timers": 0.16,
+        "fairness-tick": 3.7,
+        "fairness": 1.85,
+        "mixed-compute": 23.66,
+        "mixed": 23.67
+      },
+      "samples": {
+        "pingpong": [
+          7.81,
+          7.44,
+          7.57,
+          7.41,
+          7.46
+        ],
+        "pingpong-fresh-ops": [
+          7.61,
+          7.45,
+          7.71,
+          7.88,
+          7.39
+        ],
+        "pingpong-deadline": [
+          7.54,
+          8.43,
+          7.89,
+          7.85,
+          7.65
+        ],
+        "concurrent": [
+          2.55,
+          2.77,
+          2.84,
+          2.86,
+          2.9
+        ],
+        "connections": [
+          20.9,
+          24.81,
+          22.46,
+          21.0,
+          21.11
+        ],
+        "pipelined": [
+          0.72,
+          0.71,
+          0.7,
+          0.72,
+          0.67
+        ],
+        "blocking": [
+          6.21,
+          6.71,
+          6.22,
+          6.19,
+          6.18
+        ],
+        "blocking-io": [
+          14.58,
+          16.35,
+          15.71,
+          14.65,
+          14.54
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.6,
+          4.32,
+          4.58,
+          3.51,
+          3.7
+        ],
+        "fairness": [
+          1.8,
+          2.16,
+          2.29,
+          1.76,
+          1.85
+        ],
+        "mixed-compute": [
+          23.66,
+          24.62,
+          23.86,
+          23.31,
+          23.41
+        ],
+        "mixed": [
+          23.67,
+          24.66,
+          23.87,
+          23.32,
+          23.42
+        ]
+      }
+    },
+    {
+      "label": "2-hybrid",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-2-hybrid",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.63,
+        "pingpong-fresh-ops": 7.44,
+        "pingpong-deadline": 7.55,
+        "concurrent": 2.51,
+        "connections": 24.2,
+        "pipelined": 0.69,
+        "blocking": 6.28,
+        "blocking-io": 14.17,
+        "timers": 0.16,
+        "fairness-tick": 3.57,
+        "fairness": 1.78,
+        "mixed-compute": 24.21,
+        "mixed": 24.23
+      },
+      "samples": {
+        "pingpong": [
+          7.63,
+          8.14,
+          8.02,
+          7.37,
+          7.42
+        ],
+        "pingpong-fresh-ops": [
+          7.42,
+          7.74,
+          7.47,
+          7.38,
+          7.44
+        ],
+        "pingpong-deadline": [
+          7.56,
+          7.93,
+          7.55,
+          7.43,
+          7.46
+        ],
+        "concurrent": [
+          2.6,
+          2.39,
+          2.55,
+          2.42,
+          2.51
+        ],
+        "connections": [
+          23.67,
+          24.44,
+          24.2,
+          24.18,
+          24.7
+        ],
+        "pipelined": [
+          0.69,
+          0.72,
+          0.7,
+          0.69,
+          0.69
+        ],
+        "blocking": [
+          5.52,
+          6.29,
+          6.32,
+          6.18,
+          6.28
+        ],
+        "blocking-io": [
+          14.23,
+          15.05,
+          14.08,
+          14.17,
+          14.04
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.53,
+          3.53,
+          3.79,
+          3.79,
+          3.57
+        ],
+        "fairness": [
+          1.77,
+          1.76,
+          1.89,
+          1.9,
+          1.78
+        ],
+        "mixed-compute": [
+          23.67,
+          24.3,
+          24.28,
+          24.21,
+          24.14
+        ],
+        "mixed": [
+          23.69,
+          24.32,
+          24.3,
+          24.23,
+          24.16
+        ]
+      }
+    },
+    {
+      "label": "4-free",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-4-free",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.86,
+        "pingpong-fresh-ops": 7.83,
+        "pingpong-deadline": 7.9,
+        "concurrent": 5.92,
+        "connections": 42.67,
+        "pipelined": 0.77,
+        "blocking": 5.71,
+        "blocking-io": 14.19,
+        "timers": 0.16,
+        "fairness-tick": 14.38,
+        "fairness": 0.82,
+        "mixed-compute": 34.63,
+        "mixed": 8.73
+      },
+      "samples": {
+        "pingpong": [
+          7.74,
+          7.91,
+          7.86,
+          7.83,
+          7.89
+        ],
+        "pingpong-fresh-ops": [
+          7.82,
+          7.83,
+          7.94,
+          7.92,
+          7.82
+        ],
+        "pingpong-deadline": [
+          7.79,
+          7.9,
+          7.98,
+          7.93,
+          7.86
+        ],
+        "concurrent": [
+          6.15,
+          6.14,
+          5.29,
+          5.58,
+          5.92
+        ],
+        "connections": [
+          41.84,
+          42.26,
+          42.67,
+          42.68,
+          42.78
+        ],
+        "pipelined": [
+          0.77,
+          0.75,
+          0.95,
+          0.66,
+          0.78
+        ],
+        "blocking": [
+          5.61,
+          6.39,
+          5.71,
+          5.57,
+          5.72
+        ],
+        "blocking-io": [
+          14.05,
+          14.55,
+          14.16,
+          14.19,
+          14.2
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          14.28,
+          14.87,
+          14.3,
+          14.41,
+          14.38
+        ],
+        "fairness": [
+          0.79,
+          0.82,
+          0.89,
+          0.82,
+          0.8
+        ],
+        "mixed-compute": [
+          33.49,
+          34.28,
+          34.63,
+          35.82,
+          36.01
+        ],
+        "mixed": [
+          10.53,
+          8.53,
+          10.83,
+          8.57,
+          8.73
+        ]
+      }
+    },
+    {
+      "label": "4-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-4-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.46,
+        "pingpong-fresh-ops": 7.47,
+        "pingpong-deadline": 7.51,
+        "concurrent": 3.4,
+        "connections": 23.06,
+        "pipelined": 0.69,
+        "blocking": 6.2,
+        "blocking-io": 14.6,
+        "timers": 0.16,
+        "fairness-tick": 3.71,
+        "fairness": 1.85,
+        "mixed-compute": 23.98,
+        "mixed": 24.0
+      },
+      "samples": {
+        "pingpong": [
+          7.62,
+          7.48,
+          7.46,
+          7.44,
+          7.44
+        ],
+        "pingpong-fresh-ops": [
+          7.37,
+          7.56,
+          7.47,
+          7.46,
+          7.65
+        ],
+        "pingpong-deadline": [
+          7.46,
+          7.56,
+          7.55,
+          7.51,
+          7.5
+        ],
+        "concurrent": [
+          3.37,
+          3.36,
+          3.5,
+          3.4,
+          3.62
+        ],
+        "connections": [
+          23.06,
+          23.3,
+          22.1,
+          22.63,
+          23.88
+        ],
+        "pipelined": [
+          0.68,
+          0.72,
+          0.72,
+          0.67,
+          0.69
+        ],
+        "blocking": [
+          6.18,
+          6.48,
+          6.2,
+          6.32,
+          6.13
+        ],
+        "blocking-io": [
+          14.6,
+          14.64,
+          14.86,
+          14.55,
+          14.58
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.68,
+          3.71,
+          3.89,
+          3.69,
+          3.71
+        ],
+        "fairness": [
+          1.84,
+          1.86,
+          1.95,
+          1.84,
+          1.85
+        ],
+        "mixed-compute": [
+          23.99,
+          24.61,
+          23.89,
+          23.79,
+          23.98
+        ],
+        "mixed": [
+          24.01,
+          24.67,
+          23.9,
+          23.81,
+          24.0
+        ]
+      }
+    },
+    {
+      "label": "4-hybrid",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/g-4-hybrid",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "pingpong": 7.61,
+        "pingpong-fresh-ops": 7.58,
+        "pingpong-deadline": 7.52,
+        "concurrent": 3.92,
+        "connections": 23.62,
+        "pipelined": 0.66,
+        "blocking": 5.82,
+        "blocking-io": 14.19,
+        "timers": 0.16,
+        "fairness-tick": 3.55,
+        "fairness": 1.78,
+        "mixed-compute": 23.58,
+        "mixed": 23.59
+      },
+      "samples": {
+        "pingpong": [
+          7.67,
+          9.05,
+          7.45,
+          7.46,
+          7.61
+        ],
+        "pingpong-fresh-ops": [
+          7.37,
+          9.01,
+          7.43,
+          7.64,
+          7.58
+        ],
+        "pingpong-deadline": [
+          7.44,
+          9.17,
+          7.49,
+          7.61,
+          7.52
+        ],
+        "concurrent": [
+          3.87,
+          3.69,
+          3.93,
+          3.94,
+          3.92
+        ],
+        "connections": [
+          23.82,
+          23.61,
+          23.73,
+          23.62,
+          23.6
+        ],
+        "pipelined": [
+          0.71,
+          0.67,
+          0.66,
+          0.64,
+          0.65
+        ],
+        "blocking": [
+          6.46,
+          5.6,
+          5.65,
+          5.82,
+          6.22
+        ],
+        "blocking-io": [
+          13.97,
+          14.26,
+          14.24,
+          13.98,
+          14.19
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          3.45,
+          3.53,
+          3.55,
+          3.56,
+          3.56
+        ],
+        "fairness": [
+          1.73,
+          1.76,
+          1.78,
+          1.78,
+          1.78
+        ],
+        "mixed-compute": [
+          23.32,
+          23.65,
+          23.75,
+          23.58,
+          23.33
+        ],
+        "mixed": [
+          23.32,
+          23.66,
+          23.77,
+          23.59,
+          23.34
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
