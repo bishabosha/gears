@@ -1,0 +1,185 @@
+{
+  "started": "2026-10-17T23:17:40+02:00",
+  "finished": "2026-10-17T23:18:14+02:00",
+  "load_average": {
+    "before": [
+      3.28759765625,
+      3.8056640625,
+      4.4140625
+    ],
+    "after": [
+      5.3994140625,
+      4.2568359375,
+      4.55224609375
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "connections,concurrent,pingpong"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "base-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/base-2-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "connections": 23.93,
+        "concurrent": 2.61,
+        "pingpong": 7.66
+      },
+      "samples": {
+        "connections": [
+          23.8,
+          22.49,
+          23.93,
+          26.51,
+          24.1,
+          26.42,
+          23.07
+        ],
+        "concurrent": [
+          2.56,
+          2.93,
+          2.61,
+          3.06,
+          2.33,
+          2.51,
+          3.11
+        ],
+        "pingpong": [
+          7.48,
+          8.51,
+          7.62,
+          7.88,
+          7.66,
+          7.66,
+          7.83
+        ]
+      }
+    },
+    {
+      "label": "new-2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/2-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "connections": 25.66,
+        "concurrent": 2.46,
+        "pingpong": 7.99
+      },
+      "samples": {
+        "connections": [
+          25.35,
+          26.1,
+          25.36,
+          25.73,
+          25.66,
+          25.56,
+          26.45
+        ],
+        "concurrent": [
+          2.46,
+          2.88,
+          2.42,
+          2.41,
+          2.87,
+          2.44,
+          2.86
+        ],
+        "pingpong": [
+          8.87,
+          7.99,
+          7.52,
+          7.63,
+          8.05,
+          7.6,
+          9.0
+        ]
+      }
+    },
+    {
+      "label": "base-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/base-4-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "connections": 23.86,
+        "concurrent": 3.65,
+        "pingpong": 7.59
+      },
+      "samples": {
+        "connections": [
+          24.04,
+          22.62,
+          24.04,
+          24.06,
+          23.08,
+          23.86,
+          23.82
+        ],
+        "concurrent": [
+          3.6,
+          3.65,
+          3.99,
+          3.5,
+          4.15,
+          3.64,
+          3.77
+        ],
+        "pingpong": [
+          7.53,
+          7.59,
+          7.95,
+          7.56,
+          7.9,
+          7.56,
+          7.6
+        ]
+      }
+    },
+    {
+      "label": "new-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/w/4-affine",
+      "benchmark": "gears",
+      "build": null,
+      "median": {
+        "connections": 26.06,
+        "concurrent": 3.94,
+        "pingpong": 7.94
+      },
+      "samples": {
+        "connections": [
+          25.71,
+          25.87,
+          26.15,
+          26.06,
+          26.21,
+          28.45,
+          25.79
+        ],
+        "concurrent": [
+          3.94,
+          3.87,
+          4.12,
+          4.02,
+          3.69,
+          4.19,
+          3.85
+        ],
+        "pingpong": [
+          7.71,
+          8.46,
+          7.94,
+          8.5,
+          7.53,
+          7.95,
+          7.59
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
