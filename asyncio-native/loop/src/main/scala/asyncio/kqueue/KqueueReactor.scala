@@ -159,8 +159,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     op match {
       case command: Command =>
-        val slot = currentSlot(command.fd)
         val read = command.interest == Interest.Read
+        val slot = currentSlot(command.fd, read)
         // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
         if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
         else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
@@ -446,15 +446,15 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   def stop(): Unit = running = false
 
-  /** `fd`'s slot, brought up to date for a submission. What it knew no longer holds if the descriptor's number was closed
-    * and reused since, on any thread: it then starts over, as for a new descriptor. Nor does it if another reactor reads
-    * the descriptor now, having registered a read filter since this one did: then it starts over not ready, so that a
-    * read registers a filter here before trying anything, since kqueue reports data already waiting as soon as a filter
-    * is added, and trying a read first would only find out what the filter will. A filter of this reactor's that is
-    * still registered is harmless: a new registration replaces it, and an event it reports first is dropped by
-    * `dispatch`.
+  /** `fd`'s slot, brought up to date for a submission, a read if `reading`. What it knew no longer holds if the
+    * descriptor's number was closed and reused since, on any thread: it then starts over, as for a new descriptor. Nor
+    * does what it knew of reading hold if another reactor reads the descriptor now, having registered a read filter
+    * since this one did; a read then starts over not ready, so that it registers a filter here before trying anything,
+    * since kqueue reports data already waiting as soon as a filter is added, and trying a read first would only find
+    * out what the filter will. Writes leave what it knew of reading alone. A filter of this reactor's that is still
+    * registered is harmless: a new registration replaces it, and an event it reports first is dropped by `dispatch`.
     */
-  private def currentSlot(fd: Int): Slot = {
+  private def currentSlot(fd: Int, reading: Boolean): Slot = {
     val slot = slotFor(fd)
     val entry = DescriptorTable.get(fd)
     val generation = DescriptorTable.generation(entry)
@@ -463,7 +463,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       slot.generation = generation
     }
     val owner = DescriptorTable.readOwner(entry)
-    if owner != 0 && owner != id then {
+    if reading && owner != 0 && owner != id then {
       slot.forget()
       slot.settleReadiness(KqueueReactor.NotReady)
       takenOver += 1

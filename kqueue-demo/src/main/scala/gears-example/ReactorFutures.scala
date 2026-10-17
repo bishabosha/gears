@@ -47,8 +47,8 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
     * queued than this worker is about to run, an idle worker is woken to take some.
     */
   private[gearsexample] def push(task: Runnable): Unit =
-    if !local.push(task) then pool.inject(task)
-    else if local.size > 1 then pool.offerWork()
+    if !local.push(task) then pool.inject(task, index)
+    else if local.size > 1 then pool.offerWork(index)
 
   /** Runs `body` on this worker's thread: now if called there, or queued and the worker woken otherwise. */
   def sync(body: => Unit): Unit =
@@ -260,28 +260,35 @@ final class ReactorPool private[gearsexample] (val backend: Backend, size: Int) 
     if worker != null then worker.push(body) else inject(body)
   }
 
-  private[gearsexample] def inject(task: Runnable): Unit = {
+  /** Queues `task` on the shared queue and wakes an idle worker other than `from`, the worker queueing it if any. */
+  private[gearsexample] def inject(task: Runnable, from: Int = -1): Unit = {
     injections.incrementAndGet()
     injector.add(task)
-    wakeOne()
+    wakeOne(from)
   }
 
   private[gearsexample] def injected(): Runnable | Null = injector.poll()
 
-  /** A worker has more queued than it is about to run: wakes an idle worker to take some, unless one is searching. */
-  private[gearsexample] def offerWork(): Unit =
-    if idle.get() != 0L && searching.get() == 0 then wakeOne()
+  /** Worker `from` has more queued than it is about to run: wakes another idle worker to take some, unless one is
+    * searching. `from` itself may still be marked idle, since a worker runs completions, which queue tasks, in the turn
+    * it blocked in; but it is running, so it is not the one to wake.
+    */
+  private[gearsexample] def offerWork(from: Int): Unit =
+    if (idle.get() & ~(1L << from)) != 0L && searching.get() == 0 then wakeOne(from)
 
-  private def wakeOne(): Unit = {
-    var mask = idle.get()
+  /** Wakes an idle worker other than `except` (-1 for none). */
+  private def wakeOne(except: Int = -1): Unit = {
+    val others = if except >= 0 then ~(1L << except) else -1L
+    var mask = idle.get() & others
     while mask != 0L do {
       val i = java.lang.Long.numberOfTrailingZeros(mask)
-      if idle.compareAndSet(mask, mask & ~(1L << i)) then {
+      val current = idle.get()
+      if (current & (1L << i)) != 0L && idle.compareAndSet(current, current & ~(1L << i)) then {
         wakeUps.incrementAndGet()
         workers(i).reactor.wakeup()
         return
       }
-      mask = idle.get()
+      mask = idle.get() & others
     }
   }
 
