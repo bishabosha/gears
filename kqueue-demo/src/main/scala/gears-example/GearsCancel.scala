@@ -9,9 +9,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.scalanative.unsafe.Zone
 import scala.util.Failure
 
+import asyncio.Backend
 import asyncio.Completion
 import asyncio.Interest
-import asyncio.Reactor
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.text
@@ -56,14 +56,14 @@ object GearsCancel {
       case _                                 => false
     }
 
-  def run()(using Reactor.Factory[Reactor]): Unit = {
+  def run()(using Backend): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the reactor closes
     val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the reactor closes
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
     Zone.acquire { implicit z =>
       val buf = NativeBuffer.allocate(64)
       ReactorFutures.run { r =>
-        // Everything below runs on the thread that owns `r`, so ops go straight to the reactor.
+        // Everything below runs on the reactor's thread, so ops go straight to the reactor.
         val (readFd, writeFd) = r.handles.pipe()
         try {
           val sleeperInterrupted = new AtomicBoolean()
@@ -79,7 +79,7 @@ object GearsCancel {
             "timer" -> Future(perform(r, r.ops.timer(300)))
           )
           // Submitted straight to the reactor, with no future to cancel it: only closing the reactor can stop it.
-          r.submit(
+          reactor(r).submit(
             r.ops.blocking(sleeper(10000, leftoverInterrupted)),
             new Completion[r.Op] {
               def onComplete(op: r.Op): Unit = println("unexpected completion of the leftover task")

@@ -486,8 +486,17 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
    volatile write, where the `ArrayDeque` had neither (`kqueue-demo/bench/results/run-queue.json`, `run-queue-check.json`).
    Tokio pays the same. Claiming a drain's tasks with one compare-and-swap would save most of it, but would also keep
    thieves from them for the whole drain, a trade to measure with the pool.
-3. [ ] Ops built by the backend rather than one reactor, and `perform(op)` on the current worker's reactor, still with
-   one worker.
+3. [x] **Ops built by the backend rather than one reactor.** The interface has a `Backend` (kqueue's is
+   `KqueueBackend`): it builds the ops, names the handles, keeps the attachments and opens reactors of type
+   `Reactor.Of[Op]`, so an op it builds may go to any of its reactors, one submission at a time; ops of another backend
+   are still a different type, and a backend is also a `Reactor.Factory`. Kqueue's ops already kept no state of one
+   reactor between submissions, so this is mostly types. gears' `perform(b, op)` takes the backend only for the op's
+   type and submits to the reactor of the worker running the caller; `OpWaiter` follows the submission, recording its
+   scheduler so that a cancel goes to the reactor the op is pending on. Programs started by `ReactorFutures.run` get the
+   backend instead of a reactor. Where they submit ops directly with completions of their own (the bench's deadline
+   timers and timer stress, the cancel demo), `ReactorFutures.reactor(b)` gives the current worker's reactor, which is
+   only theirs until they next suspend: with a pool, such code will need to stay on one worker. No cost: release-fast,
+   median of 5 runs, every scenario within 1.4% (`kqueue-demo/bench/results/backend-ops.json`).
 4. [ ] Descriptors shared between kqueue reactors: an owner and a generation per descriptor, readiness reset on a move,
    and the old reactor dropping its filter when it next fires.
 5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'

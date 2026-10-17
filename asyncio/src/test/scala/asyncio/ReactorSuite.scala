@@ -48,6 +48,31 @@ class ReactorSuite extends FunSuite {
     assert(errors.contains("a.Op"), errors)
   }
 
+  test("an op built by a backend can be submitted to any reactor it opens, and not to another backend's") {
+    assertEquals(
+      compileErrors(
+        "def move(b: Backend): Unit = { val t = b.ops.timer(1); b.open().submit(t, _ => ()); b.open().submit(t, _ => ()) }"
+      ),
+      ""
+    )
+    val errors = compileErrors("def cross(a: Backend, b: Backend): Unit = b.open().submit(a.ops.timer(1), _ => ())")
+    assert(errors.contains("a.Op"), errors)
+  }
+
+  test("a backend is a factory for its reactors") {
+    val reactor = new ClosingReactor
+    given Backend = new Backend {
+      type Op = AnyRef
+      def ops: Ops[Op] = throw new UnsupportedOperationException
+      def handles: Handles = throw new UnsupportedOperationException
+      def attachment(op: Op): AnyRef | Null = null
+      def attach(op: Op, value: AnyRef | Null): Unit = ()
+      def open(): Reactor.Of[Op] = reactor
+    }
+    Reactor.scoped(_ => ())
+    assert(reactor.closed)
+  }
+
   test("only ops marked Repeatable promise they can be resubmitted") {
     assertEquals(
       compileErrors("def repeat(a: Reactor)(h: Int): Repeatable = a.ops.accept(h, HandleSlot())"),

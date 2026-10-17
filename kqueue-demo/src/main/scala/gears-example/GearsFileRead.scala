@@ -4,15 +4,15 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
+import asyncio.Backend
 import asyncio.Interest
-import asyncio.Reactor
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.drainTo
 import ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {
-  def run(fifo: String)(using Reactor.Factory[Reactor]): Unit = {
+  def run(fifo: String)(using Backend): Unit = {
     Zone.acquire { implicit z =>
       val chunk = NativeBuffer.allocate(1024)
       val contents = new ByteArrayOutputStream()
