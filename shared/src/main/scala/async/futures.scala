@@ -193,6 +193,28 @@ object Future:
 
         inline def cancelled = state == stateCancelled
       end AwaitListener
+
+      /** Awaits `src` where nothing can cancel the wait, in the `Unlinked` group: with no lock, since no cancellation
+        * can race the completion, and no group to link to. It resumes the suspension itself, as the task it schedules.
+        */
+      private class UnlinkedAwaitListener[T](src: Async.Source[T])
+          extends Function[ac.support.Suspension[T, Unit], Unit],
+            Listener[T],
+            Runnable:
+        private var sus: ac.support.Suspension[T, Unit] | Null = null
+        private var result: T = uninitialized
+
+        def apply(sus: ac.support.Suspension[T, Unit]): Unit =
+          this.sus = sus
+          src.onComplete(this)
+
+        val lock: Listener.ListenerLock | Null = null
+        def complete(data: T, source: Async.Source[T]): Unit =
+          result = data
+          ac.scheduler.execute(this)
+
+        def run(): Unit = sus.nn.resume(result)
+      end UnlinkedAwaitListener
       object AwaitListener:
         type State = stateUnused.type | stateLocked.type | stateDone.type | stateCancelled.type
         inline val stateUnused = 0
@@ -208,14 +230,25 @@ object Future:
         src
           .poll()
           .getOrElse:
-            val listener = AwaitListener[U](src)
-            val res = ac.support.suspend(listener) // linking and src.onComplete happen in listener
-            listener.unlink()
-            if listener.cancelled then throw CancellationException()
+            if group eq CompletionGroup.Unlinked then ac.support.suspend(UnlinkedAwaitListener[U](src))
             else
-              res.asInstanceOf[U] // not cancelled -> result from Source -> type U (not U | Null, still could be null)
+              val listener = AwaitListener[U](src)
+              val res = ac.support.suspend(listener) // linking and src.onComplete happen in listener
+              listener.unlink()
+              if listener.cancelled then throw CancellationException()
+              else
+                res.asInstanceOf[U] // not cancelled -> result from Source -> type U (not U | Null, still could be null)
 
-      override def withGroup(group: CompletionGroup) = FutureAsync(group)
+      // This context viewed in the `Unlinked` group, made once: awaiting outside the group is common, for one when
+      // waiting for something that has to finish even if cancelled.
+      private var unlinked: FutureAsync | Null = null
+
+      override def withGroup(group: CompletionGroup) =
+        if group ne CompletionGroup.Unlinked then FutureAsync(group)
+        else if this.group eq CompletionGroup.Unlinked then this
+        else
+          if unlinked == null then unlinked = FutureAsync(CompletionGroup.Unlinked)
+          unlinked.nn
 
     override def cancel(): Unit = if setCancelled() then this.innerGroup.cancel()
 
