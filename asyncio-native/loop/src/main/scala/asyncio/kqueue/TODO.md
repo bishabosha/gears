@@ -348,6 +348,20 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
     `concurrent`'s gain fairly needs fewer resumes rather than skipped turns, such as cheaper resumes in Scala Native
     (see the proposed Scala Native changes).
 
+## Gears itself
+
+What gears does per suspension, beyond the continuation itself, measured on `concurrent`, where 64 futures share the
+thread and every op suspends. Each step is measured against the one before (release-fast, median of 5 runs, scenarios
+`concurrent`, `pingpong`, `pipelined`, `fairness` and `mixed`).
+
+- Await without a lock or group link where nothing can cancel the wait (`FutureAsync.await` in the `Unlinked` group,
+  which `perform` uses): `AwaitListener` takes a `ReentrantLock` and a number from a global counter, links into the
+  group and unlinks again, each under `synchronized`, and resumes through a closure, all so that a cancellation cannot
+  race the completion. With nothing to cancel, `UnlinkedAwaitListener` has no lock and no link, and is itself the task
+  that resumes the suspension. A future's `Unlinked` view of its context is also made once, instead of on every
+  `withGroup`. `concurrent` 4.30 → 3.85 µs (−10.5%), `fairness` −11%, the rest −1 to −3%
+  (`kqueue-demo/bench/results/gears-unlinked-await.json`).
+
 ## Proposed changes to Scala Native
 
 Costs found while profiling that only Scala Native can remove, all on macOS arm64. The `scala-native-setjmp-issue`

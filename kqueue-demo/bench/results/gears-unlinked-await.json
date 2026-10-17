@@ -1,0 +1,173 @@
+{
+  "started": "2026-10-17T13:05:35+02:00",
+  "finished": "2026-10-17T13:06:06+02:00",
+  "load_average": {
+    "before": [
+      10.0703125,
+      5.65771484375,
+      4.923828125
+    ],
+    "after": [
+      9.28857421875,
+      5.921875,
+      5.04638671875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "concurrent,pingpong,pipelined,fairness,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.base",
+      "benchmark": "gears",
+      "build": {
+        "commit": "6db7e97bccbdda6eca77b39a9c374170dd3120ff",
+        "subject": "know when a descriptor has drained from kqueue's counts, saving the server's second accept",
+        "worktree_changes": true,
+        "worktree_changes_hash": "de029cbaf1bc",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T12:44:43+02:00"
+      },
+      "median": {
+        "concurrent": 4.3,
+        "pingpong": 8.36,
+        "pipelined": 0.7,
+        "fairness-tick": 3.98,
+        "fairness": 3.98,
+        "mixed-compute": 28.31,
+        "mixed": 28.35
+      },
+      "samples": {
+        "concurrent": [
+          4.87,
+          4.3,
+          4.19,
+          4.32,
+          4.27
+        ],
+        "pingpong": [
+          8.51,
+          8.36,
+          8.3,
+          8.31,
+          8.47
+        ],
+        "pipelined": [
+          0.68,
+          0.7,
+          0.68,
+          0.72,
+          0.71
+        ],
+        "fairness-tick": [
+          3.98,
+          4.11,
+          3.83,
+          4.0,
+          3.9
+        ],
+        "fairness": [
+          3.98,
+          4.11,
+          3.83,
+          4.0,
+          3.9
+        ],
+        "mixed-compute": [
+          28.37,
+          28.28,
+          28.31,
+          28.43,
+          28.19
+        ],
+        "mixed": [
+          28.42,
+          28.31,
+          28.35,
+          28.48,
+          28.24
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.unlinked-await",
+      "benchmark": "gears",
+      "build": {
+        "commit": "3fc2e0f165fbfd051fe40957a4de7f1e8c3a091e",
+        "subject": "record that taking the fast path for writes under load costs fairness",
+        "worktree_changes": true,
+        "worktree_changes_hash": "edc5b68329e2",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T13:05:33+02:00"
+      },
+      "median": {
+        "concurrent": 3.85,
+        "pingpong": 8.19,
+        "pipelined": 0.68,
+        "fairness-tick": 3.54,
+        "fairness": 3.54,
+        "mixed-compute": 27.97,
+        "mixed": 28.0
+      },
+      "samples": {
+        "concurrent": [
+          3.85,
+          3.98,
+          4.08,
+          3.79,
+          3.85
+        ],
+        "pingpong": [
+          8.17,
+          8.22,
+          8.25,
+          8.06,
+          8.19
+        ],
+        "pipelined": [
+          0.68,
+          0.68,
+          0.7,
+          0.68,
+          0.69
+        ],
+        "fairness-tick": [
+          3.56,
+          3.59,
+          3.54,
+          3.44,
+          3.47
+        ],
+        "fairness": [
+          3.56,
+          3.59,
+          3.54,
+          3.44,
+          3.47
+        ],
+        "mixed-compute": [
+          27.91,
+          28.0,
+          27.97,
+          27.95,
+          28.11
+        ],
+        "mixed": [
+          27.97,
+          28.04,
+          28.0,
+          28.0,
+          28.16
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
