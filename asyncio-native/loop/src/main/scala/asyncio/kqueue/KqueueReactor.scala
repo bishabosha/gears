@@ -597,8 +597,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
     * awaited reply often arrives within microseconds, and catching it this way saves the thread a sleep and a wake-up.
+    * A timer already due needs no spinning, since the turn has it to complete anyway; and the polls cost most on a
+    * thread with little else to do, as an otherwise idle worker waiting on a timer is.
     */
   private def pollBeforeBlocking(events: KqueueLoop.EventQueue): Int = {
+    if !timers.isEmpty && timers.peek.deadline <= System.nanoTime() then
+      return KqueueLoop.pollEventsNow(kq, events, maxEvents)
     var polled = 0
     var spins = 0
     while polled == 0 && spins < spinPolls do {
