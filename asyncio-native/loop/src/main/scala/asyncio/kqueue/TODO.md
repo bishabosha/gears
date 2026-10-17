@@ -339,6 +339,14 @@ the scheduler's `ConcurrentLinkedQueue`, which computes a `ClassTag` per operati
     4, 8 and 32 gave `pipelined` −29%, −46%, −66%, −72% and `fairness-tick` +37%, +87%, +122%, +375%
     (`kqueue-demo/bench/results/fast-path-budgets.json`, 3 runs). Requiring an idle scheduler as well removed the cost
     to fairness entirely while keeping the gain, which comes from futures that run alone.
+  - Letting writes take the fast path even with other tasks queued was tried and reverted: writes rarely wait, and the
+    hope was to save a suspension per message where many futures run at once. Release-fast, median of 5 runs:
+    `concurrent` 3.74 → 2.95 µs (−21%), but `fairness-tick` 3.41 → 17.59 µs (+416%, one tick per 25 messages instead of
+    one) and `mixed-compute` 26.7 → 37.4 µs (+40%), as ping-pong took one turn per round trip instead of two; the rest
+    within 3% (`kqueue-demo/bench/results/fast-path-writes.json`). It is the same imbalance as the budget alone: an op
+    that finishes without suspending gives the turn to no one, so the futures beside it fall behind. Recovering
+    `concurrent`'s gain fairly needs fewer resumes rather than skipped turns, such as cheaper resumes in Scala Native
+    (see the proposed Scala Native changes).
 
 ## Proposed changes to Scala Native
 
