@@ -405,6 +405,12 @@ step is measured against the one before, as above, with `connections` as well.
   (+52%): both back to where they were before the turn budget, as the thread now alternates one slice with one round
   trip, so this changes the share rather than the total. The rest within 2% (`kqueue-demo/bench/results/yield-now.json`,
   under a load average of 9). The benchmark itself changed here: the before side runs the old `mixed`.
+- Together, against every scenario (release-fast, median of 5 runs): `concurrent` 3.10 → 2.24 µs (−28%), `fairness`
+  traffic −38%, `blocking` −2%, the rest within 1.5%, but `fairness-tick` +24% and `mixed` +7% on both sides, which 7
+  runs confirmed (+19% and +7%): the thread still alternates one compute slice with one round trip, but each pair takes
+  about 2 µs longer, for a reason not yet found (`kqueue-demo/bench/results/turns-combined.json` and
+  `turns-combined-mixed-check.json`). The ticker's cost is the trade the turn budget makes: the futures beside a busy
+  one get as many turns as before, each a little further apart.
 
 ## Proposed changes to Scala Native
 
