@@ -8,8 +8,27 @@ import java.util.concurrent.atomic.AtomicReferenceArray
   * knew, and which reactor last registered a read filter for it, so one that registered one earlier can tell it should
   * drop its own. Descriptors are the process's, so the table is too.
   *
+  * Why it is needed: a kqueue reactor keeps what it knows of each descriptor it has used, notably whether its read
+  * filter is registered, which it registers once and keeps. When tasks move between reactors, a descriptor may be read
+  * on one reactor, then on another, and closed on a third. `DescriptorHooks` only tells the closing thread's reactor of
+  * a close, so the others would still believe their filters registered after the kernel had removed them, and a read of
+  * a reused number would wait for ever; and a reactor that a descriptor has moved away from would still wake for its
+  * data.
+  *
+  * The generation is a well-worn answer to the first problem, the ABA problem as it appears for descriptors: the same
+  * number names a different file once it has been closed and reopened. Event loops that index their state by
+  * descriptor all meet it. libev's epoll backend keeps a generation per descriptor, since epoll silently drops closed
+  * descriptors; Go's netpoller tags what it registers with a per-descriptor sequence number so that events for a
+  * closed and reused descriptor are recognised as stale; Tokio's I/O driver packs a generation into its registration
+  * tokens for the same reason. It is the generational index of slot maps and generational arenas: an index paired with
+  * a generation, checked on each use. The read owner, for the second problem, has less of a precedent, since those
+  * runtimes either poll every descriptor from one place or never move descriptors between threads; dropping a filter
+  * lazily, when it next reports an event that turns out to be someone else's, follows the usual event-loop practice of
+  * treating events as hints to check rather than facts to keep in step.
+  *
   * Each descriptor has one `Long`: its generation, counting closes, in the high 32 bits, and its read owner, the id of a
-  * reactor, in the low 32 bits, 0 for none. Pages of descriptors are allocated as numbers are first used.
+  * reactor, in the low 32 bits, 0 for none; packed so that one compare-and-swap updates both. Pages of descriptors are
+  * allocated as numbers are first used.
   */
 object DescriptorTable {
   private inline val PageBits = 10
