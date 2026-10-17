@@ -1,0 +1,173 @@
+{
+  "started": "2026-10-17T13:24:56+02:00",
+  "finished": "2026-10-17T13:25:25+02:00",
+  "load_average": {
+    "before": [
+      14.408203125,
+      7.72900390625,
+      6.0693359375
+    ],
+    "after": [
+      17.52685546875,
+      8.93798828125,
+      6.54833984375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "concurrent,pingpong,pipelined,fairness,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.plain-waiter",
+      "benchmark": "gears",
+      "build": {
+        "commit": "aa37872aad81380005fb2ecbd5d7c0fae32ab630",
+        "subject": "await without a lock or group link where nothing can cancel the wait",
+        "worktree_changes": true,
+        "worktree_changes_hash": "e3b355bffc7b",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T13:08:54+02:00"
+      },
+      "median": {
+        "concurrent": 3.32,
+        "pingpong": 7.85,
+        "pipelined": 0.69,
+        "fairness-tick": 3.04,
+        "fairness": 3.04,
+        "mixed-compute": 26.98,
+        "mixed": 26.98
+      },
+      "samples": {
+        "concurrent": [
+          3.32,
+          3.32,
+          3.39,
+          3.32,
+          3.4
+        ],
+        "pingpong": [
+          7.81,
+          7.81,
+          7.85,
+          8.45,
+          8.13
+        ],
+        "pipelined": [
+          0.71,
+          0.67,
+          0.67,
+          0.69,
+          0.69
+        ],
+        "fairness-tick": [
+          3.04,
+          3.04,
+          3.01,
+          3.17,
+          3.16
+        ],
+        "fairness": [
+          3.04,
+          3.04,
+          3.01,
+          3.17,
+          3.16
+        ],
+        "mixed-compute": [
+          27.09,
+          26.41,
+          27.16,
+          26.67,
+          26.98
+        ],
+        "mixed": [
+          27.11,
+          26.42,
+          27.17,
+          26.67,
+          26.98
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.single-member",
+      "benchmark": "gears",
+      "build": {
+        "commit": "1d12a0134faeb00bfa67a6f6c4a1e2dfa0378640",
+        "subject": "keep the op waiter's state in a plain field, used on the reactor thread only",
+        "worktree_changes": true,
+        "worktree_changes_hash": "934122ab3d2f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T13:24:55+02:00"
+      },
+      "median": {
+        "concurrent": 3.28,
+        "pingpong": 7.9,
+        "pipelined": 0.67,
+        "fairness-tick": 2.95,
+        "fairness": 2.95,
+        "mixed-compute": 27.16,
+        "mixed": 27.18
+      },
+      "samples": {
+        "concurrent": [
+          3.31,
+          3.28,
+          3.21,
+          3.21,
+          3.38
+        ],
+        "pingpong": [
+          7.45,
+          7.66,
+          7.9,
+          8.36,
+          8.26
+        ],
+        "pipelined": [
+          0.66,
+          0.66,
+          0.76,
+          0.76,
+          0.67
+        ],
+        "fairness-tick": [
+          2.82,
+          3.09,
+          3.03,
+          2.95,
+          2.95
+        ],
+        "fairness": [
+          2.82,
+          3.09,
+          3.03,
+          2.95,
+          2.95
+        ],
+        "mixed-compute": [
+          26.66,
+          26.73,
+          27.53,
+          27.26,
+          27.16
+        ],
+        "mixed": [
+          26.67,
+          26.74,
+          27.55,
+          27.27,
+          27.18
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

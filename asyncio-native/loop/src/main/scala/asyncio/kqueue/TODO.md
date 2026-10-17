@@ -365,6 +365,12 @@ thread and every op suspends. Each step is measured against the one before (rele
   future, and a cancel, which hops there first), and Scala Native's `AtomicReference` computes a `ClassTag` on every
   operation, which showed in the profile. `concurrent` 3.95 → 3.85 µs (−2.5%), `fairness` −4.7%, the rest within 3%
   (`kqueue-demo/bench/results/gears-plain-waiter.json`).
+- Keep a completion group's lone member in a field (`CompletionGroup.single`), using the set only for more: a group
+  mostly has at most one member at a time, such as a future's wait in progress, and `perform` links its waiter into the
+  caller's group and out again on every op, each time allocating a hash set node. Also `await` matches the polled
+  `Option` instead of passing a closure to `getOrElse`. `concurrent` 3.32 → 3.28 µs (−1.2%), `fairness` −3%, the rest
+  within 3% either way (`kqueue-demo/bench/results/gears-single-member.json`). Marginal, but it removes two allocations
+  per op.
 
 ## Proposed changes to Scala Native
 
