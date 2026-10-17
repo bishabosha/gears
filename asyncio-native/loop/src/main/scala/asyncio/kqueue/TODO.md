@@ -570,9 +570,74 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
    - Affine barely spreads: a burst of new futures starts and suspends on its first I/O before an idle worker wakes,
      and afterwards they are resumes, which stay; and a lone takeable task, like `mixed`'s computation, is never
      taken, since a worker's last task is left to it. Hybrid spreads a little more.
-   - None yet makes `concurrent` faster on more workers. Next: let a worker's last takeable task be taken when it
-     also has resumes queued (publishing that count), so new work and computations spread under affine; then
-     compare again, with cats-effect on the same worker counts.
+   - None yet makes `concurrent` faster on more workers.
+   - **Done: a lone task behind resumes may be taken.** A worker whose one task in `local` waits behind resumes in
+     `home` says so, in a volatile flag set when that happens and cleared once a drain has run the resumes, and offers
+     it; `hasSpare` is what other workers check. Publishing a resume count after every turn and drain instead, the
+     first version, cost `connections` 7–9% and `pingpong` 4% with no task taken, a volatile write per turn
+     (`pool-policies-spare-connections.json`). The
+     owner keeps its own copy of the flag, so the usual case neither writes nor reads it, which brought both back
+     within noise. Release-fast, median of 5 runs, µs/op, `base` the previous commit, `ce` cats-effect with as many
+     threads (`kqueue-demo/bench/results/pool-policies-spare.json`; base against the change on the first five
+     scenarios, 7 runs, `pool-policies-spare-connections-2.json`):
+
+     | scenario | 1-affine | ce-1 | 2-affine base | 2-free | 2-affine | 2-hybrid | ce-2 | 4-affine base | 4-free | 4-affine | 4-hybrid | ce-4 |
+     |---|---|---|---|---|---|---|---|---|---|---|---|---|
+     | pingpong | 7.58 | 22.8 | 7.90 | 7.64 | 7.66 | 7.60 | 23.1 | 7.50 | 7.73 | 7.89 | 7.63 | 24.0 |
+     | concurrent | 2.16 | 10.0 | 2.69 | 2.76 | 2.47 | 2.52 | 7.49 | 3.48 | 5.48 | 4.04 | 3.85 | 9.80 |
+     | connections | 24.0 | 157 | 24.4 | 42.9 | 24.5 | 22.9 | 121 | 23.8 | 42.9 | 22.5 | 24.6 | 118 |
+     | pipelined | 0.71 | 2.27 | 0.72 | 0.73 | 0.66 | 0.72 | 2.96 | 0.68 | 0.87 | 0.71 | 0.68 | 2.30 |
+     | blocking-io | 15.1 | 24.5 | 14.4 | 14.8 | 14.4 | 14.4 | 28.1 | 14.4 | 14.5 | 14.6 | 14.3 | 24.6 |
+     | timers | 0.16 | 1.03 | 0.16 | 0.16 | 0.16 | 0.16 | 0.86 | 0.16 | 0.16 | 0.16 | 0.16 | 0.98 |
+     | fairness (tick) | 1.81 (3.62) | 2.27 (4.22) | 1.78 (3.56) | 0.74 (11.3) | 1.74 (3.62) | 1.82 (3.64) | 2.52 (0.50) | 1.88 (3.77) | 0.89 (14.9) | 1.87 (3.75) | 1.83 (3.67) | 3.04 (0.47) |
+     | mixed (compute) | 23.8 (23.8) | 1187 (19.5) | 23.4 (23.4) | 8.49 (35.1) | 8.26 (36.0) | 8.52 (35.1) | 21.1 (21.1) | 24.3 (24.3) | 8.98 (34.5) | 8.49 (35.6) | 8.40 (34.4) | 109 (21.2) |
+
+     - `mixed`'s computation now moves to an idle worker under affine and hybrid: the ping-pong 23.4 → 8.3 µs on 2
+       workers and 24.3 → 8.5 on 4, a little better than free, which also moves the I/O. Everything else is within
+       noise of the base (`concurrent` alternates between about 2.2 and 2.6 µs from run to run in every build).
+     - `fairness` does not spread under affine. The first version did (traffic 1.85 → 0.72 µs), since it also
+       offered a task queued by the last resume of a drain; but the ticker alone on a worker then ticks in 14 µs
+       instead of 3.7, the slow polls of a lone worker again (step 5), so this was left as is.
+     - `concurrent` is still slower on more workers under every policy, but not for want of spreading: its 64
+       futures do spread under affine (the client's workers take 43 tasks on 2 workers, 152 on 4), and placing new
+       futures round-robin on the workers as they are spawned, tried behind a switch, gained nothing (2.31 → 2.45 µs
+       on 2 workers, 3.73 → 3.84 on 4) and was dropped. The cause is the kernel; see below. Cats-effect gains from a
+       second worker there (10.0 → 7.49 µs), though not from four (9.80), and is slower throughout.
+     - Gears is 3–6 times faster on `pingpong`, `connections`, `pipelined` and `timers`, and faster on `blocking-io`.
+       Cats-effect keeps `fairness` ticks at 0.5 µs on 2 and 4 workers, its ticker on a thread of its own without the
+       slow-poll problem; and with one thread its ping-pong is starved by the computation (1187 µs) and its
+       `mixed` on 4 threads is erratic (109). Its `blocking` (0.07 µs, not shown) is not the same measurement as
+       gears', so is left out.
+   - **Found: macOS serialises descriptor system calls per process.** `concurrent` on 1, 2 and 4 workers spends 0.70,
+     1.47 and 7.56 s in the kernel for the same 400,000 round trips, whatever the spin count (0, 4 or 16 polls before
+     blocking); sampled, the threads are mostly in `read` and `write` (54% of samples), then `kevent`. Four one-worker
+     benches as threads of one process run at 15.5 µs a round trip with 39.5 s in the kernel, whereas as four processes
+     they run at 3.4–3.9 µs: one process tops out at about 260,000 round trips a second however its threads share the
+     work, below one worker alone (470,000), and separate processes reach about 1.1 million. Plain C shows the same,
+     so it is neither gears nor Scala Native: per call, on threads of one process against separate processes (µs,
+     Darwin 27.0, 10 cores):
+
+     | call | 1 | 4 threads | 8 threads | 8 processes |
+     |---|---|---|---|---|
+     | `getppid`, no descriptor | 0.17 | 0.17 | 0.17 | 0.14 |
+     | `fstat` of its own descriptor | 0.23 | 2.06 | 6.88 | 0.27 |
+     | 1-byte `write` and `read` on its own socket pair | 0.61 | 4.20 | 14.0 | 0.66 |
+
+     Non-blocking 64-byte ping-pong over socket pairs, busy-polling: 504k, 277k and 183k round trips a second in
+     total on 1, 2 and 4 pairs of threads, against 544k, 790k and 1.11M as processes. Every call naming a descriptor
+     contends on something per process, presumably the descriptor table's lock, `kevent` included, since it names
+     the kqueue. So on macOS, a pool of reactors in one process cannot scale I/O beyond about one busy thread, and
+     each extra thread making descriptor calls slows all the others: a worker spinning on `kevent` with nothing to do
+     slows the busy ones, and is itself slowed by them, which may be the lone worker's slow polls (step 5). Cats-effect
+     is under the same limit.
+     - What this changes: on macOS, the pool helps computation, as in `mixed`, and not I/O. Fewer descriptor calls
+       per op (registrations batched into one `kevent`, no wasted `read`) are worth more than before, since each saves
+       the others' time too; so are fewer threads making them, such as idle workers blocking at once rather than
+       spinning, or I/O on fewer workers than compute. Whether the pool scales I/O needs measuring on Linux, whose
+       descriptor lookups take no lock, and io_uring's registered descriptors need no lookup at all.
+     - Left as is: four client workers connecting 512 sockets at once fill the server's listen backlog
+       (`kern.ipc.somaxconn`, 128) faster than it accepts, and a Unix socket with a full backlog refuses the
+       connection; the bench's `--connections` should stay at or under 128 with more than one worker.
 
 ## Proposed changes to Scala Native
 

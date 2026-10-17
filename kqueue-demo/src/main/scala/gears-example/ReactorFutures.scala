@@ -45,6 +45,21 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   // task doing I/O here stays, with its descriptors. On this worker's thread only.
   private val home = new java.util.ArrayDeque[Runnable]()
 
+  // Whether the lone task in `local` waits behind resumes in `home`, so that other workers may take it: set when that
+  // happens, and cleared once a drain has run the resumes. Read by other workers; `loneShared` is the owner's copy, so
+  // that the usual case, with nothing to share, neither writes nor reads it.
+  @volatile private var loneSpare = false
+  private var loneShared = false
+
+  /** Offers the lone task in `local`, which waits behind resumes, to idle workers. */
+  private def shareLone(): Unit = {
+    if !loneShared then {
+      loneShared = true
+      loneSpare = true
+    }
+    pool.offerWork(index)
+  }
+
   // Whether this worker is in a turn of its reactor, which runs completions: a task queued meanwhile from this thread
   // is a resume from the reactor, of an op finished there.
   private var inTurn = false
@@ -58,13 +73,27 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   private[gearsexample] def push(task: Runnable): Unit =
     if inTurn && pool.policy != TakePolicy.Free then home.add(task)
     else if !local.push(task) then pool.inject(task, index)
-    else if local.size > 1 then pool.offerWork(index)
+    else {
+      val queued = local.size
+      if queued > 1 then pool.offerWork(index)
+      else if queued == 1 && !home.isEmpty then shareLone()
+    }
+
+  /** Whether another worker may take some of this one's tasks: one is queued behind others that this worker is about
+    * to run first, its resumes or another queued task. A lone queued task is left to it, since taking it would only move
+    * it. Read from any thread.
+    */
+  private[gearsexample] def hasSpare: Boolean = {
+    val queued = local.size
+    queued > 1 || queued == 1 && loneSpare
+  }
 
   /** A turn of this worker's reactor. */
   private def turn(block: Boolean): Unit = {
     inTurn = true
     try reactor.runOnce(block)
     finally inTurn = false
+    if !home.isEmpty && local.size == 1 then shareLone()
   }
 
   /** Runs `body` on this worker's thread: now if called there, or queued and the worker woken otherwise. */
@@ -145,6 +174,10 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
       runTask(home.poll())
       resumes -= 1
     }
+    if loneShared then {
+      loneShared = false
+      loneSpare = false
+    }
     var remaining = local.size
     while remaining > 0 do {
       val next = local.pop()
@@ -159,8 +192,8 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
     catch case t: Throwable => t.printStackTrace()
   }
 
-  /** Takes tasks from another worker with some to spare, or from outside the pool, and returns whether it found any. A
-    * worker's last queued task is left to it, since it is about to run it, and taking it would only move it.
+  /** Takes tasks from another worker with some to spare (see `hasSpare`), or from outside the pool, and returns whether
+    * it found any.
     */
   private def takeWork(): Boolean = {
     val injected = pool.injected()
@@ -176,7 +209,7 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
         var i = 0
         while i < workers.length do {
           val source = workers((start + i) % workers.length)
-          if (source ne this) && source.local.size > 1 then {
+          if (source ne this) && source.hasSpare then {
             val moved = source.local.moveHalfTo(local)
             if moved > 0 then {
               taken += moved
@@ -352,7 +385,7 @@ final class ReactorPool private[gearsexample] (val backend: Backend, size: Int, 
 
   /** Whether there is work `worker` could take: from outside the pool, or spare on another worker. */
   private[gearsexample] def hasWorkFor(worker: ReactorWorker): Boolean =
-    !injector.isEmpty || workers.exists(other => (other ne worker) && other.local.size > 1)
+    !injector.isEmpty || workers.exists(other => (other ne worker) && other.hasSpare)
 
   /** Runs `body` after `delay` on the worker running the caller, or on the first worker from outside the pool. */
   def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
