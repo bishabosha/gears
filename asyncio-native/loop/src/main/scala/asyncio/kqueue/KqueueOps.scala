@@ -74,6 +74,12 @@ trait Command extends KqueueOp with Repeatable {
     * filter instead, which fires again while the descriptor stays ready.
     */
   def edgeTriggered: Boolean = false
+
+  /** Whether waiting for this write command should also add the descriptor's persistent read filter, in the same
+    * `kevent` call: true for a connect, since a connected socket is then read, and with the filter added before
+    * anything can arrive, its first read can wait for an edge instead of trying.
+    */
+  def registersReads: Boolean = false
 }
 
 /** A command built from a function, for `Ops.whenReady`. */

@@ -215,8 +215,8 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
   - What remained per connection was mostly elsewhere: the raw loop took 20.4 µs to gears' 45.1. The server made a
     second `accept` per connection, the next accept tried at once and finding none (item 10 removed it); the client made
     two registrations (the connect's one-shot write filter and the first read's edge-triggered filter) and a read tried
-    before the echo arrived; and each side resumes several continuations, about 3.5 signal pairs on the client and 2 on
-    the server.
+    before the echo arrived (item 11 removed one registration and the read); and each side resumes several
+    continuations, about 3.5 signal pairs on the client and 2 on the server.
 
 - [x] **8. Poll a few times without blocking before sleeping.**
   Done in `KqueueReactor.runOnce`: before blocking, it polls without blocking up to `spinPolls` times
@@ -261,6 +261,16 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
   - The server's accept loop made two `accept` calls per connection, the second finding none; now one
     (`kqueue-demo/bench/results/readable-counts-counts.json`). Release-fast, median of 5 runs: `connections` 47.5 → 45.8
     µs (−3.5%), the rest unchanged or slightly faster, within 3.5% (`kqueue-demo/bench/results/readable-counts.json`).
+
+- [x] **11. Add a connecting socket's read filter with its connect.**
+  Done in `KqueueReactor.armWithReads`: waiting for a connect (`Command.registersReads`) adds the descriptor's
+  persistent read filter in the same `kevent` call as the connect's one-shot write filter. Nothing can then arrive
+  unreported, as kqueue reports data already waiting when a filter is added, so the socket starts out not ready to read
+  and its first read waits for an edge instead of trying.
+  - Per new connection the client went from 2 registrations and 2 reads (one tried before the echo arrived) to 1 and 1
+    (`kqueue-demo/bench/results/connect-registers-reads-counts.json`). Two system calls fewer, but no measurable time:
+    release-fast, median of 5 runs, `connections` 43.5 → 43.1 µs (−0.8%), the rest within noise (`blocking` +4.7%, which
+    this does not touch; `kqueue-demo/bench/results/connect-registers-reads.json`).
 
 ## Profiling findings
 

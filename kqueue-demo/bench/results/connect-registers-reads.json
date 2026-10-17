@@ -1,0 +1,324 @@
+{
+  "started": "2026-10-17T12:45:43+02:00",
+  "finished": "2026-10-17T12:46:43+02:00",
+  "load_average": {
+    "before": [
+      6.5673828125,
+      7.623046875,
+      6.05712890625
+    ],
+    "after": [
+      4.3115234375,
+      6.71044921875,
+      5.82470703125
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.counts",
+      "benchmark": "gears",
+      "build": {
+        "commit": "a0bb364408f63049039d44fffecea3c0b98c8f91",
+        "subject": "decide against batching kqueue changes, now there are almost none",
+        "worktree_changes": true,
+        "worktree_changes_hash": "85ac68da05bc",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T12:39:56+02:00"
+      },
+      "median": {
+        "pingpong": 7.65,
+        "pingpong-fresh-ops": 7.68,
+        "pingpong-deadline": 7.8,
+        "concurrent": 3.65,
+        "connections": 43.46,
+        "pipelined": 0.68,
+        "blocking": 6.22,
+        "timers": 0.21,
+        "fairness-tick": 3.37,
+        "fairness": 3.37,
+        "mixed-compute": 26.67,
+        "mixed": 26.68
+      },
+      "samples": {
+        "pingpong": [
+          7.62,
+          7.68,
+          7.75,
+          7.63,
+          7.65
+        ],
+        "pingpong-fresh-ops": [
+          7.65,
+          7.68,
+          7.75,
+          7.67,
+          7.7
+        ],
+        "pingpong-deadline": [
+          7.8,
+          8.05,
+          7.76,
+          7.73,
+          8.25
+        ],
+        "concurrent": [
+          3.65,
+          3.72,
+          3.64,
+          3.56,
+          4.12
+        ],
+        "connections": [
+          41.85,
+          43.72,
+          44.11,
+          43.46,
+          42.65
+        ],
+        "pipelined": [
+          0.71,
+          0.68,
+          0.66,
+          0.68,
+          0.69
+        ],
+        "blocking": [
+          6.22,
+          7.28,
+          6.04,
+          6.6,
+          6.0
+        ],
+        "timers": [
+          0.21,
+          0.2,
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.37,
+          3.36,
+          3.41,
+          3.34,
+          3.42
+        ],
+        "fairness": [
+          3.37,
+          3.36,
+          3.41,
+          3.34,
+          3.42
+        ],
+        "mixed-compute": [
+          26.4,
+          26.67,
+          26.92,
+          26.43,
+          26.68
+        ],
+        "mixed": [
+          26.4,
+          26.68,
+          26.94,
+          26.44,
+          26.69
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.connect-reads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "6db7e97bccbdda6eca77b39a9c374170dd3120ff",
+        "subject": "know when a descriptor has drained from kqueue's counts, saving the server's second accept",
+        "worktree_changes": true,
+        "worktree_changes_hash": "de029cbaf1bc",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T12:44:43+02:00"
+      },
+      "median": {
+        "pingpong": 7.66,
+        "pingpong-fresh-ops": 7.67,
+        "pingpong-deadline": 7.7,
+        "concurrent": 3.63,
+        "connections": 43.13,
+        "pipelined": 0.69,
+        "blocking": 6.51,
+        "timers": 0.21,
+        "fairness-tick": 3.42,
+        "fairness": 3.42,
+        "mixed-compute": 26.51,
+        "mixed": 26.51
+      },
+      "samples": {
+        "pingpong": [
+          7.62,
+          7.75,
+          7.66,
+          7.67,
+          7.64
+        ],
+        "pingpong-fresh-ops": [
+          7.65,
+          7.77,
+          7.67,
+          7.67,
+          7.68
+        ],
+        "pingpong-deadline": [
+          7.65,
+          8.2,
+          7.7,
+          7.72,
+          7.67
+        ],
+        "concurrent": [
+          3.55,
+          3.69,
+          3.55,
+          3.63,
+          3.8
+        ],
+        "connections": [
+          42.22,
+          43.33,
+          42.85,
+          43.13,
+          43.59
+        ],
+        "pipelined": [
+          0.7,
+          0.66,
+          0.71,
+          0.69,
+          0.66
+        ],
+        "blocking": [
+          6.51,
+          5.92,
+          7.56,
+          6.68,
+          5.9
+        ],
+        "timers": [
+          0.21,
+          0.2,
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.34,
+          3.44,
+          3.45,
+          3.42,
+          3.38
+        ],
+        "fairness": [
+          3.34,
+          3.44,
+          3.45,
+          3.42,
+          3.38
+        ],
+        "mixed-compute": [
+          26.51,
+          26.9,
+          26.92,
+          26.36,
+          26.45
+        ],
+        "mixed": [
+          26.51,
+          26.92,
+          26.93,
+          26.37,
+          26.45
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.connect-reads@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "6db7e97bccbdda6eca77b39a9c374170dd3120ff",
+        "subject": "know when a descriptor has drained from kqueue's counts, saving the server's second accept",
+        "worktree_changes": true,
+        "worktree_changes_hash": "de029cbaf1bc",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T12:44:43+02:00"
+      },
+      "median": {
+        "pingpong": 4.97,
+        "pingpong-deadline": 5.98,
+        "concurrent": 1.17,
+        "connections": 20.3,
+        "pipelined": 0.47,
+        "blocking": 3.75,
+        "timers": 0.62
+      },
+      "samples": {
+        "pingpong": [
+          4.95,
+          5.01,
+          5.02,
+          4.97,
+          4.87
+        ],
+        "pingpong-deadline": [
+          5.98,
+          6.15,
+          5.98,
+          5.98,
+          5.96
+        ],
+        "concurrent": [
+          1.22,
+          1.11,
+          1.17,
+          1.21,
+          1.15
+        ],
+        "connections": [
+          17.99,
+          19.93,
+          21.3,
+          20.31,
+          20.3
+        ],
+        "pipelined": [
+          0.46,
+          0.57,
+          0.47,
+          0.47,
+          0.47
+        ],
+        "blocking": [
+          3.65,
+          3.87,
+          3.73,
+          3.75,
+          4.17
+        ],
+        "timers": [
+          0.61,
+          0.63,
+          0.61,
+          0.62,
+          0.64
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
