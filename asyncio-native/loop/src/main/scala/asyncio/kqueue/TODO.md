@@ -640,6 +640,24 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      - Nothing in that code finds a file without the lock, and there is no sysctl or flag for it. Linux finds files
        without a lock shared by the process (RCU over the descriptor table, and a cheaper path still while a process
        has one thread), and FreeBSD with `fget_unlocked`, so a pool there would not meet this.
+     - **FreeBSD fixed it in 2009.** Jeff Roberson's commit `bf422e5f27` (14 May 2009, "Implement a lockless file
+       descriptor lookup algorithm in fget_unlocked()", in FreeBSD 8.0) made lookups lock-free; Mateusz Guzik
+       refined it since (2014, retrying only the reference count; 2020, `e10f063b30`, "fd: streamline
+       fget_unlocked"). Today's `fget_unlocked_flags` (`sys/kern/kern_descrip.c`) reads the file from the table
+       without a lock, takes a reference with an atomic increment of that file's own count
+       (`refcount_acquire_if_not_zero(&fp->f_count)`), then checks with the entry's sequence counter that the entry
+       did not change meanwhile, falling back to a slower path if it did. Old tables are kept until the whole table is
+       freed and files' memory is never returned, so a stale pointer is safe to follow. Threads therefore contend only
+       on the same file, never on separate sockets; `fget_only_user` skips even the atomic when nothing else can
+       change the table, as in a process of one thread. Linux did the same with RCU in 2005. XNU's `fp_lookup` is the
+       pattern FreeBSD left: lock the table, look up, count the reference under the lock, lock again to drop it. XNU
+       already uses lock-free lookups (SMR) for Mach port names, just not for descriptors.
+     - **But FreeBSD's `sigprocmask` takes a per-process lock on every call.** `kern_sigprocmask`
+       (`sys/kern/kern_sig.c`) takes `PROC_LOCK(p)` even to read the mask, though it changes only the calling
+       thread's (`td->td_sigmask`), where XNU changes every thread's but reads without a lock. FreeBSD's libc
+       `setjmp` saves the mask and `longjmp` restores it, so there both halves of every continuation resume would take
+       the process lock: from the source, not measured. The `_setjmp` fix proposed to Scala Native matters there as
+       much as on macOS; our `setjmp_override.S` is for macOS on arm64 only and would need a FreeBSD version.
      - Kqueues without a descriptor, the workloops of `kevent_id` that libdispatch uses, are looked up under another
        lock, `fd_kqhashlock`, also one per process, so they would only take `kevent`'s own lookup off `fd_lock`, not
        those of `read` and `write`; and they are a private interface, made for libdispatch's threads. Not pursued.
@@ -755,6 +773,26 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      they are. Only polling tells the mechanisms apart: polling `mach_msg` is three times cheaper than polling
      `kevent` (1.32 against 3.87 µs on one pair), and the per-process lock shows in polled `kevent` on 8 threads
      (50.2 against 28.0 µs as processes). But a reactor must poll its kqueue for sockets anyway.
+   - **SwiftNIO meets the same lock; Apple's way round it is Network.framework.** SwiftNIO's POSIX transport
+     (`NIOPosix`, `SelectorKqueue.swift`) is built as this pool is: a `MultiThreadedEventLoopGroup` of threads, each
+     with a kqueue it polls with `kevent`, woken by an `EVFILT_USER` filter triggered with `NOTE_TRIGGER`; so its
+     threads share the descriptor lock as ours do. On Apple platforms SwiftNIO offers NIOTransportServices instead,
+     Network.framework for the connections and Dispatch for the threads. Network.framework uses Apple's user-space
+     networking stack, over Skywalk, whose shared-memory channels need a system call per batch of packets rather
+     than per message (`__channel_sync`, which takes the descriptor lock once for the batch); Skywalk is undocumented
+     and left out of XNU's published source. Apple introduced the stack on iOS and tvOS (WWDC 2018, "Introducing
+     Network.framework"); according to Apple's developer forums it reached macOS in macOS 12, is used by default, and
+     falls back to the kernel's sockets in some cases (a firewall being on is said to be one, unconfirmed). That is the
+     closest to a fix Apple has: not a lock-free lookup, but fewer system calls by keeping TCP and UDP out of the
+     kernel. Not measured: whether it is used for loopback, how a Network.framework server scales with threads, and
+     whether anything but Swift or Objective-C could drive it (it has a C API, `nw_connection_t` and `nw_listener_t`).
+   - **A design per OS, not per backend.** macOS and FreeBSD share kqueue, and so `KqueueBackend`, but not these
+     limits. On FreeBSD, as on Linux, a pool of reactor threads in one process should scale I/O, and the take
+     policies matter again; on macOS it cannot, and I/O scales only across processes. So what the pool is for, its
+     default size and whether to shard across processes depend on the OS, not on the backend: the kqueue backend
+     needs to know which it runs on. Both need the signal mask out of continuation resume, macOS because `longjmp`
+     takes its process lock, FreeBSD because `setjmp` and `longjmp` both take its. To confirm by measuring on
+     FreeBSD, with `descriptor-contention.c` (its `kqueue` mode builds there too) and the pool.
    - **What this changes.** On macOS, a pool of reactors in one process cannot scale I/O beyond about one busy thread,
      and each extra thread making descriptor calls slows all the others: a worker spinning on `kevent` with nothing
      to do slows the busy ones, and is itself slowed by them, which may be the lone worker's slow polls (step 5).
