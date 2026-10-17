@@ -6,11 +6,23 @@ today; with items 1–3 below it would cost 1 (just the `read`), and about 2 whe
 
 ## Measuring
 
-Measure each item with `kqueuedemo gears bench`, comparing saved executables with `kqueue-demo/bench/compare.py`
-(see its header). Its scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path),
-`pingpong-deadline` (item 5), `concurrent` (item 4), `pipelined` (items 2 and 3 on simultaneous reads and writes), and
-`blocking` (item 6). `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a reference for what
-a hand-written loop costs. Medians from the same build differ by about 1% between runs (`blocking` by up to about 6%).
+Measure each item with `kqueuedemo gears bench`, comparing saved executables with `kqueue-demo/bench/compare.py` (see
+its header). The scenarios map onto the items below: `pingpong` (items 2, 3 and the resume path), `pingpong-fresh-ops`
+(the same, building its ops anew for every message), `pingpong-deadline` (item 5), `timers` (item 5: 1,000 timers
+pending at a time, half firing and half cancelled), `concurrent` (item 4), `pipelined` (items 2 and 3 on simultaneous
+reads and writes), `blocking` (item 6), and two that check that queued work is not starved: `mixed`, ping-pong while a
+compute future on the same thread works in slices, reporting the compute side as `mixed-compute`, and `fairness`,
+pipelined traffic while a ticker future on the same thread awaits zero-length timers, reporting the time between ticks
+as `fairness-tick`. `kqueuedemo bench` runs the same scenarios against `KqueueLoop` directly, as a reference for what a
+hand-written loop costs, except the gears-only `pingpong-fresh-ops`, `mixed` and `fairness`. Medians from the same build
+differ by about 1% between runs (`blocking` by up to about 6%).
+
+Every scenario has run since the first measurement, after one fix made for them: `mixed` never finished, because nothing
+bounded the work a turn took on. `ReactorScheduler.drain` ran tasks until its queue was empty, including tasks they
+queued, and the reactor delivered resolved promises the same way, while the scheduler then woke itself with a promise
+per drain; so a computation yielding between slices kept the loop from ever polling. Both now take only what was queued
+when they start. Nothing else changed beyond noise (release-fast, median of 7 runs, against the start with the same
+scenarios: `blocking` +7%, the rest within 3%; `kqueue-demo/bench/results/starvation-fix.json`).
 
 ## What each operation costs now
 

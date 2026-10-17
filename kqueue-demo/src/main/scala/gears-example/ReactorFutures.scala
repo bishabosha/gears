@@ -88,12 +88,18 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     wakeup = new Wakeup(promise)
   }
 
+  /** Runs the tasks queued when it starts. Tasks they queue wait for the next drain, after the reactor's turn: work
+    * that keeps queueing more, such as a computation yielding between slices, would otherwise keep I/O from ever being
+    * polled.
+    */
   private def drain(): Unit = {
-    var task = tasks.poll()
-    while task != null do {
-      try task.nn.run()
-      catch case t: Throwable => t.printStackTrace()
-      task = tasks.poll()
+    var remaining = tasks.size() // traverses the queue, which stays short
+    while remaining > 0 do {
+      val task = tasks.poll()
+      remaining -= 1
+      if task != null then
+        try task.run()
+        catch case t: Throwable => t.printStackTrace()
     }
   }
 }

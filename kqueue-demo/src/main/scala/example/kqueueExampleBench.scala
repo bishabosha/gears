@@ -32,8 +32,8 @@ import gearsexample.GearsBench
   * side.
   */
 object KQueueExampleBench {
-  private val MessageSize = GearsBench.MessageSize
-  private val MaxEvents = 256
+  private inline val MessageSize = GearsBench.MessageSize
+  private inline val MaxEvents = 256
   private val DeadlineTimer = 1.toUSize
 
   private def register(kq: Int, fd: Int, read: Boolean, oneShot: Boolean): Unit =
@@ -188,6 +188,42 @@ object KQueueExampleBench {
     }
   }
 
+  /** The `timers` scenario with kernel timers: one `kevent` call to add each and one to delete each that is cancelled.
+    */
+  private def timerStress(count: Int): Unit = withLoop { (kq, events) =>
+    var nextId = 1L
+    var done = 0
+    while done < count do {
+      val batch = math.min(GearsBench.TimerBatch, count - done)
+      val firstId = nextId
+      var i = 0
+      while i < batch do {
+        val milliseconds = if i % 2 == 0 then 0 else 60_000
+        val id = nextId.toUSize
+        KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.addTimerOneShot(e(0), id, milliseconds))
+        nextId += 1
+        i += 1
+      }
+      var fired = 0
+      val firing = (batch + 1) / 2
+      while fired < firing do {
+        val polled = KqueueLoop.pollEventsForever(kq, events, MaxEvents)
+        var j = 0
+        while j < polled do {
+          if KqueueLoop.isTimerEvent(events(j)) then fired += 1
+          j += 1
+        }
+      }
+      i = 1
+      while i < batch do {
+        val id = (firstId + i).toUSize
+        KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.deleteTimer(e(0), id))
+        i += 2
+      }
+      done += batch
+    }
+  }
+
   private def blocking(count: Int): Unit = withLoop { (kq, events) =>
     val (readEnd, writeEnd) = KqueueHandles.pipe()
     val tasks = new LinkedBlockingQueue[Runnable]()
@@ -312,7 +348,10 @@ object KQueueExampleBench {
     val known = GearsBench.scenarios.map(_.name)
     for name <- names if !known.contains(name) do
       throw new IllegalArgumentException(s"Unknown scenario `$name`; try ${known.mkString(", ")}")
-    val selected = GearsBench.scenarios.filter(s => names.isEmpty || names.contains(s.name))
+    // `mixed` measures gears scheduling against compute work, and `pingpong-fresh-ops` building ops through the reactor
+    // interface, neither of which a hand-written loop has a counterpart for.
+    val gearsOnly = Set("mixed", "pingpong-fresh-ops", "fairness")
+    val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
       case Address.Unix(path) => Files.deleteIfExists(Paths.get(path))
       case _                  => ()
@@ -329,6 +368,7 @@ object KQueueExampleBench {
           case "concurrent"        => concurrent(address, count, connections)
           case "pipelined"         => pipelined(address, count)
           case "blocking"          => blocking(count)
+          case "timers"            => timerStress(count)
         }
         val seconds = (System.nanoTime() - start) / 1e9
         println(

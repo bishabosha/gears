@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicReference
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Address
+import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Reactor
 import asyncio.unsafe.NativeBuffer
@@ -25,7 +26,7 @@ import ReactorFutures.*
 object GearsBench {
 
   /** The size of each message a client sends and the server echoes back. */
-  val MessageSize = 64
+  inline val MessageSize = 64
 
   /** A scenario: its name, what it stresses, how many operations it performs at scale 1, and the client code that
     * performs `count` of them against the echo server at `address`.
@@ -44,6 +45,15 @@ object GearsBench {
       new Client {
         def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false)
+      }
+    ),
+    Scenario(
+      "pingpong-fresh-ops",
+      "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
+      50_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
+          pingPong(r, address, count, deadline = false, freshOps = true)
       }
     ),
     Scenario(
@@ -88,8 +98,111 @@ object GearsBench {
           }
         }
       }
+    ),
+    Scenario(
+      "timers",
+      s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
+      200_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
+          timerStress(r, count)
+      }
+    ),
+    Scenario(
+      "fairness",
+      "pipelined traffic while a ticker on the same thread performs zero-length timers; also reports fairness-tick, "
+        + "the time between ticks, which rises if busy futures stop yielding",
+      200_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
+          fairness(r, address, count)
+      }
+    ),
+    Scenario(
+      "mixed",
+      "pingpong while a compute future on the same thread works in slices, yielding between them; also reports "
+        + "mixed-compute, the time per slice meanwhile",
+      50_000,
+      new Client {
+        def apply(r: Reactor, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit =
+          mixed(r, address, count)
+      }
     )
   )
+
+  /** How many timers the `timers` scenario has pending at once. */
+  inline val TimerBatch = 1000
+
+  /** Arms timers `TimerBatch` at a time: half for 0 ms, which fire, and half for a minute, which are cancelled once the
+    * others have fired. Each timer, armed and then fired or cancelled, is one operation.
+    */
+  private def timerStress(r: Reactor, count: Int)(using Async): Unit = {
+    var done = 0
+    while done < count do {
+      val batch = math.min(TimerBatch, count - done)
+      var fired = 0
+      val counter: Completion[r.Op] = _ => fired += 1
+      val toCancel = scala.collection.mutable.ArrayBuffer.empty[r.Op]
+      var i = 0
+      while i < batch do {
+        if i % 2 == 0 then r.submit(r.ops.timer(0), counter)
+        else {
+          val timer = r.ops.timer(60_000)
+          r.submit(timer, counter)
+          toCancel += timer
+        }
+        i += 1
+      }
+      val firing = (batch + 1) / 2
+      while fired < firing do perform(r, r.ops.timer(0)) // lets the loop turn until the short timers have fired
+      toCancel.foreach(r.cancel)
+      done += batch
+    }
+  }
+
+  /** Prints one result line, in the format `kqueue-demo/bench/compare.py` reads. */
+  def report(name: String, count: Long, seconds: Double): Unit =
+    println(f"bench: $name%-18s $count%10d $seconds%9.3f ${count / seconds}%12.0f ${seconds * 1e6 / count}%8.2f")
+
+  // Where compute slices leave their results, so that the work cannot be optimised away.
+  @volatile private var computeSink = 0L
+
+  /** About ten thousand steps of arithmetic: a slice of CPU-bound work. */
+  private def computeSlice(seed: Long): Long = {
+    var x = seed | 1L
+    var i = 0
+    while i < 10_000 do {
+      x ^= x << 13
+      x ^= x >>> 7
+      x ^= x << 17
+      i += 1
+    }
+    x
+  }
+
+  /** Ping-pongs `count` messages while a compute future on the same reactor thread runs slices of work until they are
+    * done. Between slices it yields to the scheduler, awaiting each slice as its own future, so that the ping-pong
+    * continuations run in between. Reports the compute side as `mixed-compute`: the time per slice over the same
+    * period.
+    */
+  private def mixed(r: Reactor, address: Address, count: Int)(using Async.Spawn): Unit = {
+    var pingPongDone = false
+    var slices = 0L
+    val start = System.nanoTime()
+    val compute = Future {
+      var result = 0L
+      while !pingPongDone do {
+        result += Future(computeSlice(slices)).await
+        slices += 1
+      }
+      computeSink = result
+    }
+    pingPong(r, address, count, deadline = false)
+    pingPongDone = true
+    val seconds = (System.nanoTime() - start) / 1e9
+    compute.await
+    report("mixed-compute", slices, seconds)
+  }
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */
   private def withConnection(r: Reactor, address: Address)(body: Int => Unit)(using Async): Unit = {
@@ -103,7 +216,9 @@ object GearsBench {
   /** Sends `count` messages one at a time, waiting for each echo before sending the next. With `deadline`, each round
     * trip also arms a reactor timer that is cancelled once the echo is back.
     */
-  private def pingPong(r: Reactor, address: Address, count: Int, deadline: Boolean)(using Async): Unit =
+  private def pingPong(r: Reactor, address: Address, count: Int, deadline: Boolean, freshOps: Boolean = false)(using
+      Async
+  ): Unit =
     withConnection(r, address) { fd =>
       val zone = Zone.open()
       try {
@@ -115,11 +230,11 @@ object GearsBench {
         while i < count do {
           if deadline then r.submit(timer, _ => throw new IOException("A round trip timed out"))
           buf.clear()
-          while buf.hasRemaining() do perform(r, write)
+          while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
           buf.clear()
           while buf.hasRemaining() do {
             val before = buf.position()
-            perform(r, read)
+            perform(r, if freshOps then r.ops.read(fd, buf) else read)
             if buf.position() == before then throw new IOException("The server closed the connection")
           }
           if deadline then r.cancel(timer)
@@ -156,6 +271,27 @@ object GearsBench {
         writer.await
       } finally zone.close()
     }
+
+  /** Runs `pipelined` while a ticker future on the same reactor thread performs zero-length timers one after another,
+    * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations
+    * rarely wait must still let it run.
+    */
+  private def fairness(r: Reactor, address: Address, count: Int)(using Async.Spawn): Unit = {
+    var trafficDone = false
+    var ticks = 0L
+    val start = System.nanoTime()
+    val ticker = Future {
+      while !trafficDone do {
+        perform(r, r.ops.timer(0))
+        ticks += 1
+      }
+    }
+    pipelined(r, address, count)
+    trafficDone = true
+    val seconds = (System.nanoTime() - start) / 1e9
+    ticker.await
+    report("fairness-tick", math.max(ticks, 1L), seconds)
+  }
 
   /** Echoes everything a connection sends until it closes. */
   private def echo(r: Reactor, client: Int)(using Async): Unit = {
@@ -250,9 +386,7 @@ object GearsBench {
           val start = System.nanoTime()
           scenario.body(r, address, count, connections)
           val seconds = (System.nanoTime() - start) / 1e9
-          println(
-            f"bench: ${scenario.name}%-18s $count%10d $seconds%9.3f ${count / seconds}%12.0f ${seconds * 1e6 / count}%8.2f"
-          )
+          report(scenario.name, count, seconds)
         }
       }
     } finally
