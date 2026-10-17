@@ -497,8 +497,20 @@ switch: steal any task, steal only tasks not resumed by I/O, or those too once a
    timers and timer stress, the cancel demo), `ReactorFutures.reactor(b)` gives the current worker's reactor, which is
    only theirs until they next suspend: with a pool, such code will need to stay on one worker. No cost: release-fast,
    median of 5 runs, every scenario within 1.4% (`kqueue-demo/bench/results/backend-ops.json`).
-4. [ ] Descriptors shared between kqueue reactors: an owner and a generation per descriptor, readiness reset on a move,
-   and the old reactor dropping its filter when it next fires.
+4. [x] **Descriptors shared between kqueue reactors.** `DescriptorTable`, process-wide like the descriptors, keeps one
+   `Long` per descriptor: a generation that every close bumps (from `DescriptorHooks.closing`, on any thread) and the
+   id of the reactor that last registered a read filter for it. Registering any read filter claims the descriptor. A
+   reactor brings a descriptor's slot up to date when it submits: it starts over, as for a new descriptor, if the
+   generation changed or another reactor has claimed it since. A read event with no read pending, for a descriptor
+   another reactor owns now, makes the reactor delete its filter, one `kevent` call per moved descriptor, and forget
+   the slot. Write filters need none of this: they are one-shot, and an op cannot move while pending. The thread-local
+   close hook could only reach the closing thread's reactor, so before this, a descriptor closed on one thread and
+   reused on another left the first reactor sure that its filter was still registered, waiting for ever.
+   `kqueuedemo gears share` checks both on two reactor threads sharing a pipe: the old reactor must not wake for data
+   the new one owns, and a read of a reused number must complete; without the changes it fails on both. No cost with
+   one worker: release-fast, median of 5 runs, every scenario within 3% (`kqueue-demo/bench/results/shared-descriptors.json`).
+   Left to measure with the pool: deleting the filter eagerly instead, by message to the old reactor, and `EV_DISPATCH`
+   filters, which disable themselves after each event, so that a moved descriptor leaves nothing that can wake anyone.
 5. [ ] The pool: a shared queue, parking and waking idle workers, stealing, and the policy switch. The benchmarks'
    futures share plain variables, which need to become atomic. Blocking work as cats-effect does it, as a second
    strategy beside the current one: the task runs it on its own thread while the worker's reactor and queue pass to a

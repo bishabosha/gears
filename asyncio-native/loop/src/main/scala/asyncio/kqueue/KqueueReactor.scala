@@ -11,6 +11,7 @@ import asyncio.Ops
 import asyncio.Reactor
 import asyncio.Repeatable
 import asyncio.unsafe.DescriptorHooks
+import asyncio.unsafe.DescriptorTable
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
 
@@ -89,18 +90,29 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       */
     var readAvailable = -1L
 
+    /** The descriptor's generation in `DescriptorTable` when this slot last checked; a different one means its number
+      * was closed and reused since.
+      */
+    var generation = 0
+
     def settleReadiness(readiness: Int): Unit = readReadiness = if readEof then KqueueReactor.Ready else readiness
+
+    /** Forgets what is known of reading the descriptor: it was closed, or another reactor reads it now. */
+    def forget(): Unit = {
+      readRegistered = false
+      readReadiness = KqueueReactor.Unknown
+      readEof = false
+      readAvailable = -1
+    }
   }
 
-  // Forgets a descriptor closed on this thread: kqueue drops its filters, and its number may be reused.
+  /** Distinguishes this reactor from the others sharing descriptors with it, in `DescriptorTable`. */
+  private val id = KqueueReactor.nextId.incrementAndGet()
+
+  // Forgets a descriptor closed on this thread: kqueue drops its filters, and its number may be reused. A close on
+  // another thread shows as a new generation instead (see `currentSlot`).
   private val forgetClosed: Int => Unit = fd =>
-    if fd >= 0 && fd < slots.length && slots(fd) != null then {
-      val slot = slots(fd).nn
-      slot.readRegistered = false
-      slot.readReadiness = KqueueReactor.Unknown
-      slot.readEof = false
-      slot.readAvailable = -1
-    }
+    if fd >= 0 && fd < slots.length && slots(fd) != null then slots(fd).nn.forget()
   DescriptorHooks.onClose(forgetClosed)
 
   private var slots = new Array[Slot | Null](64)
@@ -141,7 +153,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     op match {
       case command: Command =>
-        val slot = slotFor(command.fd)
+        val slot = currentSlot(command.fd)
         val read = command.interest == Interest.Read
         // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
         if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
@@ -239,8 +251,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private def waitToRead(command: Command, slot: Slot): Unit =
     if !command.edgeTriggered then {
       slot.readRegistered = false
+      DescriptorTable.claimRead(command.fd, id) // so that another reactor's persistent filter is dropped
       arm(command.fd, read = true)
     } else if !slot.readRegistered then {
+      DescriptorTable.claimRead(command.fd, id)
       KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
         KqueueLoop.addFile(events(0), command.fd, read = true, clear = true)
       }
@@ -426,6 +440,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   def stop(): Unit = running = false
 
+  /** `fd`'s slot, brought up to date for a submission. What it knew no longer holds if the descriptor's number was closed
+    * and reused since, on any thread, or if another reactor has registered a read filter for it since this one did; it
+    * then starts over, as for a new descriptor. A filter of this reactor's that is still registered is harmless: a new
+    * registration replaces it, and an event it reports first is dropped by `dispatch`.
+    */
+  private def currentSlot(fd: Int): Slot = {
+    val slot = slotFor(fd)
+    val entry = DescriptorTable.get(fd)
+    val generation = DescriptorTable.generation(entry)
+    if generation != slot.generation then {
+      slot.forget()
+      slot.generation = generation
+    } else if slot.readRegistered && DescriptorTable.readOwner(entry) != id then slot.forget()
+    slot
+  }
+
   private def slotFor(fd: Int): Slot = {
     require(fd >= 0, "Descriptor must be non-negative")
     if fd >= slots.length then slots = java.util.Arrays.copyOf(slots, math.max(slots.length * 2, fd + 1))
@@ -449,6 +479,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * filter is added.
     */
   private def armWithReads(fd: Int, slot: Slot): Unit = {
+    DescriptorTable.claimRead(fd, id)
     KqueueLoop.createAndRegisterEvents(kq, 2) { events =>
       KqueueLoop.addFile(events(0), fd, read = false, clear = false, oneShot = true)
       KqueueLoop.addFile(events(1), fd, read = true, clear = true)
@@ -469,13 +500,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       if slot != null then {
         val write = isWriteEvent(event)
         val pending = if write then slot.write else slot.read
-        if !write && KqueueLoop.isEOF(event) then slot.readEof = true
         if pending == null then {
-          if !write then { // kept for the next read submitted
-            slot.readReadiness = KqueueReactor.Ready
-            slot.readAvailable = KqueueLoop.data(event).toLong
+          if !write then {
+            val entry = DescriptorTable.get(ident)
+            if DescriptorTable.readOwner(entry) != id || DescriptorTable.generation(entry) != slot.generation then {
+              // Another reactor reads the descriptor now, or its number was reused: this filter is left over. Drop it,
+              // so this reactor no longer wakes for it; it is registered again if a read here needs it.
+              KqueueLoop.deleteFileIfOpen(kq, ident, read = true)
+              slot.forget()
+            } else { // kept for the next read submitted
+              if KqueueLoop.isEOF(event) then slot.readEof = true
+              slot.readReadiness = KqueueReactor.Ready
+              slot.readAvailable = KqueueLoop.data(event).toLong
+            }
           }
         } else {
+          if !write && KqueueLoop.isEOF(event) then slot.readEof = true
           if write then slot.write = null else slot.read = null
           pending.nn match {
             case command: Command =>
@@ -664,6 +704,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 }
 
 object KqueueReactor {
+
+  /** The last id given to a reactor (see `DescriptorTable`); ids start at 1, since 0 means no owner. */
+  private val nextId = new java.util.concurrent.atomic.AtomicInteger(0)
 
   // What a slot knows of its descriptor's read readiness. `Ready`: kqueue reported it readable, or the last read
   // probably left data, so a read is performed at once. `NotReady`: a read would block, so the next waits for an edge.

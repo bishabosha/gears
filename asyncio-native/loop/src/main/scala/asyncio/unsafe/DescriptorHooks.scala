@@ -2,7 +2,8 @@ package asyncio.unsafe
 
 /** Tells code that tracks descriptors, such as a reactor's kqueue registrations, when a descriptor is about to be
   * closed through `PosixSockets.close`, before its number can be reused. Listeners belong to a thread and only hear of
-  * closes on that thread, as a reactor only hears of the descriptors closed on the thread that owns it.
+  * closes on that thread, as a reactor only hears of the descriptors closed on the thread that owns it; a close on any
+  * thread also starts a new generation in `DescriptorTable`, which every reactor can see.
   */
 object DescriptorHooks {
   private val listeners = new ThreadLocal[List[Int => Unit]] {
@@ -18,6 +19,7 @@ object DescriptorHooks {
     * the loop, unlike `foreach`, allocates no closure per close.
     */
   private[unsafe] def closing(fd: Int): Unit = {
+    DescriptorTable.closing(fd)
     var remaining = listeners.get()
     while remaining.nonEmpty do {
       remaining.head(fd)
