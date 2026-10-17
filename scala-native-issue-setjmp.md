@@ -173,3 +173,82 @@ Possible directions, for whoever knows the GC's constraints better:
   register-addressed storage, as libpthread does for its keys.
 - Conditional yieldpoints (`SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0`) poll a global through `scalanative_GC_yield`,
   with no thread-local; measured against trap-based yieldpoints below where available.
+
+## Related: the GC blocks SIGINT and SIGTERM in every thread on macOS
+
+`Synchronizer_acquire` and `Synchronizer_release` (`gc/immix/Synchronizer.c`, and the same in `gc/commix`) block
+SIGINT and SIGTERM for the duration of a collection, so that a handler cannot allocate while the GC holds its lock:
+
+```c
+// Synchronizer_acquire, after taking the lock
+    sigprocmask(SIG_BLOCK, &signalsBlockedDuringGC, NULL);
+...
+// Synchronizer_release, after Synchronizer_ResumeThreads()
+    sigprocmask(SIG_UNBLOCK, &signalsBlockedDuringGC, NULL);
+```
+
+POSIX leaves `sigprocmask` unspecified in a multithreaded process. glibc treats it as `pthread_sigmask`, but on macOS
+it changes the mask of every thread in the process. This C program shows the difference:
+
+```c
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
+
+static volatile int phase = 0;
+
+static void *other(void *how) {
+    sigset_t m;
+    while (phase == 0) ;
+    pthread_sigmask(SIG_BLOCK, NULL, &m);
+    printf("other thread after main's %s: SIGINT blocked = %d\n", (char *)how, sigismember(&m, SIGINT));
+    return NULL;
+}
+
+int main(void) {
+    sigset_t s; sigemptyset(&s); sigaddset(&s, SIGINT);
+    for (int i = 0; i < 2; i++) {
+        pthread_t t; phase = 0;
+        pthread_create(&t, NULL, other, i == 0 ? "sigprocmask" : "pthread_sigmask");
+        usleep(10000);
+        if (i == 0) sigprocmask(SIG_BLOCK, &s, NULL); else pthread_sigmask(SIG_BLOCK, &s, NULL);
+        phase = 1;
+        pthread_join(t, NULL);
+        if (i == 0) sigprocmask(SIG_UNBLOCK, &s, NULL); else pthread_sigmask(SIG_UNBLOCK, &s, NULL);
+    }
+    return 0;
+}
+```
+
+```
+other thread after main's sigprocmask: SIGINT blocked = 1
+other thread after main's pthread_sigmask: SIGINT blocked = 0
+```
+
+So on macOS each collection blocks SIGINT and SIGTERM in every thread, not only the collecting one. Because release
+resumes the stopped threads before it unblocks, those threads also run briefly with the signals blocked. A gears
+check that reads each thread's mask after every continuation resume saw them blocked after about 1 in 5,000 resumes
+while collections ran (a debug build on 0.5.12), and never with a heap large enough that no collection ran.
+
+The visible effects are small: Ctrl-C and SIGTERM wait for the collection to end. It also interacts with the
+`setjmp` in `scalanative_continuation_resume` above. When an exception escapes a resumed continuation, `longjmp`
+restores the signal mask saved at the resume, which on macOS also applies to every thread. A mask saved during a
+collection's window would then leave SIGINT and SIGTERM blocked in the whole process for good. Using `_setjmp` as
+proposed avoids that too.
+
+Proposed fix: `pthread_sigmask` instead of `sigprocmask` in both synchronizers, which confines the mask to the
+collecting thread as the comment there intends. Arguably the unblock should also come before
+`Synchronizer_ResumeThreads`, or both calls should stay on the collecting thread.
+
+```diff
+--- a/nativelib/src/main/resources/scala-native/gc/immix/Synchronizer.c
++++ b/nativelib/src/main/resources/scala-native/gc/immix/Synchronizer.c
+-    sigprocmask(SIG_BLOCK, &signalsBlockedDuringGC, NULL);
++    pthread_sigmask(SIG_BLOCK, &signalsBlockedDuringGC, NULL);
+...
+-    sigprocmask(SIG_UNBLOCK, &signalsBlockedDuringGC, NULL);
++    pthread_sigmask(SIG_UNBLOCK, &signalsBlockedDuringGC, NULL);
+```
+
+and the same in `gc/commix/Synchronizer.c`.
