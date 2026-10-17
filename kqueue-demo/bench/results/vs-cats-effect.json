@@ -1,0 +1,320 @@
+{
+  "started": "2026-10-17T19:05:54+02:00",
+  "finished": "2026-10-17T19:11:56+02:00",
+  "load_average": {
+    "before": [
+      2.99365234375,
+      4.353515625,
+      5.3583984375
+    ],
+    "after": [
+      1.8486328125,
+      2.83740234375,
+      4.27734375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "gears",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.cond",
+      "benchmark": "gears",
+      "build": {
+        "commit": "6b94fba76200301c763c31f52ff371c6de414d6f",
+        "subject": "record that the GC's sigprocmask calls can deadlock collections on macOS",
+        "worktree_changes": true,
+        "worktree_changes_hash": "7c9eddebcf78",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T18:41:20+02:00"
+      },
+      "median": {
+        "pingpong": 7.51,
+        "pingpong-fresh-ops": 7.49,
+        "pingpong-deadline": 7.5,
+        "concurrent": 2.11,
+        "connections": 41.51,
+        "pipelined": 0.65,
+        "blocking": 5.3,
+        "timers": 0.18,
+        "fairness-tick": 3.25,
+        "fairness": 1.63,
+        "mixed-compute": 27.04,
+        "mixed": 27.09
+      },
+      "samples": {
+        "pingpong": [
+          7.89,
+          7.51,
+          7.45,
+          7.3,
+          7.65
+        ],
+        "pingpong-fresh-ops": [
+          7.85,
+          7.49,
+          7.56,
+          7.33,
+          7.42
+        ],
+        "pingpong-deadline": [
+          7.71,
+          7.81,
+          7.5,
+          7.41,
+          7.4
+        ],
+        "concurrent": [
+          2.11,
+          2.04,
+          2.16,
+          2.08,
+          2.21
+        ],
+        "connections": [
+          40.96,
+          41.51,
+          41.56,
+          40.45,
+          41.82
+        ],
+        "pipelined": [
+          0.65,
+          0.66,
+          0.63,
+          0.67,
+          0.63
+        ],
+        "blocking": [
+          5.29,
+          5.3,
+          5.3,
+          5.34,
+          5.68
+        ],
+        "timers": [
+          0.18,
+          0.18,
+          0.18,
+          0.19,
+          0.19
+        ],
+        "fairness-tick": [
+          3.22,
+          3.25,
+          3.22,
+          3.36,
+          3.27
+        ],
+        "fairness": [
+          1.61,
+          1.63,
+          1.61,
+          1.68,
+          1.63
+        ],
+        "mixed-compute": [
+          27.04,
+          27.54,
+          27.06,
+          26.65,
+          26.62
+        ],
+        "mixed": [
+          27.16,
+          27.66,
+          27.09,
+          26.66,
+          26.63
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.cond@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "6b94fba76200301c763c31f52ff371c6de414d6f",
+        "subject": "record that the GC's sigprocmask calls can deadlock collections on macOS",
+        "worktree_changes": true,
+        "worktree_changes_hash": "7c9eddebcf78",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T18:41:20+02:00"
+      },
+      "median": {
+        "pingpong": 4.97,
+        "pingpong-deadline": 5.87,
+        "concurrent": 1.11,
+        "connections": 18.7,
+        "pipelined": 0.48,
+        "blocking": 3.71,
+        "timers": 0.6
+      },
+      "samples": {
+        "pingpong": [
+          4.97,
+          5.3,
+          5.05,
+          4.91,
+          4.9
+        ],
+        "pingpong-deadline": [
+          5.87,
+          6.11,
+          5.9,
+          5.85,
+          5.85
+        ],
+        "concurrent": [
+          1.09,
+          1.21,
+          1.11,
+          1.1,
+          1.11
+        ],
+        "connections": [
+          19.16,
+          18.45,
+          17.62,
+          20.49,
+          18.7
+        ],
+        "pipelined": [
+          0.48,
+          0.46,
+          0.55,
+          0.48,
+          0.57
+        ],
+        "blocking": [
+          3.99,
+          3.71,
+          3.68,
+          3.64,
+          3.78
+        ],
+        "timers": [
+          0.63,
+          0.6,
+          0.61,
+          0.59,
+          0.59
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/cebench@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "b5054b6db7b17fc7efde2c42bd90eb2e6ba9b1e7",
+        "subject": "link benchmark builds with conditional yieldpoints, which cannot deadlock a collection on macOS",
+        "worktree_changes": true,
+        "worktree_changes_hash": "e59f40b2e5f4",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:04:49+02:00"
+      },
+      "median": {
+        "pingpong": 23.01,
+        "pingpong-deadline": 26.78,
+        "concurrent": 9.85,
+        "connections": 150.26,
+        "pipelined": 2.15,
+        "blocking": 0.07,
+        "timers": 1.01,
+        "fairness-tick": 3.3,
+        "fairness": 2.25,
+        "mixed-compute": 19.24,
+        "mixed": 1173.08
+      },
+      "samples": {
+        "pingpong": [
+          23.3,
+          23.09,
+          22.97,
+          22.98,
+          23.01
+        ],
+        "pingpong-deadline": [
+          26.71,
+          27.29,
+          26.83,
+          26.73,
+          26.78
+        ],
+        "concurrent": [
+          9.9,
+          9.99,
+          9.85,
+          9.85,
+          9.81
+        ],
+        "connections": [
+          151.11,
+          150.25,
+          151.4,
+          149.64,
+          150.26
+        ],
+        "pipelined": [
+          2.15,
+          2.16,
+          2.12,
+          2.12,
+          2.17
+        ],
+        "blocking": [
+          0.07,
+          0.07,
+          0.07,
+          0.07,
+          0.07
+        ],
+        "timers": [
+          1.01,
+          1.02,
+          1.01,
+          1.01,
+          1.01
+        ],
+        "fairness-tick": [
+          3.28,
+          3.3,
+          3.39,
+          3.41,
+          3.29
+        ],
+        "fairness": [
+          2.24,
+          2.25,
+          2.24,
+          2.32,
+          2.25
+        ],
+        "mixed-compute": [
+          19.25,
+          19.26,
+          19.23,
+          19.23,
+          19.24
+        ],
+        "mixed": [
+          1174.01,
+          1173.88,
+          1172.21,
+          1172.58,
+          1173.08
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

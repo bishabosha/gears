@@ -417,6 +417,42 @@ step is measured against the one before, as above, with `connections` as well.
   `turns-combined-mixed-check.json`). The ticker's cost is the trade the turn budget makes: the futures beside a busy
   one get as many turns as before, each a little further apart.
 
+## Against cats-effect and fs2
+
+`kqueue-demo/ce-bench` writes the same scenarios with cats-effect 3.7.1 and fs2-io 3.14.0, the current releases, whose
+Scala Native runtime has the design planned below: a work-stealing pool whose workers each poll their own kqueue
+(`KqueueSystem`). Same message size, counts and result lines; the echo server runs on a runtime of its own with one
+worker, and the clients on another, one worker unless `--workers` says otherwise. Build it with
+`PROJECT=ceBench kqueue-demo/bench/build.sh` and compare it as `<label>=<path>@raw`.
+
+Release-fast, conditional yieldpoints, median of 5 runs, µs/op (`kqueue-demo/bench/results/vs-cats-effect.json`):
+
+| scenario | gears | hand-written loop | cats-effect |
+|---|---|---|---|
+| pingpong | 7.51 | 4.97 | 23.0 |
+| pingpong-deadline | 7.50 | 5.87 | 26.8 |
+| concurrent | 2.11 | 1.11 | 9.85 |
+| connections | 41.5 | 18.7 | 150 |
+| pipelined | 0.65 | 0.48 | 2.15 |
+| blocking | 5.30 | 3.71 | 0.07 |
+| timers | 0.18 | 0.60 | 1.01 |
+| fairness (tick) | 1.63 (3.25) | | 2.25 (3.30) |
+| mixed (compute) | 27.1 (27.0) | | 1173 (19.2) |
+
+- I/O costs 3–5 times what gears does. In ping-pong, both sides of cats-effect sleep in `kevent64` for every message,
+  two thread wake-ups per round trip, where gears' spin-before-blocking (item 8) leaves 0.6. Per round trip it makes
+  about 24 system calls to gears' 17: 8 `@blocking` calls (`read` twice on each side, one of them finding nothing yet,
+  `write`, `kevent64`), each with the `sigprocmask`/`sigaltstack` pair that gears avoids with item 9. When busy
+  (`concurrent`), its CPU goes to the GC (23%), its run loop (21%), clearing memory (10%) and thread-locals (9%).
+  More client workers made no difference (1, 2, 4 and 10 workers within 6%).
+- `mixed`: with a compute fiber always runnable, the worker polls its kqueue rarely, so a round trip waits about 60
+  compute slices (1.2 ms); the compute side runs faster for it. gears polls after every round of tasks.
+- Not like for like: `blocking` (`IO.blocking` runs on the calling thread, handing the worker's role to another, so
+  a run of them stays put; gears hands each task to a worker thread and back), and `timers` (a fiber per timer).
+- The echo server is a plain read/write loop, as gears' is. Writing it as `reads.through(writes)` cost cats-effect a
+  further 18% in ping-pong and 34% in `concurrent`.
+- Its run on more workers is the comparison to make once gears has a pool too.
+
 ## A thread-pooled scheduler
 
 Planned: a pool of worker threads, each owning a reactor and running futures as `ReactorScheduler` does now, which
