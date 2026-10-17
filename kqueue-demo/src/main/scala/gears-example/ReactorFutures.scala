@@ -185,6 +185,25 @@ object ReactorFutures {
     } finally waiter.inUse = false
   }
 
+  /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued, so the futures
+    * sharing its thread run first, as a long computation should between slices. Cheaper than awaiting a future spawned
+    * to the same end. Throws `CancellationException` if the caller has been cancelled by the time it resumes.
+    */
+  def yieldNow()(using ac: Async): Unit = {
+    ac.withGroup(CompletionGroup.Unlinked).await(Yield)
+    if ac.group.isCancelled then throw new CancellationException()
+  }
+
+  /** Never ready when polled, and completes a listener as soon as it is added, so that awaiting it resumes the caller
+    * from the back of its scheduler's queue.
+    */
+  private object Yield extends Async.Source[Unit] {
+    override def poll(): Option[Unit] = None
+    def poll(k: Listener[Unit]): Boolean = false
+    def onComplete(k: Listener[Unit]): Unit = k.completeNow((), this)
+    def dropListener(k: Listener[Unit]): Unit = ()
+  }
+
   private val done = Success(())
 
   /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the

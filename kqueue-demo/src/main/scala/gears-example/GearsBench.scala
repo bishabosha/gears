@@ -195,9 +195,8 @@ object GearsBench {
   }
 
   /** Ping-pongs `count` messages while a compute future on the same reactor thread runs slices of work until they are
-    * done. Between slices it yields to the scheduler, awaiting each slice as its own future, so that the ping-pong
-    * continuations run in between. Reports the compute side as `mixed-compute`: the time per slice over the same
-    * period.
+    * done. Between slices it yields to the scheduler with `yieldNow`, so that the ping-pong continuations run in
+    * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
   private def mixed(r: Reactor, address: Address, count: Int)(using Async.Spawn): Unit = {
     var pingPongDone = false
@@ -206,7 +205,8 @@ object GearsBench {
     val compute = Future {
       var result = 0L
       while !pingPongDone do {
-        result += Future(computeSlice(slices)).await
+        result += computeSlice(slices)
+        yieldNow()
         slices += 1
       }
       computeSink = result

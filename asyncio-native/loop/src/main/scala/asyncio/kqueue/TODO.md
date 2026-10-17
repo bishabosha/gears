@@ -398,6 +398,13 @@ step is measured against the one before, as above, with `connections` as well.
   per two messages, the resumed one and the fast one, instead of one per message), and `mixed-compute` +39%, one slice
   per round trip instead of two (`kqueue-demo/bench/results/turn-fast-path.json`). This is what Tokio's cooperative
   budget does, per task poll.
+- A voluntary yield (`ReactorFutures.yieldNow`): suspends the caller and queues its resume behind the tasks already
+  queued, by awaiting a source that completes its listener as soon as it is added. gears has no yield of its own, so
+  `mixed` yielded by awaiting each slice as a future of its own, which took two turns per slice, the slice's and the
+  resume's; with `yieldNow` it takes one. `mixed-compute` 37.0 → 28.1 µs (−24%), and `mixed` ping-pong 18.5 → 28.1 µs
+  (+52%): both back to where they were before the turn budget, as the thread now alternates one slice with one round
+  trip, so this changes the share rather than the total. The rest within 2% (`kqueue-demo/bench/results/yield-now.json`,
+  under a load average of 9). The benchmark itself changed here: the before side runs the old `mixed`.
 
 ## Proposed changes to Scala Native
 
