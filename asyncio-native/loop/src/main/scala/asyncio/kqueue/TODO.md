@@ -598,6 +598,15 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   (release-fast, median of 7 runs, µs/op before → after: `pingpong` 10.6 → 10.5, `concurrent` 5.5 → 5.5, `pipelined`
   3.1 → 3.1, all −0.6% to −1.6%, at the edge of the noise). Not worth depending on the struct's layout for that, so the
   accessors stay on posixlib. It also suggests per-event C calls are not where the remaining time goes.
+- [x] **Persistent write filters — measured, and kept one-shot.** Read filters are registered once, persistent and
+  edge-triggered (item 11), because reads wait in every round trip. Writes are tried first and nearly always succeed,
+  so a write filter is armed only when one would block, one-shot, and is gone once it fires; nothing is left to clean
+  up when a descriptor moves to another reactor. A persistent edge-triggered write filter would save that arming, but
+  `kqueue-demo/bench/write-events.c` shows what it costs: on a connection in ping-pong, with no write ever waiting, it
+  fires once per turn, when the peer reads and frees send-buffer space, before the echo arrives (1.00 per turn over a
+  Unix socket pair, 0.99 over TCP on loopback; the same with 16 messages per turn, so once per drain rather than per
+  message). In a reactor that is a wake-up or a poll for nothing in every round trip, against a registration saved only
+  when a write blocks, which the benchmark's scenarios almost never do.
 - [x] **SIGPIPE (correctness).**
   Done in `PosixSockets`: every socket gets `SO_NOSIGPIPE` when created (posixlib does not define it: 0x1022 on macOS,
   0x0800 on FreeBSD), so writing to a peer that has gone fails that connection with `EPIPE` instead of raising
