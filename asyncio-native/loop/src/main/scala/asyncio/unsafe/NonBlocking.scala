@@ -2,6 +2,7 @@ package asyncio.unsafe
 
 import java.io.IOException
 import java.nio.ByteBuffer
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.errno
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.unistd
@@ -21,8 +22,9 @@ object NonBlocking {
 
   inline val EOF = -1
 
-  /** Accepts a new connection on `serverFd` in non-blocking mode. Returns the client file descriptor, or -1 if no
-    * client was accepted.
+  /** Accepts a new connection on `serverFd`, which must be non-blocking, and returns it non-blocking too. Returns the
+    * client file descriptor, or -1 if no client was accepted. On macOS and FreeBSD that takes the `accept` alone: an
+    * accepted socket has the listening socket's properties, `O_NONBLOCK` among them (see accept(2)).
     */
   def accept(serverFd: Int): Int = {
     val clientFd = Unblocked.accept(serverFd, null, null)
@@ -31,7 +33,7 @@ object NonBlocking {
       if !transient then throw new IOException(s"Failed to accept connection: ${cError()}")
       -1 // no client was accepted
     } else {
-      PosixSockets.setNonBlocking(clientFd)
+      if !(LinktimeInfo.isMac || LinktimeInfo.isFreeBSD) then PosixSockets.setNonBlocking(clientFd)
       clientFd
     }
   }

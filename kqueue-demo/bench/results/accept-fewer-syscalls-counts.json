@@ -1,0 +1,86 @@
+{
+  "unit": "system calls per new connection, from kqueue-demo/bench/syscalls.py --scenarios connections",
+  "before": {
+    "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.accept-before",
+    "benchmark": "gears",
+    "build": {
+      "commit": "2c91db9f80236731df60810b3c80b494ca05daad",
+      "subject": "add a connections scenario: a new connection for each round trip",
+      "worktree_changes": false,
+      "worktree_changes_hash": null,
+      "mode": "release-fast",
+      "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+      "built": "2026-10-17T12:15:37+02:00"
+    },
+    "unit": "system calls per operation",
+    "scenarios": {
+      "connections": {
+        "client": {
+          "__connect": 1.0,
+          "__fcntl": 2.0,
+          "__sigaltstack": 3.54,
+          "close": 0.99,
+          "kevent (changes)": 1.99,
+          "kevent (poll now)": 4.78,
+          "kevent (wait)": 0.54,
+          "read": 2.0,
+          "sigprocmask": 3.47,
+          "write": 0.97
+        },
+        "other": {
+          "__accept": 1.99,
+          "__fcntl": 1.99,
+          "__sigaltstack": 2.0,
+          "close": 0.98,
+          "kevent (changes)": 0.98,
+          "kevent (poll now)": 4.38,
+          "kevent (wait)": 0.01,
+          "read": 1.98,
+          "sigprocmask": 1.89,
+          "write": 1.0
+        }
+      }
+    }
+  },
+  "after": {
+    "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/kqueuedemo.accept-after",
+    "benchmark": "gears",
+    "build": {
+      "commit": "2c91db9f80236731df60810b3c80b494ca05daad",
+      "subject": "add a connections scenario: a new connection for each round trip",
+      "worktree_changes": true,
+      "worktree_changes_hash": "ebb476988a96",
+      "mode": "release-fast",
+      "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+      "built": "2026-10-17T12:16:58+02:00"
+    },
+    "unit": "system calls per operation",
+    "scenarios": {
+      "connections": {
+        "client": {
+          "__connect": 1.0,
+          "__ioctl": 1.0,
+          "__sigaltstack": 3.31,
+          "close": 0.99,
+          "kevent (changes)": 2.01,
+          "kevent (poll now)": 4.26,
+          "kevent (wait)": 0.31,
+          "read": 1.98,
+          "sigprocmask": 3.31,
+          "write": 1.03
+        },
+        "other": {
+          "__accept": 2.01,
+          "__sigaltstack": 2.06,
+          "close": 0.99,
+          "kevent (changes)": 1.0,
+          "kevent (poll now)": 4.72,
+          "kevent (wait)": 0.04,
+          "read": 2.0,
+          "sigprocmask": 2.01,
+          "write": 0.99
+        }
+      }
+    }
+  }
+}

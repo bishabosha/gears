@@ -3,6 +3,7 @@ package asyncio.unsafe
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import scala.scalanative.annotation.alwaysinline
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.arpa.inet
 import scala.scalanative.posix.errno
 import scala.scalanative.posix.fcntl
@@ -62,13 +63,25 @@ object PosixSockets {
       throw new IOException(s"Failed to set SO_NOSIGPIPE: ${cError()}")
   }
 
+  /** The `ioctl` request that sets or clears non-blocking mode, `_IOW('f', 126, int)` on macOS and FreeBSD. posixlib
+    * does not define it.
+    */
+  private inline val FIONBIO = 0x8004667eL
+
+  /** Puts `fd` in non-blocking mode: on macOS and FreeBSD with one `ioctl(FIONBIO)`, elsewhere with `fcntl`, which
+    * takes two calls, to read the flags and to set them again.
+    */
   def setNonBlocking(fd: Int): Unit = {
-    val flags = fcntl.fcntl(fd, fcntl.F_GETFL, 0)
-    if (flags < 0 || fcntl.fcntl(fd, fcntl.F_SETFL, flags | fcntl.O_NONBLOCK) < 0) {
-      throw new IOException(
-        s"Failed to set socket descriptor to non-blocking: ${cError()}"
-      )
-    }
+    val failed =
+      if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then {
+        val on = stackalloc[CInt]()
+        !on = 1
+        Unblocked.ioctl(fd, FIONBIO.toUSize, on) < 0
+      } else {
+        val flags = fcntl.fcntl(fd, fcntl.F_GETFL, 0)
+        flags < 0 || fcntl.fcntl(fd, fcntl.F_SETFL, flags | fcntl.O_NONBLOCK) < 0
+      }
+    if failed then throw new IOException(s"Failed to set socket descriptor to non-blocking: ${cError()}")
   }
 
   def maxConnections: Int = socket.SOMAXCONN

@@ -84,7 +84,8 @@ By design, on the reactor thread:
 | Close a descriptor | 1 `close`; the kernel drops its filters | `PosixSockets.close` |
 | Gears task queued from the reactor thread, or a promise resolved there | none | `ReactorScheduler.execute`, `resolved` |
 | Wake the loop from another thread | 1 `kevent(NOTE_TRIGGER)`, merged with any already pending | `wakeup` |
-| Accept a connection | `accept` + `fcntl(F_GETFL)` + `fcntl(F_SETFL)` (item 7) | `NonBlocking.accept` |
+| Accept a connection | 1 `accept`: the accepted socket is already non-blocking (item 7) | `NonBlocking.accept` |
+| Open a socket or pipe | 1 `ioctl(FIONBIO)` per descriptor to make it non-blocking, besides opening it | `PosixSockets.setNonBlocking` |
 | Scala Native: each continuation resume, so each `perform` that suspends | `sigprocmask` + `sigaltstack`, from `setjmp` | see the proposed Scala Native changes |
 | Scala Native: each `@blocking` call, here only the waiting `kevent` | `sigprocmask` + `sigaltstack`, from `setjmp` | the same |
 
@@ -193,12 +194,20 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
   clears when it sees the event, so only the first `wakeup` since then makes the syscall. `wakeLock` remains, so that a
   trigger cannot reach the kqueue's descriptor number after `close` has released it.
 
-- [ ] **7. Accept with fewer syscalls.**
-  - On macOS a socket returned by `accept` inherits `O_NONBLOCK` from the listening socket, so the two `fcntl` calls in
-    `NonBlocking.accept` are unnecessary there.
-  - Where they are needed, `ioctl(FIONBIO)` sets the mode in one call instead of two; the same applies to
-    `PosixSockets.setNonBlocking`.
-  - Saves 2 syscalls per accepted connection.
+- [x] **7. Accept with fewer syscalls.**
+  Done in `NonBlocking.accept` and `PosixSockets.setNonBlocking`. On macOS and FreeBSD an accepted socket has the
+  listening socket's properties, `O_NONBLOCK` among them (accept(2)), so accepting takes the `accept` alone, without the
+  two `fcntl` calls; elsewhere it still sets the mode. Setting non-blocking mode, for each socket connected or listening
+  and each pipe, takes one `ioctl(FIONBIO)` there instead of `fcntl(F_GETFL)` and `fcntl(F_SETFL)`, through `Unblocked`,
+  since posixlib's `ioctl` is `@blocking` and has no `FIONBIO`.
+  - Counted per new connection in the `connections` scenario: the server went from 2 `accept` + 2 `fcntl` to 2 `accept`,
+    and the client from 2 `fcntl` to 1 `ioctl` (`kqueue-demo/bench/results/accept-fewer-syscalls-counts.json`).
+    Release-fast, median of 5 runs: `connections` 46.6 → 45.1 µs (−3%), everything else unchanged
+    (`kqueue-demo/bench/results/accept-fewer-syscalls.json`).
+  - What remains per connection is mostly elsewhere: the raw loop takes 20.4 µs to gears' 45.1. The server makes a
+    second `accept` per connection, the next accept tried at once and finding none; the client makes two registrations
+    (the connect's one-shot write filter and the first read's edge-triggered filter) and a read tried before the echo
+    arrives; and each side resumes several continuations, about 3.5 signal pairs on the client and 2 on the server.
 
 - [x] **8. Poll a few times without blocking before sleeping.**
   Done in `KqueueReactor.runOnce`: before blocking, it polls without blocking up to `spinPolls` times
