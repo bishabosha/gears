@@ -31,10 +31,11 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
   private val owner = Thread.currentThread()
 
   // Tasks queued on the reactor thread, almost all of them: resuming a continuation is queued by a completion, which
-  // runs there. A plain array deque, used only from that thread, allocates nothing per task.
-  private val local = new java.util.ArrayDeque[Runnable]()
+  // runs there. A fixed ring that allocates nothing per task, and from which other threads will be able to steal.
+  private val local = new RunQueue
 
-  // Tasks queued from other threads, which wake the loop. `drain` moves them to `local`.
+  // Tasks queued from other threads, which wake the loop, and those that found `local` full. `drain` moves them to
+  // `local`.
   private val remote = new ConcurrentLinkedQueue[Runnable]()
 
   ReactorScheduler.current.set(this)
@@ -45,8 +46,9 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     * reactor thread itself the loop is not blocked, and the task runs before it next blocks.
     */
   def execute(body: Runnable): Unit =
-    if isCurrent then local.add(body)
-    else {
+    if isCurrent then {
+      if !local.push(body) then remote.add(body) // full: the loop is running, so no wake-up is needed
+    } else {
       remote.add(body)
       reactor.wakeup()
     }
@@ -91,19 +93,28 @@ final class ReactorScheduler private[gearsexample] (val reactor: Reactor) extend
     */
   private[gearsexample] def drain(): Unit = {
     fastPathsLeft = ReactorScheduler.FastPathBudget
+    // Tasks from elsewhere join the local ones. Once `local` is full, the one that did not fit runs now and the rest
+    // wait for the next drain, which the loop does not block before: a task it runs could queue more here meanwhile.
     var fromElsewhere = remote.poll()
     while fromElsewhere != null do {
-      local.add(fromElsewhere)
-      fromElsewhere = remote.poll()
+      if local.push(fromElsewhere) then fromElsewhere = remote.poll()
+      else {
+        runTask(fromElsewhere)
+        fromElsewhere = null
+      }
     }
     var remaining = local.size
     while remaining > 0 do {
-      val task = local.poll()
+      val task = local.pop()
       remaining -= 1
-      turnFastPathsLeft = ReactorScheduler.TurnFastPathBudget
-      try task.run()
-      catch case t: Throwable => t.printStackTrace()
+      if task != null then runTask(task)
     }
+  }
+
+  private def runTask(task: Runnable): Unit = {
+    turnFastPathsLeft = ReactorScheduler.TurnFastPathBudget
+    try task.run()
+    catch case t: Throwable => t.printStackTrace()
   }
 }
 

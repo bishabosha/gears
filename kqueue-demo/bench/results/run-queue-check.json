@@ -1,0 +1,145 @@
+{
+  "started": "2026-10-17T19:37:31+02:00",
+  "finished": "2026-10-17T19:37:58+02:00",
+  "load_average": {
+    "before": [
+      4.3935546875,
+      7.59326171875,
+      8.08544921875
+    ],
+    "after": [
+      3.9638671875,
+      7.18359375,
+      7.9189453125
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "pingpong-deadline,pipelined,blocking,blocking-io"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.bio",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "298d3b650be9c92b4190872445d421a86d4bcb1a",
+        "subject": "compare the bench scenarios against cats-effect and fs2",
+        "worktree_changes": true,
+        "worktree_changes_hash": "1803bf6b8e58",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:25:23+02:00"
+      },
+      "median": {
+        "pingpong-deadline": 7.81,
+        "pipelined": 0.64,
+        "blocking": 5.95,
+        "blocking-io": 16.07
+      },
+      "samples": {
+        "pingpong-deadline": [
+          7.47,
+          8.04,
+          8.65,
+          7.47,
+          8.44,
+          7.57,
+          7.81
+        ],
+        "pipelined": [
+          0.64,
+          0.65,
+          0.75,
+          0.64,
+          0.64,
+          0.64,
+          0.68
+        ],
+        "blocking": [
+          5.75,
+          5.96,
+          5.95,
+          5.39,
+          7.0,
+          6.24,
+          5.88
+        ],
+        "blocking-io": [
+          15.06,
+          16.52,
+          15.5,
+          16.07,
+          16.35,
+          16.68,
+          15.25
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.runqueue",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "53394140c0b887bc1f9a6661f564323b132402fe",
+        "subject": "add a scenario alternating blocking work with I/O, to every bench",
+        "worktree_changes": true,
+        "worktree_changes_hash": "6241f539ac6b",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-17T19:36:05+02:00"
+      },
+      "median": {
+        "pingpong-deadline": 7.64,
+        "pipelined": 0.68,
+        "blocking": 6.04,
+        "blocking-io": 16.67
+      },
+      "samples": {
+        "pingpong-deadline": [
+          7.46,
+          7.61,
+          7.64,
+          8.03,
+          8.61,
+          8.73,
+          7.46
+        ],
+        "pipelined": [
+          0.67,
+          0.65,
+          0.68,
+          0.76,
+          0.81,
+          0.74,
+          0.68
+        ],
+        "blocking": [
+          6.11,
+          6.17,
+          5.55,
+          6.04,
+          5.54,
+          6.8,
+          5.52
+        ],
+        "blocking-io": [
+          16.88,
+          17.66,
+          14.41,
+          16.84,
+          15.12,
+          16.67,
+          15.66
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
