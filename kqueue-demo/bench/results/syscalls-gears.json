@@ -1,0 +1,158 @@
+{
+  "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/reorder/bin/kqueuedemo.3aec81d",
+  "benchmark": "gears",
+  "build": {
+    "commit": "3aec81d769989195b2b61b63351443a22ad92e21",
+    "subject": "suspend only for fairness or task would block",
+    "worktree_changes": false,
+    "worktree_changes_hash": null,
+    "mode": "release-fast",
+    "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+    "built": "2026-10-17T11:06:36+02:00"
+  },
+  "unit": "system calls per operation",
+  "scenarios": {
+    "pingpong": {
+      "client": {
+        "__sigaltstack": 1.28,
+        "kevent (poll now)": 3.82,
+        "kevent (wait)": 0.28,
+        "read": 1.0,
+        "sigprocmask": 1.29,
+        "write": 0.97
+      },
+      "other": {
+        "__sigaltstack": 1.06,
+        "kevent (poll now)": 3.01,
+        "kevent (wait)": 0.06,
+        "read": 1.0,
+        "sigprocmask": 1.04,
+        "write": 0.97
+      }
+    },
+    "pingpong-fresh-ops": {
+      "client": {
+        "__sigaltstack": 1.44,
+        "kevent (poll now)": 3.94,
+        "kevent (wait)": 0.44,
+        "read": 0.99,
+        "sigprocmask": 1.43,
+        "write": 0.99
+      },
+      "other": {
+        "__sigaltstack": 1.06,
+        "kevent (poll now)": 3.03,
+        "kevent (wait)": 0.06,
+        "read": 0.99,
+        "sigprocmask": 1.06,
+        "write": 1.0
+      }
+    },
+    "pingpong-deadline": {
+      "client": {
+        "__sigaltstack": 1.34,
+        "kevent (poll now)": 3.79,
+        "kevent (wait)": 0.34,
+        "read": 1.0,
+        "sigprocmask": 1.33,
+        "write": 1.0
+      },
+      "other": {
+        "__sigaltstack": 1.12,
+        "kevent (poll now)": 3.3,
+        "kevent (wait)": 0.12,
+        "read": 1.0,
+        "sigprocmask": 1.13,
+        "write": 0.99
+      }
+    },
+    "concurrent": {
+      "client": {
+        "__sigaltstack": 1.86,
+        "kevent (poll now)": 0.2,
+        "kevent (wait)": 0.02,
+        "read": 1.0,
+        "sigprocmask": 1.85,
+        "write": 1.0
+      },
+      "other": {
+        "__sigaltstack": 1.98,
+        "close": 0.02,
+        "kevent (poll now)": 0.02,
+        "read": 0.97,
+        "sigprocmask": 1.98,
+        "write": 1.0
+      }
+    },
+    "pipelined": {
+      "client": {
+        "__sigaltstack": 0.06,
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.03,
+        "read": 0.02,
+        "sigprocmask": 0.06,
+        "write": 1.01
+      },
+      "other": {
+        "__sigaltstack": 0.03,
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.91,
+        "read": 0.04,
+        "sigprocmask": 0.03,
+        "write": 0.03
+      }
+    },
+    "blocking": {
+      "client": {
+        "__psynch_cvsignal": 1.0,
+        "__sigaltstack": 2.0,
+        "kevent (poll now)": 0.41,
+        "sigprocmask": 2.0
+      },
+      "other": {
+        "__sigaltstack": 0.99,
+        "kevent (changes)": 0.35,
+        "sigprocmask": 1.0
+      }
+    },
+    "timers": {
+      "client": {
+        "kevent (poll now)": 0.01
+      },
+      "other": {}
+    },
+    "fairness": {
+      "client": {
+        "__sigaltstack": 2.07,
+        "kevent (poll now)": 0.07,
+        "read": 0.07,
+        "sigprocmask": 2.06,
+        "write": 0.99
+      },
+      "other": {
+        "__sigaltstack": 0.87,
+        "kevent (poll now)": 0.87,
+        "read": 0.87,
+        "sigprocmask": 0.87,
+        "write": 0.86
+      }
+    },
+    "mixed": {
+      "client": {
+        "__sigaltstack": 3.22,
+        "kevent (poll now)": 1.43,
+        "read": 1.0,
+        "sigprocmask": 3.19,
+        "write": 1.01
+      },
+      "other": {
+        "__sigaltstack": 1.45,
+        "kevent (poll now)": 3.64,
+        "kevent (wait)": 0.45,
+        "read": 0.99,
+        "sigprocmask": 1.45,
+        "write": 1.0
+      }
+    }
+  }
+}
