@@ -21,122 +21,300 @@ import asyncio.Backend
 import asyncio.Completion
 import asyncio.Reactor
 
-/** A gears scheduler that runs everything on the thread that created it, which also drives that thread's reactor:
-  * `ReactorFutures.run` alternates between running queued tasks, such as starting a future or resuming a suspended one,
-  * and turns of the reactor's loop. So code running under this scheduler submits ops to the reactor directly.
+/** One worker of a `ReactorPool`: a thread, the reactor it drives, and the tasks queued for it. Its loop alternates
+  * between running queued tasks, such as starting a future or resuming a suspended one, and turns of the reactor; with
+  * nothing to run, it looks for work on the other workers, and failing that blocks in its reactor until an event, or a
+  * worker with work to spare, wakes it. Code running on a worker submits ops to its reactor directly.
   *
-  * Futures inherit their parent's scheduler, so a program started here, and everything it spawns, runs on this one
-  * thread. There is no work stealing or balancing yet. `reactor` is one of `backend`'s, so it runs any op the backend
-  * builds.
+  * Its reactor is one of `backend`'s, opened on the worker's own thread, so it runs any op the backend builds.
   */
-final class ReactorScheduler private[gearsexample] (val backend: Backend, val reactor: Reactor) extends Scheduler {
-  private val owner = Thread.currentThread()
+final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val index: Int, val reactor: Reactor) {
 
-  // Tasks queued on the reactor thread, almost all of them: resuming a continuation is queued by a completion, which
-  // runs there. A fixed ring that allocates nothing per task, and from which other threads will be able to steal.
-  private val local = new RunQueue
+  /** The thread it runs on, which created it. */
+  private[gearsexample] val owner = Thread.currentThread()
 
-  // Tasks queued from other threads, which wake the loop, and those that found `local` full. `drain` moves them to
-  // `local`.
-  private val remote = new ConcurrentLinkedQueue[Runnable]()
+  // Tasks for this worker, almost all of them: resuming a continuation is queued by a completion, which runs here. A
+  // fixed ring that allocates nothing per task, and from which other workers steal when they run out.
+  private[gearsexample] val local = new RunQueue
 
-  ReactorScheduler.current.set(this)
+  // Tasks that must run on this worker in particular, queued from other threads, which wake it: cancelling an op
+  // pending on its reactor, or arming a timer there. `drain` moves them to `local`.
+  private val inbox = new ConcurrentLinkedQueue[Runnable]()
 
   def isCurrent: Boolean = Thread.currentThread() eq owner
 
-  /** Queues `body` to run on the reactor thread, from any thread. Only another thread has to wake the loop: on the
-    * reactor thread itself the loop is not blocked, and the task runs before it next blocks.
+  /** Queues `task` here, on this worker's thread only. A full queue overflows to the pool's shared queue. With more
+    * queued than this worker is about to run, an idle worker is woken to take some.
     */
-  def execute(body: Runnable): Unit =
-    if isCurrent then {
-      if !local.push(body) then remote.add(body) // full: the loop is running, so no wake-up is needed
-    } else {
-      remote.add(body)
+  private[gearsexample] def push(task: Runnable): Unit =
+    if !local.push(task) then pool.inject(task)
+    else if local.size > 1 then pool.offerWork()
+
+  /** Runs `body` on this worker's thread: now if called there, or queued and the worker woken otherwise. */
+  def sync(body: => Unit): Unit =
+    if isCurrent then body
+    else {
+      inbox.add(() => body)
       reactor.wakeup()
     }
 
   /** Ops that `perform` may still finish without suspending in this round while no other task is queued, reset by each
     * `drain`. Spent, `perform` suspends even for an op that could finish at once, so the reactor's poll gets to run.
     */
-  private[gearsexample] var fastPathsLeft = ReactorScheduler.FastPathBudget
+  private[gearsexample] var fastPathsLeft = ReactorWorker.FastPathBudget
 
   /** Ops that `perform` may still finish without suspending in the running task's turn, even with other tasks queued,
     * reset before each task. Spent, `perform` suspends, so a future whose ops rarely wait still gives up its turn.
     */
   private[gearsexample] var turnFastPathsLeft = 0
 
-  /** Whether no task is queued, so the loop may block. On the reactor thread only. */
-  private[gearsexample] def isIdle: Boolean = local.isEmpty && remote.isEmpty
+  /** For measurement, on this worker's thread only: tasks taken from other workers, and the times it blocked. */
+  private[gearsexample] var stolen = 0L
+  private[gearsexample] var blocked = 0L
 
-  /** Runs `body` after `delay` on the reactor thread, using a reactor timer. */
-  def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+  /** Whether no task is queued here. On this worker's thread only. */
+  private[gearsexample] def isIdle: Boolean = local.isEmpty && inbox.isEmpty
+
+  /** Runs `body` after `delay`, using a timer of this worker's reactor; the returned cancel may be called anywhere. */
+  private[gearsexample] def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
     val cancelTimer = new AtomicReference[(() => Unit) | Null](null)
-    onOwner {
+    sync {
       val timer = reactor.ops.timer(delay.toMillis.toInt)
       reactor.submit(timer, _ => body.run())
       cancelTimer.set(() => reactor.cancel(timer))
     }
     () =>
-      onOwner {
+      sync {
         val cancel = cancelTimer.get()
         if cancel != null then cancel()
       }
   }
-
-  /** Runs `body` now if called on the reactor thread, or queues it there otherwise. */
-  private[ReactorScheduler] inline def onOwner(body: => Unit): Unit =
-    if isCurrent then body else execute(() => body)
-
-  def sync(body: => Unit): Unit = onOwner(body)
 
   /** Runs the tasks queued when it starts. Tasks they queue wait for the next drain, after the reactor's turn: work
     * that keeps queueing more, such as a computation yielding between slices, would otherwise keep I/O from ever being
     * polled.
     */
   private[gearsexample] def drain(): Unit = {
-    fastPathsLeft = ReactorScheduler.FastPathBudget
-    // Tasks from elsewhere join the local ones. Once `local` is full, the one that did not fit runs now and the rest
-    // wait for the next drain, which the loop does not block before: a task it runs could queue more here meanwhile.
-    var fromElsewhere = remote.poll()
-    while fromElsewhere != null do {
-      if local.push(fromElsewhere) then fromElsewhere = remote.poll()
+    fastPathsLeft = ReactorWorker.FastPathBudget
+    // Tasks for this worker in particular, then some from outside the pool, join the local ones. Once `local` is
+    // full, the one that did not fit runs now and the rest wait for the next drain, which the loop does not block
+    // before: a task it runs could queue more here meanwhile.
+    var task = inbox.poll()
+    while task != null do {
+      if local.push(task) then task = inbox.poll()
       else {
-        runTask(fromElsewhere)
-        fromElsewhere = null
+        runTask(task)
+        task = null
       }
+    }
+    var fromOutside = ReactorWorker.InjectedPerDrain
+    task = if fromOutside > 0 then pool.injected() else null
+    while task != null do {
+      fromOutside -= 1
+      if !local.push(task) then {
+        runTask(task)
+        task = null
+      } else task = if fromOutside > 0 then pool.injected() else null
     }
     var remaining = local.size
     while remaining > 0 do {
-      val task = local.pop()
+      val next = local.pop()
       remaining -= 1
-      if task != null then runTask(task)
+      if next != null then runTask(next)
     }
   }
 
   private def runTask(task: Runnable): Unit = {
-    turnFastPathsLeft = ReactorScheduler.TurnFastPathBudget
+    turnFastPathsLeft = ReactorWorker.TurnFastPathBudget
     try task.run()
     catch case t: Throwable => t.printStackTrace()
   }
+
+  /** Takes tasks from another worker with some to spare, or from outside the pool, and returns whether it found any. A
+    * worker's last queued task is left to it, since it is about to run it, and taking it would only move it.
+    */
+  private def steal(): Boolean = {
+    val injected = pool.injected()
+    if injected != null then {
+      push(injected)
+      return true
+    }
+    val workers = pool.workers
+    if workers.length > 1 then {
+      pool.searching.incrementAndGet()
+      try {
+        val start = java.util.concurrent.ThreadLocalRandom.current().nextInt(workers.length)
+        var i = 0
+        while i < workers.length do {
+          val victim = workers((start + i) % workers.length)
+          if (victim ne this) && victim.local.size > 1 then {
+            val taken = victim.local.stealInto(local)
+            if taken > 0 then {
+              stolen += taken
+              return true
+            }
+          }
+          i += 1
+        }
+      } finally pool.searching.decrementAndGet()
+    }
+    false
+  }
+
+  /** Runs until the pool stops, then closes the reactor. */
+  private[gearsexample] def loop(): Unit = {
+    try
+      while !pool.stopped do {
+        drain()
+        if !pool.stopped then
+          if !isIdle || steal() then reactor.runOnce(block = false)
+          else {
+            // About to block: say so first, then look again, so that a worker queueing work meanwhile either sees this
+            // one idle and wakes it, or has its work seen here.
+            pool.markIdle(index)
+            if !isIdle || pool.hasWorkFor(this) then {
+              pool.unmarkIdle(index)
+              reactor.runOnce(block = false)
+            } else {
+              blocked += 1
+              reactor.runOnce(block = true)
+              pool.unmarkIdle(index)
+            }
+          }
+      }
+    finally reactor.close() // Pending ops are cancelled, rejecting any futures still waiting on them.
+  }
 }
 
-object ReactorScheduler {
+object ReactorWorker {
 
-  /** How many ops `perform` may finish without suspending in one round of the scheduler. */
+  /** How many ops `perform` may finish without suspending in one round of a worker. */
   inline val FastPathBudget = 32
 
   /** How many ops `perform` may finish without suspending in one task's turn while other tasks are queued. */
   inline val TurnFastPathBudget = 1
 
-  private val current = new ThreadLocal[ReactorScheduler]()
-
-  /** The scheduler running on this thread, if any. */
-  def onThisThread: ReactorScheduler | Null = current.get()
+  /** How many tasks from outside the pool a worker takes into each round, at most. */
+  inline val InjectedPerDrain = 32
 }
 
-/** gears' suspension support on Scala Native, with a reactor scheduler. */
+/** The thread of a pool's worker other than the first, which runs on the thread that started the pool. It holds its
+  * worker, so that finding the worker running the caller takes no thread-local lookup beyond the current thread.
+  */
+private[gearsexample] final class ReactorWorkerThread(
+    val pool: ReactorPool,
+    index: Int,
+    started: java.util.concurrent.CountDownLatch
+) extends Thread(s"reactor-worker-$index") {
+  var worker: ReactorWorker | Null = null // on this thread only
+
+  override def run(): Unit = {
+    val mine = new ReactorWorker(pool, index, pool.backend.open()) // opened here, where it hears of closes
+    worker = mine
+    pool.workers(index) = mine
+    started.countDown()
+    started.await() // so that every worker this one may steal from is in `workers`
+    mine.loop()
+  }
+}
+
+/** A gears scheduler over a pool of workers, each a thread driving a reactor of `backend`'s (see `ReactorWorker`).
+  * Futures inherit their parent's scheduler, so a program started by `ReactorFutures.run`, and everything it spawns,
+  * runs on the pool. A task queued on a worker runs there unless another worker, out of work, steals it; queued from
+  * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
+  * thread that called `run`.
+  */
+final class ReactorPool private[gearsexample] (val backend: Backend, size: Int) extends Scheduler {
+  require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
+
+  /** The workers, by index; filled in as each starts on its own thread. */
+  private[gearsexample] val workers = new Array[ReactorWorker](size)
+
+  // Tasks queued from outside the pool, and those that overflowed a worker's queue.
+  private val injector = new ConcurrentLinkedQueue[Runnable]()
+
+  // A bit per worker blocked in its reactor, or about to be, so that work can be offered to one of them.
+  private val idle = new java.util.concurrent.atomic.AtomicLong(0L)
+
+  /** Workers looking for work on others; while one is, offering work wakes no one else. */
+  private[gearsexample] val searching = new java.util.concurrent.atomic.AtomicInteger(0)
+
+  @volatile private[gearsexample] var stopped = false
+
+  /** For measurement: wake-ups sent to idle workers, offering work and for tasks from outside. */
+  private[gearsexample] val wakeUps = new java.util.concurrent.atomic.AtomicLong
+  private[gearsexample] val injections = new java.util.concurrent.atomic.AtomicLong
+
+  /** The worker running the caller, if it is one of this pool's. */
+  private[gearsexample] def currentWorker: ReactorWorker | Null =
+    Thread.currentThread() match {
+      case thread: ReactorWorkerThread => if thread.pool eq this then thread.worker else null
+      case thread =>
+        val first = workers(0)
+        if first != null && (first.owner eq thread) then first else null
+    }
+
+  /** Queues `body` on the worker running the caller, or on the shared queue from outside the pool. */
+  def execute(body: Runnable): Unit = {
+    val worker = currentWorker
+    if worker != null then worker.push(body) else inject(body)
+  }
+
+  private[gearsexample] def inject(task: Runnable): Unit = {
+    injections.incrementAndGet()
+    injector.add(task)
+    wakeOne()
+  }
+
+  private[gearsexample] def injected(): Runnable | Null = injector.poll()
+
+  /** A worker has more queued than it is about to run: wakes an idle worker to take some, unless one is searching. */
+  private[gearsexample] def offerWork(): Unit =
+    if idle.get() != 0L && searching.get() == 0 then wakeOne()
+
+  private def wakeOne(): Unit = {
+    var mask = idle.get()
+    while mask != 0L do {
+      val i = java.lang.Long.numberOfTrailingZeros(mask)
+      if idle.compareAndSet(mask, mask & ~(1L << i)) then {
+        wakeUps.incrementAndGet()
+        workers(i).reactor.wakeup()
+        return
+      }
+      mask = idle.get()
+    }
+  }
+
+  private[gearsexample] def markIdle(index: Int): Unit = {
+    var mask = idle.get()
+    while !idle.compareAndSet(mask, mask | (1L << index)) do mask = idle.get()
+  }
+
+  private[gearsexample] def unmarkIdle(index: Int): Unit = {
+    var mask = idle.get()
+    while (mask & (1L << index)) != 0L && !idle.compareAndSet(mask, mask & ~(1L << index)) do mask = idle.get()
+  }
+
+  /** Whether there is work `worker` could take: from outside the pool, or spare on another worker. */
+  private[gearsexample] def hasWorkFor(worker: ReactorWorker): Boolean =
+    !injector.isEmpty || workers.exists(other => (other ne worker) && other.local.size > 1)
+
+  /** Runs `body` after `delay` on the worker running the caller, or on the first worker from outside the pool. */
+  def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+    val worker = currentWorker
+    (if worker != null then worker else workers(0)).schedule(delay, body)
+  }
+
+  /** Stops every worker after its current round. */
+  private[gearsexample] def stop(): Unit = {
+    stopped = true
+    workers.foreach(worker => if worker != null then worker.reactor.wakeup())
+  }
+}
+
+/** gears' suspension support on Scala Native, with a pool of reactor workers. */
 object ReactorSupport extends AsyncSupport with NativeSuspend {
-  type Scheduler = ReactorScheduler
+  type Scheduler = ReactorPool
 }
 
 /** Gears futures over a thread-owned reactor. */
@@ -152,18 +330,18 @@ object ReactorFutures {
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
   def perform(b: Backend, op: b.Op)(using ac: Async): Unit = {
-    val scheduler = schedulerFor(b)
-    val r = scheduler.reactor
+    val worker = workerFor(b)
+    val r = worker.reactor
     if ac.group.isCancelled then throw new CancellationException()
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
     // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
     // reactor refuses) is left alone.
     val waiter = b.attachment(op) match {
       case reused: OpWaiter if !reused.inUse =>
-        reused.reset(scheduler)
+        reused.reset(worker)
         reused
       case _ =>
-        val fresh = new OpWaiter(scheduler, op)
+        val fresh = new OpWaiter(worker, op)
         b.attach(op, fresh)
         fresh
     }
@@ -175,13 +353,13 @@ object ReactorFutures {
       // round of the scheduler, so the reactor still polls for futures waiting on events.
       // A refused op, such as a one-shot op submitted twice, throws from either call.
       val finished =
-        if scheduler.turnFastPathsLeft > 0 then {
+        if worker.turnFastPathsLeft > 0 then {
           val now = r.trySubmit(op, waiter.completion)
-          if now then scheduler.turnFastPathsLeft -= 1
+          if now then worker.turnFastPathsLeft -= 1
           now
-        } else if scheduler.fastPathsLeft > 0 && scheduler.isIdle then {
+        } else if worker.fastPathsLeft > 0 && worker.isIdle then {
           val now = r.trySubmit(op, waiter.completion)
-          if now then scheduler.fastPathsLeft -= 1
+          if now then worker.fastPathsLeft -= 1
           now
         } else {
           r.submit(op, waiter.completion)
@@ -196,21 +374,45 @@ object ReactorFutures {
     } finally waiter.inUse = false
   }
 
-  /** The reactor of the worker running the caller, for submitting `b`'s ops directly with a completion of one's own
-    * instead of performing them. It is only the caller's until the caller next suspends, since a task may resume on
-    * another worker, and an op submitted to it must be cancelled on it. With one worker, as now, it is always the same.
+  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, with a
+    * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
+    * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
     */
-  def reactor(b: Backend)(using Async): Reactor.Of[b.Op] =
-    schedulerFor(b).reactor.asInstanceOf[Reactor.Of[b.Op]] // one of `b`'s, as `schedulerFor` checked
+  def submit(b: Backend, op: b.Op, completion: Completion[b.Op])(using Async): Submission = {
+    val worker = workerFor(b)
+    worker.reactor.submit(op, completion)
+    new Submission(worker, op)
+  }
 
-  /** The caller's scheduler, which must be a reactor scheduler of `b`'s. Asking the caller's context, rather than the
-    * thread, saves a thread-local lookup, which on macOS is a call.
+  /** An op submitted with `submit`, which it cancels on the reactor it went to. */
+  final class Submission private[ReactorFutures] (worker: ReactorWorker, op: Any) {
+
+    /** Cancels the op, from any thread: at once if called on the worker it went to, and returns true; otherwise on that
+      * worker's thread, soon, and returns false, so the op is not free to submit again until its completion's
+      * `onCancel` has run.
+      */
+    def cancel(): Boolean =
+      if worker.isCurrent then {
+        worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]) // built by its backend, as `submit` requires
+        true
+      } else {
+        worker.sync(worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]))
+        false
+      }
+  }
+
+  /** The worker running the caller, which must be one of a pool of `b`'s reactors. The pool comes from the caller's
+    * context, but which of its workers runs the caller only from the thread, a thread-local lookup.
     */
-  private def schedulerFor(b: Backend)(using ac: Async): ReactorScheduler { val backend: b.type; val reactor: Reactor.Of[b.Op] } =
-    ac.scheduler match {
-      case own: ReactorScheduler if own.backend eq b => own.asInstanceOf[ReactorScheduler { val backend: b.type; val reactor: Reactor.Of[b.Op] }]
-      case _ => throw new IllegalStateException("Ops must be performed by a program that ReactorFutures.run started")
+  private def workerFor(b: Backend)(using ac: Async): ReactorWorker { val reactor: Reactor.Of[b.Op] } = {
+    val worker = ac.scheduler match {
+      case pool: ReactorPool if pool.backend eq b => pool.currentWorker
+      case _                                      => null
     }
+    if worker == null then
+      throw new IllegalStateException("Ops must be performed by a program that ReactorFutures.run started")
+    worker.asInstanceOf[ReactorWorker { val reactor: Reactor.Of[b.Op] }] // its reactor is one of `b`'s
+  }
 
   /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued, so the futures
     * sharing its thread run first, as a long computation should between slices. Cheaper than awaiting a future spawned
@@ -238,22 +440,22 @@ object ReactorFutures {
     * reset for each submission, so it, its state and its completion are allocated once per op. Each submission may be
     * on a different worker; `scheduler` is the current one's.
     */
-  private final class OpWaiter(first: ReactorScheduler, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
+  private final class OpWaiter(first: ReactorWorker, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
 
     /** Whether a `perform` is using it. On the thread performing the op only. */
     var inUse = false
 
-    /** The scheduler, and so the reactor, of the current submission. Read by `cancel` from any thread. */
-    @volatile private var scheduler = first
+    /** The worker, and so the reactor, of the current submission. Read by `cancel` from any thread. */
+    @volatile private var worker = first
 
     // Counts submissions, so that a cancel requested from another thread for one cannot reach the next.
     @volatile private var generation = 0
 
-    /** Readies it for the op's next submission, on `next`'s reactor, after the previous one has finished. The scheduler
-      * changes before the generation, so a `cancel` that reads the new generation also finds the new scheduler.
+    /** Readies it for the op's next submission, on `next`'s reactor, after the previous one has finished. The worker
+      * changes before the generation, so a `cancel` that reads the new generation also finds the new worker.
       */
-    def reset(next: ReactorScheduler): Unit = {
-      if scheduler ne next then scheduler = next // usually the same, and a volatile write costs more than a read
+    def reset(next: ReactorWorker): Unit = {
+      if worker ne next then worker = next // usually the same, and a volatile write costs more than a read
       generation += 1
       state = OpWaiter.Empty
     }
@@ -309,7 +511,7 @@ object ReactorFutures {
     // which must not be cancelled.
     def cancel(): Unit = {
       val submission = generation
-      val target = scheduler
+      val target = worker
       target.sync(
         if submission == generation && !state.isInstanceOf[Try[?]] then
           target.reactor.cancel(op.asInstanceOf[target.reactor.Op]) // built by its backend, as `perform` requires
@@ -321,29 +523,52 @@ object ReactorFutures {
     private val Empty = new Object
   }
 
-  /** Runs `program` on the calling thread, which becomes the reactor thread: it opens a reactor of `backend`'s, starts
-    * the program as a future under a scheduler bound to this thread, and runs the reactor's loop until the program
-    * finishes. The program builds its ops and uses its handles through the backend it is given, and performs them with
-    * `perform`. The reactor is closed afterwards, and a failure of the program is rethrown.
+  /** Runs `program` on one worker, the calling thread (see the other `run`). */
+  def run(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = run(1)(program)
+
+  /** Runs `program` on a pool of `workers` workers (see `ReactorPool`), each with a reactor of `backend`'s: the calling
+    * thread becomes the first, and the others get threads of their own. The program starts as a future, builds its ops
+    * and uses its handles through the backend it is given, and performs them with `perform`; the workers run until it
+    * finishes. Each reactor is closed afterwards, on its own thread, and a failure of the program is rethrown.
     */
-  def run(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = {
-    val reactor = backend.open()
+  def run(workers: Int)(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = {
+    val pool = new ReactorPool(backend, workers)
+    // Each worker opens its reactor on its own thread, where the reactor hears of descriptors closed (see
+    // `DescriptorHooks`).
+    pool.workers(0) = new ReactorWorker(pool, 0, backend.open())
+    val started = new java.util.concurrent.CountDownLatch(workers - 1)
+    val threads = (1 until workers).map { i =>
+      val thread = new ReactorWorkerThread(pool, i, started)
+      thread.setDaemon(true)
+      thread.start()
+      thread
+    }
+    started.await() // the workers array is complete, and published to every worker, before any task runs
     try {
-      val scheduler = new ReactorScheduler(backend, reactor)
-      given ReactorScheduler = scheduler
+      given ReactorPool = pool
       given ReactorSupport.type = ReactorSupport
       Async.blocking {
-        val main = Future(program(backend)) // queued: it starts with the first drain
-        // Set once, by the reactor thread, when the program completes; polling `main` would allocate every turn.
-        var finished = false
-        main.onComplete(Listener((_, _) => finished = true))
-        while !finished do {
-          scheduler.drain()
-          // Block for events only with no task left; a task queued from another thread wakes the loop.
-          if !finished then reactor.runOnce(block = scheduler.isIdle)
-        }
+        val main = Future(program(backend)) // queued on the first worker: it starts with that worker's first round
+        main.onComplete(Listener((_, _) => pool.stop()))
+        pool.workers(0).loop()
         main.await // already complete, so this only rethrows a failure
       }
-    } finally reactor.close() // Pending ops are cancelled, rejecting any futures still waiting on them.
+    } finally {
+      pool.stop()
+      threads.foreach(_.join())
+      if sys.env.get("GEARS_POOL_STATS").contains("1") then printStats(pool)
+    }
+  }
+
+  /** Prints the pool's counters, once its workers have stopped. */
+  private def printStats(pool: ReactorPool): Unit = {
+    val workers = pool.workers.filter(_ != null)
+    def kqueue(f: asyncio.kqueue.KqueueReactor => Long): String =
+      workers.map(_.reactor match { case k: asyncio.kqueue.KqueueReactor => f(k); case _ => 0L }).mkString(" ")
+    System.err.println(
+      s"pool stats (${workers.length} workers, per worker): stolen ${workers.map(_.stolen).mkString(" ")}; " +
+        s"blocked ${workers.map(_.blocked).mkString(" ")}; taken over ${kqueue(_.takenOver)}; " +
+        s"filters dropped ${kqueue(_.filtersDropped)}; wake-ups ${pool.wakeUps.get()}; injected ${pool.injections.get()}"
+    )
   }
 }

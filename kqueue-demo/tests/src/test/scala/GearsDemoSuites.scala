@@ -4,6 +4,18 @@ package example.tests
 class GearsKQueueDemoSuite extends KQueueDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")
 
+  demoTest("bench: every scenario runs on a pool of four workers, at a tiny scale") {
+    val output = run("bench", "--scale", "0.01", "--connections", "8", "--workers", "4")
+    for (
+      scenario <- Seq(
+        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "connections", "pipelined", "blocking",
+        "blocking-io", "timers", "fairness", "fairness-tick", "mixed", "mixed-compute"
+      )
+    )
+      assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
+    assert(!output.contains("Exception"), output)
+  }
+
   demoTest("kqueue reactors on different threads share a descriptor, dropping stale filters and reused numbers") {
     val output = run("share")
     assert(output.contains("share: 0 failures"), output)
