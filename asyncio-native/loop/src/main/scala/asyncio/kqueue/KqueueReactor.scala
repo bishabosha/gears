@@ -126,9 +126,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
     ()
   }
 
-  /** Runs the completions of every promise resolved so far, on the loop thread. */
+  /** Runs the completions of the promises resolved when it starts, on the loop thread. One resolved meanwhile, such as
+    * by a completion, waits for the next turn, so completions that keep resolving promises cannot keep the loop from
+    * polling.
+    */
   private def deliverResolved(): Unit = {
-    var promise = resolvedQueue.poll()
+    var remaining = resolvedQueue.size() // traverses the queue, which stays short
+    var promise = if remaining > 0 then resolvedQueue.poll() else null
     while promise != null do {
       val pending = promise.pending
       promise.pending = null
@@ -149,7 +153,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int) extends Reactor 
             if failure != null then p.fail(failure.nn) else p.complete()
           }
       }
-      promise = resolvedQueue.poll()
+      remaining -= 1
+      promise = if remaining > 0 then resolvedQueue.poll() else null
     }
   }
 

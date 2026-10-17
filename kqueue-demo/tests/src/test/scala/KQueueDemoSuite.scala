@@ -53,7 +53,10 @@ class KQueueDemoSuite extends DemoSuite {
 
   demoTest("bench: every scenario runs and reports, at a tiny scale") {
     val output = run("bench", "--scale", "0.01", "--connections", "8")
-    for (scenario <- Seq("pingpong", "pingpong-deadline", "concurrent", "pipelined", "blocking"))
+    val gearsOnly =
+      if (commandPrefix.nonEmpty) Seq("mixed", "mixed-compute", "pingpong-fresh-ops", "fairness", "fairness-tick")
+      else Seq.empty
+    for (scenario <- Seq("pingpong", "pingpong-deadline", "concurrent", "pipelined", "blocking", "timers") ++ gearsOnly)
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }
 
