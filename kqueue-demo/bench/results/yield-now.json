@@ -1,0 +1,189 @@
+{
+  "started": "2026-10-17T14:39:45+02:00",
+  "finished": "2026-10-17T14:40:16+02:00",
+  "load_average": {
+    "before": [
+      8.83251953125,
+      9.3095703125,
+      6.1748046875
+    ],
+    "after": [
+      6.494140625,
+      8.69091796875,
+      6.0576171875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "concurrent,pingpong,pipelined,fairness,mixed,connections"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.turn1",
+      "benchmark": "gears",
+      "build": {
+        "commit": "83b07db9c878446a275170d33081972e8f45b5e1",
+        "subject": "record the gears changes' combined effect in the kqueue TODO",
+        "worktree_changes": true,
+        "worktree_changes_hash": "e8182721b6ac",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T14:36:37+02:00"
+      },
+      "median": {
+        "concurrent": 2.14,
+        "pingpong": 7.45,
+        "pipelined": 0.66,
+        "fairness-tick": 3.44,
+        "fairness": 1.72,
+        "mixed-compute": 37.03,
+        "mixed": 18.53,
+        "connections": 41.94
+      },
+      "samples": {
+        "concurrent": [
+          2.24,
+          2.2,
+          2.13,
+          2.13,
+          2.14
+        ],
+        "pingpong": [
+          7.6,
+          7.45,
+          7.35,
+          7.55,
+          7.38
+        ],
+        "pipelined": [
+          0.66,
+          0.71,
+          0.65,
+          0.69,
+          0.65
+        ],
+        "fairness-tick": [
+          3.46,
+          3.53,
+          3.39,
+          3.44,
+          3.43
+        ],
+        "fairness": [
+          1.73,
+          1.77,
+          1.7,
+          1.72,
+          1.72
+        ],
+        "mixed-compute": [
+          37.03,
+          36.97,
+          37.65,
+          36.72,
+          37.4
+        ],
+        "mixed": [
+          18.53,
+          18.5,
+          18.86,
+          18.37,
+          18.74
+        ],
+        "connections": [
+          41.33,
+          41.94,
+          42.42,
+          41.73,
+          42.77
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/6bb3f33b-d25c-4ac9-937c-0c856d57bf80/scratchpad/climb/kqueuedemo.yield",
+      "benchmark": "gears",
+      "build": {
+        "commit": "5bac76e584fcff91d8370408058bc4c0316ef020",
+        "subject": "let perform finish one op per turn of its caller without suspending, even with other tasks queued",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0e038a055d1e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "built": "2026-10-17T14:39:37+02:00"
+      },
+      "median": {
+        "concurrent": 2.17,
+        "pingpong": 7.49,
+        "pipelined": 0.67,
+        "fairness-tick": 3.43,
+        "fairness": 1.71,
+        "mixed-compute": 28.11,
+        "mixed": 28.14,
+        "connections": 42.81
+      },
+      "samples": {
+        "concurrent": [
+          2.33,
+          2.27,
+          2.14,
+          2.14,
+          2.17
+        ],
+        "pingpong": [
+          7.82,
+          7.49,
+          7.61,
+          7.49,
+          7.37
+        ],
+        "pipelined": [
+          0.69,
+          0.66,
+          0.67,
+          0.7,
+          0.65
+        ],
+        "fairness-tick": [
+          3.41,
+          3.43,
+          3.44,
+          3.39,
+          3.47
+        ],
+        "fairness": [
+          1.71,
+          1.71,
+          1.72,
+          1.7,
+          1.73
+        ],
+        "mixed-compute": [
+          28.11,
+          28.25,
+          27.68,
+          28.0,
+          28.93
+        ],
+        "mixed": [
+          28.14,
+          28.29,
+          27.7,
+          28.02,
+          29.01
+        ],
+        "connections": [
+          43.21,
+          42.81,
+          43.46,
+          41.99,
+          42.1
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
