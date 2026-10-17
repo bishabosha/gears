@@ -762,7 +762,19 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      help, in order:
      - Several processes, each with its own pool, sharing the listening socket, inherited across `fork` or passed
        over a Unix socket: the only way measured to scale (510k → 1.36M round trips a second on 1 → 4 processes).
-       Futures cannot move between them, so it is sharding, not one pool.
+       Futures cannot move between them, so it is sharding, not one pool. An architectural choice for later.
+       Prior art, searched for: well-known servers are multi-process (nginx, a single-threaded event loop per worker
+       process; Apache's prefork; PostgreSQL, a process per connection; PHP-FPM; Node's `cluster`; Gunicorn and Puma
+       clustered), but for isolation, robustness or a runtime's global lock, and with Linux in production, where
+       threads scale; none says it does so for macOS. nginx does scale with worker processes on a Mac (an informal,
+       noisy laptop test: about 13,600 → 20,100 requests a second on 1 → 8 workers, flattening after 4,
+       https://www.peterbe.com/plog/experimenting-with-nginx-worker_processes). The threaded runtimes used on macOS,
+       Tokio, SwiftNIO (an event loop and kqueue per thread, as here), Go's and cats-effect, are threads of one
+       process and document no workaround, macOS being mostly where they are developed rather than deployed.
+       Nothing found describes `proc_fdlock` limiting throughput, only its correctness (an exploit write-up,
+       https://www.exploit-db.com/exploits/41794). Linux had the same lock over a process's descriptor table and
+       made lookups lock-free with RCU in 2005 (https://lkml.iu.edu/0506.1/1621.html), which is why its threads
+       scale where XNU's do not.
      - Fewer descriptor calls per op, each now saving two takes of the lock for every thread: registrations batched
        into one `kevent`, no wasted `read`, `readv` and `writev` where several messages wait. Worth it with one worker
        too.
