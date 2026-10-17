@@ -22,7 +22,7 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite {
     assert(!output.contains("reuse was not checked"), output)
   }
 
-  demoTest("the run queue runs every task once while other threads steal from it") {
+  demoTest("the run queue runs every task once while other threads take tasks from it") {
     val output = run("runqueue")
     assert(output.contains("; 0 failures"), output)
   }

@@ -19,9 +19,9 @@ import scala.scalanative.posix.signal.sigset_t
 import scala.scalanative.posix.signal.stack_t
 import scala.scalanative.unsafe.*
 
-/** Checks that a suspended future can resume on a different thread from the one it suspended on, as a work-stealing
-  * scheduler will make it, run as `kqueuedemo gears migrate`. Two threads hand every task to each other, so each resume
-  * moves the future to the other thread. After each one the future checks:
+/** Checks that a suspended future can resume on a different thread from the one it suspended on, as a pool whose
+  * workers take tasks from one another will make it, run as `kqueuedemo gears migrate`. Two threads hand every task to
+  * each other, so each resume moves the future to the other thread. After each one the future checks:
   *   - its own state: locals and a chain of frames below the suspension, which the resume copies to the new thread's
   *     stack;
   *   - the new thread's own signal state: Scala Native gives each thread an alternate signal stack, and on macOS

@@ -136,11 +136,11 @@ object Main {
   def share(): Unit = {
     GearsShare.run()
   }
-  @main(doc = "Checks the run queue under contention: every task runs once, stolen or not")
-  def runqueue(@arg tasks: Int = 2_000_000, @arg thieves: Int = 3): Unit = {
-    GearsRunQueue.run(tasks, thieves)
+  @main(doc = "Checks the run queue under contention: every task runs once, whichever thread takes it")
+  def runqueue(@arg tasks: Int = 2_000_000, @arg takers: Int = 3): Unit = {
+    GearsRunQueue.run(tasks, takers)
   }
-  @main(doc = "Checks that a suspended future resumes correctly on another thread, as work stealing will make it")
+  @main(doc = "Checks that a suspended future resumes correctly on another thread, as a pool's workers will make it")
   def migrate(
       @arg futures: Int = 4,
       @arg resumes: Int = 20_000,
