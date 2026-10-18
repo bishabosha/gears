@@ -978,6 +978,26 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
        - So on macOS neither design scales I/O past a worker or two; a shared kqueue matches a kqueue per worker
          where the per-process lock is the limit, and costs more scheduling to get right. It is the design to try
          on Linux and FreeBSD, where `read` and `write` from several threads do scale.
+       **Lessons from the three, and what stays.** The pool stays as it was, a kqueue per worker thread; the
+       experiments' code was not kept.
+       - An op that can finish at once must finish on the thread that performs it. Any design that hands ops to
+         another thread pays a hand-off and a wake-up each way, which on macOS costs more than the descriptor lock it
+         saves: the dedicated I/O worker tripled ping-pong.
+       - On macOS, I/O does not scale past about one busy worker in a process however readiness is arranged, a kqueue
+         each, one I/O worker or one shared kqueue: every worker that makes descriptor calls slows the others. What
+         helps is fewer descriptor calls from fewer threads: computation on workers that make none (`mixed`'s slices
+         20.6 µs against 35.6 on a worker polling `kevent`), and blocking idle workers without `kevent`.
+       - A thread should poll one kqueue, not two: polling a second each round cost a round trip about 13 µs.
+       - Write readiness should be one-shot, added when a write waits; a persistent edge-triggered write filter fires
+         whenever the peer reads. The reactor already does this.
+       - `wakeup` skips the system call while a wake-up is pending, so anything that leaves the wake event untaken
+         loses later wake-ups; a turn that delivers something skips its poll.
+       - Computation inside a connection's own task spreads only where the connection's I/O does: with a kqueue per
+         worker, or in a future of its own, at the cost of a move back to the I/O worker afterwards.
+       - Found on the way, and fixed in the pool: tasks queued for a worker in particular (`sync`: cancelling an op on
+         its reactor, arming or cancelling a timer there) joined its run queue, from which other workers take tasks,
+         so another worker could run one and call a reactor it does not own. They now run from the inbox at the start
+         of each drain (see "Tasks for a worker in particular" below).
      - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
        which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
        to build.
