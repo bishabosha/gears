@@ -730,7 +730,21 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      (median of 3 runs, host under load about 7). Gears spins 4 polls and then blocks. Re-running the trial of spin
      counts (0, 1, 2, 4, 8) with the `setjmp` override on 1 and 2 workers was too noisy to use, the machine's load
      rising from 3.7 to 13.8 during it (`kqueue-demo/bench/results/spin-polls-retrial.json`): only 0 polls stood
-     out, `connections` 30% slower; to repeat on a quiet machine.
+     out, `connections` 30% slower; to repeat on a quiet machine. **Repeated** with the affine default, load 4–6,
+     median of 5 runs, µs/op, spin count then workers (`kqueue-demo/bench/results/spin-polls-quiet.json`):
+
+     | scenario | 4-1 | 0-1 | 1-1 | 2-1 | 8-1 | 4-4 | 0-4 | 1-4 | 2-4 | 8-4 |
+     |---|---|---|---|---|---|---|---|---|---|---|
+     | pingpong | 6.98 | 7.13 | 6.95 | 6.99 | 6.93 | 6.99 | 7.48 | 7.04 | 7.25 | 7.01 |
+     | concurrent | 2.00 | 1.88 | 1.88 | 1.86 | 2.00 | 3.58 | 3.65 | 3.77 | 3.72 | 3.69 |
+     | connections | 21.1 | 27.8 | 21.4 | 21.5 | 20.9 | 21.2 | 30.3 | 21.3 | 21.9 | 21.4 |
+     | pipelined | 0.67 | 0.63 | 0.67 | 0.67 | 0.68 | 0.64 | 0.67 | 0.67 | 0.68 | 0.68 |
+     | fairness (tick) | 1.45 (2.90) | 1.41 (2.83) | 1.43 (2.87) | 1.40 (2.81) | 1.41 (2.82) | 1.48 (2.96) | 1.49 (2.98) | 1.57 (3.14) | 1.48 (2.96) | 1.53 (3.07) |
+     | mixed (compute) | 22.8 (22.8) | 24.0 (24.0) | 24.3 (24.3) | 22.8 (22.8) | 22.9 (22.9) | 7.90 (35.6) | 8.10 (45.3) | 7.99 (34.2) | 7.94 (34.7) | 8.10 (35.7) |
+
+     Blocking at once is worse (`connections` 31–43% slower, ping-pong 7% on 4 workers); 1 to 8 polls are within a
+     few percent of one another, and idle workers spinning do not measurably slow busy ones on 4 workers. Fewer polls
+     help `concurrent` on one worker a little (1.86–1.88 against 2.00) and cost `connections` as little. Left at 4.
    - **Nothing else in XNU carries socket I/O without the lock.** From the same source, what a reactor could be built
      on instead:
 
@@ -836,6 +850,21 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      - Fewer descriptor calls per op, each now saving two takes of the lock for every thread: registrations batched
        into one `kevent`, no wasted `read`, `readv` and `writev` where several messages wait. Worth it with one worker
        too.
+       **Counted, and batching tried and dropped.** The client's system calls per op on the current build
+       (`kqueue-demo/bench/syscalls.py`, run with `/usr/bin/python3`, whose lldb module loads;
+       `kqueue-demo/bench/results/syscalls-gears-affine.json`): ping-pong one `read` and one `write` a round trip
+       and 2.8 `kevent` polls, the spins before blocking, plus 0.1 waits; `concurrent` one `read`, one `write` and
+       0.26 `kevent`; `pipelined` one `write` a message; `connections` `connect`, `ioctl` (non-blocking), `close`,
+       one `kevent` to register, 4.1 polls and 0.3 waits, one `read`, one `write`. No `read` is wasted and no filter
+       registered twice: steady traffic is down to the data calls and polls. The one registration call left, a new
+       connection's, was moved into the next poll's `kevent`, changes queued in the reactor and applied by the poll,
+       or on their own, marked `EV_RECEIPT`, before a delete or a close on the reactor's thread or when 64 are queued;
+       a refused change then fails its op in the next turn rather than at `submit`, checked by a demo
+       (`register-failure`: refused in a poll, in a cancel's early flush, and by overflowing the queue). It worked,
+       and gained 2.7% on `connections` with one worker and 1.5% with four, within noise of everything else
+       (`kqueue-demo/bench/results/batched-registrations.json`), not enough for a second path for registrations and
+       for failures that no longer surface at `submit`, so it was dropped. What is left to cut is polls, which the
+       spin-count trial above settles: they stay.
      - Fewer threads making them: I/O on one or two workers and computation on the rest, and idle workers blocking at
        once rather than spinning on `kevent`.
        **Measured, and reverted: I/O on one worker, computation on the rest.** An experiment, not kept in the pool:

@@ -1,0 +1,115 @@
+{
+  "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/kq.affdef",
+  "benchmark": "gears",
+  "build": {
+    "project": "kqueueDemo",
+    "commit": "fc720a3e8e0c8d9a4ae87e7e157ee9f63fffe218",
+    "subject": "run tasks queued for a worker in particular on its thread, never where another worker can take them, with a reproducer",
+    "worktree_changes": true,
+    "worktree_changes_hash": "a81b97885032",
+    "mode": "release-fast",
+    "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+    "yieldpoints": "conditional",
+    "built": "2026-10-18T16:17:59+02:00"
+  },
+  "unit": "system calls per operation",
+  "scenarios": {
+    "pingpong": {
+      "client": {
+        "kevent (poll now)": 2.78,
+        "kevent (wait)": 0.1,
+        "read": 1.0,
+        "write": 1.0
+      },
+      "other": {
+        "kevent (poll now)": 1.99,
+        "read": 0.99,
+        "write": 0.96
+      }
+    },
+    "concurrent": {
+      "client": {
+        "kevent (poll now)": 0.24,
+        "kevent (wait)": 0.02,
+        "read": 1.0,
+        "write": 1.0
+      },
+      "other": {
+        "kevent (poll now)": 0.03,
+        "read": 1.01,
+        "write": 1.0
+      }
+    },
+    "connections": {
+      "client": {
+        "__connect": 1.01,
+        "__ioctl": 1.0,
+        "close": 1.0,
+        "kevent (changes)": 1.0,
+        "kevent (poll now)": 4.07,
+        "kevent (wait)": 0.28,
+        "read": 0.99,
+        "write": 1.01
+      },
+      "other": {
+        "__accept": 1.0,
+        "close": 1.0,
+        "kevent (changes)": 1.0,
+        "kevent (poll now)": 2.36,
+        "kevent (wait)": 0.01,
+        "read": 2.04,
+        "write": 1.01
+      }
+    },
+    "pipelined": {
+      "client": {
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.04,
+        "read": 0.02,
+        "write": 1.01
+      },
+      "other": {
+        "kevent (changes)": 0.01,
+        "kevent (poll now)": 0.8,
+        "kevent (wait)": 0.01,
+        "read": 0.01,
+        "write": 0.03
+      }
+    },
+    "blocking": {
+      "client": {
+        "__psynch_cvsignal": 0.99,
+        "kevent (poll now)": 0.51
+      },
+      "other": {
+        "__psynch_cvsignal": -0.01,
+        "kevent (changes)": 0.44
+      }
+    },
+    "fairness": {
+      "client": {
+        "kevent (poll now)": 0.04,
+        "read": 0.04,
+        "write": 1.0
+      },
+      "other": {
+        "kevent (poll now)": 0.28,
+        "kevent (wait)": -0.01,
+        "read": 0.27,
+        "write": 0.26
+      }
+    },
+    "mixed": {
+      "client": {
+        "kevent (poll now)": 2.28,
+        "read": 1.0,
+        "write": 1.0
+      },
+      "other": {
+        "kevent (poll now)": 1.86,
+        "read": 1.0,
+        "write": 1.0
+      }
+    }
+  }
+}

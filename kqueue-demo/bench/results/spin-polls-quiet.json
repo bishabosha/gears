@@ -1,0 +1,1025 @@
+{
+  "started": "2026-10-18T16:27:48+02:00",
+  "finished": "2026-10-18T16:30:31+02:00",
+  "load_average": {
+    "before": [
+      4.2080078125,
+      6.21240234375,
+      6.44140625
+    ],
+    "after": [
+      4.9150390625,
+      5.62255859375,
+      6.1513671875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,pingpong-deadline,concurrent,concurrent-compute,connections,pipelined,fairness,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "4-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp4-1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 6.98,
+        "pingpong-deadline": 7.1,
+        "concurrent": 2.0,
+        "concurrent-compute": 6.27,
+        "connections": 21.1,
+        "pipelined": 0.67,
+        "fairness-tick": 2.9,
+        "fairness": 1.45,
+        "mixed-compute": 22.79,
+        "mixed": 22.79
+      },
+      "samples": {
+        "pingpong": [
+          7.3,
+          7.14,
+          6.98,
+          6.95,
+          6.94
+        ],
+        "pingpong-deadline": [
+          7.12,
+          7.17,
+          6.99,
+          6.99,
+          7.1
+        ],
+        "concurrent": [
+          2.22,
+          1.85,
+          2.0,
+          2.0,
+          1.83
+        ],
+        "concurrent-compute": [
+          6.27,
+          6.28,
+          6.29,
+          6.26,
+          6.24
+        ],
+        "connections": [
+          19.86,
+          21.59,
+          21.1,
+          21.18,
+          20.2
+        ],
+        "pipelined": [
+          0.72,
+          0.67,
+          0.69,
+          0.67,
+          0.66
+        ],
+        "fairness-tick": [
+          2.95,
+          3.13,
+          2.9,
+          2.83,
+          2.83
+        ],
+        "fairness": [
+          1.48,
+          1.57,
+          1.45,
+          1.41,
+          1.42
+        ],
+        "mixed-compute": [
+          22.89,
+          22.79,
+          22.79,
+          22.75,
+          22.69
+        ],
+        "mixed": [
+          22.9,
+          22.79,
+          22.79,
+          22.75,
+          22.7
+        ]
+      }
+    },
+    {
+      "label": "0-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp0-1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 7.13,
+        "pingpong-deadline": 6.99,
+        "concurrent": 1.88,
+        "concurrent-compute": 6.11,
+        "connections": 27.75,
+        "pipelined": 0.63,
+        "fairness-tick": 2.83,
+        "fairness": 1.41,
+        "mixed-compute": 23.99,
+        "mixed": 24.03
+      },
+      "samples": {
+        "pingpong": [
+          8.81,
+          6.79,
+          8.15,
+          7.13,
+          6.64
+        ],
+        "pingpong-deadline": [
+          6.96,
+          6.99,
+          10.7,
+          8.78,
+          6.94
+        ],
+        "concurrent": [
+          1.88,
+          1.85,
+          4.82,
+          1.92,
+          1.82
+        ],
+        "concurrent-compute": [
+          5.92,
+          5.93,
+          7.35,
+          6.11,
+          6.22
+        ],
+        "connections": [
+          27.75,
+          25.05,
+          29.43,
+          28.6,
+          26.72
+        ],
+        "pipelined": [
+          0.62,
+          0.66,
+          0.68,
+          0.63,
+          0.62
+        ],
+        "fairness-tick": [
+          2.82,
+          3.13,
+          3.37,
+          2.83,
+          2.79
+        ],
+        "fairness": [
+          1.41,
+          1.56,
+          1.68,
+          1.41,
+          1.4
+        ],
+        "mixed-compute": [
+          24.16,
+          23.99,
+          24.03,
+          23.96,
+          23.83
+        ],
+        "mixed": [
+          24.23,
+          24.03,
+          24.09,
+          24.0,
+          23.86
+        ]
+      }
+    },
+    {
+      "label": "1-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp1-1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 6.95,
+        "pingpong-deadline": 7.6,
+        "concurrent": 1.88,
+        "concurrent-compute": 6.19,
+        "connections": 21.35,
+        "pipelined": 0.67,
+        "fairness-tick": 2.87,
+        "fairness": 1.43,
+        "mixed-compute": 24.3,
+        "mixed": 24.34
+      },
+      "samples": {
+        "pingpong": [
+          6.95,
+          7.07,
+          7.6,
+          6.84,
+          6.95
+        ],
+        "pingpong-deadline": [
+          6.97,
+          7.15,
+          7.6,
+          7.75,
+          8.84
+        ],
+        "concurrent": [
+          1.82,
+          2.02,
+          1.85,
+          2.15,
+          1.88
+        ],
+        "concurrent-compute": [
+          6.13,
+          6.22,
+          6.19,
+          6.15,
+          6.26
+        ],
+        "connections": [
+          21.76,
+          21.62,
+          20.9,
+          21.35,
+          20.24
+        ],
+        "pipelined": [
+          0.75,
+          0.67,
+          0.7,
+          0.66,
+          0.66
+        ],
+        "fairness-tick": [
+          3.13,
+          3.37,
+          2.87,
+          2.81,
+          2.79
+        ],
+        "fairness": [
+          1.56,
+          1.69,
+          1.43,
+          1.4,
+          1.39
+        ],
+        "mixed-compute": [
+          24.3,
+          24.32,
+          24.52,
+          24.09,
+          24.23
+        ],
+        "mixed": [
+          24.34,
+          24.36,
+          24.64,
+          24.13,
+          24.27
+        ]
+      }
+    },
+    {
+      "label": "2-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp2-1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 6.99,
+        "pingpong-deadline": 7.11,
+        "concurrent": 1.86,
+        "concurrent-compute": 6.19,
+        "connections": 21.45,
+        "pipelined": 0.67,
+        "fairness-tick": 2.81,
+        "fairness": 1.4,
+        "mixed-compute": 22.78,
+        "mixed": 22.78
+      },
+      "samples": {
+        "pingpong": [
+          7.31,
+          6.93,
+          7.03,
+          6.99,
+          6.94
+        ],
+        "pingpong-deadline": [
+          7.11,
+          7.02,
+          8.41,
+          7.11,
+          6.99
+        ],
+        "concurrent": [
+          1.85,
+          1.86,
+          1.86,
+          2.02,
+          1.97
+        ],
+        "concurrent-compute": [
+          6.38,
+          6.19,
+          6.15,
+          6.53,
+          6.18
+        ],
+        "connections": [
+          21.67,
+          21.45,
+          21.69,
+          21.27,
+          20.56
+        ],
+        "pipelined": [
+          0.66,
+          0.81,
+          0.67,
+          0.67,
+          0.67
+        ],
+        "fairness-tick": [
+          2.88,
+          2.99,
+          2.81,
+          2.81,
+          2.79
+        ],
+        "fairness": [
+          1.44,
+          1.5,
+          1.4,
+          1.4,
+          1.39
+        ],
+        "mixed-compute": [
+          22.75,
+          22.83,
+          22.78,
+          22.7,
+          23.01
+        ],
+        "mixed": [
+          22.76,
+          22.84,
+          22.78,
+          22.7,
+          23.04
+        ]
+      }
+    },
+    {
+      "label": "8-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp8-1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 6.93,
+        "pingpong-deadline": 7.04,
+        "concurrent": 2.0,
+        "concurrent-compute": 6.32,
+        "connections": 20.9,
+        "pipelined": 0.68,
+        "fairness-tick": 2.82,
+        "fairness": 1.41,
+        "mixed-compute": 22.92,
+        "mixed": 22.93
+      },
+      "samples": {
+        "pingpong": [
+          7.87,
+          6.88,
+          6.93,
+          7.02,
+          6.93
+        ],
+        "pingpong-deadline": [
+          7.33,
+          7.01,
+          7.04,
+          7.26,
+          7.04
+        ],
+        "concurrent": [
+          2.0,
+          1.86,
+          2.67,
+          1.93,
+          2.03
+        ],
+        "concurrent-compute": [
+          6.26,
+          6.32,
+          6.58,
+          6.29,
+          6.36
+        ],
+        "connections": [
+          20.9,
+          21.13,
+          20.81,
+          21.24,
+          20.57
+        ],
+        "pipelined": [
+          0.7,
+          0.71,
+          0.67,
+          0.67,
+          0.68
+        ],
+        "fairness-tick": [
+          2.82,
+          2.85,
+          2.82,
+          2.86,
+          2.82
+        ],
+        "fairness": [
+          1.41,
+          1.42,
+          1.41,
+          1.43,
+          1.41
+        ],
+        "mixed-compute": [
+          23.36,
+          22.78,
+          22.92,
+          23.47,
+          22.67
+        ],
+        "mixed": [
+          23.4,
+          22.79,
+          22.93,
+          23.53,
+          22.67
+        ]
+      }
+    },
+    {
+      "label": "4-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp4-4",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 6.99,
+        "pingpong-deadline": 7.12,
+        "concurrent": 3.58,
+        "concurrent-compute": 3.78,
+        "connections": 21.2,
+        "pipelined": 0.64,
+        "fairness-tick": 2.96,
+        "fairness": 1.48,
+        "mixed-compute": 35.56,
+        "mixed": 7.9
+      },
+      "samples": {
+        "pingpong": [
+          7.19,
+          6.95,
+          6.99,
+          6.96,
+          7.06
+        ],
+        "pingpong-deadline": [
+          7.08,
+          7.13,
+          7.12,
+          7.05,
+          7.22
+        ],
+        "concurrent": [
+          3.58,
+          3.66,
+          3.56,
+          3.57,
+          3.94
+        ],
+        "concurrent-compute": [
+          3.71,
+          3.93,
+          3.55,
+          3.78,
+          3.93
+        ],
+        "connections": [
+          21.06,
+          23.27,
+          21.16,
+          21.85,
+          21.2
+        ],
+        "pipelined": [
+          0.69,
+          0.64,
+          0.63,
+          0.66,
+          0.63
+        ],
+        "fairness-tick": [
+          3.01,
+          2.96,
+          2.96,
+          2.9,
+          2.93
+        ],
+        "fairness": [
+          1.5,
+          1.48,
+          1.48,
+          1.45,
+          1.47
+        ],
+        "mixed-compute": [
+          34.15,
+          36.12,
+          34.08,
+          35.56,
+          35.74
+        ],
+        "mixed": [
+          7.88,
+          7.81,
+          8.19,
+          8.14,
+          7.9
+        ]
+      }
+    },
+    {
+      "label": "0-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp0-4",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 7.48,
+        "pingpong-deadline": 8.26,
+        "concurrent": 3.65,
+        "concurrent-compute": 3.8,
+        "connections": 30.28,
+        "pipelined": 0.67,
+        "fairness-tick": 2.98,
+        "fairness": 1.49,
+        "mixed-compute": 45.29,
+        "mixed": 8.1
+      },
+      "samples": {
+        "pingpong": [
+          8.42,
+          7.48,
+          7.54,
+          7.18,
+          7.34
+        ],
+        "pingpong-deadline": [
+          16.18,
+          8.26,
+          8.84,
+          7.38,
+          7.46
+        ],
+        "concurrent": [
+          3.45,
+          4.55,
+          3.65,
+          3.9,
+          3.65
+        ],
+        "concurrent-compute": [
+          3.98,
+          3.9,
+          3.52,
+          3.64,
+          3.8
+        ],
+        "connections": [
+          31.55,
+          26.94,
+          30.28,
+          30.54,
+          28.46
+        ],
+        "pipelined": [
+          0.65,
+          0.79,
+          0.67,
+          0.6,
+          0.67
+        ],
+        "fairness-tick": [
+          2.94,
+          2.98,
+          2.99,
+          2.91,
+          3.01
+        ],
+        "fairness": [
+          1.47,
+          1.49,
+          1.49,
+          1.46,
+          1.5
+        ],
+        "mixed-compute": [
+          33.73,
+          45.29,
+          45.45,
+          45.36,
+          33.78
+        ],
+        "mixed": [
+          11.41,
+          8.1,
+          7.97,
+          8.07,
+          11.35
+        ]
+      }
+    },
+    {
+      "label": "1-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp1-4",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 7.04,
+        "pingpong-deadline": 7.15,
+        "concurrent": 3.77,
+        "concurrent-compute": 3.76,
+        "connections": 21.29,
+        "pipelined": 0.67,
+        "fairness-tick": 3.14,
+        "fairness": 1.57,
+        "mixed-compute": 34.17,
+        "mixed": 7.99
+      },
+      "samples": {
+        "pingpong": [
+          8.12,
+          7.0,
+          7.04,
+          7.0,
+          7.13
+        ],
+        "pingpong-deadline": [
+          7.04,
+          7.07,
+          7.15,
+          7.26,
+          7.24
+        ],
+        "concurrent": [
+          3.67,
+          3.68,
+          3.77,
+          3.77,
+          3.83
+        ],
+        "concurrent-compute": [
+          3.71,
+          3.63,
+          3.76,
+          3.78,
+          3.95
+        ],
+        "connections": [
+          20.94,
+          21.28,
+          25.69,
+          21.29,
+          22.6
+        ],
+        "pipelined": [
+          0.63,
+          0.83,
+          0.67,
+          0.62,
+          0.67
+        ],
+        "fairness-tick": [
+          3.21,
+          3.43,
+          3.13,
+          3.14,
+          3.08
+        ],
+        "fairness": [
+          1.6,
+          1.71,
+          1.57,
+          1.57,
+          1.54
+        ],
+        "mixed-compute": [
+          34.11,
+          34.16,
+          34.17,
+          34.18,
+          35.9
+        ],
+        "mixed": [
+          7.76,
+          7.89,
+          8.0,
+          7.99,
+          8.01
+        ]
+      }
+    },
+    {
+      "label": "2-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp2-4",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 7.25,
+        "pingpong-deadline": 7.16,
+        "concurrent": 3.72,
+        "concurrent-compute": 3.75,
+        "connections": 21.94,
+        "pipelined": 0.68,
+        "fairness-tick": 2.96,
+        "fairness": 1.48,
+        "mixed-compute": 34.68,
+        "mixed": 7.94
+      },
+      "samples": {
+        "pingpong": [
+          7.46,
+          7.23,
+          7.25,
+          8.44,
+          7.03
+        ],
+        "pingpong-deadline": [
+          7.16,
+          7.08,
+          7.23,
+          7.4,
+          7.14
+        ],
+        "concurrent": [
+          3.74,
+          3.61,
+          3.55,
+          3.72,
+          3.72
+        ],
+        "concurrent-compute": [
+          3.75,
+          3.62,
+          3.64,
+          3.95,
+          3.89
+        ],
+        "connections": [
+          21.94,
+          21.43,
+          21.41,
+          22.73,
+          23.42
+        ],
+        "pipelined": [
+          0.68,
+          0.68,
+          0.63,
+          0.63,
+          0.69
+        ],
+        "fairness-tick": [
+          2.95,
+          3.0,
+          2.96,
+          2.91,
+          3.12
+        ],
+        "fairness": [
+          1.48,
+          1.5,
+          1.48,
+          1.46,
+          1.56
+        ],
+        "mixed-compute": [
+          36.07,
+          34.68,
+          34.19,
+          35.98,
+          34.12
+        ],
+        "mixed": [
+          7.79,
+          8.56,
+          8.06,
+          7.94,
+          7.89
+        ]
+      }
+    },
+    {
+      "label": "8-4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/sp8-4",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "37c1c6d0b4c7bc05fd176fc44cdd361cf112eae4",
+        "subject": "make the affine policy the default, explaining the slow connections on one worker",
+        "worktree_changes": true,
+        "worktree_changes_hash": "291297e8cc64",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T16:26:22+02:00"
+      },
+      "median": {
+        "pingpong": 7.01,
+        "pingpong-deadline": 7.12,
+        "concurrent": 3.69,
+        "concurrent-compute": 3.9,
+        "connections": 21.42,
+        "pipelined": 0.68,
+        "fairness-tick": 3.07,
+        "fairness": 1.53,
+        "mixed-compute": 35.69,
+        "mixed": 8.1
+      },
+      "samples": {
+        "pingpong": [
+          7.42,
+          7.38,
+          6.99,
+          6.94,
+          7.01
+        ],
+        "pingpong-deadline": [
+          7.24,
+          7.24,
+          7.12,
+          7.11,
+          7.12
+        ],
+        "concurrent": [
+          3.63,
+          3.71,
+          3.69,
+          3.69,
+          3.78
+        ],
+        "concurrent-compute": [
+          3.89,
+          4.02,
+          3.88,
+          3.96,
+          3.9
+        ],
+        "connections": [
+          26.46,
+          26.58,
+          21.18,
+          21.42,
+          20.48
+        ],
+        "pipelined": [
+          0.67,
+          0.68,
+          0.66,
+          0.68,
+          0.83
+        ],
+        "fairness-tick": [
+          3.07,
+          3.02,
+          2.96,
+          3.25,
+          3.14
+        ],
+        "fairness": [
+          1.53,
+          1.51,
+          1.48,
+          1.63,
+          1.57
+        ],
+        "mixed-compute": [
+          35.69,
+          35.49,
+          36.11,
+          37.25,
+          34.1
+        ],
+        "mixed": [
+          8.19,
+          8.01,
+          8.1,
+          8.55,
+          7.92
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
