@@ -1,0 +1,862 @@
+{
+  "started": "2026-10-18T13:38:52+02:00",
+  "finished": "2026-10-18T13:44:09+02:00",
+  "load_average": {
+    "before": [
+      4.333984375,
+      4.89404296875,
+      4.92333984375
+    ],
+    "after": [
+      4.9384765625,
+      5.34619140625,
+      5.15185546875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/v1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 6.96,
+        "pingpong-fresh-ops": 6.97,
+        "pingpong-deadline": 7.0,
+        "concurrent": 1.96,
+        "concurrent-compute": 6.29,
+        "concurrent-offload": 7.29,
+        "connections": 39.74,
+        "pipelined": 0.7,
+        "blocking": 5.19,
+        "blocking-io": 13.34,
+        "timers": 0.17,
+        "fairness-tick": 2.82,
+        "fairness": 1.41,
+        "mixed-compute": 26.82,
+        "mixed": 26.83
+      },
+      "samples": {
+        "pingpong": [
+          7.38,
+          6.93,
+          7.05,
+          6.93,
+          6.96
+        ],
+        "pingpong-fresh-ops": [
+          7.02,
+          6.94,
+          6.92,
+          6.97,
+          6.99
+        ],
+        "pingpong-deadline": [
+          7.0,
+          6.93,
+          7.07,
+          6.98,
+          7.02
+        ],
+        "concurrent": [
+          1.98,
+          1.85,
+          1.82,
+          1.96,
+          1.98
+        ],
+        "concurrent-compute": [
+          6.34,
+          6.35,
+          6.23,
+          6.29,
+          6.26
+        ],
+        "concurrent-offload": [
+          7.48,
+          7.21,
+          7.36,
+          7.24,
+          7.29
+        ],
+        "connections": [
+          39.34,
+          39.84,
+          39.84,
+          37.98,
+          39.74
+        ],
+        "pipelined": [
+          0.7,
+          0.68,
+          0.7,
+          0.66,
+          0.7
+        ],
+        "blocking": [
+          6.19,
+          5.12,
+          5.13,
+          5.19,
+          5.4
+        ],
+        "blocking-io": [
+          13.67,
+          13.34,
+          13.22,
+          13.24,
+          13.53
+        ],
+        "timers": [
+          0.17,
+          0.16,
+          0.16,
+          0.17,
+          0.17
+        ],
+        "fairness-tick": [
+          2.83,
+          2.88,
+          2.75,
+          2.75,
+          2.82
+        ],
+        "fairness": [
+          1.42,
+          1.44,
+          1.37,
+          1.38,
+          1.41
+        ],
+        "mixed-compute": [
+          26.97,
+          26.81,
+          26.8,
+          26.82,
+          26.9
+        ],
+        "mixed": [
+          26.99,
+          26.81,
+          26.81,
+          26.83,
+          26.92
+        ]
+      }
+    },
+    {
+      "label": "4-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/v4a",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 6.99,
+        "pingpong-fresh-ops": 7.02,
+        "pingpong-deadline": 7.11,
+        "concurrent": 3.69,
+        "concurrent-compute": 3.94,
+        "concurrent-offload": 4.03,
+        "connections": 19.93,
+        "pipelined": 0.64,
+        "blocking": 5.65,
+        "blocking-io": 13.19,
+        "timers": 0.17,
+        "fairness-tick": 2.88,
+        "fairness": 1.44,
+        "mixed-compute": 34.01,
+        "mixed": 7.82
+      },
+      "samples": {
+        "pingpong": [
+          7.42,
+          6.89,
+          7.11,
+          6.99,
+          6.94
+        ],
+        "pingpong-fresh-ops": [
+          7.27,
+          7.15,
+          7.01,
+          6.98,
+          7.02
+        ],
+        "pingpong-deadline": [
+          7.18,
+          7.11,
+          7.09,
+          7.01,
+          7.16
+        ],
+        "concurrent": [
+          3.75,
+          3.63,
+          3.87,
+          3.62,
+          3.69
+        ],
+        "concurrent-compute": [
+          4.11,
+          3.84,
+          3.94,
+          3.93,
+          4.02
+        ],
+        "concurrent-offload": [
+          3.94,
+          4.06,
+          3.84,
+          4.11,
+          4.03
+        ],
+        "connections": [
+          19.58,
+          19.93,
+          19.93,
+          21.04,
+          20.04
+        ],
+        "pipelined": [
+          0.63,
+          0.65,
+          0.64,
+          0.63,
+          0.66
+        ],
+        "blocking": [
+          5.65,
+          5.63,
+          5.54,
+          5.65,
+          5.89
+        ],
+        "blocking-io": [
+          13.07,
+          13.32,
+          13.11,
+          13.34,
+          13.19
+        ],
+        "timers": [
+          0.17,
+          0.16,
+          0.17,
+          0.16,
+          0.17
+        ],
+        "fairness-tick": [
+          2.88,
+          2.97,
+          3.1,
+          2.88,
+          2.87
+        ],
+        "fairness": [
+          1.44,
+          1.49,
+          1.55,
+          1.44,
+          1.44
+        ],
+        "mixed-compute": [
+          33.93,
+          34.16,
+          34.01,
+          35.75,
+          33.92
+        ],
+        "mixed": [
+          7.82,
+          8.17,
+          7.83,
+          7.82,
+          7.79
+        ]
+      }
+    },
+    {
+      "label": "4-io1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/v4io",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 7.03,
+        "pingpong-fresh-ops": 7.01,
+        "pingpong-deadline": 7.07,
+        "concurrent": 1.88,
+        "concurrent-compute": 6.3,
+        "concurrent-offload": 5.37,
+        "connections": 19.87,
+        "pipelined": 0.65,
+        "blocking": 5.3,
+        "blocking-io": 13.38,
+        "timers": 0.17,
+        "fairness-tick": 2.92,
+        "fairness": 1.46,
+        "mixed-compute": 20.6,
+        "mixed": 7.35
+      },
+      "samples": {
+        "pingpong": [
+          7.16,
+          7.03,
+          6.93,
+          7.05,
+          6.97
+        ],
+        "pingpong-fresh-ops": [
+          7.12,
+          6.91,
+          6.92,
+          7.16,
+          7.01
+        ],
+        "pingpong-deadline": [
+          7.37,
+          7.07,
+          6.96,
+          7.03,
+          7.07
+        ],
+        "concurrent": [
+          1.88,
+          1.94,
+          1.87,
+          1.87,
+          1.92
+        ],
+        "concurrent-compute": [
+          6.29,
+          6.37,
+          6.29,
+          6.3,
+          6.45
+        ],
+        "concurrent-offload": [
+          5.37,
+          5.04,
+          5.53,
+          5.57,
+          5.28
+        ],
+        "connections": [
+          19.87,
+          20.25,
+          19.81,
+          19.03,
+          20.56
+        ],
+        "pipelined": [
+          0.63,
+          0.68,
+          0.64,
+          0.69,
+          0.65
+        ],
+        "blocking": [
+          5.33,
+          5.25,
+          5.26,
+          5.3,
+          5.73
+        ],
+        "blocking-io": [
+          13.27,
+          13.38,
+          13.21,
+          13.53,
+          13.53
+        ],
+        "timers": [
+          0.16,
+          0.17,
+          0.16,
+          0.17,
+          0.17
+        ],
+        "fairness-tick": [
+          2.92,
+          2.88,
+          2.98,
+          2.96,
+          2.92
+        ],
+        "fairness": [
+          1.46,
+          1.44,
+          1.49,
+          1.48,
+          1.46
+        ],
+        "mixed-compute": [
+          20.6,
+          20.6,
+          20.71,
+          20.65,
+          20.59
+        ],
+        "mixed": [
+          7.27,
+          7.84,
+          7.4,
+          7.35,
+          7.24
+        ]
+      }
+    },
+    {
+      "label": "1+1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/vd2",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 21.86,
+        "pingpong-fresh-ops": 21.72,
+        "pingpong-deadline": 22.39,
+        "concurrent": 3.42,
+        "concurrent-compute": 7.32,
+        "concurrent-offload": 7.88,
+        "connections": 54.01,
+        "pipelined": 8.39,
+        "blocking": 11.34,
+        "blocking-io": 36.1,
+        "timers": 0.19,
+        "fairness-tick": 8.31,
+        "fairness": 8.25,
+        "mixed-compute": 22.45,
+        "mixed": 89.55
+      },
+      "samples": {
+        "pingpong": [
+          22.11,
+          21.33,
+          21.58,
+          21.89,
+          21.86
+        ],
+        "pingpong-fresh-ops": [
+          23.31,
+          22.89,
+          21.72,
+          21.56,
+          21.68
+        ],
+        "pingpong-deadline": [
+          22.39,
+          21.57,
+          23.57,
+          23.38,
+          21.74
+        ],
+        "concurrent": [
+          3.52,
+          3.42,
+          3.62,
+          3.39,
+          3.4
+        ],
+        "concurrent-compute": [
+          7.32,
+          7.32,
+          7.3,
+          7.45,
+          7.62
+        ],
+        "concurrent-offload": [
+          8.05,
+          7.88,
+          7.73,
+          7.98,
+          7.75
+        ],
+        "connections": [
+          54.15,
+          53.72,
+          53.89,
+          54.82,
+          54.01
+        ],
+        "pipelined": [
+          8.5,
+          8.39,
+          8.55,
+          8.02,
+          8.0
+        ],
+        "blocking": [
+          11.25,
+          11.28,
+          11.42,
+          11.34,
+          11.66
+        ],
+        "blocking-io": [
+          35.41,
+          36.19,
+          35.53,
+          36.1,
+          37.05
+        ],
+        "timers": [
+          0.19,
+          0.19,
+          0.2,
+          0.19,
+          0.19
+        ],
+        "fairness-tick": [
+          8.61,
+          8.35,
+          7.92,
+          8.31,
+          7.93
+        ],
+        "fairness": [
+          8.51,
+          8.27,
+          7.87,
+          8.25,
+          7.87
+        ],
+        "mixed-compute": [
+          22.45,
+          22.48,
+          22.47,
+          22.43,
+          22.44
+        ],
+        "mixed": [
+          89.68,
+          89.67,
+          89.55,
+          89.5,
+          89.47
+        ]
+      }
+    },
+    {
+      "label": "1+2",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/vd3",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 21.97,
+        "pingpong-fresh-ops": 22.23,
+        "pingpong-deadline": 21.87,
+        "concurrent": 4.92,
+        "concurrent-compute": 4.98,
+        "concurrent-offload": 5.02,
+        "connections": 56.54,
+        "pipelined": 9.63,
+        "blocking": 11.42,
+        "blocking-io": 35.84,
+        "timers": 0.19,
+        "fairness-tick": 10.82,
+        "fairness": 10.16,
+        "mixed-compute": 21.77,
+        "mixed": 30.9
+      },
+      "samples": {
+        "pingpong": [
+          22.26,
+          23.17,
+          21.97,
+          21.55,
+          21.42
+        ],
+        "pingpong-fresh-ops": [
+          21.99,
+          21.62,
+          23.02,
+          23.43,
+          22.23
+        ],
+        "pingpong-deadline": [
+          21.74,
+          22.33,
+          21.87,
+          21.8,
+          23.25
+        ],
+        "concurrent": [
+          5.02,
+          5.18,
+          4.75,
+          4.82,
+          4.92
+        ],
+        "concurrent-compute": [
+          5.1,
+          4.98,
+          4.98,
+          4.9,
+          5.13
+        ],
+        "concurrent-offload": [
+          5.02,
+          5.08,
+          4.95,
+          5.02,
+          5.13
+        ],
+        "connections": [
+          59.74,
+          58.4,
+          56.54,
+          56.49,
+          56.26
+        ],
+        "pipelined": [
+          9.61,
+          9.62,
+          10.03,
+          10.07,
+          9.63
+        ],
+        "blocking": [
+          11.29,
+          11.34,
+          11.42,
+          11.47,
+          11.47
+        ],
+        "blocking-io": [
+          37.51,
+          35.61,
+          35.72,
+          35.84,
+          36.0
+        ],
+        "timers": [
+          0.19,
+          0.19,
+          0.19,
+          0.19,
+          0.19
+        ],
+        "fairness-tick": [
+          10.75,
+          10.82,
+          11.12,
+          10.95,
+          10.52
+        ],
+        "fairness": [
+          10.16,
+          10.14,
+          10.52,
+          10.28,
+          9.85
+        ],
+        "mixed-compute": [
+          21.77,
+          21.73,
+          21.76,
+          21.81,
+          21.78
+        ],
+        "mixed": [
+          30.77,
+          30.71,
+          30.9,
+          31.31,
+          32.56
+        ]
+      }
+    },
+    {
+      "label": "1+4",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/vd5",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "393e25dc631a1a5d8ae4eb15cc1b69f573b45f61",
+        "subject": "measure Network.framework over loopback against BSD sockets",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0ec5a53b7c23",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T13:35:26+02:00"
+      },
+      "median": {
+        "pingpong": 21.81,
+        "pingpong-fresh-ops": 22.28,
+        "pingpong-deadline": 22.34,
+        "concurrent": 7.48,
+        "concurrent-compute": 6.25,
+        "concurrent-offload": 6.09,
+        "connections": 57.23,
+        "pipelined": 10.02,
+        "blocking": 11.59,
+        "blocking-io": 36.2,
+        "timers": 0.19,
+        "fairness-tick": 13.13,
+        "fairness": 12.21,
+        "mixed-compute": 21.79,
+        "mixed": 31.37
+      },
+      "samples": {
+        "pingpong": [
+          22.59,
+          21.89,
+          21.67,
+          21.81,
+          21.66
+        ],
+        "pingpong-fresh-ops": [
+          23.04,
+          23.47,
+          22.28,
+          21.98,
+          21.68
+        ],
+        "pingpong-deadline": [
+          22.34,
+          22.25,
+          23.68,
+          22.29,
+          22.49
+        ],
+        "concurrent": [
+          7.3,
+          7.45,
+          7.87,
+          7.48,
+          7.59
+        ],
+        "concurrent-compute": [
+          6.16,
+          6.26,
+          6.25,
+          6.35,
+          6.08
+        ],
+        "concurrent-offload": [
+          5.98,
+          6.09,
+          6.16,
+          6.05,
+          6.15
+        ],
+        "connections": [
+          59.39,
+          56.85,
+          57.29,
+          56.89,
+          57.23
+        ],
+        "pipelined": [
+          9.76,
+          10.09,
+          10.17,
+          9.75,
+          10.02
+        ],
+        "blocking": [
+          11.44,
+          11.48,
+          11.65,
+          11.59,
+          11.94
+        ],
+        "blocking-io": [
+          36.22,
+          36.16,
+          36.2,
+          36.79,
+          36.16
+        ],
+        "timers": [
+          0.19,
+          0.19,
+          0.19,
+          0.19,
+          0.19
+        ],
+        "fairness-tick": [
+          13.13,
+          13.27,
+          13.38,
+          13.06,
+          13.13
+        ],
+        "fairness": [
+          12.12,
+          12.31,
+          12.34,
+          12.1,
+          12.21
+        ],
+        "mixed-compute": [
+          21.78,
+          21.79,
+          21.78,
+          21.8,
+          21.88
+        ],
+        "mixed": [
+          30.82,
+          31.37,
+          31.05,
+          33.25,
+          32.9
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

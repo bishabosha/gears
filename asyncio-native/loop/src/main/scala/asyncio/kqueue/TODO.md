@@ -838,6 +838,95 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
        too.
      - Fewer threads making them: I/O on one or two workers and computation on the rest, and idle workers blocking at
        once rather than spinning on `kevent`.
+       **Measured, and reverted: I/O on one worker, computation on the rest.** An experiment, not kept in the pool:
+       `ReactorFutures.run(..., ioWorkers = n)` (bench `--io-workers n`, with the affine or hybrid policy) kept ops
+       to the first `n` workers. A task on another worker
+       that performed an op or armed a timer first moved to one of them: it suspended, and that worker resumed it
+       from its inbox, run as though from its reactor's turn, so the resume stayed there under the affine policy.
+       The other workers ran new futures and yields they took, and made no non-blocking `kevent` turn between
+       rounds, only the blocking one when idle. Two scenarios were added, and kept, `concurrent-compute`, as `concurrent` with
+       2,000 steps of computation (about 4 µs) after each round trip in the connection's own future, and
+       `concurrent-offload`, the same steps in a future of its own, awaited. Release-fast, median of 5 runs, µs/op,
+       client and server each a pool of that size, the same build throughout
+       (`kqueue-demo/bench/results/pool-io-workers.json`):
+
+       | scenario | 1 | 2-affine | 2-io1 | 4-affine | 4-io1 |
+       |---|---|---|---|---|---|
+       | pingpong | 6.97 | 6.86 | 6.85 | 6.86 | 6.80 |
+       | concurrent | 1.84 | 2.05 | 1.84 | 3.78 | 1.86 |
+       | concurrent-compute | 6.28 | 3.89 | 6.27 | 3.91 | 6.32 |
+       | concurrent-offload | 7.32 | 4.65 | 4.56 | 4.05 | 5.42 |
+       | connections | 40.1 | 22.8 | 22.0 | 22.4 | 22.4 |
+       | pipelined | 0.67 | 0.66 | 0.67 | 0.67 | 0.63 |
+       | blocking-io | 13.1 | 13.0 | 13.2 | 13.0 | 13.3 |
+       | fairness (tick) | 1.38 (2.76) | 1.40 (2.80) | 1.41 (2.83) | 1.44 (2.88) | 1.43 (2.85) |
+       | mixed (compute) | 26.6 (26.6) | 7.60 (35.6) | 7.23 (20.6) | 7.76 (35.6) | 7.23 (20.6) |
+
+       - Pure I/O costs what one worker does, however many workers there are: `concurrent` 1.86 µs on 4 workers
+         against 3.78 with all four doing I/O.
+       - Computation runs faster beside it: `mixed`'s slices take 20.6 µs on a worker doing no I/O, against 35.6 on
+         one making `kevent` turns, and its ping-pong is a little faster too (7.23 against 7.6–7.8).
+       - But computation inside an I/O task stays on the I/O worker: `concurrent-compute` is the one-worker number,
+         where all-I/O pools spread it with the connections (3.9). Code must put it in a future of its own to spread
+         it, and then each round trip costs a move back: the future's completion resumes the connection's task on the
+         computing worker, whose next op moves it to the I/O worker again, with a wake-up. That is even with all-I/O
+         pools on 2 workers (4.56 against 4.65), behind on 4 (5.42 against 4.05).
+       - `connections` on one worker is 40 µs today in this build and in the previous one alike (42.2 in both,
+         rechecked), against 23–24 in earlier runs; with two workers or more it is 22. Not from this change.
+       - The default, every worker doing I/O, was unchanged by running the inbox as from the turn: within noise of
+         the previous build on 4 affine workers.
+       - So on macOS, one I/O worker is the better default for I/O and for computation in futures of its own; it loses
+         where a connection's own task computes. Left to try: resuming a task whose awaited future finished on a
+         computing worker back on the I/O worker it last ran on, rather than where the future finished, which would
+         remove the move back in `concurrent-offload`; and two I/O workers a pool (the bench's client and server
+         pools already make two I/O threads in the process with one each).
+       **Measured, and reverted: a dedicated I/O worker that runs no tasks.** Also an experiment, not kept:
+       `ReactorFutures.run(..., dedicatedIo = true)` (bench `--dedicated-io`): the first worker only submitted ops,
+       ran their completions and handled cancels; every `perform` on another worker handed its op over (the op's
+       waiter, with an atomic state, posted to the I/O worker's inbox) and suspended; the completion, on the I/O
+       worker, queued the resume on the pool's shared queue, which the other workers took from, and from one
+       another. `1+n` is the I/O worker and `n` others; same
+       build as the other columns, median of 5 runs, µs/op (`kqueue-demo/bench/results/pool-dedicated-io.json`):
+
+       | scenario | 1 | 4-affine | 4-io1 | 1+1 | 1+2 | 1+4 |
+       |---|---|---|---|---|---|---|
+       | pingpong | 6.96 | 6.99 | 7.03 | 21.9 | 22.0 | 21.8 |
+       | concurrent | 1.96 | 3.69 | 1.88 | 3.42 | 4.92 | 7.48 |
+       | concurrent-compute | 6.29 | 3.94 | 6.30 | 7.32 | 4.98 | 6.25 |
+       | concurrent-offload | 7.29 | 4.03 | 5.37 | 7.88 | 5.02 | 6.09 |
+       | connections | 39.7 | 19.9 | 19.9 | 54.0 | 56.5 | 57.2 |
+       | pipelined | 0.70 | 0.64 | 0.65 | 8.39 | 9.63 | 10.0 |
+       | blocking-io | 13.3 | 13.2 | 13.4 | 36.1 | 35.8 | 36.2 |
+       | fairness (tick) | 1.41 (2.82) | 1.44 (2.88) | 1.46 (2.92) | 8.25 (8.31) | 10.2 (10.8) | 12.2 (13.1) |
+       | mixed (compute) | 26.8 (26.8) | 7.82 (34.0) | 7.35 (20.6) | 89.6 (22.5) | 30.9 (21.8) | 31.4 (21.8) |
+
+       - Every op now crosses threads twice, to the I/O worker and back, and the fast path is gone: an op that would
+         finish at once still waits for both. Ping-pong triples, pipelined is 13–15 times slower. On 1+1, the pool's
+         counters show the computing worker blocking about twice a round trip, and as many wake-ups.
+       - `concurrent` gets worse with more workers, as with a kqueue each: the computing workers block and are woken
+         in their own kqueues, `kevent` calls under the same per-process lock.
+       - Tried, one run each on a loaded machine (load 5–12), so indicative only:
+         - Posting to the I/O worker woke it only when it was blocking or about to (a volatile flag, checked after
+           queueing), not on every op: no measurable change.
+         - The computing workers spinning, without system calls, for work before blocking
+           (`GEARS_COMPUTE_SPINS`): ping-pong unchanged on 1+1 (21.5–22.9), worse on 1+4 (45–52), where ten
+           threads spin on ten cores.
+         - The I/O worker polling `kevent` without blocking for a number of turns before it blocks
+           (`GEARS_IO_POLLS`): worse, ping-pong 22 → 35, the client's and the server's I/O workers polling in one
+           process and so contending for its descriptor lock.
+         - The computing workers parking their threads (`LockSupport`, `GEARS_PARK_COMPUTE`) rather than blocking
+           in their kqueues, so that neither blocking nor waking them is a
+           descriptor call: on 1+4, `concurrent` 7.33 → 4.76, `concurrent-compute` 6.20 → 4.47,
+           `concurrent-offload` 6.22 → 4.76; ping-pong 22 → 25. With I/O on one of 4 workers, `concurrent-offload`
+           5.57 → 4.91, the rest unchanged.
+       - So handing every op to one thread loses to a kqueue per worker everywhere but the computation's own speed:
+         the hand-offs cost more than the descriptor lock they save. This is not Tokio's design either. Tokio's
+         multi-threaded runtime has one I/O driver (one epoll or kqueue) but no I/O thread: a task makes its `read`
+         or `write` on whichever worker runs it, and only when that would block does it register for readiness
+         with the shared driver, which an idle worker polls, waking the tasks that are ready. Nothing crosses threads
+         for an op that can finish at once. That design is still to measure here: ops tried on the task's own
+         worker, readiness registered in one kqueue shared by the pool (`kevent` is safe from any thread), polled by
+         whichever worker is idle.
      - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
        which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
        to build.

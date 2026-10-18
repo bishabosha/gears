@@ -8,7 +8,8 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite {
     val output = run("bench", "--scale", "0.01", "--connections", "8", "--workers", "4")
     for (
       scenario <- Seq(
-        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "connections", "pipelined", "blocking",
+        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
+        "connections", "pipelined", "blocking",
         "blocking-io", "timers", "fairness", "fairness-tick", "mixed", "mixed-compute"
       )
     )
