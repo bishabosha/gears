@@ -432,7 +432,7 @@ object GearsBench {
       connections: Int,
       address: Address,
       workers: Int = 1,
-      policy: TakePolicy = TakePolicy.Free
+      policy: TakePolicy = TakePolicy.Affine
   )(using Backend): Unit = {
     val selected =
       if names.isEmpty then scenarios

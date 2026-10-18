@@ -160,7 +160,7 @@ object Main {
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: mainargs.Flag,
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
-      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "free"
+      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine"
   ): Unit = {
     val address =
       if tcp.value then Address.IPv4("127.0.0.1", port)
