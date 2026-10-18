@@ -927,6 +927,57 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
          for an op that can finish at once. That design is still to measure here: ops tried on the task's own
          worker, readiness registered in one kqueue shared by the pool (`kevent` is safe from any thread), polled by
          whichever worker is idle.
+       **Measured: one kqueue per pool, polled by whichever worker is idle.** An experiment, not committed: the
+       pool's workers share one kqueue (`SharedDriver` in the demo) for socket readiness. A task performs its
+       command on the worker running it; only if it would block does it wait there, on a persistent edge-triggered
+       read filter added once per descriptor, or a one-shot write filter added for that wait. An edge with no task
+       waiting is not lost: each event counts a tick per descriptor and direction, and a task that finds the tick
+       moved after saying it waits tries again. A worker out of work takes the shared kqueue's lock and blocks in it;
+       the others block in their own kqueues, which still have their timers, blocking ops and wake-ups, and which the
+       shared kqueue watches, so the worker blocked there hears of those too. Busy workers poll the shared kqueue
+       without waiting each round when no one holds it. A woken task is queued on the worker that polled, any
+       policy's other workers taking from there (the free policy throughout). Same build as the other columns, median
+       of 5 runs, µs/op (`kqueue-demo/bench/results/pool-shared-kqueue.json`):
+
+       | scenario | 1 | 2-affine | 4-affine | shared-1 | shared-2 | shared-4 |
+       |---|---|---|---|---|---|---|
+       | pingpong | 6.98 | 6.88 | 7.01 | 6.76 | 6.98 | 6.94 |
+       | concurrent | 1.87 | 2.13 | 3.67 | 1.71 | 1.90 | 4.40 |
+       | concurrent-compute | 6.26 | 3.70 | 3.75 | 6.16 | 3.30 | 4.51 |
+       | concurrent-offload | 7.27 | 4.59 | 3.92 | 7.31 | 4.09 | 5.02 |
+       | connections | 40.5 | 21.3 | 21.2 | 41.7 | 35.6 | 35.2 |
+       | pipelined | 0.67 | 0.65 | 0.67 | 2.00 | 1.16 | 1.09 |
+       | blocking | 5.15 | 5.51 | 5.63 | 5.66 | 5.88 | 6.16 |
+       | blocking-io | 13.2 | 13.3 | 13.4 | 13.8 | 13.8 | 13.6 |
+       | fairness (tick) | 1.39 (2.78) | 1.43 (2.85) | 1.48 (2.97) | 10.5 (21.1) | 0.88 (17.7) | 1.02 (18.0) |
+       | mixed (compute) | 26.9 (26.9) | 7.73 (35.8) | 7.93 (34.0) | 28.4 (28.4) | 28.7 (29.1) | 24.4 (27.5) |
+
+       - Ping-pong costs the same as a kqueue per worker: an op that can finish at once does, on the task's own
+         thread, and nothing crosses threads for it.
+       - `concurrent` is a little faster on 1 and 2 workers (1.71 and 1.90 against 1.87 and 2.13), and
+         `concurrent-compute` the fastest of all on 2 (3.30). But it does not scale to 4 either: every worker still
+         makes its own `read` and `write`, under the per-process descriptor lock, so sharing readiness does not
+         lift the limit, and 4 workers are worse than with a kqueue each (4.40 against 3.67).
+       - Worse, as first written: `connections` (35 against 21), `pipelined` (1.1–2.0 against 0.67), the
+         `fairness` ticker (18–21 µs against 2.8; its zero-length timers are on the worker's own reactor, turned only
+         when it has work ready), and `mixed`, whose computation does not move to another worker (28 against 7.7).
+         These are the scheduling around the driver rather than the driver: not tuned further.
+       - Getting there took three fixes, each a finding:
+         - A persistent edge-triggered write filter fires whenever the peer reads, with nothing waiting, so the
+           worker blocked in the shared kqueue woke for nothing: ping-pong 40 µs. Writes wait on one-shot filters,
+           as the reactor's do.
+         - Polling the worker's own kqueue as well as the shared one, without waiting, every round, cost a round
+           trip about 13 µs and tripled the involuntary context switches (55,558 against 18,224 for 10,000 round
+           trips; ping-pong 38 → 11.8 µs without them, one worker). So the worker turns its own reactor only when it
+           has something to run that needs no poll (a command finished at once, a promise resolved, a timer due, all
+           seen without a system call: `KqueueReactor.hasReadyWork`), or when the shared kqueue reports its kqueue
+           readable.
+         - Not polling its own kqueue leaves its wake-up event untaken, and `wakeup` skips the system call while one
+           is pending, so a blocking op's result never woke the worker blocked in the shared kqueue. Reported
+           readable, a worker turns its reactor twice, since a turn that delivers something skips its poll.
+       - So on macOS neither design scales I/O past a worker or two; a shared kqueue matches a kqueue per worker
+         where the per-process lock is the limit, and costs more scheduling to get right. It is the design to try
+         on Linux and FreeBSD, where `read` and `write` from several threads do scale.
      - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
        which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
        to build.
