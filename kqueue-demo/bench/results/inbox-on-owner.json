@@ -1,0 +1,582 @@
+{
+  "started": "2026-10-18T15:22:37+02:00",
+  "finished": "2026-10-18T15:24:29+02:00",
+  "load_average": {
+    "before": [
+      4.45947265625,
+      5.580078125,
+      4.4111328125
+    ],
+    "after": [
+      3.9375,
+      4.96533203125,
+      4.3037109375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "base-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/ihead1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "d1ad9a41db5eb00e51f92fc3ff4fce0b1c5ac695",
+        "subject": "record the lessons of the I/O-worker experiments",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T15:21:19+02:00"
+      },
+      "median": {
+        "pingpong": 6.8,
+        "pingpong-fresh-ops": 6.86,
+        "pingpong-deadline": 6.92,
+        "concurrent": 1.84,
+        "concurrent-compute": 6.23,
+        "concurrent-offload": 7.24,
+        "connections": 40.41,
+        "pipelined": 0.68,
+        "blocking": 5.03,
+        "blocking-io": 13.16,
+        "timers": 0.15,
+        "fairness-tick": 2.8,
+        "fairness": 1.4,
+        "mixed-compute": 26.81,
+        "mixed": 26.83
+      },
+      "samples": {
+        "pingpong": [
+          7.45,
+          6.8,
+          6.86,
+          6.77,
+          6.72
+        ],
+        "pingpong-fresh-ops": [
+          6.88,
+          6.86,
+          6.88,
+          6.79,
+          6.75
+        ],
+        "pingpong-deadline": [
+          6.95,
+          6.92,
+          9.51,
+          6.91,
+          6.81
+        ],
+        "concurrent": [
+          1.89,
+          1.84,
+          2.07,
+          1.83,
+          1.81
+        ],
+        "concurrent-compute": [
+          6.23,
+          6.25,
+          6.25,
+          6.22,
+          6.22
+        ],
+        "concurrent-offload": [
+          7.24,
+          7.24,
+          7.2,
+          7.26,
+          7.25
+        ],
+        "connections": [
+          40.85,
+          40.41,
+          39.62,
+          40.43,
+          39.22
+        ],
+        "pipelined": [
+          0.68,
+          0.67,
+          0.71,
+          0.68,
+          0.66
+        ],
+        "blocking": [
+          5.0,
+          5.03,
+          5.9,
+          5.24,
+          5.01
+        ],
+        "blocking-io": [
+          13.19,
+          13.09,
+          13.39,
+          12.99,
+          13.16
+        ],
+        "timers": [
+          0.15,
+          0.16,
+          0.15,
+          0.15,
+          0.15
+        ],
+        "fairness-tick": [
+          2.8,
+          2.89,
+          2.77,
+          2.78,
+          2.88
+        ],
+        "fairness": [
+          1.4,
+          1.44,
+          1.38,
+          1.39,
+          1.44
+        ],
+        "mixed-compute": [
+          26.89,
+          26.81,
+          26.77,
+          26.65,
+          26.82
+        ],
+        "mixed": [
+          26.92,
+          26.84,
+          26.78,
+          26.66,
+          26.83
+        ]
+      }
+    },
+    {
+      "label": "inbox-1",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/iinbox1",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "d1ad9a41db5eb00e51f92fc3ff4fce0b1c5ac695",
+        "subject": "record the lessons of the I/O-worker experiments",
+        "worktree_changes": true,
+        "worktree_changes_hash": "eea6fdabd073",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T15:20:48+02:00"
+      },
+      "median": {
+        "pingpong": 6.83,
+        "pingpong-fresh-ops": 6.84,
+        "pingpong-deadline": 6.87,
+        "concurrent": 1.86,
+        "concurrent-compute": 6.25,
+        "concurrent-offload": 7.25,
+        "connections": 40.41,
+        "pipelined": 0.68,
+        "blocking": 5.03,
+        "blocking-io": 13.22,
+        "timers": 0.16,
+        "fairness-tick": 2.84,
+        "fairness": 1.42,
+        "mixed-compute": 26.58,
+        "mixed": 26.59
+      },
+      "samples": {
+        "pingpong": [
+          7.51,
+          6.88,
+          6.78,
+          6.83,
+          6.82
+        ],
+        "pingpong-fresh-ops": [
+          6.93,
+          6.89,
+          6.82,
+          6.83,
+          6.84
+        ],
+        "pingpong-deadline": [
+          6.92,
+          6.9,
+          6.84,
+          6.86,
+          6.87
+        ],
+        "concurrent": [
+          1.86,
+          1.84,
+          1.95,
+          1.86,
+          1.84
+        ],
+        "concurrent-compute": [
+          6.24,
+          6.24,
+          6.26,
+          6.25,
+          6.44
+        ],
+        "concurrent-offload": [
+          7.25,
+          7.24,
+          7.2,
+          7.34,
+          7.37
+        ],
+        "connections": [
+          40.41,
+          41.36,
+          38.07,
+          40.48,
+          39.12
+        ],
+        "pipelined": [
+          0.7,
+          0.68,
+          0.66,
+          0.7,
+          0.67
+        ],
+        "blocking": [
+          5.0,
+          5.31,
+          5.03,
+          4.95,
+          5.75
+        ],
+        "blocking-io": [
+          13.05,
+          13.22,
+          13.81,
+          13.17,
+          13.84
+        ],
+        "timers": [
+          0.16,
+          0.15,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          2.93,
+          2.78,
+          2.76,
+          2.86,
+          2.84
+        ],
+        "fairness": [
+          1.46,
+          1.39,
+          1.38,
+          1.43,
+          1.42
+        ],
+        "mixed-compute": [
+          26.52,
+          26.8,
+          26.44,
+          26.58,
+          26.59
+        ],
+        "mixed": [
+          26.54,
+          26.81,
+          26.45,
+          26.59,
+          26.6
+        ]
+      }
+    },
+    {
+      "label": "base-4-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/ihead4a",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "d1ad9a41db5eb00e51f92fc3ff4fce0b1c5ac695",
+        "subject": "record the lessons of the I/O-worker experiments",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T15:21:19+02:00"
+      },
+      "median": {
+        "pingpong": 6.91,
+        "pingpong-fresh-ops": 6.94,
+        "pingpong-deadline": 7.02,
+        "concurrent": 3.65,
+        "concurrent-compute": 3.98,
+        "concurrent-offload": 4.07,
+        "connections": 21.37,
+        "pipelined": 0.63,
+        "blocking": 5.23,
+        "blocking-io": 13.13,
+        "timers": 0.15,
+        "fairness-tick": 2.93,
+        "fairness": 1.47,
+        "mixed-compute": 35.58,
+        "mixed": 7.69
+      },
+      "samples": {
+        "pingpong": [
+          7.18,
+          6.91,
+          6.96,
+          6.89,
+          6.77
+        ],
+        "pingpong-fresh-ops": [
+          6.94,
+          6.9,
+          6.89,
+          7.15,
+          7.01
+        ],
+        "pingpong-deadline": [
+          7.0,
+          7.02,
+          6.92,
+          7.55,
+          7.03
+        ],
+        "concurrent": [
+          3.61,
+          3.72,
+          3.59,
+          3.8,
+          3.65
+        ],
+        "concurrent-compute": [
+          4.03,
+          3.86,
+          3.98,
+          3.85,
+          4.05
+        ],
+        "concurrent-offload": [
+          4.14,
+          4.07,
+          4.16,
+          3.83,
+          3.97
+        ],
+        "connections": [
+          21.66,
+          21.21,
+          21.11,
+          21.37,
+          22.19
+        ],
+        "pipelined": [
+          0.63,
+          0.68,
+          0.62,
+          0.64,
+          0.62
+        ],
+        "blocking": [
+          5.19,
+          5.58,
+          5.23,
+          5.97,
+          5.18
+        ],
+        "blocking-io": [
+          13.24,
+          13.06,
+          13.13,
+          13.8,
+          13.08
+        ],
+        "timers": [
+          0.16,
+          0.15,
+          0.15,
+          0.15,
+          0.16
+        ],
+        "fairness-tick": [
+          2.92,
+          2.94,
+          2.89,
+          2.93,
+          2.95
+        ],
+        "fairness": [
+          1.46,
+          1.47,
+          1.45,
+          1.47,
+          1.48
+        ],
+        "mixed-compute": [
+          35.79,
+          33.86,
+          35.58,
+          35.39,
+          35.74
+        ],
+        "mixed": [
+          7.65,
+          7.79,
+          7.69,
+          7.95,
+          7.64
+        ]
+      }
+    },
+    {
+      "label": "inbox-4-affine",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/iinbox4a",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "d1ad9a41db5eb00e51f92fc3ff4fce0b1c5ac695",
+        "subject": "record the lessons of the I/O-worker experiments",
+        "worktree_changes": true,
+        "worktree_changes_hash": "eea6fdabd073",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-18T15:20:48+02:00"
+      },
+      "median": {
+        "pingpong": 6.89,
+        "pingpong-fresh-ops": 6.91,
+        "pingpong-deadline": 6.92,
+        "concurrent": 3.78,
+        "concurrent-compute": 3.97,
+        "concurrent-offload": 4.03,
+        "connections": 21.6,
+        "pipelined": 0.64,
+        "blocking": 5.49,
+        "blocking-io": 13.1,
+        "timers": 0.16,
+        "fairness-tick": 2.91,
+        "fairness": 1.45,
+        "mixed-compute": 33.92,
+        "mixed": 7.75
+      },
+      "samples": {
+        "pingpong": [
+          7.15,
+          6.83,
+          6.89,
+          6.99,
+          6.89
+        ],
+        "pingpong-fresh-ops": [
+          6.85,
+          6.91,
+          7.06,
+          7.12,
+          6.86
+        ],
+        "pingpong-deadline": [
+          6.9,
+          6.91,
+          6.94,
+          6.98,
+          6.92
+        ],
+        "concurrent": [
+          3.62,
+          3.78,
+          3.67,
+          3.79,
+          3.92
+        ],
+        "concurrent-compute": [
+          3.84,
+          4.04,
+          3.8,
+          4.0,
+          3.97
+        ],
+        "concurrent-offload": [
+          3.93,
+          4.06,
+          3.88,
+          4.2,
+          4.03
+        ],
+        "connections": [
+          21.63,
+          21.09,
+          21.6,
+          22.01,
+          21.25
+        ],
+        "pipelined": [
+          0.62,
+          0.68,
+          0.64,
+          0.61,
+          0.68
+        ],
+        "blocking": [
+          5.45,
+          5.13,
+          5.54,
+          5.55,
+          5.49
+        ],
+        "blocking-io": [
+          13.07,
+          13.47,
+          13.13,
+          13.04,
+          13.1
+        ],
+        "timers": [
+          0.16,
+          0.15,
+          0.15,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          2.88,
+          2.92,
+          2.91,
+          2.89,
+          3.01
+        ],
+        "fairness": [
+          1.44,
+          1.46,
+          1.45,
+          1.45,
+          1.5
+        ],
+        "mixed-compute": [
+          34.33,
+          35.83,
+          33.92,
+          33.92,
+          33.9
+        ],
+        "mixed": [
+          8.55,
+          7.81,
+          7.71,
+          7.75,
+          7.65
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
