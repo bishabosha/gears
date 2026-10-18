@@ -28,6 +28,11 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite {
     assert(output.contains("; 0 failures"), output)
   }
 
+  demoTest("tasks queued for a worker in particular run on its thread, while another worker takes tasks") {
+    val output = run("inbox")
+    assert(output.contains("; 0 failures"), output)
+  }
+
   demoTest("a suspended future resumes on another thread with its state and that thread's signal state") {
     val output = run("migrate")
     assert(output.contains("; 0 failures"), output)

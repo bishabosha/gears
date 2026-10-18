@@ -997,7 +997,21 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
        - Found on the way, and fixed in the pool: tasks queued for a worker in particular (`sync`: cancelling an op on
          its reactor, arming or cancelling a timer there) joined its run queue, from which other workers take tasks,
          so another worker could run one and call a reactor it does not own. They now run from the inbox at the start
-         of each drain (see "Tasks for a worker in particular" below).
+         of each drain (see the next item).
+       **Done: tasks for a worker in particular run on its thread.** `ReactorWorker.sync` queues a task for one
+       worker, from another thread: cancelling an op pending on its reactor (`OpWaiter.cancel`,
+       `Submission.cancel`), or arming or cancelling a timer there (`ReactorWorker.schedule`). Each calls that
+       worker's reactor, which only its own thread may use. `drain` moved these tasks into `local`, behind the tasks
+       already there, and other workers take from `local`'s head, so a task queued there could be taken and run on
+       the wrong thread. `kqueuedemo gears inbox` reproduces it every time: on two workers, another thread queues a
+       task for the busy worker, which then yields and spawns futures behind it while the other worker is idle; the
+       idle worker takes half of `local`, the queued task first. Before the fix all 500 rounds ran the task on the
+       other worker's thread; now `drain` runs these tasks first, from the inbox, at most `InboxPerDrain` (256) a
+       round, as though from the reactor's turn, so that a task one resumes stays under the affine and hybrid
+       policies, and none runs elsewhere. Within noise of the previous commit, median of 5 runs, µs/op
+       (`kqueue-demo/bench/results/inbox-on-owner.json`): on one worker every scenario within 1% but `timers`
+       (0.15 → 0.16); on 4 affine workers ping-pong 6.91 → 6.89, `concurrent` 3.65 → 3.78, `connections`
+       21.4 → 21.6, `blocking` 5.23 → 5.49 (which queues nothing in an inbox), `mixed` 7.69 → 7.75.
      - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
        which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
        to build.

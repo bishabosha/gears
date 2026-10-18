@@ -140,6 +140,10 @@ object Main {
   def runqueue(@arg tasks: Int = 2_000_000, @arg takers: Int = 3): Unit = {
     GearsRunQueue.run(tasks, takers)
   }
+  @main(doc = "Checks that tasks queued for a worker in particular run on its thread, whatever other workers take")
+  def inbox(@arg rounds: Int = 500): Unit = {
+    GearsInbox.run(rounds)
+  }
   @main(doc = "Checks that a suspended future resumes correctly on another thread, as a pool's workers will make it")
   def migrate(
       @arg futures: Int = 4,

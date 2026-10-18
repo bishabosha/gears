@@ -38,7 +38,8 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
   private[gearsexample] val local = new RunQueue
 
   // Tasks that must run on this worker in particular, queued from other threads, which wake it: cancelling an op
-  // pending on its reactor, or arming a timer there. `drain` moves them to `local`.
+  // pending on its reactor, or arming a timer there. `drain` runs them first, never through `local`, from which other
+  // workers take tasks.
   private val inbox = new ConcurrentLinkedQueue[Runnable]()
 
   // Under the affine and hybrid policies, tasks resumed by this worker's reactor, which no other worker may take: a
@@ -142,17 +143,22 @@ final class ReactorWorker private[gearsexample] (val pool: ReactorPool, val inde
     */
   private[gearsexample] def drain(): Unit = {
     fastPathsLeft = ReactorWorker.FastPathBudget
-    // Tasks for this worker in particular, then some from outside the pool, join the local ones. Once `local` is
-    // full, the one that did not fit runs now and the rest wait for the next drain, which the loop does not block
-    // before: a task it runs could queue more here meanwhile.
+    // Tasks for this worker in particular run first, here: in `local`, another worker could take one and call this
+    // worker's reactor from its own thread. They run as though from the reactor's turn, so that a task they resume,
+    // such as one whose op a cancel finished, stays here under the affine and hybrid policies. Those queued meanwhile
+    // wait for the next drain, which the loop does not block before.
+    var mine = ReactorWorker.InboxPerDrain
     var task = inbox.poll()
-    while task != null do {
-      if local.push(task) then task = inbox.poll()
-      else {
+    inTurn = true
+    try
+      while task != null do {
         runTask(task)
-        task = null
+        mine -= 1
+        task = if mine > 0 then inbox.poll() else null
       }
-    }
+    finally inTurn = false
+    // Then some from outside the pool join the local ones. Once `local` is full, the one that did not fit runs now
+    // and the rest wait for the next drain: a task it runs could queue more here meanwhile.
     var fromOutside = ReactorWorker.InjectedPerDrain
     task = if fromOutside > 0 then pool.injected() else null
     while task != null do {
@@ -255,6 +261,9 @@ object ReactorWorker {
 
   /** How many ops `perform` may finish without suspending in one task's turn while other tasks are queued. */
   inline val TurnFastPathBudget = 1
+
+  /** How many tasks queued for a worker in particular it runs in each round, at most. */
+  inline val InboxPerDrain = 256
 
   /** How many tasks from outside the pool a worker takes into each round, at most. */
   inline val InjectedPerDrain = 32
