@@ -784,8 +784,28 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      Network.framework"); according to Apple's developer forums it reached macOS in macOS 12, is used by default, and
      falls back to the kernel's sockets in some cases (a firewall being on is said to be one, unconfirmed). That is the
      closest to a fix Apple has: not a lock-free lookup, but fewer system calls by keeping TCP and UDP out of the
-     kernel. Not measured: whether it is used for loopback, how a Network.framework server scales with threads, and
-     whether anything but Swift or Objective-C could drive it (it has a C API, `nw_connection_t` and `nw_listener_t`).
+     kernel.
+   - **Measured: over loopback, Network.framework uses the kernel's sockets, and is slower and scales worse.**
+     `kqueue-demo/bench/network-framework.c`, through its C API: an `nw_listener_t` and N `nw_connection_t`s
+     ping-ponging 64-byte messages over loopback TCP, each connection, either side, on a serial dispatch queue of its
+     own, as one process or a process per connection; against BSD sockets with a client and an echo thread per
+     connection, blocking in `read` (busy-polling both ends of a connection in one process was slower still, at
+     64 µs a round trip, their two threads contending for the descriptor lock). Sampled, Network.framework's threads
+     are in `sendmsg` and `recvmsg`, its events come through libdispatch's workloops (`kevent_id`), and there is no
+     `__channel_sync`: no user-space stack for loopback. Median of 3 runs, µs a round trip per connection (round
+     trips a second in all), the load about 8 throughout:
+
+     | | 1 | 2 threads | 4 threads | 8 threads | 2 processes | 4 processes | 8 processes |
+     |---|---|---|---|---|---|---|---|
+     | BSD sockets, blocking | 27.1 (37k) | 31.2 (64k) | 50.8 (79k) | 71.0 (113k) | 31.6 (63k) | 50.7 (79k) | 72.0 (111k) |
+     | Network.framework | 59.9 (17k) | 96.0 (21k) | 151 (26k) | 338 (24k) | 75.2 (27k) | 82.0 (49k) | 108 (74k) |
+
+     Loopback TCP is slow here anyway (gears' own TCP `pingpong` is 30 µs a round trip, against 7 over Unix
+     sockets). Blocking BSD sockets cost the same in one process as in several, as blocking wake-ups do: what limits
+     them is the TCP path and waking threads, system-wide. Network.framework is twice as slow on one connection and,
+     in one process, stops at about 25,000 round trips a second however many connections, where separate processes
+     reach 74,000: something of its own, or of Dispatch's, is serialised per process. Whether it uses the user-space
+     stack over a real interface, and does better there, needs a second machine. As a backend, it would not help.
    - **A design per OS, not per backend.** macOS and FreeBSD share kqueue, and so `KqueueBackend`, but not these
      limits. On FreeBSD, as on Linux, a pool of reactor threads in one process should scale I/O, and the take
      policies matter again; on macOS it cannot, and I/O scales only across processes. So what the pool is for, its
