@@ -8,7 +8,8 @@ import asyncio.Backend
 import asyncio.Interest
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.drainTo
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {

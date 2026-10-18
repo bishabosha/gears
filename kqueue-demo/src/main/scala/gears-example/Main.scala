@@ -4,6 +4,7 @@ import mainargs.{ParserForMethods, arg, main}
 import asyncio.Backend
 import asyncio.Address
 import asyncio.kqueue.KqueueBackend
+import asyncio.gears.TakePolicy
 
 /** The gears mirrors, run as `kqueuedemo gears <command>` with the same commands and flags as the plain demos.
   *
@@ -131,26 +132,6 @@ object Main {
       @arg(doc = "with --only, how many round trips between turns") every: Int = 1
   ): Unit = {
     GearsMoveBench.run(roundTrips, only, every)
-  }
-  @main(doc = "Checks that kqueue reactors on different threads can share a descriptor, as a pool's workers will")
-  def share(): Unit = {
-    GearsShare.run()
-  }
-  @main(doc = "Checks the run queue under contention: every task runs once, whichever thread takes it")
-  def runqueue(@arg tasks: Int = 2_000_000, @arg takers: Int = 3): Unit = {
-    GearsRunQueue.run(tasks, takers)
-  }
-  @main(doc = "Checks that tasks queued for a worker in particular run on its thread, whatever other workers take")
-  def inbox(@arg rounds: Int = 500): Unit = {
-    GearsInbox.run(rounds)
-  }
-  @main(doc = "Checks that a suspended future resumes correctly on another thread, as a pool's workers will make it")
-  def migrate(
-      @arg futures: Int = 4,
-      @arg resumes: Int = 20_000,
-      @arg(doc = "keep each future on the thread it started on, to compare") stay: mainargs.Flag
-  ): Unit = {
-    GearsMigrate.run(futures, resumes, stay.value)
   }
   @main(doc = "Stress tests to measure reactor changes against; see kqueue-demo/bench/compare.py")
   def bench(

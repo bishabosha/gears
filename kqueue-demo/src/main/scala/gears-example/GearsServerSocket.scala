@@ -13,7 +13,8 @@ import asyncio.Address
 import asyncio.HandleSlot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleServerSocket`. The acceptor is a loop, and each connection is its own future whose
   * state machine is now plain sequential code.

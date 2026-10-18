@@ -16,7 +16,9 @@ import asyncio.Address
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.unsafe.NativeBuffer
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
+import asyncio.gears.TakePolicy
 
 /** Stress tests for a reactor and its gears integration, to measure each change against. An echo server runs on one
   * reactor thread and the clients on another, so both sides go through the reactor; each scenario is timed on its own

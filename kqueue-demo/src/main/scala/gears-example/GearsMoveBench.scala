@@ -2,7 +2,9 @@ package gearsexample
 
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Address
@@ -10,9 +12,9 @@ import asyncio.Completion
 import asyncio.kqueue.KqueueHandles
 import asyncio.kqueue.KqueueOp
 import asyncio.kqueue.KqueueOps
+import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
-import GearsShare.Driven
 
 /** Measures what moving a descriptor between kqueue reactors costs, run as `kqueuedemo gears move-bench`: ping-pong
   * round trips of 64 bytes against an echo server on a reactor thread of its own, driven by completions on the client
@@ -26,6 +28,49 @@ import GearsShare.Driven
   */
 object GearsMoveBench {
   inline val MessageSize = 64
+
+  /** A reactor whose own thread runs the tasks given to it between turns, counting the turns that return. */
+  final class Driven(name: String) {
+    val reactor: KqueueReactor = KqueueReactor.open()
+    private val tasks = new ConcurrentLinkedQueue[Runnable]()
+    @volatile private var running = true
+    val turns = new AtomicLong
+    private val thread = new Thread(() => loop(), name)
+    thread.setDaemon(true)
+    thread.start()
+
+    private def loop(): Unit = {
+      while running do {
+        var task = tasks.poll()
+        while task != null do {
+          task.run()
+          task = tasks.poll()
+        }
+        if running then reactor.runOnce(block = true)
+        turns.incrementAndGet()
+      }
+      reactor.close()
+    }
+
+    /** Runs `body` on the reactor's thread, without waiting for it. */
+    def post(body: => Unit): Unit = {
+      tasks.add(() => body)
+      reactor.wakeup()
+    }
+
+    /** Runs `body` on the reactor's thread, and waits until it has. */
+    def onThread(body: => Unit): Unit = {
+      val ran = new CountDownLatch(1)
+      tasks.add(() => { body; ran.countDown() })
+      reactor.wakeup()
+      ran.await()
+    }
+
+    def stop(): Unit = {
+      running = false
+      reactor.wakeup()
+    }
+  }
 
   /** A connection's client end, with its buffer and ops, which any client reactor may submit in turn. */
   final class Conn(val fd: Int, zone: Zone) {

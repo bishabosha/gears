@@ -1,4 +1,4 @@
-package gearsexample
+package asyncio.gears
 
 import gears.async.Async
 import gears.async.Future
@@ -11,17 +11,20 @@ import asyncio.Backend
 import ReactorFutures.*
 
 /** Checks that tasks queued for a worker in particular (`ReactorWorker.sync`: cancelling an op on its reactor, arming
-  * or cancelling a timer there) run on that worker's thread, whatever other workers take, run as
-  * `kqueuedemo gears inbox`. They call a reactor that only its own thread may use.
+  * or cancelling a timer there) run on that worker's thread, whatever other workers take, (see `InboxSuite`). They call
+  * a reactor that only its own thread may use.
   *
-  * On a pool of two workers, each round has another thread queue a task for the worker running the program, while
-  * the program keeps that worker busy; the program then yields, so the queued task and the program's resume wait for
-  * the same round of that worker, and spawns futures behind them while the other worker is idle, so that it takes
-  * some. Every queued task must still run on the worker it was queued for.
+  * On a pool of two workers, each round has another thread queue a task for the worker running the program, while the
+  * program keeps that worker busy; the program then yields, so the queued task and the program's resume wait for the
+  * same round of that worker, and spawns futures behind them while the other worker is idle, so that it takes some.
+  * Every queued task must still run on the worker it was queued for.
   */
-object GearsInbox {
+object InboxCheck {
 
-  def run(rounds: Int)(using Backend): Unit = {
+  /** How the check went: queued tasks run, those run on another worker's thread, and tasks other workers took. */
+  final case class Outcome(ran: Long, elsewhere: Long, taken: Long)
+
+  def run(rounds: Int)(using Backend): Outcome = {
     val ran = new AtomicLong
     val elsewhere = new AtomicLong
     var workers = Array.empty[ReactorWorker]
@@ -53,12 +56,6 @@ object GearsInbox {
         round += 1
       }
     }
-    val taken = workers.map(_.taken).sum // read once the workers have stopped
-    println(s"inbox: $rounds rounds, ${ran.get()} queued tasks run, $taken tasks taken; ${elsewhere.get()} failures")
-    if elsewhere.get() != 0 || ran.get() != rounds then sys.exit(1)
-    if taken == 0 then {
-      System.err.println("inbox: no task was taken, so the check proves little")
-      sys.exit(1)
-    }
+    Outcome(ran.get(), elsewhere.get(), workers.map(_.taken).sum) // read once the workers have stopped
   }
 }

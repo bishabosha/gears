@@ -8,7 +8,8 @@ import asyncio.Backend
 import asyncio.Address
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF. */
 object GearsSocket {

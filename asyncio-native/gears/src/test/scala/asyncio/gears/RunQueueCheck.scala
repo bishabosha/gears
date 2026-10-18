@@ -1,13 +1,16 @@
-package gearsexample
+package asyncio.gears
 
 import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.atomic.AtomicLong
 
-/** Checks `RunQueue` under contention, run as `kqueuedemo gears runqueue`. One owner thread pushes tasks and takes some
-  * itself, while other threads, the takers, move tasks from it into queues of their own and run them. Every task must
-  * run exactly once, and whichever thread runs it must see the field the owner wrote before queueing it.
+/** Checks `RunQueue` under contention (see `RunQueueSuite`). One owner thread pushes tasks and takes some itself, while
+  * other threads, the takers, move tasks from it into queues of their own and run them. Every task must run exactly
+  * once, and whichever thread runs it must see the field the owner wrote before queueing it.
   */
-object GearsRunQueue {
+object RunQueueCheck {
+
+  /** How the check went: tasks that ran other than once or saw a stale field, and how many tasks the takers moved. */
+  final case class Outcome(failures: Long, moved: Long)
 
   final class Task(val id: Int, counts: AtomicIntegerArray, failures: AtomicLong) extends Runnable {
     // Written by the owner before it queues the task, read by whichever thread runs it; plain on purpose.
@@ -19,7 +22,7 @@ object GearsRunQueue {
     }
   }
 
-  def run(tasks: Int, takers: Int): Unit = {
+  def run(tasks: Int, takers: Int): Outcome = {
     val counts = new AtomicIntegerArray(tasks)
     val failures = new AtomicLong
     val ran = new AtomicLong
@@ -46,7 +49,6 @@ object GearsRunQueue {
     }
     takerThreads.foreach(_.start())
 
-    val start = System.nanoTime()
     var next = 0
     // The owner queues tasks three at a time and runs one, so the queue stays busy without overflowing for long.
     while next < tasks || !owner.isEmpty do {
@@ -68,25 +70,12 @@ object GearsRunQueue {
     while ran.get() < tasks do Thread.onSpinWait() // the takers finish what they took
     done = true
     takerThreads.foreach(_.join())
-    val seconds = (System.nanoTime() - start) / 1e9
-
     var wrong = 0
     var i = 0
     while i < tasks do {
-      if counts.get(i) != 1 then {
-        if wrong < 10 then System.err.println(s"runqueue: task $i ran ${counts.get(i)} times")
-        wrong += 1
-      }
+      if counts.get(i) != 1 then wrong += 1
       i += 1
     }
-    println(
-      f"runqueue: $tasks tasks, ${moved.get()} moved by $takers takers, in $seconds%.2f s; " +
-        s"${wrong + failures.get()} failures"
-    )
-    if wrong != 0 || failures.get() != 0 then sys.exit(1)
-    if moved.get() == 0 then {
-      System.err.println("runqueue: nothing was moved, so the check proves little")
-      sys.exit(1)
-    }
+    Outcome(wrong + failures.get(), moved.get())
   }
 }

@@ -16,27 +16,6 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite {
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
     assert(!output.contains("Exception"), output)
   }
-
-  demoTest("kqueue reactors on different threads share a descriptor, dropping stale filters and reused numbers") {
-    val output = run("share")
-    assert(output.contains("share: 0 failures"), output)
-    assert(!output.contains("reuse was not checked"), output)
-  }
-
-  demoTest("the run queue runs every task once while other threads take tasks from it") {
-    val output = run("runqueue")
-    assert(output.contains("; 0 failures"), output)
-  }
-
-  demoTest("tasks queued for a worker in particular run on its thread, while another worker takes tasks") {
-    val output = run("inbox")
-    assert(output.contains("; 0 failures"), output)
-  }
-
-  demoTest("a suspended future resumes on another thread with its state and that thread's signal state") {
-    val output = run("migrate")
-    assert(output.contains("; 0 failures"), output)
-  }
 }
 
 class GearsSocketDemoSuite extends SocketDemoSuite {

@@ -1,0 +1,130 @@
+package asyncio.gears
+
+import gears.async.Cancellable
+import gears.async.Scheduler
+
+import java.util.concurrent.ConcurrentLinkedQueue
+import scala.concurrent.duration.FiniteDuration
+
+import asyncio.Backend
+
+/** The thread of a pool's worker other than the first, which runs on the thread that started the pool. It holds its
+  * worker, so that finding the worker running the caller takes no thread-local lookup beyond the current thread.
+  */
+private[gears] final class ReactorWorkerThread(
+    val pool: ReactorPool,
+    index: Int,
+    started: java.util.concurrent.CountDownLatch
+) extends Thread(s"reactor-worker-$index") {
+  var worker: ReactorWorker | Null = null // on this thread only
+
+  override def run(): Unit = {
+    val mine = new ReactorWorker(pool, index, pool.backend.open()) // opened here, where it hears of closes
+    worker = mine
+    pool.workers(index) = mine
+    started.countDown()
+    started.await() // so that every worker this one may take tasks from is in `workers`
+    mine.loop()
+  }
+}
+
+/** A gears scheduler over a pool of workers, each a thread driving a reactor of `backend`'s (see `ReactorWorker`).
+  * Futures inherit their parent's scheduler, so a program started by `ReactorFutures.run`, and everything it spawns,
+  * runs on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from
+  * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
+  * thread that called `run`.
+  */
+final class ReactorPool private[gears] (val backend: Backend, size: Int, val policy: TakePolicy) extends Scheduler {
+  require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
+
+  /** The workers, by index; filled in as each starts on its own thread. */
+  private[gears] val workers = new Array[ReactorWorker](size)
+
+  // Tasks queued from outside the pool, and those that overflowed a worker's queue.
+  private val injector = new ConcurrentLinkedQueue[Runnable]()
+
+  // A bit per worker blocked in its reactor, or about to be, so that work can be offered to one of them.
+  private val idle = new java.util.concurrent.atomic.AtomicLong(0L)
+
+  /** Workers looking for work on others; while one is, offering work wakes no one else. */
+  private[gears] val searching = new java.util.concurrent.atomic.AtomicInteger(0)
+
+  @volatile private[gears] var stopped = false
+
+  /** For measurement: wake-ups sent to idle workers, offering work and for tasks from outside. */
+  private[gears] val wakeUps = new java.util.concurrent.atomic.AtomicLong
+  private[gears] val injections = new java.util.concurrent.atomic.AtomicLong
+
+  /** The worker running the caller, if it is one of this pool's. */
+  private[gears] def currentWorker: ReactorWorker | Null =
+    Thread.currentThread() match {
+      case thread: ReactorWorkerThread => if thread.pool eq this then thread.worker else null
+      case thread                      =>
+        val first = workers(0)
+        if first != null && (first.owner eq thread) then first else null
+    }
+
+  /** Queues `body` on the worker running the caller, or on the shared queue from outside the pool. */
+  def execute(body: Runnable): Unit = {
+    val worker = currentWorker
+    if worker != null then worker.push(body) else inject(body)
+  }
+
+  /** Queues `task` on the shared queue and wakes an idle worker other than `from`, the worker queueing it if any. */
+  private[gears] def inject(task: Runnable, from: Int = -1): Unit = {
+    injections.incrementAndGet()
+    injector.add(task)
+    wakeOne(from)
+  }
+
+  private[gears] def injected(): Runnable | Null = injector.poll()
+
+  /** Worker `from` has more queued than it is about to run: wakes another idle worker to take some, unless one is
+    * searching. `from` itself may still be marked idle, since a worker runs completions, which queue tasks, in the turn
+    * it blocked in; but it is running, so it is not the one to wake.
+    */
+  private[gears] def offerWork(from: Int): Unit =
+    if (idle.get() & ~(1L << from)) != 0L && searching.get() == 0 then wakeOne(from)
+
+  /** Wakes an idle worker other than `except` (-1 for none). */
+  private def wakeOne(except: Int = -1): Unit = {
+    val others = if except >= 0 then ~(1L << except) else -1L
+    var mask = idle.get() & others
+    while mask != 0L do {
+      val i = java.lang.Long.numberOfTrailingZeros(mask)
+      val current = idle.get()
+      if (current & (1L << i)) != 0L && idle.compareAndSet(current, current & ~(1L << i)) then {
+        wakeUps.incrementAndGet()
+        workers(i).reactor.wakeup()
+        return
+      }
+      mask = idle.get() & others
+    }
+  }
+
+  private[gears] def markIdle(index: Int): Unit = {
+    var mask = idle.get()
+    while !idle.compareAndSet(mask, mask | (1L << index)) do mask = idle.get()
+  }
+
+  private[gears] def unmarkIdle(index: Int): Unit = {
+    var mask = idle.get()
+    while (mask & (1L << index)) != 0L && !idle.compareAndSet(mask, mask & ~(1L << index)) do mask = idle.get()
+  }
+
+  /** Whether there is work `worker` could take: from outside the pool, or spare on another worker. */
+  private[gears] def hasWorkFor(worker: ReactorWorker): Boolean =
+    !injector.isEmpty || workers.exists(other => (other ne worker) && other.hasSpare)
+
+  /** Runs `body` after `delay` on the worker running the caller, or on the first worker from outside the pool. */
+  def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+    val worker = currentWorker
+    (if worker != null then worker else workers(0)).schedule(delay, body)
+  }
+
+  /** Stops every worker after its current round. */
+  private[gears] def stop(): Unit = {
+    stopped = true
+    workers.foreach(worker => if worker != null then worker.reactor.wakeup())
+  }
+}
