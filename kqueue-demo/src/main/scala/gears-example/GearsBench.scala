@@ -77,6 +77,28 @@ object GearsBench {
       }
     ),
     Scenario(
+      "concurrent-compute",
+      "as concurrent, with a slice of computation after each round trip, in the connection's own future",
+      100_000,
+      new Client {
+        def apply(r: Backend, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit = {
+          val each = math.max(1, count / connections)
+          (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Inline))).awaitAll
+        }
+      }
+    ),
+    Scenario(
+      "concurrent-offload",
+      "as concurrent-compute, with each slice in a future of its own, awaited before the next round trip",
+      100_000,
+      new Client {
+        def apply(r: Backend, address: Address, count: Int, connections: Int)(using Async.Spawn): Unit = {
+          val each = math.max(1, count / connections)
+          (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Offload))).awaitAll
+        }
+      }
+    ),
+    Scenario(
       "connections",
       "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
       20_000,
@@ -186,11 +208,11 @@ object GearsBench {
   // Where compute slices leave their results, so that the work cannot be optimised away.
   @volatile private var computeSink = 0L
 
-  /** About ten thousand steps of arithmetic: a slice of CPU-bound work. */
-  private def computeSlice(seed: Long): Long = {
+  /** About ten thousand steps of arithmetic, by default: a slice of CPU-bound work. */
+  private def computeSlice(seed: Long, steps: Int = 10_000): Long = {
     var x = seed | 1L
     var i = 0
-    while i < 10_000 do {
+    while i < steps do {
       x ^= x << 13
       x ^= x >>> 7
       x ^= x << 17
@@ -232,9 +254,15 @@ object GearsBench {
     } finally r.handles.close(fd)
   }
 
+  /** Computation done after each round trip by the compute variants of `concurrent`. */
+  enum Work { case NoWork, Inline, Offload }
+
+  /** Steps of `computeSlice` done after each round trip by the compute variants of `concurrent`: a few microseconds. */
+  inline val WorkSteps = 2_000
+
   /** Sends `count` messages one at a time, waiting for each echo before sending the next. With `deadline`, each round
     * trip also arms a reactor timer that is cancelled once the echo is back; with `blockingFirst`, a trivial blocking
-    * task runs before each round trip.
+    * task runs before each round trip; `work` says whether a slice of computation follows each, and where.
     */
   private def pingPong(
       r: Backend,
@@ -242,8 +270,9 @@ object GearsBench {
       count: Int,
       deadline: Boolean,
       freshOps: Boolean = false,
-      blockingFirst: Boolean = false
-  )(using Async): Unit =
+      blockingFirst: Boolean = false,
+      work: Work = Work.NoWork
+  )(using Async.Spawn): Unit =
     withConnection(r, address) { fd =>
       val zone = Zone.open()
       try {
@@ -251,6 +280,7 @@ object GearsBench {
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
         var timer = r.ops.timer(60_000)
+        var worked = 0L
         var i = 0
         while i < count do {
           if blockingFirst then perform(r, r.ops.blocking(() => ()))
@@ -267,8 +297,14 @@ object GearsBench {
           // Cancelled at once if this task is still on the worker the timer went to; otherwise the cancel runs there
           // soon, and the timer cannot be submitted again before it has, so the next round trip gets a new one.
           if pending != null && !pending.cancel() then timer = r.ops.timer(60_000)
+          work match {
+            case Work.NoWork  => ()
+            case Work.Inline  => worked += computeSlice(i, WorkSteps)
+            case Work.Offload => worked += Future(computeSlice(i, WorkSteps)).await
+          }
           i += 1
         }
+        if worked == 1L then computeSink = worked // only so that the work cannot be optimised away
       } finally zone.close()
     }
 
