@@ -68,7 +68,8 @@ lazy val root =
       )
     )
 
-// The platform-independent reactor model: ops, completions, the Reactor trait, and the blocker pool.
+// The platform-independent reactor model: ops, completions, the Reactor trait, and the blocker pool; and the gears
+// scheduler over a pool of reactors, which a platform with suspension support for it starts.
 lazy val asyncio =
   crossProject(JVMPlatform, NativePlatform)
     .crossType(CrossType.Pure)
@@ -78,6 +79,9 @@ lazy val asyncio =
       libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
       testFrameworks += MUnitFramework
     )
+    // Its tests take tasks across threads.
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .dependsOn(root)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val nativeAsyncioLoop =
@@ -92,8 +96,8 @@ lazy val nativeAsyncioLoop =
     )
     .dependsOn(asyncio.native)
 
-// Gears on Scala Native over reactors: a scheduler that is a pool of worker threads, each driving a reactor of its
-// own, and `perform` to suspend a future on an op (see asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
+// Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
+// asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
 lazy val nativeAsyncioGears =
   (project in file("asyncio-native/gears"))
     .enablePlugins(ScalaNativePlugin)
@@ -103,7 +107,7 @@ lazy val nativeAsyncioGears =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop, root.native)
+    .dependsOn(nativeAsyncioLoop)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =

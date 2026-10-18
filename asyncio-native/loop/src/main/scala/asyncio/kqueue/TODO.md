@@ -1060,15 +1060,18 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      - Left as is: four client workers connecting 512 sockets at once fill the server's listen backlog
        (`kern.ipc.somaxconn`, 128) faster than it accepts, and a Unix socket with a full backlog refuses the
        connection; the bench's `--connections` should stay at or under 128 with more than one worker.
-7. [x] **The pool is a library.** It moved out of the demo into `asyncio-native/gears` (sbt project
-   `nativeAsyncioGears`, package `asyncio.gears`), which depends on the loop and on gears' Native build:
-   `ReactorFutures` (`run`, `perform`, `submit`, `yieldNow`), `ReactorPool`, `TakePolicy` and `ReactorSupport` are its
-   interface; `ReactorWorker`, its thread and `RunQueue` are `private[gears]`. The `setjmp` override ships in its
-   native resources, so every program on the pool skips the signal mask on resume. The pool's checks are its Native
-   tests (`ReactorPoolSuite`: `RunQueueCheck`, `InboxCheck`, `MigrateCheck`, formerly `kqueuedemo gears runqueue`,
-   `inbox` and `migrate`), and the descriptor-sharing check, which is the reactor's, is the loop's
-   (`SharedDescriptorSuite`: `SharedDescriptorCheck`, formerly `kqueuedemo gears share`). The demo keeps the examples,
-   the bench and `move-bench`, now on the library.
+7. [x] **The pool is a library.** It moved out of the demo, and what is the same on every platform then moved again,
+   into `asyncio` (package `asyncio.gears`), which now depends on gears: `ReactorPool` and its `run`, which takes the
+   suspension support to use, `ReactorAsync` (`perform`, `submit`, `yieldNow`), `TakePolicy`, and the
+   `private[gears]` `ReactorWorker`, its thread and `RunQueue`. They build for the JVM too, where `RunQueueCheck`
+   (`RunQueueSuite`) also runs, though gears has no support there to run the pool with. `asyncio-native/gears` (sbt
+   project `nativeAsyncioGears`) keeps what is Native's: `ReactorSupport` (`NativeSuspend` with the pool as its
+   scheduler), `ReactorFutures` (`run`, which starts the pool with it and prints `GEARS_POOL_STATS`, and exports
+   `ReactorAsync`'s interface), and the `setjmp` override in its native resources, so every program on the pool
+   skips the signal mask on resume. Its tests (`ReactorPoolSuite`) are `InboxCheck` and `MigrateCheck`, formerly
+   `kqueuedemo gears inbox` and `migrate`; `RunQueueCheck` was `runqueue`. The descriptor-sharing check, which is the
+   reactor's, is the loop's (`SharedDescriptorSuite`: `SharedDescriptorCheck`, formerly `kqueuedemo gears share`).
+   The demo keeps the examples, the bench and `move-bench`, on the library. The bench is unchanged by either move.
 
 ## Proposed changes to Scala Native
 

@@ -8,12 +8,6 @@ import asyncio.kqueue.KqueueBackend
 class ReactorPoolSuite extends FunSuite {
   given Backend = KqueueBackend
 
-  test("the run queue runs every task once while other threads take tasks from it") {
-    val outcome = RunQueueCheck.run(tasks = 2_000_000, takers = 3)
-    assertEquals(outcome.failures, 0L)
-    assert(outcome.moved > 0, "nothing was moved, so the check proves little")
-  }
-
   test("tasks queued for a worker in particular run on its thread, while another worker takes tasks") {
     val rounds = 500
     val outcome = InboxCheck.run(rounds)

@@ -2,272 +2,30 @@ package asyncio.gears
 
 import gears.async.Async
 import gears.async.AsyncSupport
-import gears.async.Cancellable
-import gears.async.CompletionGroup
-import gears.async.Future
-import gears.async.Listener
-import gears.async.Scheduler
 import gears.async.native.NativeSuspend
 
-import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicReference
-import scala.util.Failure
-import scala.util.Success
-import scala.util.Try
-
 import asyncio.Backend
-import asyncio.Completion
-import asyncio.Reactor
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
 object ReactorSupport extends AsyncSupport with NativeSuspend {
   type Scheduler = ReactorPool
 }
 
-/** Gears futures over a thread-owned reactor. */
+/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is `ReactorAsync`'s. */
 object ReactorFutures {
-
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, and suspends
-    * the caller until the reactor finishes with it: it returns when the op completes, throws its failure, or throws
-    * `CancellationException` when it is cancelled. It must be called from a program started by `run` with `b`. `b` only
-    * says what the op is; which reactor runs it depends on where the caller runs, so a repeatable op may go to a
-    * different reactor each time. To run an op alongside other work, call this inside a `Future`.
-    *
-    * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
-    * once it returns or throws, the op's buffers and slots belong to the caller again.
-    */
-  def perform(b: Backend, op: b.Op)(using ac: Async): Unit = {
-    val worker = workerFor(b)
-    val r = worker.reactor
-    if ac.group.isCancelled then throw new CancellationException()
-    // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
-    // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
-    // reactor refuses) is left alone.
-    val waiter = b.attachment(op) match {
-      case reused: OpWaiter if !reused.inUse =>
-        reused.reset(worker)
-        reused
-      case _ =>
-        val fresh = new OpWaiter(worker, op)
-        b.attach(op, fresh)
-        fresh
-    }
-    waiter.inUse = true
-    try {
-      // The fast path: an op the reactor finishes at once returns here without suspending, which skips the whole await
-      // and resume. Taken within a small budget per turn of the caller, so a future whose ops rarely wait still gives
-      // the turn to those queued beside it, and beyond that only while no other task is queued, within a budget per
-      // round of the scheduler, so the reactor still polls for futures waiting on events.
-      // A refused op, such as a one-shot op submitted twice, throws from either call.
-      val finished =
-        if worker.turnFastPathsLeft > 0 then {
-          val now = r.trySubmit(op, waiter.completion)
-          if now then worker.turnFastPathsLeft -= 1
-          now
-        } else if worker.fastPathsLeft > 0 && worker.isIdle then {
-          val now = r.trySubmit(op, waiter.completion)
-          if now then worker.fastPathsLeft -= 1
-          now
-        } else {
-          r.submit(op, waiter.completion)
-          false
-        }
-      if !finished then {
-        waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
-        // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
-        try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
-        finally waiter.unlink()
-      }
-    } finally waiter.inUse = false
-  }
-
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, with a
-    * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
-    * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
-    */
-  def submit(b: Backend, op: b.Op, completion: Completion[b.Op])(using Async): Submission = {
-    val worker = workerFor(b)
-    worker.reactor.submit(op, completion)
-    new Submission(worker, op)
-  }
-
-  /** An op submitted with `submit`, which it cancels on the reactor it went to. */
-  final class Submission private[ReactorFutures] (worker: ReactorWorker, op: Any) {
-
-    /** Cancels the op, from any thread: at once if called on the worker it went to, and returns true; otherwise on that
-      * worker's thread, soon, and returns false, so the op is not free to submit again until its completion's
-      * `onCancel` has run.
-      */
-    def cancel(): Boolean =
-      if worker.isCurrent then {
-        worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]) // built by its backend, as `submit` requires
-        true
-      } else {
-        worker.sync(worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]))
-        false
-      }
-  }
-
-  /** The worker running the caller, which must be one of a pool of `b`'s reactors. The pool comes from the caller's
-    * context, but which of its workers runs the caller only from the thread, a thread-local lookup.
-    */
-  private def workerFor(b: Backend)(using ac: Async): ReactorWorker { val reactor: Reactor.Of[b.Op] } = {
-    val worker = ac.scheduler match {
-      case pool: ReactorPool if pool.backend eq b => pool.currentWorker
-      case _                                      => null
-    }
-    if worker == null then
-      throw new IllegalStateException("Ops must be performed by a program that ReactorFutures.run started")
-    worker.asInstanceOf[ReactorWorker { val reactor: Reactor.Of[b.Op] }] // its reactor is one of `b`'s
-  }
-
-  /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued, so the futures
-    * sharing its thread run first, as a long computation should between slices. Cheaper than awaiting a future spawned
-    * to the same end. Throws `CancellationException` if the caller has been cancelled by the time it resumes.
-    */
-  def yieldNow()(using ac: Async): Unit = {
-    ac.withGroup(CompletionGroup.Unlinked).await(Yield)
-    if ac.group.isCancelled then throw new CancellationException()
-  }
-
-  /** Never ready when polled, and completes a listener as soon as it is added, so that awaiting it resumes the caller
-    * from the back of its scheduler's queue.
-    */
-  private object Yield extends Async.Source[Unit] {
-    override def poll(): Option[Unit] = None
-    def poll(k: Listener[Unit]): Boolean = false
-    def onComplete(k: Listener[Unit]): Unit = k.completeNow((), this)
-    def dropListener(k: Listener[Unit]): Unit = ()
-  }
-
-  private val done = Success(())
-
-  /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the
-    * caller's cancellation group. It has at most one listener, the suspended caller. Kept as the op's attachment and
-    * reset for each submission, so it, its state and its completion are allocated once per op. Each submission may be
-    * on a different worker; `scheduler` is the current one's.
-    */
-  private final class OpWaiter(first: ReactorWorker, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
-
-    /** Whether a `perform` is using it. On the thread performing the op only. */
-    var inUse = false
-
-    /** The worker, and so the reactor, of the current submission. Read by `cancel` from any thread. */
-    @volatile private var worker = first
-
-    // Counts submissions, so that a cancel requested from another thread for one cannot reach the next.
-    @volatile private var generation = 0
-
-    /** Readies it for the op's next submission, on `next`'s reactor, after the previous one has finished. The worker
-      * changes before the generation, so a `cancel` that reads the new generation also finds the new worker.
-      */
-    def reset(next: ReactorWorker): Unit = {
-      if worker ne next then worker = next // usually the same, and a volatile write costs more than a read
-      generation += 1
-      state = OpWaiter.Empty
-    }
-
-    // Empty, then either the suspended caller's listener or the outcome, and finally the outcome, so exactly one side
-    // delivers the outcome: `finish` to a listener it finds, or `onComplete` to itself when it finds the outcome
-    // already there. On the reactor thread only, where completions run, where the caller awaits, and where `cancel`
-    // reads it, so a plain field: Scala Native's `AtomicReference` computes a `ClassTag` on every operation.
-    private var state: AnyRef = OpWaiter.Empty
-
-    // Completions are contravariant, so this one fits the op of any reactor.
-    val completion: Completion[Any] = new Completion[Any] {
-      def onComplete(op: Any): Unit = finish(done)
-      override def onFailure(op: Any, failure: Throwable): Unit = finish(Failure(failure))
-      override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
-    }
-
-    private def finish(outcome: Try[Unit]): Unit = {
-      val previous = state
-      state = outcome
-      previous match {
-        case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
-        case _                                 => ()
-      }
-    }
-
-    // gears' `await` calls this first; the default builds a listener and an `Option` to find out.
-    override def poll(): Option[Try[Unit]] =
-      state match {
-        case outcome: Try[Unit] @unchecked => Some(outcome)
-        case _                             => None
-      }
-
-    def poll(k: Listener[Try[Unit]]): Boolean =
-      state match {
-        case outcome: Try[Unit] @unchecked =>
-          k.completeNow(outcome, this)
-          true
-        case _ => false
-      }
-
-    def onComplete(k: Listener[Try[Unit]]): Unit =
-      state match {
-        case outcome: Try[Unit] @unchecked => k.completeNow(outcome, this)
-        case OpWaiter.Empty                => state = k
-        case _                             => () // Only the one caller ever waits.
-      }
-
-    def dropListener(k: Listener[Try[Unit]]): Unit = if state eq k then state = OpWaiter.Empty
-
-    // Cancellation can come from any thread, so it is carried out on the thread of the reactor the op was submitted to.
-    // By then the op may have finished, and a repeatable op may even have been submitted again, there or elsewhere,
-    // which must not be cancelled.
-    def cancel(): Unit = {
-      val submission = generation
-      val target = worker
-      target.sync(
-        if submission == generation && !state.isInstanceOf[Try[?]] then
-          target.reactor.cancel(op.asInstanceOf[target.reactor.Op]) // built by its backend, as `perform` requires
-      )
-    }
-  }
-
-  private object OpWaiter {
-    private val Empty = new Object
-  }
+  export ReactorAsync.*
 
   /** Runs `program` on one worker, the calling thread (see the other `run`). */
   def run(program: Backend => Async.Spawn ?=> Unit)(using backend: Backend): Unit = run(1)(program)
 
-  /** Runs `program` on a pool of `workers` workers (see `ReactorPool`), each with a reactor of `backend`'s: the calling
-    * thread becomes the first, and the others get threads of their own. The program starts as a future, builds its ops
-    * and uses its handles through the backend it is given, and performs them with `perform`; the workers run until it
-    * finishes. `policy` says which tasks a worker out of work may take from another. Each reactor is closed afterwards,
-    * on its own thread, and a failure of the program is rethrown.
+  /** Runs `program` on a pool of `workers` workers (see `ReactorPool.run`), suspending futures with `ReactorSupport`.
+    * With `GEARS_POOL_STATS=1`, the pool's counters are printed once its workers stop.
     */
   def run(workers: Int, policy: TakePolicy = TakePolicy.Affine)(program: Backend => Async.Spawn ?=> Unit)(using
       backend: Backend
   ): Unit = {
-    val pool = new ReactorPool(backend, workers, policy)
-    // Each worker opens its reactor on its own thread, where the reactor hears of descriptors closed (see
-    // `DescriptorHooks`).
-    pool.workers(0) = new ReactorWorker(pool, 0, backend.open())
-    val started = new java.util.concurrent.CountDownLatch(workers - 1)
-    val threads = (1 until workers).map { i =>
-      val thread = new ReactorWorkerThread(pool, i, started)
-      thread.setDaemon(true)
-      thread.start()
-      thread
-    }
-    started.await() // the workers array is complete, and published to every worker, before any task runs
-    try {
-      given ReactorPool = pool
-      given ReactorSupport.type = ReactorSupport
-      Async.blocking {
-        val main = Future(program(backend)) // queued on the first worker: it starts with that worker's first round
-        main.onComplete(Listener((_, _) => pool.stop()))
-        pool.workers(0).loop()
-        main.await // already complete, so this only rethrows a failure
-      }
-    } finally {
-      pool.stop()
-      threads.foreach(_.join())
-      if sys.env.get("GEARS_POOL_STATS").contains("1") then printStats(pool)
-    }
+    val stats = sys.env.get("GEARS_POOL_STATS").contains("1")
+    ReactorPool.run(ReactorSupport, workers, policy, pool => if stats then printStats(pool))(program)
   }
 
   /** Prints the pool's counters, once its workers have stopped. */
