@@ -1012,6 +1012,19 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
        (`kqueue-demo/bench/results/inbox-on-owner.json`): on one worker every scenario within 1% but `timers`
        (0.15 → 0.16); on 4 affine workers ping-pong 6.91 → 6.89, `concurrent` 3.65 → 3.78, `connections`
        21.4 → 21.6, `blocking` 5.23 → 5.49 (which queues nothing in an inbox), `mixed` 7.69 → 7.75.
+       **Done: the affine policy is the default.** `connections` on one worker had gone from 23–24 µs to 40–42 in the
+       tables of the experiments above, in old builds as much as new: not the machine, but the policy. Earlier tables
+       ran one worker with `--policy affine`, those with `--workers 1` alone the default, free; and even with no
+       worker to take from, the policies queue differently. Under free a resume joins `local` with everything else,
+       counted when the drain starts, so the echo future the server's accept loop spawns on resuming waits for the
+       next drain, after another turn of the reactor; under affine the resume is in `home`, which the drain runs
+       before it counts `local`, so the future runs in the same drain. A drain that also ran what its tasks spawned
+       brought free's `connections` to 21.6 µs, confirming it (tried behind a switch, not kept). The same explains
+       free's 42.9 µs on 2 and 4 workers in the step 6 table. Affine is as fast or faster everywhere measured but
+       `fairness`'s traffic, which free spreads (with a slow ticker), so `ReactorFutures.run` and the bench now
+       default to it. One worker, median of 5 runs, µs/op (`kqueue-demo/bench/results/affine-default.json`):
+       `connections` 40.5 → 21.3, `mixed` 26.9 → 22.8 (its slices 26.9 → 22.8), `concurrent-compute` 6.37 → 6.23,
+       every other scenario within 2%.
      - Before more work on the take policies, measure the pool's I/O scaling on Linux, where neither lock exists,
        which needs an epoll or io_uring backend; driven as above, io_uring with registered descriptors is the one
        to build.
