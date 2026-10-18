@@ -1,6 +1,10 @@
 package asyncio.gears
 
+import gears.async.Async
+import gears.async.AsyncSupport
 import gears.async.Cancellable
+import gears.async.Future
+import gears.async.Listener
 import gears.async.Scheduler
 
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -29,7 +33,7 @@ private[gears] final class ReactorWorkerThread(
 }
 
 /** A gears scheduler over a pool of workers, each a thread driving a reactor of `backend`'s (see `ReactorWorker`).
-  * Futures inherit their parent's scheduler, so a program started by `ReactorFutures.run`, and everything it spawns,
+  * Futures inherit their parent's scheduler, so a program started by `ReactorPool.run`, and everything it spawns,
   * runs on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
@@ -126,5 +130,49 @@ final class ReactorPool private[gears] (val backend: Backend, size: Int, val pol
   private[gears] def stop(): Unit = {
     stopped = true
     workers.foreach(worker => if worker != null then worker.reactor.wakeup())
+  }
+}
+
+object ReactorPool {
+
+  /** gears' suspension support with a `ReactorPool` as its scheduler, which only some platforms have. */
+  type Support = AsyncSupport { type Scheduler = ReactorPool }
+
+  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s, suspending futures with
+    * `support`: the calling thread becomes the first, and the others get threads of their own. The program starts as a
+    * future, builds its ops and uses its handles through the backend it is given, and performs them with
+    * `ReactorAsync.perform`; the workers run until it finishes. `policy` says which tasks a worker out of work may take
+    * from another. Each reactor is closed afterwards, on its own thread, then `stopped` is called with the pool, and a
+    * failure of the program is rethrown.
+    */
+  def run(support: Support, workers: Int, policy: TakePolicy, stopped: ReactorPool => Unit = _ => ())(
+      program: Backend => Async.Spawn ?=> Unit
+  )(using backend: Backend): Unit = {
+    val pool = new ReactorPool(backend, workers, policy)
+    // Each worker opens its reactor on its own thread, where the reactor hears of descriptors closed (see
+    // `DescriptorHooks`).
+    pool.workers(0) = new ReactorWorker(pool, 0, backend.open())
+    val started = new java.util.concurrent.CountDownLatch(workers - 1)
+    val threads = (1 until workers).map { i =>
+      val thread = new ReactorWorkerThread(pool, i, started)
+      thread.setDaemon(true)
+      thread.start()
+      thread
+    }
+    started.await() // the workers array is complete, and published to every worker, before any task runs
+    try {
+      given ReactorPool = pool
+      given Support = support
+      Async.blocking {
+        val main = Future(program(backend)) // queued on the first worker: it starts with that worker's first round
+        main.onComplete(Listener((_, _) => pool.stop()))
+        pool.workers(0).loop()
+        main.await // already complete, so this only rethrows a failure
+      }
+    } finally {
+      pool.stop()
+      threads.foreach(_.join())
+      stopped(pool)
+    }
   }
 }
