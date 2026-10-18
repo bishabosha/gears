@@ -1,4 +1,4 @@
-package gearsexample
+package asyncio.gears
 
 import gears.async.Async
 import gears.async.AsyncSupport
@@ -20,24 +20,27 @@ import scala.scalanative.posix.signal.stack_t
 import scala.scalanative.unsafe.*
 
 /** Checks that a suspended future can resume on a different thread from the one it suspended on, as a pool whose
-  * workers take tasks from one another will make it, run as `kqueuedemo gears migrate`. Two threads hand every task to
-  * each other, so each resume moves the future to the other thread. After each one the future checks:
+  * workers take tasks from one another will make it (see `MigrateSuite`). Two threads hand every task to each other, so
+  * each resume moves the future to the other thread. After each one the future checks:
   *   - its own state: locals and a chain of frames below the suspension, which the resume copies to the new thread's
   *     stack;
-  *   - the new thread's own signal state: Scala Native gives each thread an alternate signal stack, and on macOS
-  *     libc's `setjmp`, which a resume calls, also saves signal state, so restoring the old thread's would leave two
-  *     threads sharing one alternate stack;
+  *   - the new thread's own signal state: Scala Native gives each thread an alternate signal stack, and on macOS libc's
+  *     `setjmp`, which a resume calls, also saves signal state, so restoring the old thread's would leave two threads
+  *     sharing one alternate stack;
   *   - an exception thrown after the move and caught in a frame the resume restored, and one that ends the future;
   *   - a `@blocking` call and an allocation, which switch the new thread's GC state.
   *
   * The signal mask is compared without SIGINT and SIGTERM: Scala Native's GC blocks them for a collection with
-  * `sigprocmask` (`Synchronizer_acquire`), which on macOS applies to every thread of the process, and unblocks them only
-  * after resuming the threads it stopped, so the other threads can briefly see them blocked, moved or not.
+  * `sigprocmask` (`Synchronizer_acquire`), which on macOS applies to every thread of the process, and unblocks them
+  * only after resuming the threads it stopped, so the other threads can briefly see them blocked, moved or not.
   */
-object GearsMigrate {
+object MigrateCheck {
 
-  /** The signal state of the calling thread: its alternate stack and flags, and its signal mask without the signals
-    * the GC blocks.
+  /** How the check went: failures, resumes that moved threads, and resumes in all. */
+  final case class Outcome(failures: Long, moved: Long, resumes: Long)
+
+  /** The signal state of the calling thread: its alternate stack and flags, and its signal mask without the signals the
+    * GC blocks.
     */
   final case class SignalState(altStack: Long, altSize: Long, altFlags: Int, mask: Long)
 
@@ -107,7 +110,7 @@ object GearsMigrate {
   /** Every so many rounds, the suspending frame throws after the resume, and a frame halfway up catches it. */
   private inline val ThrowEvery = 16
 
-  def run(futures: Int, resumes: Int, stay: Boolean = false): Unit = {
+  def run(futures: Int, resumes: Int, stay: Boolean = false): Outcome = {
     val swapper = new Swapper(stay)
     given Swapper = swapper
     given SwapperSupport.type = SwapperSupport
@@ -142,7 +145,6 @@ object GearsMigrate {
         below + depth
       }
 
-    val start = System.nanoTime()
     Async.blocking {
       val ended = (0 until futures).map { id =>
         Future {
@@ -165,13 +167,6 @@ object GearsMigrate {
         }
     }
     swapper.stop()
-    val seconds = (System.nanoTime() - start) / 1e9
-    val count = futures.toLong * resumes
-    println(f"migrate: ${moves.get()} of $count resumes moved threads in $seconds%.2f s; ${failures.get()} failures")
-    if failures.get() != 0 then sys.exit(1)
-    if !stay && moves.get() < count / 2 then {
-      System.err.println("migrate: too few resumes moved threads to tell")
-      sys.exit(1)
-    }
+    Outcome(failures.get(), moves.get(), futures.toLong * resumes)
   }
 }

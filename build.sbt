@@ -83,8 +83,27 @@ lazy val asyncio =
 lazy val nativeAsyncioLoop =
   (project in file("asyncio-native/loop"))
     .enablePlugins(ScalaNativePlugin)
-    .settings(publish / skip := true)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework,
+      // Its tests run reactors on several threads.
+      nativeConfig ~= { _.withMultithreading(true) }
+    )
     .dependsOn(asyncio.native)
+
+// Gears on Scala Native over reactors: a scheduler that is a pool of worker threads, each driving a reactor of its
+// own, and `perform` to suspend a future on an op (see asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
+lazy val nativeAsyncioGears =
+  (project in file("asyncio-native/gears"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework,
+      nativeConfig ~= { _.withMultithreading(true) }
+    )
+    .dependsOn(nativeAsyncioLoop, root.native)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =
@@ -97,7 +116,7 @@ lazy val kqueueDemo =
       // The gears mirrors in src/main/scala/gears-example run futures on gears' fork-join pool.
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop, root.native)
+    .dependsOn(nativeAsyncioGears)
 
 // The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py
 lazy val ceBench =

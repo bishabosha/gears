@@ -1,4 +1,4 @@
-package gearsexample
+package asyncio.kqueue
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -7,16 +7,12 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Completion
-import asyncio.kqueue.KqueueHandles
-import asyncio.kqueue.KqueueOp
-import asyncio.kqueue.KqueueOps
-import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
 
 /** Checks that kqueue reactors on different threads can share a descriptor, as a pool's workers will when a task moves
-  * from one to another, run as `kqueuedemo gears share`. Two reactors, A and B, each on its own thread, take turns
-  * reading a pipe:
+  * from one to another (see `SharedDescriptorSuite`). Two reactors, A and B, each on its own thread, take turns reading
+  * a pipe:
   *   - A reads, then B: B's filter takes over, and A drops its own at its next event for the pipe, which a byte left
   *     unread for a moment makes sure of;
   *   - five more bytes arrive with no read pending, each read by B a moment later, while A has nothing to do: A must
@@ -26,7 +22,10 @@ import asyncio.unsafe.NonBlocking
   *     descriptor, a registered filter and nothing to read, for the new one, or its read would wait forever.
   * Each read must complete within two seconds.
   */
-object GearsShare {
+object SharedDescriptorCheck {
+
+  /** How the check went: its failures, and whether the new pipe reused the old one's numbers. */
+  final case class Outcome(failures: Int, reuseChecked: Boolean)
 
   /** A reactor whose own thread runs the tasks given to it between turns, counting the turns that return. */
   final class Driven(name: String) {
@@ -71,11 +70,12 @@ object GearsShare {
     }
   }
 
-  def run(): Unit = {
+  def run(): Outcome = {
     val zone = Zone.open()
     val a = new Driven("share-a")
     val b = new Driven("share-b")
     var failures = 0
+    var reuseChecked = true
     def fail(message: String): Unit = {
       failures += 1
       System.err.println(s"share: $message")
@@ -139,7 +139,7 @@ object GearsShare {
         KqueueHandles.close(writeEnd)
       }
       val (newRead, newWrite) = KqueueHandles.pipe()
-      if newRead != readEnd then println(s"share: the new pipe got $newRead, not $readEnd, so reuse was not checked")
+      if newRead != readEnd then reuseChecked = false
       readOn(a, "A's read of the reused descriptor", newRead, newWrite)
       KqueueHandles.close(newRead)
       KqueueHandles.close(newWrite)
@@ -147,7 +147,6 @@ object GearsShare {
       a.stop()
       b.stop()
     }
-    println(s"share: $failures failures")
-    if failures != 0 then sys.exit(1)
+    Outcome(failures, reuseChecked)
   }
 }

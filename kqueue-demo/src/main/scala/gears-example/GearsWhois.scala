@@ -10,7 +10,8 @@ import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.text
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleWhois`: resolve, connect to port 43, send one query line, print the raw reply. */
 object GearsWhois {

@@ -5,7 +5,8 @@ import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.unsafe.NativeBuffer
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {

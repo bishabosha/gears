@@ -16,7 +16,8 @@ import asyncio.Address
 import asyncio.HandleSlot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{FrameParser, StreamProtocol}
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleKeyValue`, the pipelined key-value service. Each session is a reader future and a
   * writer future joined by a bounded channel of reply batches, which replaces the shared flags and the byte backlog:

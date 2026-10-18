@@ -15,7 +15,8 @@ import asyncio.Interest
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.text
-import ReactorFutures.*
+import asyncio.gears.ReactorFutures
+import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleCancel`. Cancellation is just `Future.cancel()`: the bridge asks the reactor to
   * cancel the op, and the future is rejected when the reactor confirms through the completion's `onCancel`. Cancelling

@@ -469,7 +469,7 @@ io_uring's ring-bound ops. Taking tasks lives in the scheduler, above the `React
 Whether moving tasks that are doing I/O costs more than keeping them where they are is to be measured, with a policy
 switch: take any task, take only tasks not resumed by I/O, or those too once a worker's backlog persists.
 
-1. [x] **A task resumed on another thread.** `kqueuedemo gears migrate` hands every resume to the other of two threads
+1. [x] **A task resumed on another thread.** `MigrateCheck` hands every resume to the other of two threads
    and checks, after each: the locals of the frames the resume restored, an exception thrown after the move and caught
    in one of those frames, one that ends the future, a `@blocking` call and an allocation, and the new thread's own
    alternate signal stack and mask. No failures in 4 million moved resumes in a release-fast build, nor in debug. The
@@ -479,7 +479,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
    tasks, first in first out for its owner, from which another thread claims about half with one compare-and-swap on the
    head, which packs two indices so that the owner can go on taking tasks while the other thread copies.
    `ReactorScheduler` uses it in place of its `ArrayDeque`; a task that finds it full goes to the shared queue.
-   `kqueuedemo gears runqueue` checks it: an owner pushing and taking tasks while three other threads take tasks from
+   `RunQueueCheck` checks it: an owner pushing and taking tasks while three other threads take tasks from
    it, every task run exactly once and seeing what the owner wrote before queueing it (5 million tasks, ten release-fast
    runs, no failures). With one worker it costs little: release-fast, median of 5 runs, the scenarios within noise
    except `pipelined` +3% and +6.3% over 7 runs (0.64 → 0.68 µs), the scenario that queues the most tasks per message;
@@ -507,7 +507,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
    the slot. Write filters need none of this: they are one-shot, and an op cannot move while pending. The thread-local
    close hook could only reach the closing thread's reactor, so before this, a descriptor closed on one thread and
    reused on another left the first reactor sure that its filter was still registered, waiting for ever.
-   `kqueuedemo gears share` checks both on two reactor threads sharing a pipe: the old reactor must not wake for data
+   `SharedDescriptorCheck` checks both on two reactor threads sharing a pipe: the old reactor must not wake for data
    the new one owns, and a read of a reused number must complete; without the changes it fails on both. No cost with
    one worker: release-fast, median of 5 runs, every scenario within 3% (`kqueue-demo/bench/results/shared-descriptors.json`).
    Left to measure with the pool: deleting the filter eagerly instead, by message to the old reactor, and `EV_DISPATCH`
@@ -680,7 +680,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      | `_setjmp` then `_longjmp` | 0.022 | 0.021 | 0.024 | 0.024 | 0.029 |
 
    - **Done: `setjmp` and `longjmp` overridden in the demo's binary.**
-     `kqueue-demo/src/main/resources/scala-native/setjmp_override.S` defines `setjmp` and `longjmp` as branches to
+     `asyncio-native/gears`'s `setjmp_override.S` defines `setjmp` and `longjmp` as branches to
      `_setjmp` and `_longjmp`; references within the binary bind to them before libc's, so Scala Native's
      continuation resume, its exceptions and the GC's register capture all skip the mask and the alternate stack.
      This is the workaround that the first proposed Scala Native change said we did not have. Release-fast, median of
@@ -1032,7 +1032,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
        `Submission.cancel`), or arming or cancelling a timer there (`ReactorWorker.schedule`). Each calls that
        worker's reactor, which only its own thread may use. `drain` moved these tasks into `local`, behind the tasks
        already there, and other workers take from `local`'s head, so a task queued there could be taken and run on
-       the wrong thread. `kqueuedemo gears inbox` reproduces it every time: on two workers, another thread queues a
+       the wrong thread. `InboxCheck` reproduces it every time: on two workers, another thread queues a
        task for the busy worker, which then yields and spawns futures behind it while the other worker is idle; the
        idle worker takes half of `local`, the queued task first. Before the fix all 500 rounds ran the task on the
        other worker's thread; now `drain` runs these tasks first, from the inbox, at most `InboxPerDrain` (256) a
@@ -1060,6 +1060,15 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      - Left as is: four client workers connecting 512 sockets at once fill the server's listen backlog
        (`kern.ipc.somaxconn`, 128) faster than it accepts, and a Unix socket with a full backlog refuses the
        connection; the bench's `--connections` should stay at or under 128 with more than one worker.
+7. [x] **The pool is a library.** It moved out of the demo into `asyncio-native/gears` (sbt project
+   `nativeAsyncioGears`, package `asyncio.gears`), which depends on the loop and on gears' Native build:
+   `ReactorFutures` (`run`, `perform`, `submit`, `yieldNow`), `ReactorPool`, `TakePolicy` and `ReactorSupport` are its
+   interface; `ReactorWorker`, its thread and `RunQueue` are `private[gears]`. The `setjmp` override ships in its
+   native resources, so every program on the pool skips the signal mask on resume. The pool's checks are its Native
+   tests (`ReactorPoolSuite`: `RunQueueCheck`, `InboxCheck`, `MigrateCheck`, formerly `kqueuedemo gears runqueue`,
+   `inbox` and `migrate`), and the descriptor-sharing check, which is the reactor's, is the loop's
+   (`SharedDescriptorSuite`: `SharedDescriptorCheck`, formerly `kqueuedemo gears share`). The demo keeps the examples,
+   the bench and `move-bench`, now on the library.
 
 ## Proposed changes to Scala Native
 
@@ -1106,7 +1115,7 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   aborts. Three threads calling `sched_yield` in a loop beside an allocating one hang 4 runs in 5, on 0.5.12 and the
   nightly; not at all with conditional yieldpoints, nor with the calls redirected to `pthread_sigmask`. A C program
   racing `sigprocmask(SIG_BLOCK/SIG_UNBLOCK, empty)` against handler returns leaves the handler's signal blocked in 552
-  of 948k returns, and in none with `pthread_sigmask`. Found by `kqueuedemo gears migrate`, which saw SIGINT and SIGTERM
+  of 948k returns, and in none with `pthread_sigmask`. Found by `MigrateCheck`, which saw SIGINT and SIGTERM
   blocked after about 1 in 5,000 resumes in a debug build. libc `longjmp` also restores its mask with `sigprocmask`, so
   the continuation resume's `setjmp`, when an exception escapes, resets every thread's mask. Fix: `pthread_sigmask` in
   both synchronizers; the draft issue has the analysis and both repros. Until then a pool of reactor threads, all

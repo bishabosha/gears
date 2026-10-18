@@ -1,4 +1,4 @@
-package gearsexample
+package asyncio.gears
 
 import java.util.concurrent.atomic.AtomicLong
 
@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicLong
   * used. A task written into a slot is published by the owner's volatile write of the tail that follows it, and a
   * thread moving tasks reads the tail before the slots.
   */
-final class RunQueue {
+private[gears] final class RunQueue {
   import RunQueue.*
 
   private val buffer = new Array[Runnable](Capacity)
@@ -61,8 +61,8 @@ final class RunQueue {
   }
 
   /** Moves about half of this queue's tasks to the tail of `into`, which the calling thread must own, and returns how
-    * many it moved: none if this queue is empty, another thread is already moving tasks from it, or `into` is more
-    * than half full.
+    * many it moved: none if this queue is empty, another thread is already moving tasks from it, or `into` is more than
+    * half full.
     */
   def moveHalfTo(into: RunQueue): Int = {
     val intoTail = into.tail
@@ -98,7 +98,7 @@ final class RunQueue {
   }
 }
 
-object RunQueue {
+private[gears] object RunQueue {
 
   /** How many tasks a queue holds; a power of two. */
   inline val Capacity = 256
