@@ -160,6 +160,26 @@ trait Backend extends Reactor.Factory[Reactor] {
     * as usual. For a caller on no reactor's thread, which would otherwise hand every op to one. False by default.
     */
   def tryNow(op: Op): Boolean = false
+
+  /** A blocking op's body, to run on the calling thread rather than on this backend's blocker threads, for a caller
+    * that may block anyway and is on no reactor's thread; null if `op` is not a blocking op, or this backend runs them
+    * only on its blocker threads. As a submission would, it runs the op once: a one-shot op already submitted is
+    * refused with `IllegalStateException`. False by default: null.
+    */
+  def blockingHere(op: Op): BlockingHere | Null = null
+}
+
+/** A blocking op run on the calling thread (see `Backend.blockingHere`). */
+trait BlockingHere {
+
+  /** Runs the body, writing its result into the op's slot, and returns once it has; its failure is thrown. If `cancel`
+    * came first, the body is skipped; if during, the body is interrupted, its result not written, and once it returns
+    * this throws `CancellationException`.
+    */
+  def run(): Unit
+
+  /** Cancels the op from any thread, as `Reactor.cancel` would a blocking op: skipped, or interrupted. */
+  def cancel(): Unit
 }
 
 /** A backend with Unix domain stream sockets (see `UnixStreamHandles`). */

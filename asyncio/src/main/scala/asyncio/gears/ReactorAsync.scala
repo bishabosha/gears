@@ -4,8 +4,10 @@ import gears.async.Async
 import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
+import gears.async.cancellationScope
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.locks.LockSupport
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -102,6 +104,13 @@ object ReactorAsync {
         b.attach(op, fresh)
         fresh
     }
+    // A blocking op runs here: the caller may block anyway, and is on no reactor's thread. Cancelling the caller
+    // interrupts it, as cancelling the op on a reactor would.
+    val here = b.blockingHere(op)
+    if here != null then {
+      cancellationScope(new Cancellable { def cancel(): Unit = here.cancel() })(here.run())
+      return
+    }
     // An op the backend can finish here, on the caller's thread, skips both hand-offs. A run of them gives up the
     // thread now and then, as a pool's fast path gives up its turn, so the futures beside the caller still run.
     if waiter.finishedHere >= RemoteWaiter.HereBudget then {
@@ -122,7 +131,7 @@ object ReactorAsync {
         try submitOn(driver, op, waiter.completion)
         catch case t: Throwable => waiter.refuse(t) // a refused op, such as a one-shot op submitted twice
       )
-      try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
+      try waiter.await().get
       finally waiter.unlink()
     } finally waiter.inUse = false
   }
@@ -304,10 +313,11 @@ object ReactorAsync {
     inline val HereBudget = 32
   }
 
-  /** An op's submissions from a caller on no worker, as `OpWaiter`, except that the caller awaits on its own thread
-    * while the completion runs on the reactor's, so its state is guarded by its lock.
+  /** An op's submissions from a caller on no worker, which waits for each by parking its own thread, as a thread that
+    * may block anyway can: the completion, on the reactor's thread, leaves the outcome and unparks it. A member of the
+    * caller's cancellation group while the op is pending. Kept as the op's attachment and reset for each submission.
     */
-  private final class RemoteWaiter(first: ReactorDriver, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
+  private final class RemoteWaiter(first: ReactorDriver, op: Any) extends Cancellable {
 
     /** Whether a `perform` is using it. On the thread performing the op only. */
     var inUse = false
@@ -317,14 +327,15 @@ object ReactorAsync {
 
     @volatile private var driver = first
     @volatile private var generation = 0
+    @volatile private var outcome: Try[Unit] | Null = null
+    @volatile private var caller: Thread | Null = null
 
-    // Empty, then the caller's listener or the outcome, and finally the outcome (see `OpWaiter`). Guarded by `this`.
-    private var state: AnyRef = OpWaiter.Empty
-
+    /** Readies it for the op's next submission, on `next`'s reactor, by the calling thread. */
     def reset(next: ReactorDriver): Unit = {
-      driver = next
+      if driver ne next then driver = next
       generation += 1
-      synchronized { state = OpWaiter.Empty }
+      outcome = null
+      caller = Thread.currentThread()
     }
 
     val completion: Completion[Any] = new Completion[Any] {
@@ -336,47 +347,22 @@ object ReactorAsync {
     /** The reactor refused the submission: it fails with `failure`. */
     def refuse(failure: Throwable): Unit = finish(Failure(failure))
 
-    private def finish(outcome: Try[Unit]): Unit = {
-      val waiting = synchronized {
-        val previous = state
-        state = outcome
-        previous
-      }
-      waiting match {
-        case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
-        case _                                 => ()
-      }
+    private def finish(result: Try[Unit]): Unit = {
+      outcome = result
+      LockSupport.unpark(caller)
     }
 
-    private def outcome: Try[Unit] | Null = synchronized {
-      state match {
-        case outcome: Try[Unit] @unchecked => outcome
-        case _                             => null
+    /** Parks the caller until the submission's outcome is in. An interrupt does not end the wait: the op is still the
+      * reactor's until it says otherwise.
+      */
+    def await(): Try[Unit] = {
+      var result = outcome
+      while result == null do {
+        LockSupport.park(this)
+        result = outcome
       }
+      result
     }
-
-    override def poll(): Option[Try[Unit]] = Option(outcome)
-
-    def poll(k: Listener[Try[Unit]]): Boolean = {
-      val now = outcome
-      if now != null then k.completeNow(now, this)
-      now != null
-    }
-
-    def onComplete(k: Listener[Try[Unit]]): Unit = {
-      val now = synchronized {
-        state match {
-          case outcome: Try[Unit] @unchecked => outcome
-          case OpWaiter.Empty                =>
-            state = k
-            null
-          case _ => null // Only the one caller ever waits.
-        }
-      }
-      if now != null then k.completeNow(now, this)
-    }
-
-    def dropListener(k: Listener[Try[Unit]]): Unit = synchronized { if state eq k then state = OpWaiter.Empty }
 
     // Carried out on the driver's thread, where the submission went, if it is still the current one and pending.
     def cancel(): Unit = {
@@ -388,4 +374,5 @@ object ReactorAsync {
       )
     }
   }
+
 }

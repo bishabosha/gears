@@ -35,4 +35,10 @@ object NioBackend extends UnixStreamBackend {
       done
     case _ => false
   }
+
+  /** A blocking op runs on the caller under the same rules as on the blocker pool (see `NioBlocking`). */
+  override def blockingHere(op: Op): asyncio.BlockingHere | Null = op match {
+    case blocking: NioBlocking => blocking.here()
+    case _                     => null
+  }
 }

@@ -197,7 +197,27 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
      5.1, a blocking op going through the reactor and the blocker pool where the floor forks a subtask.
    - **With many connections, ours beats the floor** (`concurrent` 7.7 against 10.3): the reactor's batching of interest
      changes and completions per turn, against a registration per wait.
-   - Next, for `Carriers.Jdk`: a caller that is a virtual thread could block itself while its op is pending, with
-     `LockSupport.park`, as the floor does, instead of awaiting through gears, keeping cancellation by linking the op
-     to the caller's group as now; and run a blocking op's body on itself, which is already off any reactor's thread.
+5. [x] **`Carriers.Jdk` at the floor: callers park themselves, and run blocking ops themselves.** A caller on no
+   pool worker, which may block anyway, now waits for a pending op by parking its own thread (`LockSupport.park`):
+   the completion leaves the outcome in the waiter and unparks it, with no gears `await`, label or listener; the waiter
+   is still linked to the caller's group, so cancelling the caller cancels the op on its reactor. And a blocking op
+   runs on the caller (`Backend.blockingHere`, which NIO implements with its blocker pool's rules: skipped if cancelled
+   first, interrupted if during, its result then not written), rather than going to a reactor and its blocker pool.
+   Median of 5, µs/op, load average 5 to 8 (`kqueue-demo/bench/results/jvm-jdk-carriers-park.json`):
+
+   | scenario | Jdk before | Jdk after | Selector floor | JDK blocking channels |
+   | --- | --- | --- | --- | --- |
+   | pingpong | 33.6 | 18.0 | 19.3 | 9.2 |
+   | pingpong-deadline | 37.1 | 19.2 | 22.4 | 12.3 |
+   | blocking-io | 50.0 | 18.5 | 25.8 | 15.2 |
+   | blocking | 9.7 | 0.14 | 5.8 | 5.4 |
+   | connections | 94 | 86 | 57 | 39 |
+   | concurrent | 7.4 | 7.5 | 10.0 | 11.4 |
+   | mixed | 41 | 34 | 27 | 11.5 |
+
+   `Carriers.Jdk` is now at the `Selector` floor on a connection's latency, below it wherever blocking ops are
+   involved (a call, where the floor forks a subtask), and still ahead with many connections. What is left to the
+   JDK's own blocking channels is `Selector`'s (see 4). A blocking op running on the caller no longer belongs to a
+   reactor, so closing the reactor no longer interrupts it; the caller's own cancellation, which a program's end
+   brings, does (the cancel demo's checks still pass).
 
