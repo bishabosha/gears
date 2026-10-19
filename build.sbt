@@ -68,6 +68,14 @@ lazy val root =
       )
     )
 
+// Buffers for tests and demos written against `asyncio` alone, allocated from an arena each platform provides: a Zone
+// on Scala Native, foreign memory on the JVM. Kept out of the reactor interface on purpose.
+lazy val asyncioTestkit =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Full)
+    .in(file("asyncio-testkit"))
+    .settings(publish / skip := true)
+
 // The platform-independent reactor model: ops, completions, the Reactor trait, and the blocker pool; and the gears
 // scheduler over a pool of reactors, which a platform with suspension support for it starts.
 lazy val asyncio =
@@ -81,7 +89,7 @@ lazy val asyncio =
     )
     // Its tests take tasks across threads.
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
-    .dependsOn(root)
+    .dependsOn(root, asyncioTestkit % Test)
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val nativeAsyncioLoop =
@@ -119,7 +127,7 @@ lazy val jvmAsyncioGears =
       // `Carriers.Reactors` gives virtual threads the pool as their scheduler, which the JDK keeps to itself.
       Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
     )
-    .dependsOn(asyncio.jvm, jvmAsyncioNio % Test)
+    .dependsOn(asyncio.jvm, jvmAsyncioNio % Test, asyncioTestkit.jvm % Test)
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
 // asyncio/kqueue/TODO.md, "A thread-pooled scheduler").

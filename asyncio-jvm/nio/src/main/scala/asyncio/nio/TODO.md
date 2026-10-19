@@ -73,7 +73,9 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
 ## Next
 
 1. [ ] **A shared demo.** The gears demos now only need `asyncio` and the capabilities they ask for, apart from buffers
-   (`NativeBuffer`, over a `Zone`, on Scala Native, where the kernel needs pointer-backed buffers) and `Main`'s choice
-   of backend. With buffers allocated through the backend, they can move into a cross-built project with a `Main` per
-   platform; the FIFO and Unix datagram demos would then not compile against NIO, as intended.
+   and `Main`'s choice of backend. Buffers stay out of the reactor interface: `asyncio-testkit` (sbt `asyncioTestkit`,
+   cross-built) has `BufferArena`, closable, a `Zone` on Scala Native and a shared foreign memory arena (`Arena.ofShared`,
+   off-heap) on the JVM; the contract suites and `ReactorFuturesSuite` use it. Moving the demos from `NativeBuffer` and
+   `Zone.acquire` to `BufferArena.scoped` lets them go into a cross-built project with a `Main` per platform; the FIFO
+   and Unix datagram demos would then not compile against NIO, as intended.
 2. [ ] **Measure** the two JVM modes against each other and against kqueue with the same bench, once (1) lets it run.
