@@ -244,6 +244,24 @@ abstract class NioBlocking extends NioPromise {
       }
     }
 
+  /** Runs this op on the calling thread instead of the blocker pool (see `Backend.blockingHere`). */
+  private[nio] def here(): asyncio.BlockingHere = {
+    if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
+    submitted = true
+    new asyncio.BlockingHere {
+      def run(): Unit = {
+        if !begin() then throw new java.util.concurrent.CancellationException()
+        var failure: Throwable | Null = null
+        try block()
+        catch case t: Throwable => failure = t
+        finally end()
+        if synchronized(cancelled) then throw new java.util.concurrent.CancellationException()
+        if failure != null then throw failure
+      }
+      def cancel(): Unit = interrupt(): Unit
+    }
+  }
+
   private def begin(): Boolean = synchronized {
     if cancelled then false
     else {
