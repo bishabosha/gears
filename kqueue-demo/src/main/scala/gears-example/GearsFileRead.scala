@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Backend
+import asyncio.FifoBackend
 import asyncio.Interest
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.drainTo
@@ -13,13 +13,13 @@ import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {
-  def run(fifo: String)(using Backend): Unit = {
+  def run(fifo: String)(using FifoBackend): Unit = {
     Zone.acquire { implicit z =>
       val chunk = NativeBuffer.allocate(1024)
       val contents = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
-        val file = r.handles.openFile(fifo, write = false)
+        val file = r.handles.openFifo(fifo, write = false)
         try {
           println(s"opened file: $file")
 

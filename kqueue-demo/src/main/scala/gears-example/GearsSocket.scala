@@ -5,7 +5,8 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
-import asyncio.Address
+import asyncio.UnixAddress
+import asyncio.UnixStreamBackend
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
@@ -13,14 +14,14 @@ import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF. */
 object GearsSocket {
-  def run(sock: String)(using Backend): Unit = run(Address.Unix(sock))
+  def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
 
-  def run(address: Address)(using Backend): Unit = {
+  def run(address: StreamAddress)(using UnixStreamBackend): Unit = {
     Zone.acquire { implicit z =>
       val buf = NativeBuffer.allocate(8192)
       val response = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
-        val socket = r.handles.connect(address)
+        val socket = Sockets.connect(r, address)
         try {
           println(s"connection in progress to: $address")
           perform(r, r.ops.connect(socket))

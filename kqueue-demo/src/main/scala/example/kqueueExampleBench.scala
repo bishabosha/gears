@@ -11,7 +11,8 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Address
+import asyncio.IpAddress
+import asyncio.UnixAddress
 import asyncio.kqueue.KqueueHandles
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.EventQueue
@@ -32,6 +33,17 @@ import gearsexample.GearsBench
   * side.
   */
 object KQueueExampleBench {
+
+  private def connectTo(address: IpAddress | UnixAddress): Int = address match {
+    case unix: UnixAddress => KqueueHandles.connect(unix)
+    case ip: IpAddress     => KqueueHandles.connect(ip)
+  }
+
+  private def listenOn(address: IpAddress | UnixAddress): Int = address match {
+    case unix: UnixAddress => KqueueHandles.listen(unix)
+    case ip: IpAddress     => KqueueHandles.listen(ip)
+  }
+
   private inline val MessageSize = GearsBench.MessageSize
   private inline val MaxEvents = 256
   private val DeadlineTimer = 1.toUSize
@@ -63,8 +75,8 @@ object KQueueExampleBench {
     while buf.hasRemaining() do if NonBlocking.write(fd, buf) < 0 then awaitWritable(kq, events, fd)
 
   /** Connects to `address`, waiting for the connection to complete, and registers it for reads. */
-  private def connect(kq: Int, events: EventQueue, address: Address): Int = {
-    val fd = KqueueHandles.connect(address)
+  private def connect(kq: Int, events: EventQueue, address: IpAddress | UnixAddress): Int = {
+    val fd = connectTo(address)
     awaitWritable(kq, events, fd)
     PosixSockets.checkConnect(fd)
     register(kq, fd, read = true, oneShot = false)
@@ -78,7 +90,7 @@ object KQueueExampleBench {
     finally KqueueLoop.close(kq)
   }
 
-  private def pingPong(address: Address, count: Int, deadline: Boolean): Unit = withLoop { (kq, events) =>
+  private def pingPong(address: IpAddress | UnixAddress, count: Int, deadline: Boolean): Unit = withLoop { (kq, events) =>
     val fd = connect(kq, events, address)
     val zone = Zone.open()
     try {
@@ -103,7 +115,7 @@ object KQueueExampleBench {
     }
   }
 
-  private def concurrent(address: Address, count: Int, connections: Int): Unit = withLoop { (kq, events) =>
+  private def concurrent(address: IpAddress | UnixAddress, count: Int, connections: Int): Unit = withLoop { (kq, events) =>
     val each = math.max(1, count / connections)
     val zone = Zone.open()
     val open = mutable.HashMap.empty[Int, (ByteBuffer, Array[Int])] // fd -> its buffer and remaining round trips
@@ -147,7 +159,7 @@ object KQueueExampleBench {
   }
 
   /** The `connections` scenario: a new connection for each round trip, on one kqueue. */
-  private def newConnections(address: Address, count: Int): Unit = withLoop { (kq, events) =>
+  private def newConnections(address: IpAddress | UnixAddress, count: Int): Unit = withLoop { (kq, events) =>
     val zone = Zone.open()
     try {
       val buf = NativeBuffer.allocate(MessageSize)(using zone)
@@ -168,7 +180,7 @@ object KQueueExampleBench {
     } finally zone.close()
   }
 
-  private def pipelined(address: Address, count: Int): Unit = withLoop { (kq, events) =>
+  private def pipelined(address: IpAddress | UnixAddress, count: Int): Unit = withLoop { (kq, events) =>
     val fd = connect(kq, events, address)
     val zone = Zone.open()
     try {
@@ -302,7 +314,7 @@ object KQueueExampleBench {
   }
 
   /** A trivial blocking task on the worker thread and a round trip in turn, on one kqueue. */
-  private def blockingIo(address: Address, count: Int): Unit = withLoop { (kq, events) =>
+  private def blockingIo(address: IpAddress | UnixAddress, count: Int): Unit = withLoop { (kq, events) =>
     val fd = connect(kq, events, address)
     val (readEnd, writeEnd) = KqueueHandles.pipe()
     val tasks = blockingWorker(writeEnd)
@@ -334,11 +346,11 @@ object KQueueExampleBench {
   /** The echo server: echoes every connection's bytes until it closes. A connection whose echo would block stops being
     * read until the echo has been written.
     */
-  private def serve(address: Address, listening: CountDownLatch, failure: AtomicReference[Throwable | Null]): Unit =
+  private def serve(address: IpAddress | UnixAddress, listening: CountDownLatch, failure: AtomicReference[Throwable | Null]): Unit =
     try {
       val kq = KqueueLoop.open()
       val server =
-        try KqueueHandles.listen(address)
+        try listenOn(address)
         finally listening.countDown()
       register(kq, server, read = true, oneShot = false)
       val zone = Zone.open() // connection buffers, kept for the life of the process
@@ -402,7 +414,7 @@ object KQueueExampleBench {
         listening.countDown()
     }
 
-  private def startServer(address: Address): Unit = {
+  private def startServer(address: IpAddress | UnixAddress): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
     val thread = new Thread(() => serve(address, listening, failure), "bench-server")
@@ -414,7 +426,7 @@ object KQueueExampleBench {
   }
 
   /** Runs the named scenarios, or all of them, each with `GearsBench`'s base count times `scale`. */
-  def run(names: Seq[String], scale: Double, connections: Int, address: Address): Unit = {
+  def run(names: Seq[String], scale: Double, connections: Int, address: IpAddress | UnixAddress): Unit = {
     val known = GearsBench.scenarios.map(_.name)
     for name <- names if !known.contains(name) do
       throw new IllegalArgumentException(s"Unknown scenario `$name`; try ${known.mkString(", ")}")
@@ -424,7 +436,7 @@ object KQueueExampleBench {
     val gearsOnly = Set("mixed", "pingpong-fresh-ops", "fairness", "concurrent-compute", "concurrent-offload")
     val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
-      case Address.Unix(path) => Files.deleteIfExists(Paths.get(path))
+      case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))
       case _                  => ()
     }
     try {
@@ -450,7 +462,7 @@ object KQueueExampleBench {
       }
     } finally
       address match {
-        case Address.Unix(path) => Files.deleteIfExists(Paths.get(path))
+        case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))
         case _                  => ()
       }
   }

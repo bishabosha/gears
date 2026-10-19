@@ -12,7 +12,8 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
-import asyncio.Address
+import asyncio.UnixAddress
+import asyncio.UnixStreamBackend
 import asyncio.HandleSlot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{FrameParser, StreamProtocol}
@@ -58,7 +59,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      r: Backend,
+      r: UnixStreamBackend,
       fd: Int,
       inbox: ByteBuffer,
       store: Store,
@@ -89,7 +90,7 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: Backend, fd: Int, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(using
+  private def writeReplies(r: UnixStreamBackend, fd: Int, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(using
       Async
   ): Unit = {
     val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
@@ -112,7 +113,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: Backend, fd: Int, store: Store)(using Async): Unit = {
+  private def session(r: UnixStreamBackend, fd: Int, store: Store)(using Async): Unit = {
     val zone = Zone.open()
     try {
       val inbox = NativeBuffer.allocate(BufferSize)(using zone)
@@ -133,10 +134,10 @@ object GearsKeyValue {
     }
   }
 
-  def serve(address: Address)(using Backend): Unit = {
+  def serve(address: StreamAddress)(using UnixStreamBackend): Unit = {
     val store = new Store
     ReactorFutures.run { r =>
-      val server = r.handles.listen(address)
+      val server = Sockets.listen(r, address)
       try {
         println("Key-value server is now listening for connections.")
         val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
@@ -154,14 +155,14 @@ object GearsKeyValue {
   /** Sets a counter, increments it `count` times, then reads it back, all in one pipelined batch: a sender future
     * writes commands while a receiver future reads replies.
     */
-  def run(address: Address, count: Int)(using Backend): Unit = {
+  def run(address: StreamAddress, count: Int)(using UnixStreamBackend): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
     Zone.acquire { implicit z =>
       val outbox = NativeBuffer.allocate(BufferSize)
       val inbox = NativeBuffer.allocate(BufferSize)
       ReactorFutures.run { r =>
-        val socket = r.handles.connect(address)
+        val socket = Sockets.connect(r, address)
         try {
           println(s"connection in progress to: $address")
           perform(r, r.ops.connect(socket))

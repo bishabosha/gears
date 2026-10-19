@@ -5,7 +5,6 @@ import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Address
 import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.Slot
@@ -64,8 +63,10 @@ final case class Connect(fd: Int) extends Command {
   override def registersReads: Boolean = true
 }
 
-/** Receives one packet and writes its sender into `from`. Done once a packet has arrived. */
-final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[Address]) extends Command {
+/** Receives one packet and writes its sender into `from`, which holds a Unix address if `unix`, and an IP one
+  * otherwise. Done once a packet has arrived.
+  */
+final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress], unix: Boolean) extends Command {
   def interest: Interest = Interest.Read
   private var received = -1
   override def transferred: Int = received
@@ -81,21 +82,24 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[Address]) exten
     if size >= 0 then {
       NativeBuffer.advance(buf, size)
       buf.flip()
-      from.set(KqueueHandles.decode(address, !length))
+      val sender = KqueueHandles.decode(address, !length)
+      if sender.isInstanceOf[asyncio.UnixAddress] != unix then
+        throw new java.io.IOException(s"Received from $sender on a socket of the other family")
+      from.asInstanceOf[Slot[SocketAddress]].set(sender)
     }
     size >= 0
   }
 }
 
 /** Sends one packet, to `to` or to the connected peer when `to` is null, consuming `buf`. Done once it has gone. */
-final class SendTo(val fd: Int, buf: ByteBuffer, to: Address | Null) extends Command {
+final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) extends Command {
   def interest: Interest = Interest.Write
   def perform(): Boolean = {
     val size = buf.remaining()
     val sent =
       if to == null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
       else
-        KqueueHandles.withSocketAddr(to.nn) { (address, length) =>
+        KqueueHandles.withSocketAddr(to) { (address, length) =>
           PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)
         }
     if sent then buf.position(buf.limit()) // a datagram goes whole or not at all

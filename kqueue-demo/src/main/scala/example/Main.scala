@@ -156,8 +156,8 @@ object Main {
       @arg port: Int = 19876
   ): Unit = {
     val address =
-      if tcp.value then asyncio.Address.IPv4("127.0.0.1", port)
-      else asyncio.Address.Unix(s"/tmp/kqueue-bench-${System.nanoTime() % 1_000_000}.sock")
+      if tcp.value then asyncio.IpAddress.IPv4("127.0.0.1", port)
+      else asyncio.UnixAddress(s"/tmp/kqueue-bench-${System.nanoTime() % 1_000_000}.sock")
     KQueueExampleBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address)
   }
   def main(args: Array[String]): Unit = {

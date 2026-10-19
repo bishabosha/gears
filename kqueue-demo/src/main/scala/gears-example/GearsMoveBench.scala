@@ -7,7 +7,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Address
+import asyncio.UnixAddress
 import asyncio.Completion
 import asyncio.kqueue.KqueueHandles
 import asyncio.kqueue.KqueueOp
@@ -145,7 +145,7 @@ object GearsMoveBench {
   def run(roundTrips: Int, only: String = "", every: Int = 1): Unit = {
     val zone = Zone.open()
     val path = s"/tmp/move-bench-${System.nanoTime() % 1_000_000}.sock"
-    val address = Address.Unix(path)
+    val address = UnixAddress(path)
     Files.deleteIfExists(Paths.get(path))
     val server = new Driven("move-server")
     val a = new Driven("move-a")
