@@ -22,6 +22,19 @@ abstract class DemoSuite extends FunSuite {
   /** Arguments placed before every demo command; `Seq("gears")` runs the gears mirrors instead. */
   def commandPrefix: Seq[String] = Nil
 
+  /** How a demo is started, before its command: the linked executable, or a JVM running the gears demos. */
+  def launcher: Seq[String] = Seq(binary)
+
+  /** Whether these are the gears demos, which mirror only some of the plain ones. */
+  def gearsMirrors: Boolean = commandPrefix.nonEmpty
+
+  /** Whether the backend has FIFOs and Unix datagram sockets, which NIO lacks, so its demos have no such commands. */
+  def hasFifos: Boolean = true
+  def hasUnixDatagrams: Boolean = true
+
+  /** Whether a connected datagram socket can send an empty packet, which the JDK's cannot. */
+  def sendsEmptyConnectedDatagrams: Boolean = true
+
   /** Several demo runs per test, including the five-second timer and datagram timeout. */
   override def munitTimeout: Duration = 2.minutes
 
@@ -91,7 +104,7 @@ abstract class DemoSuite extends FunSuite {
     }
 
   private def start(log: Path, args: Seq[String]): Process =
-    new ProcessBuilder((binary +: (commandPrefix ++ args))*)
+    new ProcessBuilder((launcher ++ commandPrefix ++ args)*)
       .redirectErrorStream(true)
       .redirectOutput(log.toFile)
       .start()

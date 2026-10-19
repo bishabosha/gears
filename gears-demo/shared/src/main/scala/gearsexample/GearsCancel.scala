@@ -1,20 +1,20 @@
 package gearsexample
 
 import gears.async.Future
+import gears.async.Future.Promise
 
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import scala.scalanative.unsafe.Zone
 import scala.util.Failure
 
 import asyncio.Backend
 import asyncio.Completion
 import asyncio.Interest
 import asyncio.Slot
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.text
+import asyncio.testkit.BufferArena
+import DemoIO.text
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
@@ -61,8 +61,8 @@ object GearsCancel {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the reactor closes
     val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the reactor closes
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
-    Zone.acquire { implicit z =>
-      val buf = NativeBuffer.allocate(64)
+    BufferArena.scoped { arena =>
+      val buf = arena.allocate(64)
       ReactorFutures.run { r =>
         // Everything below runs on the reactor's thread, so ops go straight to the reactor.
         val (readFd, writeFd) = r.handles.pipe()
@@ -116,8 +116,16 @@ object GearsCancel {
 
           // Closing a handle may remove what the reactor watches, so a read still pending on it must stay cancellable.
           val (orphanRead, orphanWrite) = r.handles.pipe()
-          val orphan = Future(perform(r, r.ops.read(orphanRead, NativeBuffer.allocate(16))))
-          perform(r, r.ops.timer(0)) // lets the future start, submitting its read before the pipe is closed
+          val reading = Promise[Unit]()
+          val orphan = Future {
+            reading.complete(scala.util.Success(()))
+            perform(r, r.ops.read(orphanRead, arena.allocate(16)))
+          }
+          // Lets the future start and submit its read before the pipe is closed: on a pool's worker, the read is pending
+          // once the future has started; on the JVM's own virtual threads, it is handed to the reactor's thread first,
+          // which the timer gives time for.
+          reading.await
+          perform(r, r.ops.timer(20))
           r.handles.close(orphanRead)
           r.handles.close(orphanWrite)
           orphan.cancel()
@@ -126,10 +134,10 @@ object GearsCancel {
 
           stubbornTask.awaitResult
           println(s"a running blocking task had stopped before onCancel: ${stubbornFinished.get()}")
-          println(s"the cancelled task left its slot empty: ${example.KQueueExampleCancel.isEmpty(stubbornResult)}")
+          println(s"the cancelled task left its slot empty: ${DemoIO.isEmpty(stubbornResult)}")
 
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
-          r.handles.writeNow(writeFd, NativeBuffer.of("hello".getBytes(StandardCharsets.UTF_8)))
+          r.handles.writeNow(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8)))
           buf.clear()
           perform(r, r.ops.read(readFd, buf))
           buf.flip()

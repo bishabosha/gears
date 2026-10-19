@@ -25,6 +25,21 @@ enum Carriers {
   case Reactors
 }
 
+object Carriers {
+
+  /** What carries a program's futures when `run` is not told: the system property `asyncio.gears.carriers`, `jdk` or
+    * `reactors`, so that code written for every platform can be run either way; `Jdk` without it.
+    */
+  def default: Carriers =
+    sys.props.get("asyncio.gears.carriers") match {
+      case None       => Carriers.Jdk
+      case Some(name) =>
+        Carriers.values
+          .find(_.toString.equalsIgnoreCase(name))
+          .getOrElse(throw new IllegalArgumentException(s"asyncio.gears.carriers is jdk or reactors, not `$name`"))
+    }
+}
+
 /** Gears futures over reactors on the JVM: `run` starts a program, and the rest is `ReactorAsync`'s, so that code
   * calling `perform` is the same here as on Scala Native.
   */
@@ -34,13 +49,14 @@ object ReactorFutures {
   /** Runs `program` with one reactor (see the other `run`). */
   def run(using backend: Backend)(program: backend.type => Async.Spawn ?=> Unit): Unit = run(1)(program)
 
-  /** Runs `program` with `workers` reactors of `backend`'s, its futures carried by `carriers` (see `Carriers`). The
+  /** Runs `program` with `workers` reactors of `backend`'s, its futures carried by `carriers` (see `Carriers`; by
+    * default, as `Carriers.default` says). The
     * program starts as a future on a virtual thread, is given the backend, with its own type, so that it may use the
     * capabilities that backend has, and performs its ops with `perform`; the reactors run until it finishes, and are
     * closed afterwards. `policy` says, with `Carriers.Reactors`, which tasks a worker out of work may take from
     * another. A failure of the program is rethrown.
     */
-  def run(workers: Int, policy: TakePolicy = TakePolicy.Affine, carriers: Carriers = Carriers.Jdk)(using
+  def run(workers: Int, policy: TakePolicy = TakePolicy.Affine, carriers: Carriers = Carriers.default)(using
       backend: Backend
   )(program: backend.type => Async.Spawn ?=> Unit): Unit =
     carriers match {

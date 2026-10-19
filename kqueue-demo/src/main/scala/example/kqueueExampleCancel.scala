@@ -45,12 +45,7 @@ object KQueueExampleCancel {
     }
   }
 
-  /** Whether `slot` is empty, taking out any value it holds. */
-  def isEmpty(slot: Slot[?]): Boolean =
-    try {
-      slot.clear()
-      false
-    } catch case _: IllegalStateException => true
+  export gearsexample.DemoIO.isEmpty
 
   /** Waits up to two seconds for `sleeper` to record an interrupt. */
   def interruptedSoon(sleeper: Sleeper): Boolean = {

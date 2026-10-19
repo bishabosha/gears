@@ -6,14 +6,13 @@ import gears.async.Future
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.HandleSlot
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.{StreamProtocol, drainTo}
+import asyncio.testkit.BufferArena
+import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
@@ -25,9 +24,9 @@ object GearsServerSocket {
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
   private def serve(r: UnixStreamBackend, client: Int)(using Async): Unit = {
-    val zone = Zone.open()
+    val arena = BufferArena.open()
     try {
-      val buf = NativeBuffer.allocate(8192)(using zone)
+      val buf = arena.allocate(8192)
       // One repeatable op per direction for the whole connection; the buffer's limit says how much each read takes.
       val read = r.ops.read(client, buf)
       val write = r.ops.write(client, buf)
@@ -75,7 +74,7 @@ object GearsServerSocket {
         // One misbehaving client must not take the server down.
         println(s"Client socket $client failed: ${e.getMessage}")
     } finally {
-      zone.close()
+      arena.close()
       r.handles.close(client)
       println(s"Closed client socket: $client")
     }

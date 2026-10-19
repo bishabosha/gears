@@ -2,20 +2,19 @@ package gearsexample
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
 
 import asyncio.FifoBackend
 import asyncio.Interest
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.drainTo
+import asyncio.testkit.BufferArena
+import DemoIO.drainTo
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {
   def run(fifo: String)(using FifoBackend): Unit = {
-    Zone.acquire { implicit z =>
-      val chunk = NativeBuffer.allocate(1024)
+    BufferArena.scoped { arena =>
+      val chunk = arena.allocate(1024)
       val contents = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")

@@ -41,9 +41,10 @@ class SocketDemoSuite extends DemoSuite {
     demoTest(s"stream ${family.name}: native clients, framing, fragmentation, invalid length, concurrent clients") {
       withTempDirectory("gears-sockets-")(stream(family, _))
     }
-    demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
-      withTempDirectory("gears-sockets-")(datagram(family, _))
-    }
+    if family != Family.Unix || hasUnixDatagrams then
+      demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
+        withTempDirectory("gears-sockets-")(datagram(family, _))
+      }
     if family != Family.Unix then
       demoTest(s"restart ${family.name}: a killed server's port can be listened on again at once") {
         withTempDirectory("gears-sockets-")(restart(family, _))
@@ -188,7 +189,7 @@ class SocketDemoSuite extends DemoSuite {
     withServer(s"datagram${family.suffix}-serve" +: args, "waiting for messages") { server =>
       val local = directory.resolve("native-client-é.sock")
       val localArgs = if (family == Family.Unix) Seq("--local-sock", local.toString) else Seq.empty
-      for (message <- Seq("hello", "héllo 🌍", "")) {
+      for (message <- Seq("hello", "héllo 🌍") ++ (if sendsEmptyConnectedDatagrams then Seq("") else Nil)) {
         val output = run(s"datagram${family.suffix}" +: args ++: localArgs ++: Seq("-m", message)*)
         assert(output.contains(s"Received datagram of ${utf8(message).length} bytes: `$message`"), output)
         assert(!Files.exists(local), "Unix client path was not removed")
@@ -243,11 +244,13 @@ class SocketDemoSuite extends DemoSuite {
       val port = reserved.getLocalAddress.asInstanceOf[InetSocketAddress].getPort
       assert(runFailing("sock4", "--port", port.toString).contains("Failed to connect"))
     }
-    val local = directory.resolve("failed-client.sock")
-    runFailing("datagram", "--sock", directory.resolve("missing.sock").toString, "--local-sock", local.toString)
-    assert(!Files.exists(local), "Failed Unix client leaked its bound path")
-    val longPath = directory.resolve("é" * 60).toString
-    assert(runFailing("datagram-serve", "--sock", longPath).contains("UTF-8 bytes"))
+    if hasUnixDatagrams then {
+      val local = directory.resolve("failed-client.sock")
+      runFailing("datagram", "--sock", directory.resolve("missing.sock").toString, "--local-sock", local.toString)
+      assert(!Files.exists(local), "Failed Unix client leaked its bound path")
+      val longPath = directory.resolve("é" * 60).toString
+      assert(runFailing("datagram-serve", "--sock", longPath).contains("UTF-8 bytes"))
+    }
     Using.resource(new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) { silent =>
       assert(runFailing("datagram4", "--port", silent.getLocalPort.toString).contains("Timed out"))
     }

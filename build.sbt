@@ -142,6 +142,26 @@ lazy val nativeAsyncioGears =
     )
     .dependsOn(nativeAsyncioLoop)
 
+// The gears demos, written against `asyncio` alone, so the same code runs on kqueue (Scala Native, through
+// kqueueDemo's `kqueuedemo gears ...`) and on NIO (the JVM, `gearsDemoJVM/run ...`). A demo that needs a capability
+// asks for it, so one NIO lacks does not compile against it.
+lazy val gearsDemo =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Full)
+    .in(file("gears-demo"))
+    .settings(publish / skip := true)
+    .jvmSettings(
+      Compile / mainClass := Some("gearsexample.Main"),
+      libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
+      run / fork := true,
+      // So that `-Dasyncio.gears.carriers=reactors` can carry the futures on the reactor pool.
+      run / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    )
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .dependsOn(asyncioTestkit)
+    .jvmConfigure(_.dependsOn(jvmAsyncioGears, jvmAsyncioNio))
+    .nativeConfigure(_.dependsOn(nativeAsyncioGears))
+
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =
   (project in file("kqueue-demo"))
@@ -150,10 +170,10 @@ lazy val kqueueDemo =
       publish / skip := true,
       Compile / mainClass := Some("example.Main"),
       libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
-      // The gears mirrors in src/main/scala/gears-example run futures on gears' fork-join pool.
+      // The gears demos run futures on a pool of worker threads.
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioGears)
+    .dependsOn(gearsDemo.native)
 
 // The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py
 lazy val ceBench =
@@ -181,5 +201,13 @@ lazy val kqueueDemoTests =
       Test / javaOptions += {
         val binary = fileConverter.value.toPath((kqueueDemo / Compile / nativeLink).value)
         s"-Dkqueue.demo.binary=${binary.toAbsolutePath}"
+      },
+      // The same gears demos on the JVM, started as `java -cp <this> gearsexample.Main`.
+      Test / javaOptions += {
+        val converter = fileConverter.value
+        val classpath = (gearsDemo.jvm / Runtime / fullClasspath).value
+          .map(entry => converter.toPath(entry.data).toAbsolutePath.toString)
+          .mkString(java.io.File.pathSeparator)
+        s"-Dgears.demo.jvm.classpath=$classpath"
       }
     )

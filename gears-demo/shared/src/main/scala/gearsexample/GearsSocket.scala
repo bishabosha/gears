@@ -2,13 +2,12 @@ package gearsexample
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.{StreamProtocol, drainTo}
+import asyncio.testkit.BufferArena
+import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
@@ -17,8 +16,8 @@ object GearsSocket {
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
 
   def run(address: StreamAddress)(using UnixStreamBackend): Unit = {
-    Zone.acquire { implicit z =>
-      val buf = NativeBuffer.allocate(8192)
+    BufferArena.scoped { arena =>
+      val buf = arena.allocate(8192)
       val response = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         val socket = Sockets.connect(r, address)

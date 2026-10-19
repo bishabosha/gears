@@ -125,7 +125,8 @@ final class Connect(val handle: Int) extends Command {
   override def selectOps(channel: SelectableChannel): Int = SelectionKey.OP_CONNECT
   def perform(): Boolean = {
     val channel = selectable(classOf[SocketChannel], "Connecting")
-    channel.isConnected || channel.finishConnect()
+    try channel.isConnected || channel.finishConnect()
+    catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
   }
 }
 
@@ -150,7 +151,10 @@ final class Send(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
     val size = buf.remaining()
-    val sent = if target == null then channel.write(buf) else channel.send(buf, target)
+    // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it.
+    if target == null && size == 0 then
+      throw new java.io.IOException("The JDK cannot send an empty datagram on a connected socket")
+    val sent = if target != null then channel.send(buf, target) else channel.write(buf)
     // A datagram goes whole or not at all; an empty one reports 0 bytes either way.
     sent > 0 || size == 0
   }
@@ -174,7 +178,7 @@ final class NioTimer(val milliseconds: Int) extends NioOp with Repeatable {
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
-  * thread. `NioBlocking`, the only kind, completes itself from a thread of its own.
+  * thread. `NioBlocking`, the only kind, completes itself from the blocker pool.
   */
 sealed abstract class NioPromise extends NioOp {
   // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.
@@ -207,7 +211,7 @@ object NioPromise {
   private[nio] final case class Failed(failure: Throwable)
 }
 
-/** A promise the reactor completes by running `block` on a virtual thread. An exception thrown by `block` is the op's
+/** A promise the reactor completes by running `block` on the blocker pool (`NioBlocking.blockers`). An exception thrown by `block` is the op's
   * failure. Cancelling it skips `block` if it has not started, and interrupts its thread if it is running; either way
   * the completion's `onCancel` waits until `block` has returned. As with the kqueue backend's blocking ops, a subclass
   * writes its result into its slot through `publish`, which skips the write once cancelled.
@@ -223,9 +227,9 @@ abstract class NioBlocking extends NioPromise {
   /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
   private[nio] var cancelling: Completion[NioOp] | Null = null
 
-  /** Runs `block` on a virtual thread and completes the promise with the outcome, unless it is cancelled first. */
+  /** Runs `block` on the blocker pool and completes the promise with the outcome, unless it is cancelled first. */
   private[nio] def start(): Unit =
-    Thread.ofVirtual().start { () =>
+    NioBlocking.blockers.execute { () =>
       if begin() then {
         var failure: Throwable | Null = null
         try block()
@@ -235,7 +239,7 @@ abstract class NioBlocking extends NioPromise {
         // `block` has returned, which is when its `onCancel` runs.
         if failure != null then fail(failure) else signal()
       }
-    }: Unit
+    }
 
   private def begin(): Boolean = synchronized {
     if cancelled then false
@@ -245,10 +249,16 @@ abstract class NioBlocking extends NioPromise {
     }
   }
 
-  private def end(): Unit = synchronized {
-    runner = null
-    ended = true
-    notifyAll()
+  /** Once this returns no cancel can interrupt the thread, so an interrupt that raced in is cleared, and cannot leak
+    * into the thread's next task.
+    */
+  private def end(): Unit = {
+    synchronized {
+      runner = null
+      ended = true
+      notifyAll()
+    }
+    Thread.interrupted(): Unit
   }
 
   /** Marks the task cancelled and interrupts its thread if it is running. Returns true if it was running. */
@@ -276,6 +286,23 @@ abstract class NioBlocking extends NioPromise {
   }
 }
 
+private[nio] object NioBlocking {
+
+  /** The blocker pool: daemon platform threads, made as needed and kept a while. Not virtual threads, since one started
+    * from a virtual thread inherits its scheduler: from a future carried by a reactor pool (`Carriers.Reactors`), a
+    * blocking op would then take one of the pool's workers, and a reactor closing on that worker would wait for it
+    * forever.
+    */
+  lazy val blockers: java.util.concurrent.ExecutorService =
+    java.util.concurrent.Executors.newCachedThreadPool { (task: Runnable) =>
+      val thread = new Thread(task, s"nio-blocker-${count.incrementAndGet()}")
+      thread.setDaemon(true)
+      thread
+    }
+
+  private val count = new java.util.concurrent.atomic.AtomicInteger
+}
+
 /** A blocking task built from a function, for `Ops.blocking`. */
 final class BlockingTask(body: () => Unit) extends NioBlocking {
   def block(): Unit = body()
@@ -286,7 +313,7 @@ final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extend
   def block(): Unit = publish(into, body())
 }
 
-/** Resolves a host name with `InetAddress`, which blocks, on a thread of its own. */
+/** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
   def block(): Unit = {
     val addresses =

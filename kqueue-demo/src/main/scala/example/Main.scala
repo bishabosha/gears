@@ -161,7 +161,7 @@ object Main {
     KQueueExampleBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address)
   }
   def main(args: Array[String]): Unit = {
-    // `gears <command> ...` runs the gears mirror of a demo from src/main/scala/gears-example.
+    // `gears <command> ...` runs the gears mirror of a demo, from gears-demo, on kqueue.
     if args.headOption.contains("gears") then gearsexample.Main.main(args.tail)
     else ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }
