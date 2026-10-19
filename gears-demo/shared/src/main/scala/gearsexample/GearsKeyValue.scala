@@ -9,14 +9,13 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.collection.mutable
-import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.HandleSlot
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.{FrameParser, StreamProtocol}
+import asyncio.testkit.BufferArena
+import DemoIO.{FrameParser, StreamProtocol}
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
@@ -114,10 +113,10 @@ object GearsKeyValue {
 
   /** One client connection: reading and writing run at the same time on the same socket. */
   private def session(r: UnixStreamBackend, fd: Int, store: Store)(using Async): Unit = {
-    val zone = Zone.open()
+    val arena = BufferArena.open()
     try {
-      val inbox = NativeBuffer.allocate(BufferSize)(using zone)
-      val outbox = NativeBuffer.allocate(BufferSize)(using zone)
+      val inbox = arena.allocate(BufferSize)
+      val outbox = arena.allocate(BufferSize)
       val replies = BufferedChannel[Array[Byte]](Backlog)
       Async.group {
         Seq(
@@ -128,7 +127,7 @@ object GearsKeyValue {
     } catch {
       case e: IOException => println(s"Client socket $fd failed: ${e.getMessage}")
     } finally {
-      zone.close()
+      arena.close()
       r.handles.close(fd)
       println(s"Closed client socket: $fd")
     }
@@ -158,9 +157,9 @@ object GearsKeyValue {
   def run(address: StreamAddress, count: Int)(using UnixStreamBackend): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
-    Zone.acquire { implicit z =>
-      val outbox = NativeBuffer.allocate(BufferSize)
-      val inbox = NativeBuffer.allocate(BufferSize)
+    BufferArena.scoped { arena =>
+      val outbox = arena.allocate(BufferSize)
+      val inbox = arena.allocate(BufferSize)
       ReactorFutures.run { r =>
         val socket = Sockets.connect(r, address)
         try {

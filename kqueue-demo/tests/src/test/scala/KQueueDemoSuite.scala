@@ -21,7 +21,7 @@ class KQueueDemoSuite extends DemoSuite {
     assert(elapsed >= 4.5.seconds, s"timer fired after ${elapsed.toMillis} ms:\n$output")
   }
 
-  if (commandPrefix.isEmpty) // the reactor's own timers; the gears demos have no mirror of this one
+  if (!gearsMirrors) // the reactor's own timers; the gears demos have no mirror of this one
     demoTest("many timers: fired in deadline order, cancelled ones never") {
       val output = run("timers")
       assert(output.contains("timers fired: 1333 of 1333"), output)
@@ -29,7 +29,7 @@ class KQueueDemoSuite extends DemoSuite {
       assert(output.contains("cancelled timers fired: 0"), output)
     }
 
-  if (commandPrefix.isEmpty) // KqueueHandles directly; the gears demos have no mirror of this one
+  if (!gearsMirrors) // KqueueHandles directly; the gears demos have no mirror of this one
     demoTest("writing to a pipe or FIFO whose reader has closed fails, instead of ending the process") {
       withFifo { fifo =>
         val output = run("broken-pipe", "--fifo", fifo.toString)
@@ -71,7 +71,7 @@ class KQueueDemoSuite extends DemoSuite {
   demoTest("bench: every scenario runs and reports, at a tiny scale") {
     val output = run("bench", "--scale", "0.01", "--connections", "8")
     val gearsOnly =
-      if (commandPrefix.nonEmpty) Seq("mixed", "mixed-compute", "pingpong-fresh-ops", "fairness", "fairness-tick")
+      if (gearsMirrors) Seq("mixed", "mixed-compute", "pingpong-fresh-ops", "fairness", "fairness-tick")
       else Seq.empty
     for (
       scenario <- Seq(
@@ -87,7 +87,7 @@ class KQueueDemoSuite extends DemoSuite {
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }
 
-  demoTest("FIFO read readiness and EOF") {
+  if (hasFifos) demoTest("FIFO read readiness and EOF") {
     withFifo { fifo =>
       withDemo("file-read", "--fifo", fifo.toString) { reader =>
         reader.waitFor("Event registered for file read.", 5.seconds)
@@ -98,7 +98,7 @@ class KQueueDemoSuite extends DemoSuite {
     }
   }
 
-  demoTest("FIFO write readiness") {
+  if (hasFifos) demoTest("FIFO write readiness") {
     withFifo { fifo =>
       // The native writer sends on every writable event. Holding both ends open here lets its
       // non-blocking open find a reader without a race, and keeps the data queued after it stops.

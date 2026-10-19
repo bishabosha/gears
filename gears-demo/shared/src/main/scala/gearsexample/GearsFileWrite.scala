@@ -1,19 +1,18 @@
 package gearsexample
 
 import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
 
 import asyncio.FifoBackend
-import asyncio.unsafe.NativeBuffer
+import asyncio.testkit.BufferArena
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {
   def run(fifo: String, message: String)(using FifoBackend): Unit = {
-    Zone.acquire { implicit z =>
+    BufferArena.scoped { arena =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
-      val buf = NativeBuffer.allocate(math.max(bytes.length, 1))
+      val buf = arena.allocate(math.max(bytes.length, 1))
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
         val file = r.handles.openFifo(fifo, write = true)

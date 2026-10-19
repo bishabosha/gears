@@ -38,9 +38,15 @@ the backend has Unix streams and not elsewhere.
   reactors; checked by the contract's "closing a handle that a reactor blocked on another thread has used").
 - **Regular files** are `FileChannel`s, always ready, as POSIX reports one; a command on one that is not done is
   performed again next turn.
-- **Blocking ops and `resolve`** each run on a virtual thread of their own, which a cancel interrupts, with the kqueue
-  backend's rules for `onCancel` and slots. `resolve` uses `InetAddress.getAllByName`.
-- **Differences:** an IPv6 address comes back in the JDK's long form (`0:0:0:0:0:0:0:1`, not `::1`). No spinning before
+- **Blocking ops and `resolve`** run on a blocker pool of daemon platform threads, which a cancel interrupts, with the
+  kqueue backend's rules for `onCancel` and slots. `resolve` uses `InetAddress.getAllByName`. They were virtual threads
+  at first, but one started from a virtual thread inherits its scheduler: under `Carriers.Reactors` a blocking op then
+  took one of the pool's workers, and the cancel demo hung, its reactor closing on the only worker while waiting for an
+  interrupted sleep that needed that worker to wake (found running `gears cancel` on the JVM).
+- **Differences:** an IPv6 address comes back in the JDK's long form (`0:0:0:0:0:0:0:1`, not `::1`). A connected
+  datagram socket cannot send an empty packet: the JDK's `DatagramChannel` sends nothing for an empty buffer once
+  connected, through `write` or `send` to its peer, and reports it sent, so NIO's `send` fails instead (an unconnected
+  socket's `send(handle, buf, to)` sends one). No spinning before
   blocking, no readiness guesses (every read is tried first), and nothing measured yet.
 
 ## Gears on the JVM: `ReactorFutures.run(workers, policy, carriers)`
@@ -72,10 +78,14 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
 
 ## Next
 
-1. [ ] **A shared demo.** The gears demos now only need `asyncio` and the capabilities they ask for, apart from buffers
-   and `Main`'s choice of backend. Buffers stay out of the reactor interface: `asyncio-testkit` (sbt `asyncioTestkit`,
-   cross-built) has `BufferArena`, closable, a `Zone` on Scala Native and a shared foreign memory arena (`Arena.ofShared`,
-   off-heap) on the JVM; the contract suites and `ReactorFuturesSuite` use it. Moving the demos from `NativeBuffer` and
-   `Zone.acquire` to `BufferArena.scoped` lets them go into a cross-built project with a `Main` per platform; the FIFO
-   and Unix datagram demos would then not compile against NIO, as intended.
+1. [x] **A shared demo.** The gears demos are `gears-demo` (sbt `gearsDemoJVM`, `gearsDemoNative`), written against
+   `asyncio` alone with buffers from `asyncio-testkit`'s `BufferArena`, and their helpers in `DemoIO`. kqueue-demo
+   keeps the plain demos, `move-bench` (kqueue's own) and the Native `Main`, so `kqueuedemo gears <command>` is as it
+   was; the JVM's `Main` (`sbt "gearsDemoJVM/run <command>"`) has the commands NIO can run, the FIFO and Unix datagram
+   demos not compiling against it. `-Dasyncio.gears.carriers=reactors` runs them on the reactor pool
+   (`Carriers.default`). `kqueueDemoTests` runs the gears checks on the JVM too, in both modes (`JvmGears*Suite`,
+   `JvmReactorsGears*Suite`), skipping what NIO lacks. Running them found three things: a race in the cancel demo, which
+   assumed a future's read reached the reactor within one turn, true only on a pool's worker; NIO's blocking ops on
+   virtual threads, which a future carried by the pool made run on the pool itself (see above); and the JDK's empty
+   datagrams on a connected socket (see the differences).
 2. [ ] **Measure** the two JVM modes against each other and against kqueue with the same bench, once (1) lets it run.

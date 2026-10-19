@@ -9,14 +9,13 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
-import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.Completion
 import asyncio.HandleSlot
-import asyncio.unsafe.NativeBuffer
+import asyncio.testkit.BufferArena
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 import asyncio.gears.TakePolicy
@@ -277,9 +276,9 @@ object GearsBench {
       work: Work = Work.NoWork
   )(using Async.Spawn): Unit =
     withConnection(r, address) { fd =>
-      val zone = Zone.open()
+      val arena = BufferArena.open()
       try {
-        val buf = NativeBuffer.allocate(MessageSize)(using zone)
+        val buf = arena.allocate(MessageSize)
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
         var timer = r.ops.timer(60_000)
@@ -308,17 +307,17 @@ object GearsBench {
           i += 1
         }
         if worked == 1L then computeSink = worked // only so that the work cannot be optimised away
-      } finally zone.close()
+      } finally arena.close()
     }
 
   /** Writes `count` messages, each as its own write, from one future while reading the echoes in another. */
   private def pipelined(r: UnixStreamBackend, address: StreamAddress, count: Int)(using Async.Spawn): Unit =
     withConnection(r, address) { fd =>
-      val zone = Zone.open()
+      val arena = BufferArena.open()
       try {
         val total = count.toLong * MessageSize
-        val out = NativeBuffer.allocate(MessageSize)(using zone)
-        val in = NativeBuffer.allocate(8192)(using zone)
+        val out = arena.allocate(MessageSize)
+        val in = arena.allocate(8192)
         val writer = Future {
           val write = r.ops.write(fd, out)
           var i = 0
@@ -337,7 +336,7 @@ object GearsBench {
           received += in.position()
         }
         writer.await
-      } finally zone.close()
+      } finally arena.close()
     }
 
   /** Runs `pipelined` while a ticker future on the same reactor thread performs zero-length timers one after another,
@@ -363,9 +362,9 @@ object GearsBench {
 
   /** Echoes everything a connection sends until it closes. */
   private def echo(r: UnixStreamBackend, client: Int)(using Async): Unit = {
-    val zone = Zone.open()
+    val arena = BufferArena.open()
     try {
-      val buf = NativeBuffer.allocate(8192)(using zone)
+      val buf = arena.allocate(8192)
       val read = r.ops.read(client, buf)
       val write = r.ops.write(client, buf)
       var open = true
@@ -380,7 +379,7 @@ object GearsBench {
       }
     } catch case _: IOException => () // a client that goes away mid-write ends only its own connection
     finally {
-      zone.close()
+      arena.close()
       r.handles.close(client)
     }
   }

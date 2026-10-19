@@ -144,7 +144,9 @@ object NioHandles extends UnixStreamHandles {
     val channel = SocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
-      channel.connect(socketAddress(address)) // a Unix socket usually connects at once; `ops.connect` checks
+      // A Unix socket usually connects at once; `ops.connect` checks.
+      try channel.connect(socketAddress(address))
+      catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
     }
   }
 
@@ -235,19 +237,31 @@ object NioHandles extends UnixStreamHandles {
     */
   private[nio] def socketAddress(address: SocketAddress): java.net.SocketAddress = address match {
     case UnixAddress(path)          => UnixDomainSocketAddress.of(path)
-    case IpAddress.IPv4(host, port) => new InetSocketAddress(numeric(host, ipv6 = false), port)
-    case IpAddress.IPv6(host, port) => new InetSocketAddress(numeric(host, ipv6 = true), port)
+    case IpAddress.IPv4(host, p) => new InetSocketAddress(numeric(host, ipv6 = false), port(p))
+    case IpAddress.IPv6(host, p) => new InetSocketAddress(numeric(host, ipv6 = true), port(p))
   }
 
   /** A numeric host as an address. `InetAddress.getByName` only checks the form of a literal, but would look up a
-    * name, so anything that is not one is refused first.
+    * name, so anything that is not one is refused first, with the kqueue backend's message.
     */
   private def numeric(host: String, ipv6: Boolean): InetAddress = {
+    def invalid = new IOException(s"Invalid numeric IP address: $host")
     val literal =
       if ipv6 then host.contains(':') else host.nonEmpty && host.forall(c => c == '.' || (c >= '0' && c <= '9'))
-    if !literal then throw new IOException(s"Not a numeric ${if ipv6 then "IPv6" else "IPv4"} address: $host")
-    InetAddress.getByName(host)
+    if !literal then throw invalid
+    try InetAddress.getByName(host)
+    catch case _: java.net.UnknownHostException => throw invalid
   }
+
+  /** Checks a port as the kqueue backend does, with its message. */
+  private def port(port: Int): Int = {
+    require(port >= 0 && port <= 65535, s"Port must be between 0 and 65535: $port")
+    port
+  }
+
+  /** A failed connection, with the kqueue backend's message. */
+  private[nio] def connectFailed(e: IOException): IOException =
+    new IOException(s"Failed to connect socket: ${e.getMessage}", e)
 
   /** The `IpAddress` of a socket address the JDK reports for an IP socket. */
   private[nio] def ipAddress(socket: java.net.SocketAddress): IpAddress = socket match {

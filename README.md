@@ -178,9 +178,13 @@ sbt 'kqueueDemo/run whois --host whois.iana.org --query example.com'
 sbt 'kqueueDemo/run resolve --host localhost'
 ```
 
-Every reactor demo also has a gears mirror in `kqueue-demo/src/main/scala/gears-example`,
+Every reactor demo also has a gears mirror in `gears-demo/shared/src/main/scala/gearsexample`,
 run by putting `gears` before the command, for example `kqueueDemo/run gears kv-serve
---sock /tmp/gears-kv.sock`. Each completion step becomes a call to `ReactorFutures.perform`, which suspends
+--sock /tmp/gears-kv.sock`. The mirrors are written against the `asyncio` interface alone, so the same
+code runs on the JVM over NIO, with the commands NIO has the capabilities for: `gearsDemoJVM/run kv-serve
+--sock /tmp/gears-kv.sock`. With `-Dasyncio.gears.carriers=reactors` among its JVM options
+(`set gearsDemoJVM / run / javaOptions += "-Dasyncio.gears.carriers=reactors"`), the futures are carried by
+the reactor pool instead of the JDK's virtual thread scheduler. Each completion step becomes a call to `ReactorFutures.perform`, which suspends
 the caller until the op finishes, so the code reads sequentially; wrapping a call in a
 `Future` runs the op alongside other work. Reactors are thread-owned: `ReactorFutures.run` makes the calling
 thread a reactor thread, running the program as a future on a pool of workers, each a thread
@@ -188,7 +192,7 @@ alternating between its queued tasks and turns of its own reactor's loop, blocki
 it has no task to run and none to take from another worker. With one worker, the default,
 everything a program spawns stays on the calling thread; with more, a worker out of work takes
 queued tasks from the others, and a task's ops go to the reactor of whichever worker runs it.
-The test suites run against both versions.
+The test suites run against both versions, and the gears one on the JVM too.
 
 `kqueueDemo/run gears bench` is a stress test to measure reactor changes against: an
 echo server and its clients run on two reactor threads in one process, through five

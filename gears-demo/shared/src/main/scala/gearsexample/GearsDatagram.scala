@@ -6,15 +6,14 @@ import gears.async.Future
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
 import asyncio.IpAddress
 import asyncio.UnixAddress
 import asyncio.UnixDatagramBackend
 import asyncio.Slot
-import asyncio.unsafe.NativeBuffer
-import example.KQueueExampleIO.text
+import asyncio.testkit.BufferArena
+import DemoIO.text
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
@@ -28,9 +27,9 @@ object GearsDatagram {
   /** Exchanges a packet with a Unix datagram server; a Unix datagram client needs its own bound path for the reply. */
   def run(sock: String, localSock: String, message: String)(using UnixDatagramBackend): Unit = {
     require(sock != localSock, "The client and server socket paths must be different")
-    Zone.acquire { implicit z =>
-      val request = NativeBuffer.of(message.getBytes(StandardCharsets.UTF_8))
-      val response = NativeBuffer.allocate(65536)
+    BufferArena.scoped { arena =>
+      val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
+      val response = arena.allocate(65536)
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
         try exchange(r, sock, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[UnixAddress]()), request, response)
@@ -41,9 +40,9 @@ object GearsDatagram {
 
   /** Exchanges a packet with an IP datagram server; connecting the socket also assigns it an ephemeral local port. */
   def run(address: IpAddress, message: String)(using Backend): Unit = {
-    Zone.acquire { implicit z =>
-      val request = NativeBuffer.of(message.getBytes(StandardCharsets.UTF_8))
-      val response = NativeBuffer.allocate(65536)
+    BufferArena.scoped { arena =>
+      val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
+      val response = arena.allocate(65536)
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(null, address)
         try exchange(r, address, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[IpAddress]()), request, response)
@@ -78,8 +77,8 @@ object GearsDatagram {
 
   /** Echoes each packet on a Unix datagram socket to its sender. */
   def serve(address: UnixAddress)(using UnixDatagramBackend): Unit =
-    Zone.acquire { implicit z =>
-      val packet = NativeBuffer.allocate(65536)
+    BufferArena.scoped { arena =>
+      val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
@@ -90,8 +89,8 @@ object GearsDatagram {
 
   /** Echoes each packet on an IP datagram socket to its sender. */
   def serve(address: IpAddress)(using Backend): Unit =
-    Zone.acquire { implicit z =>
-      val packet = NativeBuffer.allocate(65536)
+    BufferArena.scoped { arena =>
+      val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(address, null)
         val sender = Slot[IpAddress]()
