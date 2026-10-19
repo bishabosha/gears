@@ -14,6 +14,7 @@ import munit.FunSuite
 import asyncio.HandleSlot
 import asyncio.UnixAddress
 import asyncio.nio.NioBackend
+import asyncio.testkit.BufferArena
 import ReactorFutures.*
 
 /** Gears programs over NIO's reactors, carried by `carriers`, on `workers` reactors: the same calls to `perform` either
@@ -21,6 +22,14 @@ import ReactorFutures.*
   */
 abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends FunSuite {
   given NioBackend.type = NioBackend
+
+  // The buffers of every test, which their futures share across threads.
+  private lazy val arena = BufferArena.open()
+
+  override def afterAll(): Unit = {
+    arena.close()
+    super.afterAll()
+  }
 
   private def running(body: NioBackend.type => Async.Spawn ?=> Unit): Unit =
     ReactorFutures.run(workers, carriers = carriers)(body)
@@ -49,7 +58,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
       val (in, out) = r.handles.pipe()
       try {
         val writer = Future {
-          val buf = ByteBuffer.allocateDirect(8192)
+          val buf = arena.allocate(8192)
           val write = r.ops.write(out, buf)
           var sent = 0
           while sent < total do {
@@ -60,7 +69,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
           r.handles.close(out)
         }
         val reader = Future {
-          val buf = ByteBuffer.allocateDirect(8192)
+          val buf = arena.allocate(8192)
           val read = r.ops.read(in, buf)
           var atEnd = false
           while !atEnd do {
@@ -91,7 +100,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
             perform(r, accept)
             val socket = accepted.clear()
             Future {
-              val buf = ByteBuffer.allocateDirect(64)
+              val buf = arena.allocate(64)
               val read = r.ops.read(socket, buf)
               val write = r.ops.write(socket, buf)
               try
@@ -111,7 +120,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
             val socket = r.handles.connect(address)
             try {
               perform(r, r.ops.connect(socket))
-              val buf = ByteBuffer.allocateDirect(64)
+              val buf = arena.allocate(64)
               val read = r.ops.read(socket, buf)
               val write = r.ops.write(socket, buf)
               for _ <- 1 to trips do {
@@ -140,13 +149,13 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
     running { r =>
       val (in, out) = r.handles.pipe()
       try {
-        val buf = ByteBuffer.allocateDirect(16)
+        val buf = arena.allocate(16)
         val read = r.ops.read(in, buf)
         val waiting = Future(perform(r, read))
         perform(r, r.ops.timer(20)) // so that the read is pending
         waiting.cancel()
         val cancelled = waiting.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
-        r.handles.writeNow(out, ByteBuffer.wrap("again".getBytes(StandardCharsets.UTF_8)))
+        r.handles.writeNow(out, arena.of("again".getBytes(StandardCharsets.UTF_8)))
         perform(r, read)
         outcome = s"$cancelled ${text(buf)}"
       } finally {
@@ -163,7 +172,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
       val (in, out) = r.handles.pipe()
       r.handles.close(in)
       r.handles.close(out)
-      try perform(r, r.ops.read(in, ByteBuffer.allocate(4)))
+      try perform(r, r.ops.read(in, arena.allocate(4)))
       catch case t: Throwable => failure = t
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))

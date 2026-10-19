@@ -12,7 +12,7 @@ import munit.FunSuite
 /** What every backend's reactors must do, as `Reactor`, `Ops` and `Handles` describe it, checked through the interface
   * alone, so that code written against it runs the same on any backend. A backend's suite extends this, and the
   * contracts of the capabilities its backend has (`UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with
-  * the backend and how to allocate buffers its ops can use. Each check drives one reactor, or two, from the test's
+  * the backend; buffers come from the platform's `BufferArena`. Each check drives one reactor, or two, from the test's
   * thread.
   */
 trait ReactorContract extends FunSuite {
@@ -20,8 +20,16 @@ trait ReactorContract extends FunSuite {
   /** The backend under test. */
   val backend: Backend
 
+  /** Where the checks' buffers come from, freed when the suite ends. */
+  private lazy val arena = asyncio.testkit.BufferArena.open()
+
   /** A buffer of `capacity` bytes that this backend's ops can fill and drain, live until the suite ends. */
-  def allocate(capacity: Int): ByteBuffer
+  protected def allocate(capacity: Int): ByteBuffer = arena.allocate(capacity)
+
+  override def afterAll(): Unit = {
+    arena.close()
+    super.afterAll()
+  }
 
   /** Checks this backend is known to fail, by name: they are expected to fail, so one that starts passing is reported,
     * to be taken off the list.
