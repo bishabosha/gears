@@ -96,14 +96,24 @@ object ReactorAsync {
   private def performElsewhere(b: Backend, op: b.Op, driver: ReactorDriver)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
     val waiter = b.attachment(op) match {
-      case reused: RemoteWaiter if !reused.inUse =>
-        reused.reset(driver)
-        reused
-      case _ =>
+      case reused: RemoteWaiter if !reused.inUse => reused
+      case _                                     =>
         val fresh = new RemoteWaiter(driver, op)
         b.attach(op, fresh)
         fresh
     }
+    // An op the backend can finish here, on the caller's thread, skips both hand-offs. A run of them gives up the
+    // thread now and then, as a pool's fast path gives up its turn, so the futures beside the caller still run.
+    if waiter.finishedHere >= RemoteWaiter.HereBudget then {
+      waiter.finishedHere = 0
+      Thread.`yield`()
+    }
+    if b.tryNow(op) then {
+      waiter.finishedHere += 1
+      return
+    }
+    waiter.finishedHere = 0
+    waiter.reset(driver)
     waiter.inUse = true
     try {
       // Linked first: a cancel is handed to the same thread after the submission, so it finds the op pending.
@@ -288,6 +298,12 @@ object ReactorAsync {
     val Empty = new Object
   }
 
+  private object RemoteWaiter {
+
+    /** How many submissions of one op in a row may finish on the caller's thread before it yields. */
+    inline val HereBudget = 32
+  }
+
   /** An op's submissions from a caller on no worker, as `OpWaiter`, except that the caller awaits on its own thread
     * while the completion runs on the reactor's, so its state is guarded by its lock.
     */
@@ -295,6 +311,9 @@ object ReactorAsync {
 
     /** Whether a `perform` is using it. On the thread performing the op only. */
     var inUse = false
+
+    /** Submissions in a row that the backend finished on the caller's thread (`Backend.tryNow`). Caller's thread only. */
+    var finishedHere = 0
 
     @volatile private var driver = first
     @volatile private var generation = 0

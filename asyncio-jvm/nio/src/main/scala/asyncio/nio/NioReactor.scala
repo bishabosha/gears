@@ -80,6 +80,14 @@ final class NioReactor private (selector: Selector) extends Reactor {
   // returning clears; cleared after each select, before anything it was for is looked at.
   private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
 
+  // Whether the loop is blocked in a select, or about to be, and whether a wake-up was asked for since the last select.
+  // `wakeup` sets the second, then wakes the selector only if the first is set; the loop sets the first, then blocks
+  // only if the second is not, so one of them always sees the other: a wake-up while the loop is awake, running
+  // completions or a caller's tasks, costs no `Selector.wakeup`, which writes to the selector's pipe, and the read that
+  // drains it.
+  @volatile private var parked = false
+  @volatile private var wakeRequested = false
+
   private val timers = new TimerHeap
   private var nextTimerOrder = 0L
   private var running = false
@@ -146,7 +154,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
             if read then require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
             else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
             command.completion = pending
-            if command.tryFirst && performedAtOnce(command, queue = !finishNow) then finished = finishNow
+            val tryIt = command.tryFirst && !command.triedNow
+            command.triedNow = false
+            if tryIt && performedAtOnce(command, queue = !finishNow) then finished = finishNow
             else {
               val ops = command.selectOps(s.channel)
               if read then {
@@ -290,11 +300,13 @@ final class NioReactor private (selector: Selector) extends Reactor {
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
-  def wakeup(): Unit =
-    if wakePending.compareAndSet(false, true) then
+  def wakeup(): Unit = {
+    wakeRequested = true
+    if parked && wakePending.compareAndSet(false, true) then
       wakeLock.synchronized {
         if !closed then selector.wakeup(): Unit
       }
+  }
 
   /** Runs the completions of the promises resolved when it starts (see `KqueueReactor`). */
   private def deliverResolved(): Boolean = {
@@ -466,13 +478,21 @@ final class NioReactor private (selector: Selector) extends Reactor {
       selectedCount = 0
       val waitFor = !delivered && block && again.isEmpty && ready.isEmpty
       if !waitFor then selector.selectNow(collect)
-      else if timers.isEmpty then selector.select(collect)
       else {
-        // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
-        val wait = timers.peek.deadline - System.nanoTime()
-        if wait <= 0 then selector.selectNow(collect)
-        else selector.select(collect, (wait + 999_999L) / 1_000_000L)
+        parked = true
+        try
+          if wakeRequested || !resolvedQueue.isEmpty then selector.selectNow(collect)
+          else if timers.isEmpty then selector.select(collect)
+          else {
+            // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
+            val wait = timers.peek.deadline - System.nanoTime()
+            if wait <= 0 then selector.selectNow(collect)
+            else selector.select(collect, (wait + 999_999L) / 1_000_000L)
+          }
+        finally parked = false
       }
+      // Before anything a wake-up was for is looked at: the caller's tasks after this turn, and promises below.
+      wakeRequested = false
       wakePending.set(false)
       var i = 0
       while i < selectedCount do {

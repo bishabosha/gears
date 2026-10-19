@@ -1,0 +1,570 @@
+{
+  "started": "2026-10-19T20:08:32+02:00",
+  "finished": "2026-10-19T20:13:40+02:00",
+  "load_average": {
+    "before": [
+      3.310546875,
+      4.1201171875,
+      3.60400390625
+    ],
+    "after": [
+      5.07373046875,
+      4.837890625,
+      4.0849609375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "nio-jdk",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/jvm/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b0e8a45a4d9cd5d645441f400de1ba8da1fbafd5",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 25.15,
+        "mixed-compute": 29.29,
+        "pingpong": 48.82,
+        "pingpong-fresh-ops": 49.91,
+        "pingpong-deadline": 49.24,
+        "concurrent": 5.53,
+        "concurrent-compute": 5.26,
+        "concurrent-offload": 5.55,
+        "connections": 127.08,
+        "pipelined": 20.39,
+        "blocking": 9.53,
+        "blocking-io": 67.24,
+        "timers": 0.18,
+        "fairness": 21.28,
+        "mixed": 65.1
+      },
+      "samples": {
+        "fairness-tick": [
+          25.05,
+          25.53,
+          24.2,
+          25.15,
+          25.45
+        ],
+        "mixed-compute": [
+          29.2,
+          29.29,
+          29.25,
+          29.36,
+          29.37
+        ],
+        "pingpong": [
+          49.95,
+          48.58,
+          49.74,
+          48.82,
+          48.42
+        ],
+        "pingpong-fresh-ops": [
+          48.9,
+          50.27,
+          48.92,
+          50.22,
+          49.91
+        ],
+        "pingpong-deadline": [
+          50.53,
+          49.15,
+          50.54,
+          49.24,
+          49.13
+        ],
+        "concurrent": [
+          5.35,
+          5.54,
+          5.43,
+          5.53,
+          5.65
+        ],
+        "concurrent-compute": [
+          5.2,
+          5.26,
+          5.3,
+          5.24,
+          5.41
+        ],
+        "concurrent-offload": [
+          5.62,
+          5.51,
+          5.55,
+          5.43,
+          5.71
+        ],
+        "connections": [
+          126.95,
+          128.59,
+          127.08,
+          129.53,
+          125.92
+        ],
+        "pipelined": [
+          20.44,
+          19.97,
+          20.55,
+          20.16,
+          20.39
+        ],
+        "blocking": [
+          9.53,
+          9.29,
+          9.41,
+          9.61,
+          9.58
+        ],
+        "blocking-io": [
+          69.0,
+          66.73,
+          68.51,
+          67.24,
+          66.16
+        ],
+        "timers": [
+          0.18,
+          0.2,
+          0.18,
+          0.17,
+          0.18
+        ],
+        "fairness": [
+          21.13,
+          21.66,
+          20.55,
+          21.28,
+          21.57
+        ],
+        "mixed": [
+          64.0,
+          65.1,
+          65.59,
+          64.84,
+          65.32
+        ]
+      }
+    },
+    {
+      "label": "nio-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/jvm/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b0e8a45a4d9cd5d645441f400de1ba8da1fbafd5",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=reactors"
+      },
+      "median": {
+        "fairness-tick": 5.14,
+        "mixed-compute": 32.67,
+        "pingpong": 8.71,
+        "pingpong-fresh-ops": 8.59,
+        "pingpong-deadline": 9.98,
+        "concurrent": 3.88,
+        "concurrent-compute": 6.97,
+        "concurrent-offload": 9.87,
+        "connections": 79.48,
+        "pipelined": 1.26,
+        "blocking": 7.37,
+        "blocking-io": 15.85,
+        "timers": 0.16,
+        "fairness": 2.57,
+        "mixed": 16.34
+      },
+      "samples": {
+        "fairness-tick": [
+          5.45,
+          5.14,
+          4.7,
+          4.34,
+          5.94
+        ],
+        "mixed-compute": [
+          32.67,
+          32.72,
+          32.51,
+          32.36,
+          33.52
+        ],
+        "pingpong": [
+          8.86,
+          8.27,
+          8.41,
+          8.71,
+          9.24
+        ],
+        "pingpong-fresh-ops": [
+          8.64,
+          8.74,
+          8.59,
+          8.39,
+          8.56
+        ],
+        "pingpong-deadline": [
+          9.98,
+          10.08,
+          9.78,
+          9.65,
+          9.99
+        ],
+        "concurrent": [
+          3.75,
+          3.92,
+          3.88,
+          3.56,
+          4.01
+        ],
+        "concurrent-compute": [
+          6.87,
+          7.5,
+          6.97,
+          7.11,
+          6.94
+        ],
+        "concurrent-offload": [
+          9.87,
+          10.02,
+          9.8,
+          9.61,
+          10.26
+        ],
+        "connections": [
+          83.95,
+          79.48,
+          80.51,
+          79.03,
+          79.36
+        ],
+        "pipelined": [
+          1.31,
+          1.26,
+          1.23,
+          1.23,
+          1.27
+        ],
+        "blocking": [
+          7.41,
+          7.53,
+          7.37,
+          7.18,
+          7.31
+        ],
+        "blocking-io": [
+          15.85,
+          15.91,
+          15.36,
+          15.71,
+          16.01
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness": [
+          2.73,
+          2.57,
+          2.35,
+          2.17,
+          2.97
+        ],
+        "mixed": [
+          16.34,
+          16.37,
+          16.26,
+          16.19,
+          16.78
+        ]
+      }
+    },
+    {
+      "label": "jdk-vthreads",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/jvm/jdk-vthreads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b0e8a45a4d9cd5d645441f400de1ba8da1fbafd5",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "jdk-bench",
+        "java_options": "--enable-preview"
+      },
+      "median": {
+        "fairness-tick": 1.05,
+        "mixed-compute": 22.89,
+        "pingpong": 9.0,
+        "pingpong-fresh-ops": 8.89,
+        "pingpong-deadline": 12.31,
+        "concurrent": 11.75,
+        "concurrent-compute": 12.14,
+        "concurrent-offload": 12.87,
+        "connections": 39.0,
+        "pipelined": 1.09,
+        "blocking": 5.17,
+        "blocking-io": 14.99,
+        "timers": 0.3,
+        "fairness": 1.71,
+        "mixed": 10.23
+      },
+      "samples": {
+        "fairness-tick": [
+          1.06,
+          1.03,
+          1.13,
+          1.05,
+          1.05
+        ],
+        "mixed-compute": [
+          22.88,
+          22.93,
+          23.11,
+          22.89,
+          22.7
+        ],
+        "pingpong": [
+          9.28,
+          8.95,
+          9.0,
+          9.04,
+          8.98
+        ],
+        "pingpong-fresh-ops": [
+          9.05,
+          8.89,
+          8.83,
+          8.92,
+          8.83
+        ],
+        "pingpong-deadline": [
+          12.58,
+          11.94,
+          12.77,
+          11.94,
+          12.31
+        ],
+        "concurrent": [
+          11.66,
+          11.77,
+          11.75,
+          11.75,
+          11.69
+        ],
+        "concurrent-compute": [
+          12.07,
+          12.39,
+          12.16,
+          12.14,
+          12.04
+        ],
+        "concurrent-offload": [
+          12.87,
+          13.27,
+          13.1,
+          12.83,
+          12.83
+        ],
+        "connections": [
+          40.65,
+          39.46,
+          38.67,
+          39.0,
+          38.79
+        ],
+        "pipelined": [
+          1.11,
+          0.95,
+          1.24,
+          1.09,
+          1.09
+        ],
+        "blocking": [
+          5.34,
+          5.04,
+          5.26,
+          5.17,
+          5.16
+        ],
+        "blocking-io": [
+          14.99,
+          14.8,
+          15.57,
+          15.17,
+          14.74
+        ],
+        "timers": [
+          0.28,
+          0.27,
+          0.31,
+          0.3,
+          0.31
+        ],
+        "fairness": [
+          1.74,
+          1.75,
+          1.7,
+          1.71,
+          1.65
+        ],
+        "mixed": [
+          10.22,
+          10.8,
+          10.27,
+          10.23,
+          10.21
+        ]
+      }
+    },
+    {
+      "label": "kqueue",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/85010bb7-a60e-4bda-aec4-c0aed406dcc4/scratchpad/kq.b0e8",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "b0e8a45a4d9cd5d645441f400de1ba8da1fbafd5",
+        "subject": "share the gears demos across platforms in gears-demo, with buffers from BufferArena, and run their checks on the JVM over NIO in both carrier modes",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-19T20:02:11+02:00"
+      },
+      "median": {
+        "pingpong": 6.98,
+        "pingpong-fresh-ops": 6.86,
+        "pingpong-deadline": 6.9,
+        "concurrent": 1.81,
+        "concurrent-compute": 6.24,
+        "concurrent-offload": 7.24,
+        "connections": 21.15,
+        "pipelined": 0.67,
+        "blocking": 5.09,
+        "blocking-io": 12.99,
+        "timers": 0.16,
+        "fairness-tick": 2.81,
+        "fairness": 1.4,
+        "mixed-compute": 22.68,
+        "mixed": 22.68
+      },
+      "samples": {
+        "pingpong": [
+          7.04,
+          6.96,
+          6.97,
+          7.0,
+          6.98
+        ],
+        "pingpong-fresh-ops": [
+          6.86,
+          6.86,
+          6.84,
+          6.8,
+          7.01
+        ],
+        "pingpong-deadline": [
+          6.9,
+          7.15,
+          6.84,
+          6.89,
+          6.91
+        ],
+        "concurrent": [
+          1.85,
+          2.05,
+          1.8,
+          1.79,
+          1.81
+        ],
+        "concurrent-compute": [
+          6.25,
+          6.34,
+          6.22,
+          6.23,
+          6.24
+        ],
+        "concurrent-offload": [
+          7.19,
+          7.24,
+          7.22,
+          7.3,
+          7.26
+        ],
+        "connections": [
+          22.19,
+          21.15,
+          21.91,
+          19.5,
+          21.11
+        ],
+        "pipelined": [
+          0.67,
+          0.68,
+          0.66,
+          0.68,
+          0.67
+        ],
+        "blocking": [
+          5.36,
+          5.03,
+          5.09,
+          5.37,
+          5.06
+        ],
+        "blocking-io": [
+          13.27,
+          12.99,
+          13.37,
+          12.94,
+          12.79
+        ],
+        "timers": [
+          0.16,
+          0.16,
+          0.16,
+          0.16,
+          0.16
+        ],
+        "fairness-tick": [
+          2.81,
+          2.83,
+          2.92,
+          2.78,
+          2.8
+        ],
+        "fairness": [
+          1.4,
+          1.42,
+          1.46,
+          1.39,
+          1.4
+        ],
+        "mixed-compute": [
+          22.69,
+          22.6,
+          22.81,
+          22.68,
+          22.56
+        ],
+        "mixed": [
+          22.69,
+          22.6,
+          22.82,
+          22.68,
+          22.57
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

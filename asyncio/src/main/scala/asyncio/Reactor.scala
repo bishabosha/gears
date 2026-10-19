@@ -152,6 +152,14 @@ trait Backend extends Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
+
+  /** Performs `op` now, on the calling thread and on no reactor, if this backend can and the op finishes at once, as a
+    * read of data already waiting or a write that fits does: then it returns true, the op's results are in the
+    * caller's buffers and slots, and a failure is thrown, as from `Reactor.trySubmit`. Otherwise, or if this backend
+    * only tries ops on a reactor's thread, it returns false having done nothing that counts, and the op is submitted
+    * as usual. For a caller on no reactor's thread, which would otherwise hand every op to one. False by default.
+    */
+  def tryNow(op: Op): Boolean = false
 }
 
 /** A backend with Unix domain stream sockets (see `UnixStreamHandles`). */

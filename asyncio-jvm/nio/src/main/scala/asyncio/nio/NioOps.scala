@@ -78,6 +78,9 @@ abstract class Command extends NioOp with Repeatable {
   /** The entry of the current submission, looked up by the reactor. */
   private[nio] var entry: Entry | Null = null
 
+  /** Whether `NioBackend.tryNow` just tried this command and it would have blocked: its next submission skips trying. */
+  private[nio] var triedNow = false
+
   /** The key of the selector this command last waited on, kept so that waiting there again needs no lookup. */
   private[nio] var key: SelectionKey | Null = null
 

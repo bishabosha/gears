@@ -21,4 +21,18 @@ object NioBackend extends UnixStreamBackend {
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   def open(): Reactor.Of[Op] = NioReactor.open()
+
+  /** A command tried first is tried here: a non-blocking channel may be read and written from any thread, and trying
+    * touches no reactor. A `whenReady`, a timer or a blocking op is not.
+    */
+  override def tryNow(op: Op): Boolean = op match {
+    case command: Command if command.tryFirst =>
+      require(command.completion == null, s"$op is already pending")
+      command.entry = NioHandles.entry(command.handle)
+      val done = command.perform()
+      // Just tried, so the reactor it goes to next waits for readiness at once, which a select reports if it came since.
+      command.triedNow = !done
+      done
+    case _ => false
+  }
 }
