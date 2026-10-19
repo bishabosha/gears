@@ -63,7 +63,7 @@ private[gears] final class ReactorThread(backend: Backend, index: Int, started: 
     if isCurrent then body
     else {
       inbox.add(() => body)
-      reactor.wakeup()
+      reactor.wakeup() // which a backend may make cheap while the reactor is awake, as NIO does
     }
 
   /** Opens the reactor here, where it is owned, then runs the tasks handed to it between turns, blocking in the
@@ -91,7 +91,7 @@ private[gears] final class ReactorThread(backend: Backend, index: Int, started: 
 
   def stop(): Unit = {
     stopped = true
-    reactor.wakeup()
+    reactor.wakeup() // whether parked or not: it may be about to block
   }
 
   def join(): Unit = thread.join()
@@ -101,6 +101,7 @@ private[gears] object ReactorThread {
 
   /** How many handed-over tasks a reactor thread runs between turns, at most. */
   inline val TasksPerTurn = 256
+
 }
 
 /** `workers` reactor threads for a program on gears' own scheduler (see `OpRouter`). Each caller's ops go to the

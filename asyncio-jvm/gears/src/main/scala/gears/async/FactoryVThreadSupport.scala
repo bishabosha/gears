@@ -14,27 +14,36 @@ final class FactoryVThreadSupport[S <: Scheduler](factory: ThreadFactory) extend
 
   private def start(body: Runnable): Unit = factory.newThread(body).start()
 
+  /** Where a boundary's body leaves its result each time it suspends or finishes. Results are counted, so a caller
+    * waiting for the next one waits for a result newer than the one it saw before resuming, rather than for one not
+    * yet cleared: under `VThreadSupport`'s clear-then-wait, a `resumeAsync` clearing the result before a waiting
+    * `resume` had looked left that `resume` waiting on, woken by every later suspension of the body for nothing.
+    */
   private[async] final class FactoryLabel[R]():
     private var result: Option[R] = None
+    private var results = 0L // how many times a result has been set
     private val lock = ReentrantLock()
     private val cond = lock.newCondition()
 
-    def clearResult() =
+    /** How many results have been set so far, to wait for a newer one with `waitResult`. */
+    def seen(): Long =
       lock.lock()
-      result = None
-      lock.unlock()
+      try results
+      finally lock.unlock()
 
     def setResult(data: R) =
       lock.lock()
       try
         result = Some(data)
+        results += 1
         cond.signalAll()
       finally lock.unlock()
 
-    def waitResult(): R =
+    /** The first result set after `after` results. */
+    def waitResult(after: Long): R =
       lock.lock()
       try
-        while result.isEmpty do cond.await()
+        while results <= after do cond.await()
         result.get
       finally lock.unlock()
 
@@ -61,9 +70,9 @@ final class FactoryVThreadSupport[S <: Scheduler](factory: ThreadFactory) extend
       finally lock.unlock()
 
     override def resume(arg: T): R =
-      l.clearResult()
+      val after = l.seen()
       setInput(arg)
-      l.waitResult()
+      l.waitResult(after)
 
   override type Suspension[-T, +R] = FactorySuspension[T, R]
 
@@ -72,10 +81,9 @@ final class FactoryVThreadSupport[S <: Scheduler](factory: ThreadFactory) extend
     start: () =>
       val result = body(using label)
       label.setResult(result)
-    label.waitResult()
+    label.waitResult(after = 0)
 
   override private[async] def resumeAsync[T, R](suspension: Suspension[T, R])(arg: T)(using Scheduler): Unit =
-    suspension.l.clearResult()
     suspension.setInput(arg)
 
   override def scheduleBoundary(body: (Label[Unit]) ?=> Unit)(using Scheduler): Unit =

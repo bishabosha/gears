@@ -426,7 +426,8 @@ object GearsBench {
     }
 
   /** Runs the named scenarios, or all of them, each with its base count times `scale`, the clients on a pool of
-    * `workers` workers, and the echo server on another of the same size, both taking tasks by `policy`.
+    * `workers` workers, and the echo server on another of the same size, both taking tasks by `policy`; with `warmup`,
+    * each runs first at a fifth of its count, for the JVM's JIT.
     */
   def run(
       names: Seq[String],
@@ -434,7 +435,8 @@ object GearsBench {
       connections: Int,
       address: StreamAddress,
       workers: Int = 1,
-      policy: TakePolicy = TakePolicy.Affine
+      policy: TakePolicy = TakePolicy.Affine,
+      warmup: Boolean = false
   )(using UnixStreamBackend): Unit = {
     val selected =
       if names.isEmpty then scenarios
@@ -455,6 +457,10 @@ object GearsBench {
     try {
       startServer(address, workers, policy)
       ReactorFutures.run(workers, policy) { r =>
+        // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
+        // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
+        if warmup then
+          for scenario <- selected do scenario.body(r, address, math.max(1, (scenario.baseCount * scale / 5).toInt), connections)
         println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s")
         for scenario <- selected do {
           val count = math.max(1, (scenario.baseCount * scale).toInt)

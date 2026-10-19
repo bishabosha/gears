@@ -116,7 +116,8 @@ object Main {
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: mainargs.Flag,
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
-      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine"
+      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
+      @arg(doc = "run every scenario once at a fifth of its count first, so the JIT has compiled it") warmup: mainargs.Flag
   ): Unit = {
     val address =
       if tcp.value then IpAddress.IPv4("127.0.0.1", port)
@@ -124,8 +125,39 @@ object Main {
     val takePolicy = TakePolicy.values
       .find(_.toString.equalsIgnoreCase(policy))
       .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
-    GearsBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address, workers, takePolicy)
+    GearsBench.run(
+      scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty),
+      scale,
+      connections,
+      address,
+      workers,
+      takePolicy,
+      warmup.value
+    )
   }
+  @main(
+    name = "jdk-bench",
+    doc = "The bench scenarios with the JDK alone: blocking channels on virtual threads, in structured task scopes " +
+      "(needs --enable-preview), over a Unix socket"
+  )
+  def jdkBench(
+      @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
+      @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,
+      @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
+      @arg(doc = "run every scenario once at a fifth of its count first, so the JIT has compiled it") warmup: mainargs.Flag,
+      @arg(doc = "ignored, so the same flags as bench's can be passed: the JDK's virtual thread scheduler decides; set "
+        + "-Djdk.virtualThreadScheduler.parallelism to bound it") workers: Int = 1,
+      @arg(doc = "do the I/O with non-blocking channels and a selector thread for each side, instead of blocking ones")
+      selector: mainargs.Flag
+  ): Unit =
+    JdkBench.run(
+      scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty),
+      scale,
+      connections,
+      java.nio.file.Path.of(s"/tmp/jdk-bench-${System.nanoTime() % 1_000_000}.sock"),
+      warmup.value,
+      selector.value
+    )
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }
