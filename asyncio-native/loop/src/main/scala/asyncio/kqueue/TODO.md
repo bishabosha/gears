@@ -1164,3 +1164,17 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   `SCALA_NATIVE_NIGHTLY=1` builds against a nightly that includes the fix, and `kqueue-demo/bench/build.sh` uses it for
   benchmark executables. When moving, set the plugin version in `project/plugins.sbt` and remove the nightly switch
   there and in `build.sbt`, along with the nightly check in `build.sh`.
+- [x] **Reads to the end of a file or FIFO (correctness).** Found by the contract suite that every backend runs
+  (`asyncio/src/test/scala/asyncio/ReactorContract.scala`, here `KqueueContractSuite`). A read that comes back short
+  settled the descriptor `NotReady` (`ReadIntoBuffer.mayStillBeReady`), so the next read waited for an edge of the
+  persistent read filter instead of trying. That holds for sockets and pipes, whose filter fires at the end of stream
+  even when it came before the filter was added. It does not for a regular file, whose `EVFILT_READ` fires only while
+  the offset is short of the end, or, on macOS, for a FIFO whose writer closed before the filter was added: the read
+  that would have found the end waited forever. Fixed by marking the descriptors `openFile` and `openFifo` open in
+  `DescriptorTable` (`markAlwaysTry`, a bit of the entry, cleared with the rest when the descriptor closes): a short
+  read of one leaves readiness unknown, so the next read is tried first, while sockets and pipes keep the guess that
+  saves a would-block read in every round trip. `openFile` now opens only regular files, and `openFifo` only FIFOs.
+  Measured with the typed capabilities and the JVM's hand-off path for `perform` (median of 5, against HEAD): within
+  noise, after `perform` and `submit` went back to matching a `ReactorPool` scheduler by class before the general
+  `ReactorHomes` route; through the interface, with a closure for `sync`, every scenario was 1–5% slower and `timers`
+  12.5%.

@@ -1,11 +1,6 @@
 package asyncio.gears
 
-import gears.async.Async
-import gears.async.AsyncSupport
 import gears.async.Cancellable
-import gears.async.Future
-import gears.async.Listener
-import gears.async.Scheduler
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import scala.concurrent.duration.FiniteDuration
@@ -38,7 +33,7 @@ private[gears] final class ReactorWorkerThread(
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
   */
-final class ReactorPool private[gears] (val backend: Backend, size: Int, val policy: TakePolicy) extends Scheduler {
+class ReactorPool private[gears] (val backend: Backend, size: Int, val policy: TakePolicy) extends ReactorScheduler {
   require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
 
   /** The workers, by index; filled in as each starts on its own thread. */
@@ -59,14 +54,20 @@ final class ReactorPool private[gears] (val backend: Backend, size: Int, val pol
   private[gears] val wakeUps = new java.util.concurrent.atomic.AtomicLong
   private[gears] val injections = new java.util.concurrent.atomic.AtomicLong
 
+  /** The thread the caller runs on, as the pool knows its workers: on the JVM, a virtual thread's carrier. */
+  protected def callerThread(): Thread = Thread.currentThread()
+
   /** The worker running the caller, if it is one of this pool's. */
-  private[gears] def currentWorker: ReactorWorker | Null =
-    Thread.currentThread() match {
+  def currentWorker: ReactorWorker | Null =
+    callerThread() match {
       case thread: ReactorWorkerThread => if thread.pool eq this then thread.worker else null
       case thread                      =>
         val first = workers(0)
         if first != null && (first.owner eq thread) then first else null
     }
+
+  /** Where an op performed from outside the pool goes: a worker picked by the caller's thread. */
+  def driverFor(caller: Thread): ReactorDriver = workers(Math.floorMod(System.identityHashCode(caller), workers.length))
 
   /** Queues `body` on the worker running the caller, or on the shared queue from outside the pool. */
   def execute(body: Runnable): Unit = {
@@ -126,6 +127,9 @@ final class ReactorPool private[gears] (val backend: Backend, size: Int, val pol
     (if worker != null then worker else workers(0)).schedule(delay, body)
   }
 
+  /** Runs the first worker, on the thread that started the pool, until the pool stops. */
+  private[gears] def runFirstWorker(): Unit = workers(0).loop()
+
   /** Stops every worker after its current round. */
   private[gears] def stop(): Unit = {
     stopped = true
@@ -135,20 +139,20 @@ final class ReactorPool private[gears] (val backend: Backend, size: Int, val pol
 
 object ReactorPool {
 
-  /** gears' suspension support with a `ReactorPool` as its scheduler, which only some platforms have. */
-  type Support = AsyncSupport { type Scheduler = ReactorPool }
-
-  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s, suspending futures with
-    * `support`: the calling thread becomes the first, and the others get threads of their own. The program starts as a
-    * future, builds its ops and uses its handles through the backend it is given, and performs them with
-    * `ReactorAsync.perform`; the workers run until it finishes. `policy` says which tasks a worker out of work may take
-    * from another. Each reactor is closed afterwards, on its own thread, then `stopped` is called with the pool, and a
-    * failure of the program is rethrown.
+  /** Runs a pool of `workers` workers, each with a reactor of `backend`'s: the calling thread becomes the first, and the
+    * others get threads of their own, each opening its reactor there. `drive` then runs on the calling thread: it starts
+    * the program, runs the first worker (`runFirstWorker`) until the program finishes and stops the pool, and rethrows
+    * the program's failure. Each reactor is closed afterwards, on its own thread, then `stopped` is called with the
+    * pool. `newPool` builds the pool, for a platform whose workers are found another way.
     */
-  def run(support: Support, workers: Int, policy: TakePolicy, stopped: ReactorPool => Unit = _ => ())(
-      program: Backend => Async.Spawn ?=> Unit
-  )(using backend: Backend): Unit = {
-    val pool = new ReactorPool(backend, workers, policy)
+  def run(
+      backend: Backend,
+      workers: Int,
+      policy: TakePolicy,
+      newPool: (Backend, Int, TakePolicy) => ReactorPool = new ReactorPool(_, _, _),
+      stopped: ReactorPool => Unit = _ => ()
+  )(drive: ReactorPool => Unit): Unit = {
+    val pool = newPool(backend, workers, policy)
     // Each worker opens its reactor on its own thread, where the reactor hears of descriptors closed (see
     // `DescriptorHooks`).
     pool.workers(0) = new ReactorWorker(pool, 0, backend.open())
@@ -160,16 +164,8 @@ object ReactorPool {
       thread
     }
     started.await() // the workers array is complete, and published to every worker, before any task runs
-    try {
-      given ReactorPool = pool
-      given Support = support
-      Async.blocking {
-        val main = Future(program(backend)) // queued on the first worker: it starts with that worker's first round
-        main.onComplete(Listener((_, _) => pool.stop()))
-        pool.workers(0).loop()
-        main.await // already complete, so this only rethrows a failure
-      }
-    } finally {
+    try drive(pool)
+    finally {
       pool.stop()
       threads.foreach(_.join())
       stopped(pool)

@@ -14,24 +14,40 @@ import asyncio.Backend
 import asyncio.Completion
 import asyncio.Reactor
 
-/** What gears futures running on a `ReactorPool` do with its reactors: perform ops, submit them, and yield. Each
-  * platform with suspension support for a scheduler of its own starts the pool with `ReactorPool.run` (on Scala Native,
-  * `ReactorFutures.run`); the rest is the same on every platform.
+/** What gears futures do with a program's reactors: perform ops, submit them, and yield, the same on every platform.
+  * Each platform's `ReactorFutures.run` starts the program and its reactors: on a `ReactorPool`, whose workers run both
+  * the futures and the reactors, so an op goes to the reactor of the worker running the caller; or, on the JVM by
+  * default, beside gears' own scheduler, so that an op is handed to a reactor's thread (see `OpRouter`).
   */
 object ReactorAsync {
 
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, and suspends
-    * the caller until the reactor finishes with it: it returns when the op completes, throws its failure, or throws
-    * `CancellationException` when it is cancelled. It must be called from a program that `ReactorPool.run` started
-    * with `b`. `b` only says what the op is; which reactor runs it depends on where the caller runs, so a repeatable op
-    * may go to a different reactor each time. To run an op alongside other work, call this inside a `Future`.
+  /** Submits `op`, which must have been built by `b.ops`, to a reactor of the caller's program, and suspends the
+    * caller until the reactor finishes with it: it returns when the op completes, throws its failure, or throws
+    * `CancellationException` when it is cancelled. It must be called from a program that `ReactorFutures.run` started
+    * with `b`. `b` only says what the op is; which reactor runs it depends on where the caller runs: on a pool's worker,
+    * that worker's, and otherwise one picked by the caller's thread. A repeatable op may go to a different reactor each
+    * time. To run an op alongside other work, call this inside a `Future`.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def perform(b: Backend, op: b.Op)(using ac: Async): Unit = {
-    val worker = workerFor(b)
-    val r = worker.reactor
+  def perform(b: Backend, op: b.Op)(using ac: Async): Unit =
+    ac.scheduler match {
+      // A pool's own scheduler, as on Scala Native: matched on the class, the common case, ahead of the general one.
+      case pool: ReactorPool if pool.backend eq b =>
+        val worker = pool.currentWorker
+        if worker != null then performHere(b, op, worker)
+        else performElsewhere(b, op, pool.driverFor(Thread.currentThread()))
+      case _ =>
+        val router = routerFor(b)
+        val worker = router.currentWorker
+        if worker != null then performHere(b, op, worker)
+        else performElsewhere(b, op, router.driverFor(Thread.currentThread()))
+    }
+
+  /** `perform` on the worker running the caller: an op the reactor finishes at once returns without suspending. */
+  private def performHere(b: Backend, op: b.Op, worker: ReactorWorker)(using ac: Async): Unit = {
+    val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
     if ac.group.isCancelled then throw new CancellationException()
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
     // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
@@ -74,44 +90,93 @@ object ReactorAsync {
     } finally waiter.inUse = false
   }
 
+  /** `perform` from a caller on no worker: the op is handed to `driver`'s thread, which submits it, and the caller
+    * suspends until its completion, which runs there, resumes it.
+    */
+  private def performElsewhere(b: Backend, op: b.Op, driver: ReactorDriver)(using ac: Async): Unit = {
+    if ac.group.isCancelled then throw new CancellationException()
+    val waiter = b.attachment(op) match {
+      case reused: RemoteWaiter if !reused.inUse =>
+        reused.reset(driver)
+        reused
+      case _ =>
+        val fresh = new RemoteWaiter(driver, op)
+        b.attach(op, fresh)
+        fresh
+    }
+    waiter.inUse = true
+    try {
+      // Linked first: a cancel is handed to the same thread after the submission, so it finds the op pending.
+      waiter.link()
+      driver.sync(
+        try submitOn(driver, op, waiter.completion)
+        catch case t: Throwable => waiter.refuse(t) // a refused op, such as a one-shot op submitted twice
+      )
+      try ac.withGroup(CompletionGroup.Unlinked).await(waiter).get
+      finally waiter.unlink()
+    } finally waiter.inUse = false
+  }
+
   /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, with a
     * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
     * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
     */
-  def submit(b: Backend, op: b.Op, completion: Completion[b.Op])(using Async): Submission = {
-    val worker = workerFor(b)
-    worker.reactor.submit(op, completion)
-    new Submission(worker, op)
+  def submit(b: Backend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission = {
+    val router = ac.scheduler match {
+      case pool: ReactorPool if pool.backend eq b => pool // the common case, matched on the class
+      case _                                      => routerFor(b)
+    }
+    val worker = router.currentWorker
+    if worker != null then {
+      worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion) // its reactor is one of `b`'s
+      new Submission(worker, op)
+    } else {
+      val driver = router.driverFor(Thread.currentThread())
+      driver.sync(submitOn(driver, op, completion.asInstanceOf[Completion[Any]])) // its ops are `b`'s, as is the reactor
+      new Submission(driver, op)
+    }
   }
 
   /** An op submitted with `submit`, which it cancels on the reactor it went to. */
-  final class Submission private[ReactorAsync] (worker: ReactorWorker, op: Any) {
+  final class Submission private[ReactorAsync] (driver: ReactorDriver, op: Any) {
 
     /** Cancels the op, from any thread: at once if called on the worker it went to, and returns true; otherwise on that
       * worker's thread, soon, and returns false, so the op is not free to submit again until its completion's
       * `onCancel` has run.
       */
     def cancel(): Boolean =
-      if worker.isCurrent then {
-        worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]) // built by its backend, as `submit` requires
+      if driver.isCurrent then {
+        cancelOn(driver, op)
         true
       } else {
-        worker.sync(worker.reactor.cancel(op.asInstanceOf[worker.reactor.Op]))
+        driver.sync(cancelOn(driver, op))
         false
       }
   }
 
-  /** The worker running the caller, which must be one of a pool of `b`'s reactors. The pool comes from the caller's
-    * context, but which of its workers runs the caller only from the thread, a thread-local lookup.
+  /** Submits `op` to `driver`'s reactor, on its thread; the op was built by the backend whose reactor it is. */
+  private def submitOn(driver: ReactorDriver, op: Any, completion: Completion[Any]): Unit = {
+    val r = driver.reactor
+    r.submit(op.asInstanceOf[r.Op], completion)
+  }
+
+  /** Cancels `op` on `driver`'s reactor, on its thread (see `submitOn`). */
+  private def cancelOn(driver: ReactorDriver, op: Any): Unit = {
+    val r = driver.reactor
+    r.cancel(op.asInstanceOf[r.Op]): Unit
+  }
+
+  /** The reactors of the caller's program, which must have been started with `b`: through the caller's scheduler, if
+    * it is a pool, or else those the runner set up beside gears' own scheduler.
     */
-  private def workerFor(b: Backend)(using ac: Async): ReactorWorker { val reactor: Reactor.Of[b.Op] } = {
-    val worker = ac.scheduler match {
-      case pool: ReactorPool if pool.backend eq b => pool.currentWorker
-      case _                                      => null
+  private def routerFor(b: Backend)(using ac: Async): OpRouter = {
+    val router = ac.scheduler match {
+      case router: OpRouter => router
+      case _                   => OpRouter.ambient.get()
     }
-    if worker == null then
-      throw new IllegalStateException("Ops must be performed by a program that ReactorPool.run started")
-    worker.asInstanceOf[ReactorWorker { val reactor: Reactor.Of[b.Op] }] // its reactor is one of `b`'s
+    if router == null || !(router.backend eq b) then
+      throw new IllegalStateException("Ops must be performed by a program that ReactorFutures.run started with their backend")
+    router
   }
 
   /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued, so the futures
@@ -214,12 +279,94 @@ object ReactorAsync {
       val target = worker
       target.sync(
         if submission == generation && !state.isInstanceOf[Try[?]] then
-          target.reactor.cancel(op.asInstanceOf[target.reactor.Op]) // built by its backend, as `perform` requires
+          cancelOn(target, op)
       )
     }
   }
 
   private object OpWaiter {
-    private val Empty = new Object
+    val Empty = new Object
+  }
+
+  /** An op's submissions from a caller on no worker, as `OpWaiter`, except that the caller awaits on its own thread
+    * while the completion runs on the reactor's, so its state is guarded by its lock.
+    */
+  private final class RemoteWaiter(first: ReactorDriver, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
+
+    /** Whether a `perform` is using it. On the thread performing the op only. */
+    var inUse = false
+
+    @volatile private var driver = first
+    @volatile private var generation = 0
+
+    // Empty, then the caller's listener or the outcome, and finally the outcome (see `OpWaiter`). Guarded by `this`.
+    private var state: AnyRef = OpWaiter.Empty
+
+    def reset(next: ReactorDriver): Unit = {
+      driver = next
+      generation += 1
+      synchronized { state = OpWaiter.Empty }
+    }
+
+    val completion: Completion[Any] = new Completion[Any] {
+      def onComplete(op: Any): Unit = finish(done)
+      override def onFailure(op: Any, failure: Throwable): Unit = finish(Failure(failure))
+      override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
+    }
+
+    /** The reactor refused the submission: it fails with `failure`. */
+    def refuse(failure: Throwable): Unit = finish(Failure(failure))
+
+    private def finish(outcome: Try[Unit]): Unit = {
+      val waiting = synchronized {
+        val previous = state
+        state = outcome
+        previous
+      }
+      waiting match {
+        case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
+        case _                                 => ()
+      }
+    }
+
+    private def outcome: Try[Unit] | Null = synchronized {
+      state match {
+        case outcome: Try[Unit] @unchecked => outcome
+        case _                             => null
+      }
+    }
+
+    override def poll(): Option[Try[Unit]] = Option(outcome)
+
+    def poll(k: Listener[Try[Unit]]): Boolean = {
+      val now = outcome
+      if now != null then k.completeNow(now, this)
+      now != null
+    }
+
+    def onComplete(k: Listener[Try[Unit]]): Unit = {
+      val now = synchronized {
+        state match {
+          case outcome: Try[Unit] @unchecked => outcome
+          case OpWaiter.Empty                =>
+            state = k
+            null
+          case _ => null // Only the one caller ever waits.
+        }
+      }
+      if now != null then k.completeNow(now, this)
+    }
+
+    def dropListener(k: Listener[Try[Unit]]): Unit = synchronized { if state eq k then state = OpWaiter.Empty }
+
+    // Carried out on the driver's thread, where the submission went, if it is still the current one and pending.
+    def cancel(): Unit = {
+      val submission = generation
+      val target = driver
+      target.sync(
+        if submission == generation && outcome == null then
+          cancelOn(target, op)
+      )
+    }
   }
 }

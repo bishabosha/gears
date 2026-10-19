@@ -1,0 +1,87 @@
+package asyncio.gears
+
+import gears.async.Async
+import gears.async.FactoryVThreadSupport
+import gears.async.VThreadScheduler
+import gears.async.VThreadSupport
+
+import asyncio.Backend
+
+/** What carries a JVM program's futures: always virtual threads, so that suspending one blocks only it. */
+enum Carriers {
+
+  /** Gears' own virtual threads, on the JDK's scheduler, with the reactors on threads of their own: each op is handed
+    * to a reactor's thread, which runs its completion and resumes the future. Needs nothing of the JDK beyond its
+    * public interface. The default.
+    */
+  case Jdk
+
+  /** Virtual threads carried by a `ReactorPool`'s workers, which also drive the reactors, as gears' futures are on
+    * Scala Native: an op goes to the reactor of the worker carrying its future, which may finish it at once, and its
+    * completion resumes the future on that worker, under the pool's `TakePolicy`. Needs
+    * `--add-opens java.base/java.lang=ALL-UNNAMED`, since the JDK keeps both a virtual thread's scheduler and its
+    * carrier to itself.
+    */
+  case Reactors
+}
+
+/** Gears futures over reactors on the JVM: `run` starts a program, and the rest is `ReactorAsync`'s, so that code
+  * calling `perform` is the same here as on Scala Native.
+  */
+object ReactorFutures {
+  export ReactorAsync.*
+
+  /** Runs `program` with one reactor (see the other `run`). */
+  def run(using backend: Backend)(program: backend.type => Async.Spawn ?=> Unit): Unit = run(1)(program)
+
+  /** Runs `program` with `workers` reactors of `backend`'s, its futures carried by `carriers` (see `Carriers`). The
+    * program starts as a future on a virtual thread, is given the backend, with its own type, so that it may use the
+    * capabilities that backend has, and performs its ops with `perform`; the reactors run until it finishes, and are
+    * closed afterwards. `policy` says, with `Carriers.Reactors`, which tasks a worker out of work may take from
+    * another. A failure of the program is rethrown.
+    */
+  def run(workers: Int, policy: TakePolicy = TakePolicy.Affine, carriers: Carriers = Carriers.Jdk)(using
+      backend: Backend
+  )(program: backend.type => Async.Spawn ?=> Unit): Unit =
+    carriers match {
+      case Carriers.Jdk      => runBesideGears(backend, workers)(program(backend))
+      case Carriers.Reactors => runOnReactors(backend, workers, policy)(program(backend))
+    }
+
+  /** Runs `program` on gears' own virtual threads, which find the reactor threads through `OpRouter.ambient`. */
+  private def runBesideGears(backend: Backend, workers: Int)(program: Async.Spawn ?=> Unit): Unit = {
+    val router = new ReactorThreads(backend, workers)
+    val previous = OpRouter.ambient.get()
+    OpRouter.ambient.set(router) // inherited by the virtual thread that `Async.blocking` runs the program on
+    try {
+      given VThreadSupport.type = VThreadSupport
+      given VThreadScheduler.type = VThreadScheduler
+      Async.blocking(program)
+    } finally {
+      OpRouter.ambient.set(previous)
+      router.stop()
+    }
+  }
+
+  /** Runs `program` on virtual threads carried by a pool's workers; the calling thread is the first worker. */
+  private def runOnReactors(backend: Backend, workers: Int, policy: TakePolicy)(program: Async.Spawn ?=> Unit): Unit = {
+    VirtualCarriers.check()
+    ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
+      val factory = VirtualCarriers.factory(pool.execute(_))
+      val scheduler = new VirtualReactorScheduler(pool, factory)
+      given support: FactoryVThreadSupport[VirtualReactorScheduler] = new FactoryVThreadSupport(factory)
+      given VirtualReactorScheduler = scheduler
+      @volatile var failure: Throwable | Null = null
+      // Started from this thread, the first worker's, so the program's first continuation is queued there.
+      factory
+        .newThread { () =>
+          try Async.blocking(program)
+          catch case t: Throwable => failure = t
+          finally pool.stop()
+        }
+        .start()
+      pool.runFirstWorker()
+      if failure != null then throw failure
+    }
+  }
+}

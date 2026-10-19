@@ -124,6 +124,10 @@ object Reactor {
   * moving from one reactor's thread to another's can take its ops along: once a submission has completed, failed or
   * been cancelled on one reactor, a `Repeatable` op may go to another. Ops of another backend are a different type.
   * Building an op or using a handle touches no reactor, so either may be done from any thread.
+  *
+  * What every backend has is here: IP sockets, pipes and regular files. What only some have is a capability the backend
+  * mixes in, with its own handles and ops: `UnixStreamBackend`, `UnixDatagramBackend` and `FifoBackend`. Code that needs
+  * one asks for a backend that has it, so a backend without it is refused when compiling, not when running.
   */
 trait Backend extends Reactor.Factory[Reactor] {
 
@@ -150,17 +154,35 @@ trait Backend extends Reactor.Factory[Reactor] {
   def open(): Reactor.Of[Op]
 }
 
+/** A backend with Unix domain stream sockets (see `UnixStreamHandles`). */
+trait UnixStreamBackend extends Backend {
+  def handles: UnixStreamHandles
+}
+
+/** A backend with Unix domain datagram sockets (see `UnixDatagramHandles` and `UnixDatagramOps`). */
+trait UnixDatagramBackend extends Backend {
+  def ops: UnixDatagramOps[Op]
+  def handles: UnixDatagramHandles
+}
+
+/** A backend that waits on FIFOs as it does on pipes (see `FifoHandles`). */
+trait FifoBackend extends Backend {
+  def handles: FifoHandles
+}
+
 /** The readiness a custom op waits for before it runs. */
 enum Interest {
   case Read, Write
 }
 
-/** Where a socket lives: a Unix domain path, or a numeric IPv4 or IPv6 address and port. */
-enum Address {
-  case Unix(path: String)
+/** Where an IP socket lives: a numeric IPv4 or IPv6 address and a port. */
+enum IpAddress {
   case IPv4(host: String, port: Int)
   case IPv6(host: String, port: Int)
 }
+
+/** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket. */
+final case class UnixAddress(path: String)
 
 /** Opening, closing, and waitless use of a reactor's handles. Every operation is synchronous and never blocks; failures
   * throw `java.io.IOException`.
@@ -172,22 +194,22 @@ enum Address {
   */
 trait Handles {
 
-  /** Opens a file, typically a FIFO, for reading or writing without blocking. */
+  /** Opens a regular file for reading or writing; anything else is refused. A regular file is always ready, so ops on it
+    * never wait.
+    */
   def openFile(path: String, write: Boolean): Int
 
   /** A stream socket whose connection to `address` has started; submit `ops.connect` to wait for it to finish. */
-  def connect(address: Address): Int
+  def connect(address: IpAddress): Int
 
-  /** A stream socket bound to `address` and listening for connections. With `reuseAddr`, an IP address can be bound
+  /** A stream socket bound to `address` and listening for connections. With `reuseAddr`, the address can be bound
     * while connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
-    * them to expire. It has no effect on a Unix address.
+    * them to expire.
     */
-  def listen(address: Address, reuseAddr: Boolean = true): Int
+  def listen(address: IpAddress, reuseAddr: Boolean = true): Int
 
-  /** A datagram socket, bound to `local` and connected to `remote` where given. A Unix datagram client needs a `local`
-    * path so that replies can reach it.
-    */
-  def datagram(local: Address | Null, remote: Address | Null): Int
+  /** A datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family. */
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Int
 
   /** A pipe, as its read end and its write end. */
   def pipe(): (Int, Int)
@@ -198,8 +220,34 @@ trait Handles {
   /** Writes what fits now from `buf`: the bytes written, or -1 if nothing fits. */
   def writeNow(handle: Int, buf: ByteBuffer): Int
 
-  /** Closes a handle. A Unix socket path that `listen` or `datagram` bound is removed with it. */
+  /** Closes a handle. A Unix socket path that a listener or datagram socket bound is removed with it. */
   def close(handle: Int): Unit
+}
+
+/** Unix domain stream sockets, which the ops for IP stream sockets (`accept`, `connect`, `read`, `write`) also run on. */
+trait UnixStreamHandles extends Handles {
+
+  /** A stream socket whose connection to `address` has started; submit `ops.connect` to wait for it to finish. */
+  def connect(address: UnixAddress): Int
+
+  /** A stream socket bound to `address`, replacing a socket file already there, and listening for connections. */
+  def listen(address: UnixAddress): Int
+}
+
+/** Unix domain datagram sockets, whose packets `UnixDatagramOps` sends and receives. */
+trait UnixDatagramHandles extends Handles {
+
+  /** A datagram socket, bound to `local` and connected to `remote` where given. A client needs a `local` path so that
+    * replies can reach it.
+    */
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): Int
+}
+
+/** FIFOs, waited on as pipes are. */
+trait FifoHandles extends Handles {
+
+  /** Opens a FIFO for reading or writing without blocking. Opening one for writing fails while it has no reader. */
+  def openFifo(path: String, write: Boolean): Int
 }
 
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
@@ -280,15 +328,18 @@ trait Ops[Op] {
   /** Waits for a non-blocking connect on `handle` to finish. Completes once connected, or fails. */
   def connect(handle: Int): Op
 
-  /** Receives one packet into `buf`, which is left flipped for reading, and writes its sender into `from`, which must
-    * be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
+  /** Receives one packet on an IP datagram socket into `buf`, which is left flipped for reading, and writes its sender
+    * into `from`, which must be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
     */
-  def receive(handle: Int, buf: ByteBuffer, from: Slot[Address]): Op & Repeatable
+  def receive(handle: Int, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
-  /** Sends `buf` as one packet, to `to` or to the connected peer when `to` is null. Completes once the whole packet has
-    * been sent, consuming `buf`.
+  /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
+    * consuming `buf`.
     */
-  def send(handle: Int, buf: ByteBuffer, to: Address | Null): Op & Repeatable
+  def send(handle: Int, buf: ByteBuffer, to: IpAddress): Op & Repeatable
+
+  /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. */
+  def send(handle: Int, buf: ByteBuffer): Op & Repeatable
 
   /** Completes once `milliseconds` have passed. */
   def timer(milliseconds: Int): Op & Repeatable
@@ -314,4 +365,17 @@ trait Ops[Op] {
     * cancel that arrives before the write leaves `into` empty.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
+}
+
+/** The ops of Unix domain datagram sockets, as `Ops.receive` and `Ops.send` are for IP ones. */
+trait UnixDatagramOps[Op] extends Ops[Op] {
+
+  /** Receives one packet on a Unix datagram socket, as `receive` does on an IP one; an unnamed sender has the empty
+    * path.
+    */
+  @annotation.targetName("receiveUnix")
+  def receive(handle: Int, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
+
+  /** Sends one packet on a Unix datagram socket, to `to`, as `send` does on an IP one. */
+  def send(handle: Int, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
 }

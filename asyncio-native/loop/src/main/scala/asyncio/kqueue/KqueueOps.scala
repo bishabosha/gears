@@ -2,14 +2,15 @@ package asyncio.kqueue
 
 import java.nio.ByteBuffer
 
-import asyncio.Address
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
-import asyncio.Ops
+import asyncio.IpAddress
 import asyncio.Repeatable
 import asyncio.ResolvedAddress
 import asyncio.Slot
+import asyncio.UnixAddress
+import asyncio.UnixDatagramOps
 
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below
   * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -32,13 +33,17 @@ sealed trait KqueueOp {
 }
 
 /** Builds the ops `KqueueReactor` understands. */
-object KqueueOps extends Ops[KqueueOp] {
+object KqueueOps extends UnixDatagramOps[KqueueOp] {
   def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
   def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
   def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)
   def connect(fd: Int): KqueueOp = Connect(fd)
-  def receive(fd: Int, buf: ByteBuffer, from: Slot[Address]): ReceiveFrom = new ReceiveFrom(fd, buf, from)
-  def send(fd: Int, buf: ByteBuffer, to: Address | Null): SendTo = new SendTo(fd, buf, to)
+  def receive(fd: Int, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom = new ReceiveFrom(fd, buf, from, unix = false)
+  def send(fd: Int, buf: ByteBuffer, to: IpAddress): SendTo = new SendTo(fd, buf, to)
+  def send(fd: Int, buf: ByteBuffer): SendTo = new SendTo(fd, buf, null)
+  @annotation.targetName("receiveUnix")
+  def receive(fd: Int, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom = new ReceiveFrom(fd, buf, from, unix = true)
+  def send(fd: Int, buf: ByteBuffer, to: UnixAddress): SendTo = new SendTo(fd, buf, to)
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
   def whenReady(fd: Int, interest: Interest)(perform: () => Boolean): WhenReady = new WhenReady(fd, interest, perform)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)

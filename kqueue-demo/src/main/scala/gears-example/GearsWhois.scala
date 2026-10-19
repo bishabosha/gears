@@ -4,7 +4,7 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
-import asyncio.Address
+import asyncio.IpAddress
 import asyncio.AddressFamily
 import asyncio.ResolvedAddress
 import asyncio.Slot
@@ -24,8 +24,8 @@ object GearsWhois {
         val resolvedAll = addresses.clear()
         val resolved = resolvedAll.head
         val address = resolved.family match {
-          case AddressFamily.IPv6 => Address.IPv6(resolved.host, port)
-          case AddressFamily.IPv4 => Address.IPv4(resolved.host, port)
+          case AddressFamily.IPv6 => IpAddress.IPv6(resolved.host, port)
+          case AddressFamily.IPv4 => IpAddress.IPv4(resolved.host, port)
         }
         println(s"resolved $host to $address (${resolvedAll.length} addresses)")
         val fd = r.handles.connect(address)

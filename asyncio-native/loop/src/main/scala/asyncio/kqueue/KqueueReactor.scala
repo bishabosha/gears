@@ -5,9 +5,7 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import asyncio.Completion
-import asyncio.Handles
 import asyncio.Interest
-import asyncio.Ops
 import asyncio.Reactor
 import asyncio.Repeatable
 import asyncio.unsafe.DescriptorHooks
@@ -33,10 +31,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     */
   type Op = KqueueOp
 
-  def ops: Ops[Op] = KqueueOps
+  def ops: KqueueOps.type = KqueueOps
 
   /** Kqueue watches POSIX file descriptors, so a handle is the descriptor itself. */
-  def handles: Handles = KqueueHandles
+  def handles: KqueueHandles.type = KqueueHandles
 
   /** Takes a pending op's completion off it, ending the submission: the completion may then submit the op again. */
   private def take(op: KqueueOp): Completion[KqueueOp] = {
@@ -94,6 +92,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       * was closed and reused since.
       */
     var generation = 0
+
+    /** Whether reads must always be tried (`DescriptorTable.alwaysTry`): a short read leaves readiness unknown, not
+      * `NotReady`, since the read filter of a regular file or a FIFO may never report the end that follows it.
+      */
+    var alwaysTry = false
 
     def settleReadiness(readiness: Int): Unit = readReadiness = if readEof then KqueueReactor.Ready else readiness
 
@@ -246,7 +249,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       val left = if available >= 0 && taken >= 0 then math.max(available - taken, 0L) else -1L
       slot.readAvailable = if left > 0 then left else -1
       slot.settleReadiness(
-        if left > 0 || (left < 0 && command.mayStillBeReady) then KqueueReactor.Ready else KqueueReactor.NotReady
+        if left > 0 || (left < 0 && command.mayStillBeReady) then KqueueReactor.Ready
+        else if slot.alwaysTry then KqueueReactor.Unknown
+        else KqueueReactor.NotReady
       )
     }
 
@@ -462,6 +467,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       slot.forget()
       slot.generation = generation
     }
+    slot.alwaysTry = DescriptorTable.alwaysTry(entry)
     val owner = DescriptorTable.readOwner(entry)
     if reading && owner != 0 && owner != id then {
       slot.forget()

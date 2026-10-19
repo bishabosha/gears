@@ -26,8 +26,8 @@ object KQueueExampleBrokenPipe {
     println(s"pipe write after its reader closed: ${attempt(writeEnd)}")
     KqueueHandles.close(writeEnd)
 
-    val reader = KqueueHandles.openFile(fifo, write = false) // a non-blocking writer needs a reader to open
-    val writer = KqueueHandles.openFile(fifo, write = true)
+    val reader = KqueueHandles.openFifo(fifo, write = false) // a non-blocking writer needs a reader to open
+    val writer = KqueueHandles.openFifo(fifo, write = true)
     KqueueHandles.close(reader)
     println(s"fifo write after its reader closed: ${attempt(writer)}")
     KqueueHandles.close(writer)

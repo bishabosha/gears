@@ -9,7 +9,8 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Backend
-import asyncio.Address
+import asyncio.UnixAddress
+import asyncio.UnixStreamBackend
 import asyncio.HandleSlot
 import asyncio.unsafe.NativeBuffer
 import example.KQueueExampleIO.{StreamProtocol, drainTo}
@@ -23,7 +24,7 @@ object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
-  private def serve(r: Backend, client: Int)(using Async): Unit = {
+  private def serve(r: UnixStreamBackend, client: Int)(using Async): Unit = {
     val zone = Zone.open()
     try {
       val buf = NativeBuffer.allocate(8192)(using zone)
@@ -80,11 +81,11 @@ object GearsServerSocket {
     }
   }
 
-  def run(sock: String)(using Backend): Unit = run(Address.Unix(sock))
+  def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
 
-  def run(address: Address)(using Backend): Unit = {
+  def run(address: StreamAddress)(using UnixStreamBackend): Unit = {
     ReactorFutures.run { r =>
-      val server = r.handles.listen(address)
+      val server = Sockets.listen(r, address)
       try {
         println("Socket is now listening for connections.")
         val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer

@@ -1,17 +1,18 @@
 package gearsexample
 
 import mainargs.{ParserForMethods, arg, main}
-import asyncio.Backend
-import asyncio.Address
+import asyncio.IpAddress
+import asyncio.UnixAddress
 import asyncio.kqueue.KqueueBackend
 import asyncio.gears.TakePolicy
 
 /** The gears mirrors, run as `kqueuedemo gears <command>` with the same commands and flags as the plain demos.
   *
-  * This is the edge: the demos only know the `asyncio` interface, and this is the one place that chooses kqueue.
+  * This is the edge: the demos only know the `asyncio` interface, and this is the one place that chooses kqueue. Each
+  * demo asks for the capabilities it needs (Unix sockets, FIFOs), and kqueue has them all.
   */
 object Main {
-  given Backend = KqueueBackend
+  given KqueueBackend.type = KqueueBackend
 
   @main
   def fileRead(@arg fifo: String): Unit = {
@@ -35,47 +36,47 @@ object Main {
   }
   @main(name = "sock4-serve")
   def sock4Serve(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
-    GearsServerSocket.run(Address.IPv4(host, port))
+    GearsServerSocket.run(IpAddress.IPv4(host, port))
   }
   @main(name = "sock4")
   def sock4(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
-    GearsSocket.run(Address.IPv4(host, port))
+    GearsSocket.run(IpAddress.IPv4(host, port))
   }
   @main(name = "sock6-serve")
   def sock6Serve(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
-    GearsServerSocket.run(Address.IPv6(host, port))
+    GearsServerSocket.run(IpAddress.IPv6(host, port))
   }
   @main(name = "sock6")
   def sock6(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
-    GearsSocket.run(Address.IPv6(host, port))
+    GearsSocket.run(IpAddress.IPv6(host, port))
   }
   @main
   def kvServe(@arg sock: String): Unit = {
-    GearsKeyValue.serve(Address.Unix(sock))
+    GearsKeyValue.serve(UnixAddress(sock))
   }
   @main
   def kv(@arg sock: String, @arg count: Int = 1000): Unit = {
-    GearsKeyValue.run(Address.Unix(sock), count)
+    GearsKeyValue.run(UnixAddress(sock), count)
   }
   @main(name = "kv4-serve")
   def kv4Serve(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
-    GearsKeyValue.serve(Address.IPv4(host, port))
+    GearsKeyValue.serve(IpAddress.IPv4(host, port))
   }
   @main(name = "kv4")
   def kv4(@arg host: String = "127.0.0.1", @arg port: Int = 9999, @arg count: Int = 1000): Unit = {
-    GearsKeyValue.run(Address.IPv4(host, port), count)
+    GearsKeyValue.run(IpAddress.IPv4(host, port), count)
   }
   @main(name = "kv6-serve")
   def kv6Serve(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
-    GearsKeyValue.serve(Address.IPv6(host, port))
+    GearsKeyValue.serve(IpAddress.IPv6(host, port))
   }
   @main(name = "kv6")
   def kv6(@arg host: String = "::1", @arg port: Int = 9999, @arg count: Int = 1000): Unit = {
-    GearsKeyValue.run(Address.IPv6(host, port), count)
+    GearsKeyValue.run(IpAddress.IPv6(host, port), count)
   }
   @main
   def datagramServe(@arg sock: String): Unit = {
-    GearsDatagram.serve(Address.Unix(sock))
+    GearsDatagram.serve(UnixAddress(sock))
   }
   @main
   def datagram(
@@ -87,7 +88,7 @@ object Main {
   }
   @main(name = "datagram4-serve")
   def datagram4Serve(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
-    GearsDatagram.serve(Address.IPv4(host, port))
+    GearsDatagram.serve(IpAddress.IPv4(host, port))
   }
   @main(name = "datagram4")
   def datagram4(
@@ -95,11 +96,11 @@ object Main {
       @arg port: Int = 9999,
       @arg(short = 'm') message: String = "Hello from Scala Native KQueue Datagram Example!"
   ): Unit = {
-    GearsDatagram.run(Address.IPv4(host, port), message)
+    GearsDatagram.run(IpAddress.IPv4(host, port), message)
   }
   @main(name = "datagram6-serve")
   def datagram6Serve(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
-    GearsDatagram.serve(Address.IPv6(host, port))
+    GearsDatagram.serve(IpAddress.IPv6(host, port))
   }
   @main(name = "datagram6")
   def datagram6(
@@ -107,7 +108,7 @@ object Main {
       @arg port: Int = 9999,
       @arg(short = 'm') message: String = "Hello from Scala Native KQueue Datagram Example!"
   ): Unit = {
-    GearsDatagram.run(Address.IPv6(host, port), message)
+    GearsDatagram.run(IpAddress.IPv6(host, port), message)
   }
   @main
   def whois(
@@ -144,8 +145,8 @@ object Main {
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine"
   ): Unit = {
     val address =
-      if tcp.value then Address.IPv4("127.0.0.1", port)
-      else Address.Unix(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")
+      if tcp.value then IpAddress.IPv4("127.0.0.1", port)
+      else UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")
     val takePolicy = TakePolicy.values
       .find(_.toString.equalsIgnoreCase(policy))
       .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))

@@ -3,20 +3,20 @@ package gearsexample
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Backend
+import asyncio.FifoBackend
 import asyncio.unsafe.NativeBuffer
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {
-  def run(fifo: String, message: String)(using Backend): Unit = {
+  def run(fifo: String, message: String)(using FifoBackend): Unit = {
     Zone.acquire { implicit z =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
       val buf = NativeBuffer.allocate(math.max(bytes.length, 1))
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
-        val file = r.handles.openFile(fifo, write = true)
+        val file = r.handles.openFifo(fifo, write = true)
         try {
           println(s"opened file: $file")
           println("Event registered for file write.")

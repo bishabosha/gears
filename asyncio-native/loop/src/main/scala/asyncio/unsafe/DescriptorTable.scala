@@ -26,9 +26,9 @@ import java.util.concurrent.atomic.AtomicReferenceArray
   * lazily, when it next reports an event that turns out to be someone else's, follows the usual event-loop practice of
   * treating events as hints to check rather than facts to keep in step.
   *
-  * Each descriptor has one `Long`: its generation, counting closes, in the high 32 bits, and its read owner, the id of a
-  * reactor, in the low 32 bits, 0 for none; packed so that one compare-and-swap updates both. Pages of descriptors are
-  * allocated as numbers are first used.
+  * Each descriptor has one `Long`: its generation, counting closes, in the high 32 bits; whether reads of it must always
+  * be tried (`markAlwaysTry`) in bit 31; and its read owner, the id of a reactor, in the low 31 bits, 0 for none; packed
+  * so that one compare-and-swap updates them all. Pages of descriptors are allocated as numbers are first used.
   */
 object DescriptorTable {
   private inline val PageBits = 10
@@ -53,15 +53,31 @@ object DescriptorTable {
 
   inline def generation(entry: Long): Int = (entry >>> 32).toInt
 
-  inline def readOwner(entry: Long): Int = entry.toInt
+  inline def readOwner(entry: Long): Int = (entry & OwnerMask).toInt
+
+  /** Whether reads of the descriptor must always be tried, rather than wait for its read filter after a short read. */
+  inline def alwaysTry(entry: Long): Boolean = (entry & AlwaysTry) != 0L
+
+  private inline val AlwaysTry = 0x80000000L
+  private inline val OwnerMask = 0x7fffffffL
 
   /** Records that reactor `id` holds `fd`'s read filter from now on. */
   def claimRead(fd: Int, id: Int): Unit = {
+    require(id > 0 && id <= OwnerMask, s"Not a reactor id: $id")
     val entries = page(fd)
     val i = fd & (PageSize - 1)
     var entry = entries.get(i)
-    while !entries.compareAndSet(i, entry, (entry & 0xffffffff00000000L) | (id.toLong & 0xffffffffL)) do
-      entry = entries.get(i)
+    while !entries.compareAndSet(i, entry, (entry & ~OwnerMask) | id.toLong) do entry = entries.get(i)
+  }
+
+  /** Records that reads of `fd`, until it is closed, must always be tried: it is a regular file or a FIFO, whose read
+    * filter may never report the end of the file once a read has come back short.
+    */
+  def markAlwaysTry(fd: Int): Unit = {
+    val entries = page(fd)
+    val i = fd & (PageSize - 1)
+    var entry = entries.get(i)
+    while !entries.compareAndSet(i, entry, entry | AlwaysTry) do entry = entries.get(i)
   }
 
   /** Records that `fd` is being closed, before its number can be reused: a new generation, with no read owner. */

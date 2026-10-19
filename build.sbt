@@ -94,7 +94,32 @@ lazy val nativeAsyncioLoop =
       // Its tests run reactors on several threads.
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(asyncio.native)
+    .dependsOn(asyncio.native % "compile->compile;test->test")
+
+// The JVM's reactor backend: NIO selectors over the JDK's selectable channels, and threads for what the JDK can only
+// block on.
+lazy val jvmAsyncioNio =
+  (project in file("asyncio-jvm/nio"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework
+    )
+    .dependsOn(asyncio.jvm % "compile->compile;test->test")
+
+// Gears on the JVM over reactors: `ReactorFutures.run` with gears' virtual threads beside reactor threads, or, opted
+// into, virtual threads carried by the reactor pool (see asyncio-jvm/nio/src/main/scala/asyncio/nio/TODO.md).
+lazy val jvmAsyncioGears =
+  (project in file("asyncio-jvm/gears"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework,
+      Test / fork := true,
+      // `Carriers.Reactors` gives virtual threads the pool as their scheduler, which the JDK keeps to itself.
+      Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    )
+    .dependsOn(asyncio.jvm, jvmAsyncioNio % Test)
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
 // asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
