@@ -60,10 +60,12 @@ what differs is what carries the futures, `Carriers`:
 
 - **`Carriers.Jdk`, the default:** gears' own virtual threads, on the JDK's scheduler, with `workers` reactor threads
   beside them (`ReactorThreads`), found through an inheritable thread local the runner sets (`OpRouter.ambient`).
-  `perform` hands its op to a reactor thread, picked by the caller's thread so a future's ops stay together, which
-  submits it and runs its completion, resuming the future; a cancel is handed over the same way. There is no fast path,
-  since only a reactor's own thread may try an op: every op costs a hand-off and a wake-up each way. Needs nothing of
-  the JDK beyond its public interface.
+  `perform` first tries the op on the caller's own thread (`ReactorBackend.tryNow`); one that would block, while few
+  ops are waiting, is tried again after a yield, up to 16 times, then waited for on the handle's own selector in the
+  caller's thread (`ReactorBackend.waitHere`, cancelled with `Selector.wakeup`); otherwise, or with many ops waiting,
+  it is handed to a reactor thread, picked by the caller's thread so a future's ops stay together, which submits it
+  and runs its completion, resuming the future; a cancel is handed over the same way (items 3, 5 and 11). A blocking
+  op runs on the caller. Needs nothing of the JDK beyond its public interface.
 - **`Carriers.Reactors`, opted into:** virtual threads whose scheduler is a `ReactorPool`, so the pool's workers carry
   them and drive the reactors, as on Scala Native: `perform` finds the worker by the caller's carrier, and may finish an
   op at once; a completion's resume is a continuation queued on that worker, under the pool's `TakePolicy`. The JDK
@@ -414,3 +416,97 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     - **Over TCP its single-connection advantage is gone** (ping-pong 26 against the reactor's 19.6), and it trails on
       `concurrent` and `pipelined`; cats-effect sits between the two except at `mixed`, where its fibers starve.
     - Not done: Linux, where the descriptor lock should not apply; why TCP loses the advantage.
+11. [x] **NIO's public-API path, `Carriers.Jdk`, brought up with what `VThreadBackend` found, fairly.** Three steps
+    before an op is handed to a reactor, each of which yields or parks and never spins (see item 10 for why), and all
+    in `ReactorAsync.performElsewhere`, so a backend only provides the pieces:
+    - **Yield and try again** (`-Dasyncio.gears.retriesHere`, 16): an op `tryNow` could not finish is tried again
+      after a `Thread.yield`, up to 16 times. Only for an op the backend can try on the caller at all
+      (`ReactorBackend.triesNow`: NIO's commands tried first, not a timer, a `whenReady` or a blocking op; without
+      that, a ticker's zero-length timers yielded 16 times each, `fairness-tick` 20 to 57 µs), and only while fewer
+      than `retryBelow` ops are waiting, on a reactor or on their callers: with many, each turn of a reactor serves
+      many at once, which tries on every caller's thread only slow (`concurrent` 5.4 to 14.7 ungated). 8 retries
+      were worse than none over TCP (41 against 34 µs), where the loopback round trip takes about 20 µs, so the
+      first few yields find nothing; 16 catch it (22).
+    - **Wait on the handle's own selector, in the caller's thread** (`ReactorBackend.waitHere`, NIO's
+      `SelectorWait`, cancelled with `Selector.wakeup`), under the same gate, instead of handing the op over: no thread
+      is woken to register the wait, none to resume the caller. Worth little over Unix sockets, where the retries
+      catch the echo, and 4.5 µs a round trip over TCP (24.9 to 20.4, the reactor pool at 19.6).
+    - **A zero-length timer finishes on the caller**, after a yield (`NioBackend.tryNow`), as on a reactor its
+      completion runs a turn later: `fairness-tick` 25 to 1.5 µs, below the reactor pool's 3.2.
+
+    Two things measured and dropped: the reactor on a virtual thread, so that it would take turns inside the
+    scheduler instead of competing with its carriers for the cores (`starvation-p99` 4.8 to 6.4 ms: its own wake-up
+    then queues behind the futures' too); and spinning, as in item 10.
+
+    **Where the worst-case lateness comes from.** `starvation`'s p99 for `Carriers.Jdk` was 4.4 ms before any of
+    this and 6 ms after, against the reactor pool's 0.5 and `VThreadBackend`'s 1.5, and it tracks how many ops cross
+    the reactor thread: with the gate opened (`retryBelow=1000`, every op waiting on its own selector) it is 1.6 ms,
+    `VThreadBackend`'s. The reactor is one platform thread running every completion while the carriers saturate the
+    cores, so when the OS preempts it everything behind it waits, and the maxima of 9 to 10 ms are scheduling quanta;
+    a wait on the handle's own selector is woken by the JDK's poller instead. Opening the gate costs `concurrent` (5.5
+    to 7.1 µs): more threads in the kernel on macOS's descriptor lock, the balance to strike. The gate, swept with 64
+    connections (median of 3, µs/op; lateness in µs):
+
+    | `retryBelow` | concurrent | concurrent-offload | pipelined | starvation p99 | max |
+    | --- | --- | --- | --- | --- | --- |
+    | 4 | 5.39 | 6.50 | 1.70 | 5161 | 15653 |
+    | 16 | 5.37 | 6.38 | 1.83 | 4086 | 10706 |
+    | 32 | 5.52 | 6.37 | 1.64 | 4556 | 7067 |
+    | 64 | 6.46 | 9.86 | 2.17 | 1916 | 5657 |
+    | 128 | 7.52 | 10.44 | 1.88 | 1502 | 2088 |
+
+    32 is the default: nothing lost, the worst case halved. From 64 on, every connection waits on its own thread,
+    and the p99 falls to the 1.5 ms of `VThreadBackend` for 20 to 40% on `concurrent` and 50% on
+    `concurrent-offload`; on Linux, without the descriptor lock, the price may be lower, to be measured.
+
+    **The result.** Median of 5, µs/op, Unix sockets, load average about 8
+    (`kqueue-demo/bench/results/jvm-nio-jdk-tuned.json`; `nio-jdk` at the start of the day from item 10's table):
+
+    | scenario | nio-jdk before | nio-jdk | nio-reactors | vthread-backend | jdk-vthreads |
+    | --- | --- | --- | --- | --- | --- |
+    | pingpong | 18.0 | 5.9 | 9.9 | 5.4 | 10.6 |
+    | pingpong-deadline | 20.5 | 8.4 | 9.4 | | 13.6 |
+    | concurrent | 5.4 | 5.8 | 2.1 | 6.8 | 10.7 |
+    | concurrent-offload | 6.3 | 6.3 | 6.5 | 10.3 | 11.7 |
+    | connections | 56 | 66 | 47 | 74 | 24 |
+    | pipelined | 0.86 | 1.30 | 0.43 | 1.53 | 1.07 |
+    | blocking-io | 18.3 | 5.9 | 16.5 | | 18.3 |
+    | timers | 0.18 | 0.17 | 0.14 | | 0.27 |
+    | fairness (tick) | 0.94 (22.4) | 1.70 (1.5) | 1.50 (3.0) | 2.23 (1.9) | 1.73 (1.4) |
+    | mixed (compute) | 21.4 (26.1) | 8.5 (24.8) | 16.6 (33.3) | 6.8 (26.8) | 11.1 (21.8) |
+    | starvation | 8.1 | 7.7 | 3.9 | 8.5 | 13.2 |
+    | starvation p50 / p99 / max | 282 / 4383 / 10113 | 301 / 3155 / 9199 | 413 / 476 / 2676 | 308 / 1353 / 2485 | 268 / 2678 / 9458 |
+
+    - **On one connection, three times faster than it was and ahead of the reactor pool**, which needs `--add-opens`
+      (ping-pong 5.9 against 9.9, `mixed` 8.5 against 16.6, `blocking-io` 5.9 against 16.5: the read after a
+      blocking op now finds the echo by retrying); `fairness-tick` 22 to 1.5 µs.
+    - **With many connections, within 10% of where it was** (`concurrent` 5.8, the gate holding), the reactor pool
+      still 2.7 times faster there and three times on `pipelined`, which the retries slow (0.86 to 1.30: a reader
+      that tries eagerly reads smaller pieces) and `connections` (56 to 66).
+    - **Worst-case lateness** 3.2 ms p99, down from 4.4, the reactor pool's 0.5 out of reach while completions cross
+      a platform thread the OS can preempt (see above).
+
+    Over TCP, against cats-effect on its selector (`jvm-nio-jdk-tuned-tcp.json`; `nio-jdk` before from item 6):
+
+    | scenario | nio-jdk before | nio-jdk | nio-reactors | vthread-backend | cats-effect |
+    | --- | --- | --- | --- | --- | --- |
+    | pingpong | 33.5 | 25.7 | 19.4 | 25.3 | 25.0 |
+    | pingpong-deadline | 34.9 | 33.8 | 18.6 | | 24.9 |
+    | concurrent | 7.1 | 7.1 | 4.4 | 10.1 | 6.8 |
+    | pipelined | 1.13 | 2.19 | 0.75 | 2.36 | 1.40 |
+    | blocking-io | 34.1 | 26.5 | 31.1 | | 25.6 |
+    | fairness (tick) | 1.20 (23.1) | 1.64 (1.8) | 1.81 (3.6) | 1.81 (2.0) | 1.46 (52.0) |
+    | mixed (compute) | 39.5 (26.2) | 29.1 (25.9) | 25.7 (43.5) | 29.7 (27.6) | 997 (16.3) |
+    | starvation p50 / p99 / max | | 264 / 4774 / 10778 | 216 / 710 / 2439 | 301 / 1407 / 2266 | 689 / 1370 / 2595 |
+
+    Over TCP it is level with cats-effect and `VThreadBackend` on one connection (25.7 against 25.0 and 25.3), a
+    quarter faster than it was, and the reactor pool keeps a third (19.4): the loopback round trip is about 20 µs,
+    so the retries find nothing and every read pays the wait on its own selector, which costs more than the reactor
+    pool's one `select` for all. `pingpong-deadline` did not move (33.8): the read now finishes on the caller, but
+    arming and cancelling its timer are still two hand-offs to the reactor each round trip; a timer that the
+    caller's own wait could carry, as a `select` timeout, is the next step there. `pipelined` lost, as over Unix
+    sockets.
+
+    Not done: Linux, where the per-process descriptor lock does not apply, so the gate and the retries may both sit
+    elsewhere; a deadline carried by the caller's wait; and the hand-off path's lateness, which only moving ops off
+    the reactor thread has cut so far.

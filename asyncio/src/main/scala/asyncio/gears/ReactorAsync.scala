@@ -128,7 +128,40 @@ object ReactorAsync {
       waiter.finishedHere += 1
       return
     }
+    // Before handing the op over, yield and try again a few times: the futures beside the caller run meanwhile, and
+    // the data often arrives, so the op needs no reactor and no wake-up. A yield puts the caller behind every other
+    // thread ready to run, so this stays fair. Only for an op the backend can finish here at all, and only while few
+    // ops wait on the reactors: with many, each turn of a reactor serves many of them at once, which tries on every
+    // caller's thread would only slow.
+    val few = b.triesNow(op) && RemoteWaiter.waiting.get() < RemoteWaiter.RetryBelow
+    var tries = if few then RemoteWaiter.RetriesHere else 0
+    while tries > 0 do {
+      tries -= 1
+      Thread.`yield`()
+      if ac.group.isCancelled then throw new CancellationException()
+      if b.tryNow(op) then {
+        waiter.finishedHere += 1
+        return
+      }
+    }
     waiter.finishedHere = 0
+    // Still while few ops wait: wait for the handle here, parked in the caller's own thread, rather than on a reactor:
+    // no thread is woken to register the wait, and none to resume the caller. Cancelling the caller ends the wait.
+    if few && RemoteWaiter.WaitHere then {
+      val here = b.waitHere(op)
+      if here != null then {
+        RemoteWaiter.waiting.incrementAndGet()
+        try
+          cancellationScope(here) {
+            while true do {
+              here.await()
+              if ac.group.isCancelled then throw new CancellationException()
+              if b.tryNow(op) then return
+            }
+          }
+        finally RemoteWaiter.waiting.decrementAndGet()
+      }
+    }
     waiter.reset(driver)
     waiter.inUse = true
     try {
@@ -138,8 +171,12 @@ object ReactorAsync {
         try submitOn(driver, op, waiter.completion)
         catch case t: Throwable => waiter.refuse(t) // a refused op, such as a one-shot op submitted twice
       )
+      RemoteWaiter.waiting.incrementAndGet()
       try waiter.await().get
-      finally waiter.unlink()
+      finally {
+        RemoteWaiter.waiting.decrementAndGet()
+        waiter.unlink()
+      }
     } finally waiter.inUse = false
   }
 
@@ -318,6 +355,27 @@ object ReactorAsync {
 
     /** How many submissions of one op in a row may finish on the caller's thread before it yields. */
     inline val HereBudget = 32
+
+    /** How many times an op the backend could not finish on the caller's thread is tried again there, after a yield
+      * each time, before it is handed to a reactor (`-Dasyncio.gears.retriesHere`): 8, as `VThreadBackend` yields
+      * before it waits.
+      */
+    val RetriesHere: Int = sys.props.get("asyncio.gears.retriesHere").map(_.toInt).getOrElse(8)
+
+    /** An op is tried again on the caller, and waited for there, only while fewer than this many ops are waiting,
+      * on a reactor or on their callers (`-Dasyncio.gears.retryBelow`): with more, the reactor's one `select` serves
+      * them all. 32, where the bench loses no throughput to threads contending in the kernel; higher cuts the
+      * worst-case lateness of a wake-up at that price (see the NIO TODO, item 11).
+      */
+    val RetryBelow: Int = sys.props.get("asyncio.gears.retryBelow").map(_.toInt).getOrElse(32)
+
+    /** Whether an op that the retries did not finish waits on the caller's thread, where the backend can wait there,
+      * rather than on a reactor (`-Dasyncio.gears.waitHere`, true by default); for measuring the one against the other.
+      */
+    val WaitHere: Boolean = sys.props.get("asyncio.gears.waitHere").forall(_.toBoolean)
+
+    /** Ops waiting, on a reactor or on their caller's thread, not yet finished, from every caller. */
+    val waiting = new java.util.concurrent.atomic.AtomicInteger()
   }
 
   /** An op's submissions from a caller on no worker, which waits for each by parking its own thread, as a thread that

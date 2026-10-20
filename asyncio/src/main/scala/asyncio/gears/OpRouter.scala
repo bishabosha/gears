@@ -44,7 +44,10 @@ private[gears] object OpRouter {
 /** A gears scheduler whose futures can perform ops on its reactors. */
 private[gears] trait ReactorScheduler extends Scheduler with OpRouter
 
-/** A platform thread driving a reactor of `backend`'s for callers on other threads, which hand it ops with `sync`. */
+/** A platform thread driving a reactor of `backend`'s for callers on other threads, which hand it ops with `sync`. A
+  * virtual thread was tried and dropped: its own wake-up then queues behind the futures' too (see the NIO TODO, item
+  * 11).
+  */
 private[gears] final class ReactorThread(backend: ReactorBackend, index: Int, started: CountDownLatch)
     extends ReactorDriver {
   private val inbox = new ConcurrentLinkedQueue[Runnable]()

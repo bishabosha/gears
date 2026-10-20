@@ -36,7 +36,32 @@ object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBack
       // Just tried, so the reactor it goes to next waits for readiness at once, which a select reports if it came since.
       command.triedNow = !done
       done
+    // A timer of no time is due now. It yields first, so that, as on a reactor, where its completion runs a turn
+    // later, the other threads ready to run get their turn: a loop of them stays fair, and costs no hand-off.
+    case timer: NioTimer if timer.milliseconds == 0 =>
+      require(timer.completion == null, s"$op is already pending")
+      Thread.`yield`()
+      true
     case _ => false
+  }
+
+  /** A command tried first can be tried on the caller; a `whenReady`, a timer or a blocking op cannot. */
+  override def triesNow(op: Op): Boolean = op match {
+    case command: Command => command.tryFirst
+    case _                => false
+  }
+
+  /** A command tried first waits on its handle's own selector, in the caller's thread (`SelectorWait`); a regular
+    * file is always ready, so `tryNow` finishes it.
+    */
+  override def waitHere(op: Op): asyncio.WaitHere | Null = op match {
+    case command: Command if command.tryFirst =>
+      NioHandles.entry(command.handle) match {
+        case s: Selectable =>
+          new SelectorWait(s, command.interest == asyncio.Interest.Write, command.selectOps(s.channel))
+        case _ => null
+      }
+    case _ => null
   }
 
   /** A blocking op runs on the caller under the same rules as on the blocker pool (see `NioBlocking`). */
