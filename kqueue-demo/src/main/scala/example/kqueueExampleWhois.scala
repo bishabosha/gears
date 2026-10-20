@@ -16,6 +16,7 @@ import asyncio.kqueue.WriteFromBuffer
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
+import asyncio.kqueue.KqueueHandles
 import KQueueExampleIO.*
 
 /** Pulls a real reply off the internet with the WHOIS protocol (RFC 3912): resolve the host, connect to port 43, send
@@ -64,7 +65,7 @@ object KQueueExampleWhois {
       case read: ReadIntoBuffer =>
         if buf.position() == 0 then { // nothing added: the server closed the connection
           println(s"--- server closed the connection after $received bytes")
-          PosixSockets.close(fd)
+          KqueueHandles.close(fd)
           r.stop()
         } else {
           received += buf.position()

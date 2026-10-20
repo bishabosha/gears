@@ -10,9 +10,9 @@ import java.util.concurrent.atomic.AtomicReferenceArray
   *
   * Why it is needed: a kqueue reactor keeps what it knows of each descriptor it has used, notably whether its read
   * filter is registered, which it registers once and keeps. When tasks move between reactors, a descriptor may be read
-  * on one reactor, then on another, and closed on a third. `DescriptorHooks` only tells the closing thread's reactor of
-  * a close, so the others would still believe their filters registered after the kernel had removed them, and a read of
-  * a reused number would wait for ever; and a reactor that a descriptor has moved away from would still wake for its
+  * on one reactor, then on another, and closed on a third. A reactor told of a close only later (`KqueueHandles.close`
+  * queues it) would meanwhile still believe its filters registered after the kernel had removed them, and a read of a
+  * reused number would wait for ever; and a reactor that a descriptor has moved away from would still wake for its
   * data.
   *
   * The generation is a well-worn answer to the first problem, the ABA problem as it appears for descriptors: the same
@@ -80,7 +80,9 @@ object DescriptorTable {
     while !entries.compareAndSet(i, entry, entry | AlwaysTry) do entry = entries.get(i)
   }
 
-  /** Records that `fd` is being closed, before its number can be reused: a new generation, with no read owner. */
+  /** Records that `fd` is being closed, before its number can be reused: a new generation, with no read owner
+    * (`KqueueHandles.close`).
+    */
   def closing(fd: Int): Unit = {
     val entries = page(fd)
     val i = fd & (PageSize - 1)

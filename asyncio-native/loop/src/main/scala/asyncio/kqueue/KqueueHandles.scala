@@ -57,7 +57,7 @@ object KqueueHandles
     try if !isKind(fd, stat.S_ISREG) then throw new IOException(s"Not a regular file: $path")
     catch {
       case e: IOException =>
-        PosixSockets.close(fd)
+        close(fd)
         throw e
     }
     DescriptorTable.markAlwaysTry(fd)
@@ -74,7 +74,7 @@ object KqueueHandles
       if write then noSigPipe(fd)
     } catch {
       case e: IOException =>
-        PosixSockets.close(fd)
+        close(fd)
         throw e
     }
     DescriptorTable.markAlwaysTry(fd)
@@ -151,8 +151,8 @@ object KqueueHandles
       noSigPipe(ends(1))
     } catch {
       case e: IOException =>
-        PosixSockets.close(ends(0))
-        PosixSockets.close(ends(1))
+        close(ends(0))
+        close(ends(1))
         throw e
     }
     (ends(0), ends(1))
@@ -161,9 +161,17 @@ object KqueueHandles
   def readNow(handle: Int, buf: ByteBuffer): Int = NonBlocking.read(handle, buf)
   def writeNow(handle: Int, buf: ByteBuffer): Int = NonBlocking.write(handle, buf)
 
+  /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
+    * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on
+    * it fail and its slots are forgotten before the number is reused (see `Handles.close`). A handle must not be used
+    * while it is being closed.
+    */
   def close(handle: Int): Unit = {
     val path = boundPaths.remove(handle) // before closing, while the number is still ours
+    val generation = DescriptorTable.generation(DescriptorTable.get(handle))
+    DescriptorTable.closing(handle)
     PosixSockets.close(handle)
+    KqueueReactor.descriptorClosed(handle, generation)
     if path != null then Zone.acquire { implicit z => PosixFileOps.safeUnlink(toCString(path, StandardCharsets.UTF_8)) }
   }
 

@@ -107,10 +107,11 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
     all
   }
 
-  /** Closes the channel, and wakes the reactors it is registered with: a registered channel's descriptor is released
-    * only once each selector has seen its key cancelled, which one blocked with nothing else to do would never get to,
-    * so the other end of a pipe or socket would never see it close. An op waiting on one of its own selectors is woken,
-    * to find the channel closed, and the selectors go back to the pool once none waits.
+  /** Closes the channel, and tells the reactors it is registered with, which wakes them: a registered channel's
+    * descriptor is released only once each selector has seen its key cancelled, which one blocked with nothing else to
+    * do would never get to, so the other end of a pipe or socket would never see it close; and the commands pending on
+    * it there fail, as `Handles.close` says. An op waiting on one of its own selectors is woken, to find the channel
+    * closed, and the selectors go back to the pool once none waits.
     */
   def close(): Unit = {
     val (waking, released) = synchronized {
@@ -120,7 +121,7 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
     }
     try {
       channel.close()
-      registrations.forEach(_.wakeup())
+      registrations.forEach(_.closed(this))
     } finally {
       try {
         waking.foreach(_.wakeup())

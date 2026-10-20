@@ -337,9 +337,8 @@ object PosixSockets {
   def withIPv6SocketAddr[A](host: String, port: Int)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A =
     Zone.acquire { implicit z => use(createIPv6SocketAddr(host, port), sizeOf[in.sockaddr_in6].toUInt) }
 
-  /** Closes `fd`, first telling this thread's `DescriptorHooks` listeners, while the number is still `fd`'s. */
+  /** Closes `fd`. A descriptor a reactor may know is closed through `KqueueHandles.close`, which tells the reactors. */
   def close(fd: Int): Unit = {
-    DescriptorHooks.closing(fd)
     if (unistd.close(fd) < 0) {
       throw new IOException(
         s"Failed to close socket: ${cError()}"

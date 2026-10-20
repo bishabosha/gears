@@ -10,6 +10,7 @@ import asyncio.unsafe.PosixErr.cError
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
+import asyncio.kqueue.KqueueHandles
 
 /** Opens many descriptors and prints their numbers, to check the assumption behind an fd-indexed handler table:
   * descriptors are small, dense integers, the kernel hands out the lowest free number, and the soft RLIMIT_NOFILE
@@ -41,7 +42,7 @@ object KQueueExampleFileHandles {
     var closed = 0
     i = 1
     while i < count do {
-      PosixSockets.close(opened(i))
+      KqueueHandles.close(opened(i))
       closed += 1
       i += 2
     }

@@ -486,6 +486,62 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("closing a handle fails the op pending on it") {
+    val (in, out) = backend.handles.pipe()
+    try
+      withReactor { r =>
+        val outcome = Outcome()
+        r.submit(backend.ops.read(in, allocate(16)), outcome)
+        r.runOnce(block = false) // the read is registered, and waiting
+        backend.handles.close(in)
+        turnUntil(r)(outcome.finished)
+        assert(outcome.failure.isInstanceOf[IOException], String.valueOf(outcome.failure))
+        assertEquals(outcome.completed, 0)
+      }
+    finally backend.handles.close(out)
+  }
+
+  test("closing a handle fails the op pending on it on a reactor blocked on another thread") {
+    val (in, out) = backend.handles.pipe()
+    val registered = new CountDownLatch(1)
+    val failed = new CountDownLatch(1)
+    @volatile var failure: Throwable | Null = null
+    @volatile var other: Reactor | Null = null
+    val blocked = new Thread(() => {
+      val b = backend.open()
+      other = b
+      b.submit(
+        backend.ops.read(in, allocate(16)),
+        new Completion[backend.Op] {
+          def onComplete(op: backend.Op): Unit = failed.countDown()
+          override def onFailure(op: backend.Op, t: Throwable): Unit = {
+            failure = t
+            failed.countDown()
+          }
+        }
+      )
+      b.submit(backend.ops.whenReady(out, Interest.Write)(() => true), _ => registered.countDown())
+      b.run() // blocks between turns until stopped
+      b.close()
+    })
+    blocked.start()
+    try {
+      registered.await()
+      Thread.sleep(20) // so that the other reactor is blocked again
+      backend.handles.close(in)
+      assert(failed.await(5, java.util.concurrent.TimeUnit.SECONDS), "the pending read was not ended by the close")
+      assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+    } finally {
+      val b = other
+      if b != null then {
+        b.stop()
+        b.wakeup()
+      }
+      blocked.join()
+      backend.handles.close(out)
+    }
+  }
+
   test("closing a reactor cancels its pending ops") {
     val (in, out) = backend.handles.pipe()
     try {

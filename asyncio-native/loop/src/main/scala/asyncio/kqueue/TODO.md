@@ -161,8 +161,10 @@ signal columns are `sigprocmask` + `sigaltstack` pairs, so each is two syscalls
     `ReceiveFrom`). Other commands, such as the plain demos' own and `whenReady` bodies, may return false meaning
     "not finished" with data still waiting, and an edge-triggered filter would never fire again for them, so they keep
     one-shot, level-triggered filters. Writes, which rarely wait, also stay one-shot.
-  - Descriptors must be closed through `PosixSockets.close` on the reactor's thread: its `DescriptorHooks` tell the
-    reactor to forget the registration before the number can be reused.
+  - Descriptors were to be closed through `PosixSockets.close` on the reactor's thread, whose thread-local
+    `DescriptorHooks` told the reactor to forget the registration before the number could be reused; since replaced:
+    `KqueueHandles.close`, from any thread, tells every reactor, which also fails the commands pending on the
+    descriptor (see the NIO TODO, item 15).
   - Release-fast, median of 5 runs, µs/op from item 2 → item 3: `pingpong` 12.2 → 13.6 (+11%), `pingpong-deadline` 17.6
     → 15.5 (−12%), `concurrent` 6.9 → 4.9 (−30%), `pipelined` 3.1 → 2.8 (−12%), the rest within 2%
     (`kqueue-demo/bench/results/edge-triggered-reads.json`). Ping-pong is slower because the thread now blocks right
@@ -499,7 +501,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
    only theirs until they next suspend: with a pool, such code will need to stay on one worker. No cost: release-fast,
    median of 5 runs, every scenario within 1.4% (`kqueue-demo/bench/results/backend-ops.json`).
 4. [x] **Descriptors shared between kqueue reactors.** `DescriptorTable`, process-wide like the descriptors, keeps one
-   `Long` per descriptor: a generation that every close bumps (from `DescriptorHooks.closing`, on any thread) and the
+   `Long` per descriptor: a generation that every close bumps (`KqueueHandles.close`, on any thread) and the
    id of the reactor that last registered a read filter for it. Registering any read filter claims the descriptor. A
    reactor brings a descriptor's slot up to date when it submits: it starts over, as for a new descriptor, if the
    generation changed or another reactor has claimed it since. A read event with no read pending, for a descriptor

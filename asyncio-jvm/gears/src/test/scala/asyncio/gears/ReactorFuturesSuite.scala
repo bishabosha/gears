@@ -227,9 +227,7 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
     assertEquals(outcome, "true still")
   }
 
-  // A caller off the pool waits on the handle's own selector, which closing the handle wakes; an op pending on a
-  // reactor stays pending, a handle with ops pending being the caller's to keep open (see `Reactor.close`).
-  if carriers == Carriers.Jdk then test("an op a caller off the pool waits for fails once its handle is closed") {
+  test("an op waiting on a handle that is closed fails") {
     var failure: Throwable | Null = null
     running { r =>
       val (in, out) = r.handles.pipe()

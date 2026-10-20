@@ -9,6 +9,7 @@ import asyncio.unsafe.PosixFileOps
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
+import asyncio.kqueue.KqueueHandles
 
 enum KQueueExampleAddress {
   case Unix(sock: String)
@@ -56,7 +57,7 @@ enum KQueueExampleAddress {
   }
 
   private def close(fd: Int, unlinkOnClose: Boolean): Unit = {
-    PosixSockets.close(fd)
+    KqueueHandles.close(fd)
     this match
       case Unix(sock) if unlinkOnClose =>
         Zone.acquire { implicit z =>

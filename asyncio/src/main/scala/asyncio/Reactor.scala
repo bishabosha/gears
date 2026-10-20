@@ -96,7 +96,8 @@ trait Reactor extends AutoCloseable {
 
   /** Releases the reactor's own resources. Every pending op is cancelled, so its completion gets `onCancel` and nothing
     * else; ops still running elsewhere, such as blocking ops, are waited for first. Handles named by ops belong to the
-    * caller and stay open. Call it when `run` is not running; closing twice does nothing.
+    * caller and stay open (closing one instead fails the ops pending on it: see `Handles.close`). Call it when `run`
+    * is not running; closing twice does nothing.
     */
   def close(): Unit
 }
@@ -311,7 +312,11 @@ trait Handles {
   /** A pipe, as its read end and its write end. */
   def pipe(): (Int, Int)
 
-  /** Closes a handle. A Unix socket path that a listener or datagram socket bound is removed with it. */
+  /** Closes a handle. The ops pending on it, on whichever reactor they are, fail with an `IOException` (a closed
+    * channel's), their completions getting `onFailure` from that reactor's loop and a `perform` waiting on one
+    * throwing it, as the JDK fails a thread blocked on a channel that is closed. A Unix socket path that a listener or
+    * datagram socket bound is removed with it.
+    */
   def close(handle: Int): Unit
 }
 

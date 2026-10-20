@@ -116,13 +116,20 @@ object KQueueExampleCancel {
                 } catch case _: IllegalStateException => true
               println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
 
-              // Closing a descriptor removes its kqueue filters, so a read still pending on it must stay cancellable.
+              // Closing a descriptor fails the ops pending on it, from the loop on a later turn (`Handles.close`), so
+              // the read's completion hears of it, and a cancel has nothing left to do.
               val (orphanRead, orphanWrite) = KqueueHandles.pipe()
               val orphan = ReadIntoBuffer(orphanRead, NativeBuffer.allocate(16))
-              r.submit(orphan, _ => println("unexpected completion of the orphaned read"))
+              r.submit(
+                orphan,
+                new Completion[KqueueOp] {
+                  def onComplete(op: KqueueOp): Unit = println("unexpected completion of the orphaned read")
+                  override def onFailure(op: KqueueOp, t: Throwable): Unit =
+                    println(s"closing fails a pending read: ${t.isInstanceOf[java.io.IOException]}")
+                }
+              )
               KqueueHandles.close(orphanRead)
               KqueueHandles.close(orphanWrite)
-              println(s"cancelling after close: ${r.cancel(orphan)}")
 
               // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
               nioWriteBytes(writeFd, NativeBuffer.of("hello".getBytes(StandardCharsets.UTF_8)))
