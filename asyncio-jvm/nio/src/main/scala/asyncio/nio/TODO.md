@@ -630,3 +630,12 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     three afterwards, and every other full run of the day passed. Not reproduced, so not understood; the pool's resume
     path across workers is where the dump points. Thread dump kept with the day's scratch files.
 
+17. [x] **The gears checks shared across backends.** `ReactorFuturesSuite` was NIO's alone, so the checks ported
+    from `VThreadBackend` (item 14) ran on NIO's four carrier modes and nowhere else. Its body is now
+    `asyncio.gears.FuturesContract`, in `asyncio`'s shared tests beside `ReactorContract`: twelve checks through
+    `perform` alone, abstract over the backend and over `running`, which starts a program the platform's way. NIO's
+    suite instantiates it in each carrier mode on one and several reactors (49 with its own pool check), kqueue's on
+    a pool of one and of four workers (`KqueueFuturesSuite`, 24, beside the pool's two). The refused-connection
+    check finds its free port by listening with the backend and letting go, since `java.net.ServerSocket` is the
+    JDK's; `jvmAsyncioGears` and `nativeAsyncioGears` now depend on the tests below them (`test->test`).
+
