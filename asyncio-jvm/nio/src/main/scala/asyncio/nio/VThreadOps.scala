@@ -141,6 +141,36 @@ private[nio] object VThreadOp {
   val Ignore: java.util.function.Consumer[SelectionKey] = _ => ()
 }
 
+/** A wait on the calling thread for a handle to be ready for `ops`, on the handle's own selector for that direction
+  * (see `Selectable.enterWait`): `ReactorBackend.waitHere` for NIO, as `VThreadOp.await` waits. Cancelled with
+  * `Selector.wakeup`, so the handle stays open.
+  */
+private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: Int) extends asyncio.WaitHere {
+  @volatile private var cancelled = false
+  @volatile private var waitingOn: Selector | Null = null
+
+  def await(): Unit = {
+    val selector = entry.enterWait(write)
+    try {
+      val key = entry.channel.keyFor(selector)
+      if key != null && key.interestOps() != ops then key.interestOps(ops): Unit
+      waitingOn = selector
+      if !cancelled then selector.select(VThreadOp.Ignore): Unit
+    } catch {
+      case _: ClosedSelectorException | _: java.nio.channels.CancelledKeyException => ()
+    } finally {
+      waitingOn = null
+      entry.exitWait()
+    }
+  }
+
+  def cancel(): Unit = {
+    cancelled = true
+    val selector = waitingOn
+    if selector != null then selector.wakeup(): Unit
+  }
+}
+
 /** Builds the ops `VThreadBackend` performs. */
 object VThreadOps extends ReadinessOps[VThreadOp] {
   def read(handle: Int, buf: ByteBuffer): VThreadRead = new VThreadRead(handle, buf)

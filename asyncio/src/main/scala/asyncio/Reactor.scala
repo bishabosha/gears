@@ -1,6 +1,7 @@
 package asyncio
 
 import _root_.gears.async.Async
+import _root_.gears.async.Cancellable
 
 import java.nio.ByteBuffer
 
@@ -185,12 +186,37 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
     */
   def tryNow(op: Op): Boolean = false
 
+  /** Whether `tryNow` can finish `op` on the calling thread at all: one it can, which did not finish, may be worth
+    * trying again after a yield, where one it cannot, such as a timer, is handed over at once. False by default.
+    */
+  def triesNow(op: Op): Boolean = false
+
   /** A blocking op's body, to run on the calling thread rather than on this backend's blocker threads, for a caller
     * that may block anyway and is on no reactor's thread; null if `op` is not a blocking op, or this backend runs them
     * only on its blocker threads. As a submission would, it runs the op once: a one-shot op already submitted is
     * refused with `IllegalStateException`. False by default: null.
     */
   def blockingHere(op: Op): BlockingHere | Null = null
+
+  /** A wait for `op` on the calling thread, for a caller that may block and is on no reactor's thread: it parks the
+    * caller until `op` may be worth trying again with `tryNow`, with no reactor involved. Null if `op` is not one
+    * `tryNow` can finish, or this backend waits only on its reactors. Null by default.
+    */
+  def waitHere(op: Op): WaitHere | Null = null
+}
+
+/** A wait on the calling thread for an op's handle to be ready (see `ReactorBackend.waitHere`). A `Cancellable`, so
+  * that the caller's group can end it.
+  */
+trait WaitHere extends Cancellable {
+
+  /** Parks the caller until the op's handle may be ready, or `cancel` has been called, and returns; the caller then
+    * tries the op again. Throws if the handle has been closed.
+    */
+  def await(): Unit
+
+  /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
+  def cancel(): Unit
 }
 
 /** A blocking op run on the calling thread (see `ReactorBackend.blockingHere`). */
