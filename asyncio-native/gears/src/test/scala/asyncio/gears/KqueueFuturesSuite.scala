@@ -5,7 +5,7 @@ import gears.async.Async
 import asyncio.kqueue.KqueueBackend
 
 /** `FuturesContract` over kqueue's reactors, on a pool of `workers` workers. */
-abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract {
+abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
   protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit =

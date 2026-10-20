@@ -4,15 +4,11 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
-import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.arpa.inet
-import scala.scalanative.posix.fcntl
 import scala.scalanative.posix.netinet.in
 import scala.scalanative.posix.netinet.inOps.{*, given}
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.sys.socketOps.{*, given}
-import scala.scalanative.posix.sys.stat
-import scala.scalanative.posix.sys.statOps.*
 import scala.scalanative.posix.sys.un
 import scala.scalanative.posix.sys.unOps.{*, given}
 import scala.scalanative.posix.unistd
@@ -26,6 +22,7 @@ import asyncio.UnixAddress
 import asyncio.UnixDatagramHandles
 import asyncio.UnixStreamHandles
 import asyncio.unsafe.DescriptorTable
+import asyncio.unsafe.Descriptors
 import asyncio.unsafe.NonBlocking
 import asyncio.unsafe.PosixErr.cError
 import asyncio.unsafe.PosixFileOps
@@ -33,10 +30,10 @@ import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Flavor
 import asyncio.unsafe.Sockets.Transport
 
-/** Kqueue's handles are POSIX file descriptors, opened non-blocking. Descriptor numbers are process-wide, so the Unix
-  * paths bound by `listen` and `datagram` are remembered per descriptor and removed when it is closed. Writing to a
-  * handle whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would end the process: sockets
-  * get `SO_NOSIGPIPE`, and on macOS pipes and FIFOs opened for writing get `F_SETNOSIGPIPE`.
+/** Kqueue's handles are POSIX file descriptors, opened non-blocking (see `Descriptors`). Descriptor numbers are
+  * process-wide, so the Unix paths bound by `listen` and `datagram` are remembered per descriptor and removed when it
+  * is closed. Writing to a handle whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would
+  * end the process: sockets get `SO_NOSIGPIPE`, and on macOS pipes and FIFOs opened for writing get `F_SETNOSIGPIPE`.
   */
 /** Either kind of socket address, as the system calls take them. */
 private[kqueue] type SocketAddress = IpAddress | UnixAddress
@@ -53,13 +50,7 @@ object KqueueHandles
     * a read waiting for that would never see the end.
     */
   def openFile(path: String, write: Boolean): Int = {
-    val fd = openNonBlocking(path, write)
-    try if !isKind(fd, stat.S_ISREG) then throw new IOException(s"Not a regular file: $path")
-    catch {
-      case e: IOException =>
-        close(fd)
-        throw e
-    }
+    val fd = Descriptors.openFile(path, write)
     DescriptorTable.markAlwaysTry(fd)
     fd
   }
@@ -68,44 +59,10 @@ object KqueueHandles
     * reactor's read filter was added never reports the end either.
     */
   def openFifo(path: String, write: Boolean): Int = {
-    val fd = openNonBlocking(path, write)
-    try {
-      if !isKind(fd, stat.S_ISFIFO) then throw new IOException(s"Not a FIFO: $path")
-      if write then noSigPipe(fd)
-    } catch {
-      case e: IOException =>
-        close(fd)
-        throw e
-    }
+    val fd = Descriptors.openFifo(path, write)
     DescriptorTable.markAlwaysTry(fd)
     fd
   }
-
-  private def openNonBlocking(path: String, write: Boolean): Int = {
-    val fd = Zone.acquire { implicit z =>
-      fcntl.open(toCString(path), (if write then fcntl.O_WRONLY else fcntl.O_RDONLY) | fcntl.O_NONBLOCK)
-    }
-    if fd < 0 then throw new IOException(s"Failed to open $path: ${cError()}")
-    fd
-  }
-
-  private def isKind(fd: Int, kind: stat.mode_t => CInt): Boolean = {
-    val info = stackalloc[stat.stat]()
-    if stat.fstat(fd, info) < 0 then throw new IOException(s"Failed to inspect file: ${cError()}")
-    kind(info.st_mode) != 0
-  }
-
-  /** macOS's `fcntl` command for a pipe or FIFO's write end that makes a write after the reader has closed fail with
-    * `EPIPE` instead of raising `SIGPIPE`. posixlib does not define it.
-    */
-  private inline val F_SETNOSIGPIPE = 73
-
-  /** Stops writes to `fd`, a pipe or FIFO's write end, from raising `SIGPIPE`. On macOS only: FreeBSD has no
-    * per-descriptor equivalent, so there such a write still raises the signal unless the application ignores it.
-    */
-  private def noSigPipe(fd: Int): Unit =
-    if LinktimeInfo.isMac then // a link-time condition, kept apart from the runtime one
-      if fcntl.fcntl(fd, F_SETNOSIGPIPE, 1) < 0 then throw new IOException(s"Failed to set F_SETNOSIGPIPE: ${cError()}")
 
   def connect(address: IpAddress): Int = connectStream(address)
   def connect(address: UnixAddress): Int = connectStream(address)
@@ -142,21 +99,7 @@ object KqueueHandles
     }
   }
 
-  def pipe(): (Int, Int) = {
-    val ends = stackalloc[CInt](2)
-    if unistd.pipe(ends) < 0 then throw new IOException(s"Failed to create pipe: ${cError()}")
-    try {
-      PosixSockets.setNonBlocking(ends(0))
-      PosixSockets.setNonBlocking(ends(1))
-      noSigPipe(ends(1))
-    } catch {
-      case e: IOException =>
-        close(ends(0))
-        close(ends(1))
-        throw e
-    }
-    (ends(0), ends(1))
-  }
+  def pipe(): (Int, Int) = Descriptors.pipe()
 
   def readNow(handle: Int, buf: ByteBuffer): Int = NonBlocking.read(handle, buf)
   def writeNow(handle: Int, buf: ByteBuffer): Int = NonBlocking.write(handle, buf)

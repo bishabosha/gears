@@ -11,14 +11,14 @@ import munit.FunSuite
 
 /** What every backend's reactors must do, as `Reactor`, `Ops` and `Handles` describe it, checked through the interface
   * alone, so that code written against it runs the same on any backend. A backend's suite extends this, and the
-  * contracts of the capabilities its backend has (`UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with
-  * the backend; buffers come from the platform's `BufferArena`. Each check drives one reactor, or two, from the test's
-  * thread.
+  * contracts of the capabilities its backend has (`ReadinessContract`, `UnixStreamContract`, `UnixDatagramContract`,
+  * `FifoContract`), with the backend; buffers come from the platform's `BufferArena`. Each check drives one reactor,
+  * or two, from the test's thread, and uses handles only through ops, since a backend need not have readiness.
   */
 trait ReactorContract extends FunSuite {
 
-  /** The backend under test: a reactor backend, with readiness and blocking ops, which these checks also cover. */
-  val backend: ReactorBackend & ReadinessBackend & BlockingBackend
+  /** The backend under test: a reactor backend with blocking ops, which these checks also cover. */
+  val backend: ReactorBackend & BlockingBackend
 
   /** Where the checks' buffers come from, freed when the suite ends. */
   private lazy val arena = asyncio.testkit.BufferArena.open()
@@ -120,8 +120,9 @@ trait ReactorContract extends FunSuite {
         r.submit(backend.ops.read(in, buf), outcome)
         for _ <- 1 to 5 do r.runOnce(block = false)
         assertEquals(outcome.completed, 0)
-        assertEquals(backend.handles.writeNow(out, bytes("hello")), 5)
-        turnUntil(r)(outcome.finished)
+        val sent = Outcome()
+        r.submit(backend.ops.write(out, bytes("hello")), sent)
+        turnUntil(r)(outcome.finished && sent.finished)
         assertEquals(outcome.completed, 1)
         assertEquals(text(buf), "hello")
       } finally {
@@ -142,7 +143,6 @@ trait ReactorContract extends FunSuite {
         turnUntil(r)(outcome.finished)
         assertEquals(outcome.completed, 1)
         assertEquals(buf.position(), 0)
-        assertEquals(backend.handles.readNow(in, buf), -1)
       } finally r.handles.close(in)
     }
   }
@@ -165,29 +165,13 @@ trait ReactorContract extends FunSuite {
     withReactor { r =>
       val (in, out) = r.handles.pipe()
       try {
-        backend.handles.writeNow(out, bytes("then the end"))
+        val sent = Outcome()
+        r.submit(backend.ops.write(out, bytes("then the end")), sent)
+        turnUntil(r)(sent.finished)
         r.handles.close(out)
         val buf = allocate(64)
         assertEquals(readToEnd(r, backend.ops.read(in, buf), buf), "then the end")
       } finally r.handles.close(in)
-    }
-  }
-
-  test("trySubmit finishes a read of data already waiting without calling its completion") {
-    withReactor { r =>
-      val (in, out) = r.handles.pipe()
-      try {
-        backend.handles.writeNow(out, bytes("ready"))
-        val buf = allocate(16)
-        val outcome = Outcome()
-        assert(r.trySubmit(backend.ops.read(in, buf), outcome))
-        assertEquals(text(buf), "ready")
-        for _ <- 1 to 3 do r.runOnce(block = false)
-        assertEquals(outcome.completed, 0)
-      } finally {
-        r.handles.close(in)
-        r.handles.close(out)
-      }
     }
   }
 
@@ -235,7 +219,7 @@ trait ReactorContract extends FunSuite {
         assert(!r.cancel(read), "a cancelled op is no longer pending")
         val second = Outcome()
         r.submit(read, second)
-        backend.handles.writeNow(out, bytes("again"))
+        r.submit(backend.ops.write(out, bytes("again")), Outcome())
         turnUntil(r)(second.finished)
         assertEquals(second.completed, 1)
         assertEquals(first.completed, 0)
@@ -397,35 +381,6 @@ trait ReactorContract extends FunSuite {
     }
   }
 
-  test("whenReady runs its body only once the handle is ready, and waits again while it returns false") {
-    withReactor { r =>
-      val (in, out) = r.handles.pipe()
-      try {
-        val buf = allocate(64)
-        var runs = 0
-        val ready = backend.ops.whenReady(in, Interest.Read) { () =>
-          runs += 1
-          backend.handles.readNow(in, buf)
-          text(buf).endsWith("!")
-        }
-        val outcome = Outcome()
-        r.submit(ready, outcome)
-        for _ <- 1 to 5 do r.runOnce(block = false)
-        assertEquals(runs, 0)
-        backend.handles.writeNow(out, bytes("part"))
-        turnUntil(r)(runs > 0)
-        assertEquals(outcome.completed, 0)
-        backend.handles.writeNow(out, bytes("!"))
-        turnUntil(r)(outcome.finished)
-        assertEquals(outcome.completed, 1)
-        assertEquals(text(buf), "part!")
-      } finally {
-        r.handles.close(in)
-        r.handles.close(out)
-      }
-    }
-  }
-
   test("a repeatable op moves between two reactors of the backend") {
     withReactor { a =>
       withReactor { b =>
@@ -435,12 +390,12 @@ trait ReactorContract extends FunSuite {
           val read = backend.ops.read(in, buf)
           val first = Outcome()
           a.submit(read, first)
-          backend.handles.writeNow(out, bytes("a"))
+          a.submit(backend.ops.write(out, bytes("a")), Outcome())
           turnUntil(a)(first.finished)
           val second = Outcome()
           b.submit(read, second)
           for _ <- 1 to 3 do b.runOnce(block = false)
-          backend.handles.writeNow(out, bytes("b"))
+          b.submit(backend.ops.write(out, bytes("b")), Outcome())
           turnUntil(a, b)(second.finished)
           assertEquals((first.completed, second.completed), (1, 1))
           assertEquals(text(buf), "ab")
@@ -459,7 +414,7 @@ trait ReactorContract extends FunSuite {
     val blocked = new Thread(() => {
       val b = backend.open()
       other = b
-      b.submit(backend.ops.whenReady(out, Interest.Write)(() => true), _ => registered.countDown())
+      b.submit(backend.ops.write(out, bytes("x")), _ => registered.countDown())
       b.run() // blocks between turns until stopped
       b.close()
     })
@@ -470,10 +425,7 @@ trait ReactorContract extends FunSuite {
       backend.handles.close(out)
       withReactor { r =>
         val buf = allocate(16)
-        val outcome = Outcome()
-        r.submit(backend.ops.read(in, buf), outcome)
-        turnUntil(r)(outcome.finished)
-        assertEquals((outcome.completed, buf.position()), (1, 0))
+        assertEquals(readToEnd(r, backend.ops.read(in, buf), buf), "x")
       }
     } finally {
       val b = other
@@ -520,7 +472,7 @@ trait ReactorContract extends FunSuite {
           }
         }
       )
-      b.submit(backend.ops.whenReady(out, Interest.Write)(() => true), _ => registered.countDown())
+      b.submit(backend.ops.timer(0), _ => registered.countDown())
       b.run() // blocks between turns until stopped
       b.close()
     })

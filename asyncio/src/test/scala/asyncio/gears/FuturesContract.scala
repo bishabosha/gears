@@ -14,7 +14,7 @@ import munit.FunSuite
 import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.IpAddress
-import asyncio.ReadinessBackend
+import asyncio.Backend
 import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.UnixAddress
@@ -25,12 +25,25 @@ import ReactorAsync.*
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
   * `running`, which starts a program the platform's way (`ReactorFutures.run`); NIO's does so in each carrier mode and
-  * on one and several reactors, kqueue's on a pool of one and of several workers.
+  * on one and several reactors, kqueue's on a pool of one and of several workers, Darwin's likewise. The checks with
+  * stream sockets use Unix ones on a backend that has them, and TCP on the loopback otherwise.
   */
 trait FuturesContract extends FunSuite {
 
-  /** The backend under test, with Unix stream sockets and readiness, which the checks use. */
-  val backend: UnixStreamBackend & ReadinessBackend
+  /** The backend under test. */
+  val backend: Backend
+
+  /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
+    * them, and on TCP at a free port of the loopback otherwise.
+    */
+  protected def listenAndConnect(dir: java.nio.file.Path): (Int, () => Int) = backend match {
+    case unix: UnixStreamBackend =>
+      val address = UnixAddress(dir.resolve("echo.sock").toString)
+      (unix.handles.listen(address), () => unix.handles.connect(address))
+    case _ =>
+      val address = IpAddress.IPv4("127.0.0.1", freePort())
+      (backend.handles.listen(address), () => backend.handles.connect(address))
+  }
 
   /** Runs `body` as a program over `backend`, the platform's way. */
   protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit
@@ -55,7 +68,7 @@ trait FuturesContract extends FunSuite {
   }
 
   // The buffers of every test, which their futures share across threads.
-  private lazy val arena = BufferArena.open()
+  protected lazy val arena: BufferArena = BufferArena.open()
 
   override def afterAll(): Unit = {
     arena.close()
@@ -71,7 +84,7 @@ trait FuturesContract extends FunSuite {
     }
   }
 
-  private def text(buf: ByteBuffer): String = {
+  protected def text(buf: ByteBuffer): String = {
     val copy = buf.duplicate().flip()
     val out = new Array[Byte](copy.remaining())
     copy.get(out)
@@ -121,14 +134,13 @@ trait FuturesContract extends FunSuite {
     assertEquals(received, total)
   }
 
-  test("clients and a server echo over Unix stream sockets") {
+  test("clients and a server echo over stream sockets") {
     val dir = Files.createTempDirectory("gears")
     val clients = 16
     val trips = 200
     var echoed = 0
     try running { r =>
-      val address = UnixAddress(dir.resolve("echo.sock").toString)
-      val listener = r.handles.listen(address)
+      val (listener, connect) = listenAndConnect(dir)
       try {
         val server = Future {
           val accepted = HandleSlot()
@@ -154,7 +166,7 @@ trait FuturesContract extends FunSuite {
         }
         val done = (1 to clients).map { _ =>
           Future {
-            val socket = r.handles.connect(address)
+            val socket = connect()
             try {
               perform(r, r.ops.connect(socket))
               val buf = arena.allocate(64)
@@ -192,7 +204,7 @@ trait FuturesContract extends FunSuite {
         perform(r, r.ops.timer(20)) // so that the read is pending
         waiting.cancel()
         val cancelled = waiting.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
-        r.handles.writeNow(out, arena.of("again".getBytes(StandardCharsets.UTF_8)))
+        perform(r, r.ops.write(out, arena.of("again".getBytes(StandardCharsets.UTF_8))))
         perform(r, read)
         outcome = s"$cancelled ${text(buf)}"
       } finally {
@@ -223,9 +235,8 @@ trait FuturesContract extends FunSuite {
     var outcome = ""
     withTempDir { dir =>
       running { r =>
-        val address = UnixAddress(dir.resolve("open.sock").toString)
-        val listener = r.handles.listen(address)
-        val client = r.handles.connect(address)
+        val (listener, connect) = listenAndConnect(dir)
+        val client = connect()
         try {
           perform(r, r.ops.connect(client))
           val accepted = HandleSlot()
@@ -263,30 +274,6 @@ trait FuturesContract extends FunSuite {
       } finally r.handles.close(out)
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
-  }
-
-  test("whenReady runs its body once the handle is ready") {
-    var outcome = ""
-    running { r =>
-      val (in, out) = r.handles.pipe()
-      try {
-        val buf = arena.allocate(16)
-        val runs = new java.util.concurrent.atomic.AtomicInteger
-        val ready = r.ops.whenReady(in, Interest.Read) { () =>
-          runs.incrementAndGet()
-          r.handles.readNow(in, buf) != 0
-        }
-        val waiting = Future(perform(r, ready))
-        perform(r, r.ops.timer(20))
-        r.handles.writeNow(out, arena.of("ready".getBytes(StandardCharsets.UTF_8)))
-        waiting.await
-        outcome = s"${text(buf)} after ${runs.get()}"
-      } finally {
-        r.handles.close(in)
-        r.handles.close(out)
-      }
-    }
-    assertEquals(outcome, "ready after 1")
   }
 
   test("a connection refused after waiting for it fails perform") {
