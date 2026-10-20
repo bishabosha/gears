@@ -12,6 +12,10 @@ import java.util.concurrent.CancellationException
 import munit.FunSuite
 
 import asyncio.HandleSlot
+import asyncio.Interest
+import asyncio.IpAddress
+import asyncio.ResolvedAddress
+import asyncio.Slot
 import asyncio.UnixAddress
 import asyncio.nio.NioBackend
 import asyncio.testkit.BufferArena
@@ -33,6 +37,15 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
 
   private def running(body: NioBackend.type => Async.Spawn ?=> Unit): Unit =
     ReactorFutures.run(workers, carriers = carriers)(body)
+
+  private def withTempDir(body: java.nio.file.Path => Unit): Unit = {
+    val dir = Files.createTempDirectory("gears")
+    try body(dir)
+    finally if Files.exists(dir) then {
+      Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
+      Files.deleteIfExists(dir): Unit
+    }
+  }
 
   private def text(buf: ByteBuffer): String = {
     val copy = buf.duplicate().flip()
@@ -180,6 +193,109 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
       outcome = s"$cancelled ${waited < 1_000_000_000L}"
     }
     assertEquals(outcome, "true true")
+  }
+
+  test("a read waiting on a socket is cancelled with the connection left open") {
+    var outcome = ""
+    withTempDir { dir =>
+      running { r =>
+        val address = UnixAddress(dir.resolve("open.sock").toString)
+        val listener = r.handles.listen(address)
+        val client = r.handles.connect(address)
+        try {
+          perform(r, r.ops.connect(client))
+          val accepted = HandleSlot()
+          perform(r, r.ops.accept(listener, accepted))
+          val server = accepted.clear()
+          try {
+            val buf = arena.allocate(16)
+            val read = r.ops.read(client, buf)
+            val waiting = Future(perform(r, read))
+            perform(r, r.ops.timer(20))
+            waiting.cancel()
+            val cancelled = waiting.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
+            perform(r, r.ops.write(server, arena.of("still".getBytes(StandardCharsets.UTF_8))))
+            perform(r, read)
+            outcome = s"$cancelled ${text(buf)}"
+          } finally r.handles.close(server)
+        } finally {
+          r.handles.close(client)
+          r.handles.close(listener)
+        }
+      }
+    }
+    assertEquals(outcome, "true still")
+  }
+
+  // A caller off the pool waits on the handle's own selector, which closing the handle wakes; an op pending on a
+  // reactor stays pending, a handle with ops pending being the caller's to keep open (see `Reactor.close`).
+  if carriers == Carriers.Jdk then test("an op a caller off the pool waits for fails once its handle is closed") {
+    var failure: Throwable | Null = null
+    running { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val waiting = Future(perform(r, r.ops.read(in, arena.allocate(4))))
+        perform(r, r.ops.timer(20))
+        r.handles.close(in)
+        failure = waiting.awaitResult.failed.toOption.orNull
+      } finally r.handles.close(out)
+    }
+    assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+  }
+
+  test("whenReady runs its body once the handle is ready") {
+    var outcome = ""
+    running { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val buf = arena.allocate(16)
+        val runs = new java.util.concurrent.atomic.AtomicInteger
+        val ready = r.ops.whenReady(in, Interest.Read) { () =>
+          runs.incrementAndGet()
+          r.handles.readNow(in, buf) != 0
+        }
+        val waiting = Future(perform(r, ready))
+        perform(r, r.ops.timer(20))
+        r.handles.writeNow(out, arena.of("ready".getBytes(StandardCharsets.UTF_8)))
+        waiting.await
+        outcome = s"${text(buf)} after ${runs.get()}"
+      } finally {
+        r.handles.close(in)
+        r.handles.close(out)
+      }
+    }
+    assertEquals(outcome, "ready after 1")
+  }
+
+  test("a connection refused after waiting for it fails perform") {
+    var failure: Throwable | Null = null
+    // A port nothing listens on: one just given up.
+    val port = {
+      val socket = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+      try socket.getLocalPort
+      finally socket.close()
+    }
+    running { r =>
+      try {
+        val socket = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        try perform(r, r.ops.connect(socket))
+        finally r.handles.close(socket)
+      } catch case t: Throwable => failure = t
+    }
+    assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+  }
+
+  test("an op that is not Repeatable is performed only once") {
+    var failure: Throwable | Null = null
+    running { r =>
+      val into = Slot[List[ResolvedAddress]]()
+      val resolve = r.ops.resolve("localhost", into)
+      perform(r, resolve)
+      into.clear()
+      try perform(r, resolve)
+      catch case t: Throwable => failure = t
+    }
+    assert(failure.isInstanceOf[IllegalStateException], String.valueOf(failure))
   }
 
   test("an op that fails fails perform") {

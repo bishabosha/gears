@@ -8,16 +8,17 @@
 
 Every backend has `ops`, `handles` and `perform`, over IP sockets, pipes and regular files (`Backend`, `Handles`,
 `Ops`). What only some have is a capability mixed into the backend, with its own handles and ops, so asking a backend
-for one it lacks fails to compile. Running ops on reactors is one of them: a backend may instead perform each op itself.
+for one it lacks fails to compile. Running ops on reactors is one of them: a backend may instead perform each op
+itself, as the JVM's `VThreadBackend` did until it was retired (item 14).
 
-| Capability | Traits | kqueue | NIO | VThread |
-| --- | --- | --- | --- | --- |
-| Reactors (`open`, `submit`, attachments) | `ReactorBackend` | yes | yes | no: an op waits on the caller's virtual thread |
-| Readiness and waitless use (`whenReady`, `readNow`, `writeNow`) | `ReadinessBackend`, `ReadinessOps`, `ReadinessHandles` | yes | yes | yes: NIO's handles, each waiting on a selector of its own |
-| Blocking ops (`blocking`) | `BlockingBackend`, `BlockingOps` | yes | yes | no: a caller that may block calls the code itself |
-| Unix stream sockets | `UnixStreamBackend`, `UnixStreamHandles` | yes | yes (`UnixDomainSocketAddress`, JDK 16+) | yes |
-| Unix datagram sockets | `UnixDatagramBackend`, `UnixDatagramHandles`, `UnixDatagramOps` | yes | no: the JDK has no Unix datagram channels | no |
-| FIFOs | `FifoBackend`, `FifoHandles` (`openFifo`) | yes | no: the JDK can only block on one | no |
+| Capability | Traits | kqueue | NIO |
+| --- | --- | --- | --- |
+| Reactors (`open`, `submit`, attachments) | `ReactorBackend` | yes | yes |
+| Readiness and waitless use (`whenReady`, `readNow`, `writeNow`) | `ReadinessBackend`, `ReadinessOps`, `ReadinessHandles` | yes | yes |
+| Blocking ops (`blocking`) | `BlockingBackend`, `BlockingOps` | yes | yes |
+| Unix stream sockets | `UnixStreamBackend`, `UnixStreamHandles` | yes | yes (`UnixDomainSocketAddress`, JDK 16+) |
+| Unix datagram sockets | `UnixDatagramBackend`, `UnixDatagramHandles`, `UnixDatagramOps` | yes | no: the JDK has no Unix datagram channels |
+| FIFOs | `FifoBackend`, `FifoHandles` (`openFifo`) | yes | no: the JDK can only block on one |
 
 Addresses are typed by family: `IpAddress` (IPv4, IPv6) and `UnixAddress`; `send` takes an address of its socket's
 family, or none for a connected socket's peer. `openFile` opens only regular files, on both backends; a FIFO is
@@ -579,3 +580,14 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     measured as worse than a platform one. So the blend stays as items 11 and 12 left it: a wait on the handle's own
     selector while few ops wait, a timer parked on the caller always, the reactor beyond. The code was removed.
 
+14. [x] **`VThreadBackend` retired.** Everything it pioneered runs in NIO's `Carriers.Jdk` path now: the wait on the
+    handle's own selector, the timer parked on the caller, cancellation by `wakeup` or an unpark (`WaitsHere.scala`,
+    where its waits moved). What it still had over NIO was a smaller maximum lateness under compute saturation (2.9
+    against 6.9 ms, one event in three thousand), for the absence of a reactor's thread; what it lacked was the
+    reactor, blocking ops and `submit`, and 20 to 60% on `concurrent` and `concurrent-offload`. A second backend with
+    that much in common with the first was not worth that. Its checks that NIO's suite lacked are in
+    `ReactorFuturesSuite`: a read cancelled on a socket leaving the connection usable, `whenReady`, a refused
+    connection and a one-shot op performed twice in all four carrier modes; closing a handle waking its waiter under
+    `Carriers.Jdk` only, where the waiter is on the handle's own selector, since an op pending on a reactor stays
+    pending, a handle with ops pending being the caller's to keep open (`Reactor.close`). The bench's
+    `-Dasyncio.backend` switch and the `vthread-backend` build went with it; its results stay cited in items 7 to 13.
