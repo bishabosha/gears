@@ -64,8 +64,9 @@ what differs is what carries the futures, `Carriers`:
   ops are waiting, is tried again after a yield, up to 16 times, then waited for on the handle's own selector in the
   caller's thread (`ReactorBackend.waitHere`, cancelled with `Selector.wakeup`); otherwise, or with many ops waiting,
   it is handed to a reactor thread, picked by the caller's thread so a future's ops stay together, which submits it
-  and runs its completion, resuming the future; a cancel is handed over the same way (items 3, 5 and 11). A blocking
-  op runs on the caller. Needs nothing of the JDK beyond its public interface.
+  and runs its completion, resuming the future; a cancel is handed over the same way (items 3, 5, 11 and 12). A
+  blocking op runs on the caller, and a timer parks it until its time. Needs nothing of the JDK beyond its public
+  interface.
 - **`Carriers.Reactors`, opted into:** virtual threads whose scheduler is a `ReactorPool`, so the pool's workers carry
   them and drive the reactors, as on Scala Native: `perform` finds the worker by the caller's carrier, and may finish an
   op at once; a completion's resume is a continuation queued on that worker, under the pool's `TakePolicy`. The JDK
@@ -510,3 +511,46 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     Not done: Linux, where the per-process descriptor lock does not apply, so the gate and the retries may both sit
     elsewhere; a deadline carried by the caller's wait; and the hand-off path's lateness, which only moving ops off
     the reactor thread has cut so far.
+
+12. [x] **The hand-off's worst-case lateness closed: a timer parks the caller.** Item 11 left `Carriers.Jdk`'s
+    `starvation` p99 at 3.2 ms against the reactor pool's 0.5 and `VThreadBackend`'s 1.4, and traced it to ops
+    crossing the reactor thread. The scenario's checker is a timer, and timers always crossed it: `triesNow` is
+    false for them, so neither the retries nor the wait on the caller applied, and the one event the scenario times
+    waited for a platform thread the OS keeps from the cores while the carriers saturate them. Now `waitHere` for a
+    timer is a `TimerWait`, which parks the caller's own virtual thread until the time has passed (`parkNanos`) and
+    is cancelled with an unpark, as `VThreadBackend`'s timers are; `WaitHere.await` says whether the wait finished
+    the op, since there is nothing to try afterwards. A timer contends for nothing, so it waits on the caller
+    whatever the gate says, which now applies only to ops whose tries are system calls on a handle (`triesNow`).
+    Checked in both carrier modes: a timer cancelled while parked stops waiting, and may be performed again.
+
+    With that, the gate makes no difference to the p99 (32 to 128: 1.7 to 2.2 ms, median of 3 at the bench's
+    length), nor does holding the scheduler to nine carriers to leave a core for the reactor's thread (1.8), and
+    `concurrent` no longer pays for a wider gate (5.3 to 5.5 µs across the range): the timer traffic through the
+    reactor was part of what the gate sweep in item 11 charged to the gate. At that length a run has about a
+    thousand samples, so the p99 is a handful of events and the max one; three times longer, the tail resolves
+    (median of 5, lateness in µs; `kqueue-demo/bench/results/jvm-timers-on-caller-starvation.json`):
+
+        | lateness, µs | nio-jdk | vthread-backend | nio-reactors | jdk-vthreads |
+    | --- | --- | --- | --- | --- |
+    | p50 | 516 | 519 | 309 | 514 |
+    | p99 | 1114 | 1653 | 434 | 2260 |
+    | max | 6851 | 2902 | 2172 | 11332 |
+
+    The p99 is now below `VThreadBackend`'s and 2.6 times the reactor pool's, from 3.2 ms this morning. The max, one
+    event in three thousand, is still two to three times the other gears backends' (6.9 against 2.2 and 2.9 ms),
+    though under the JDK's own blocking channels (11.3): the reactor's thread is one more thread for the OS to keep
+    from a core, and only moving every op off it would remove that. The timer scenarios are unchanged
+    (`jvm-timers-on-caller.json`):
+
+        | scenario | nio-jdk | vthread-backend | nio-reactors | jdk-vthreads |
+    | --- | --- | --- | --- | --- |
+    | pingpong | 5.75 | 5.17 | 9.72 | 10.51 |
+    | pingpong-deadline | 8.51 | | 9.15 | 13.45 |
+    | concurrent | 5.26 | 6.24 | 2.23 | 10.64 |
+    | concurrent-offload | 6.47 | 10.14 | 6.60 | 11.89 |
+    | timers | 0.18 | | 0.14 | 0.29 |
+    | fairness (tick) | 1.91 (1.47) | 2.18 (1.67) | 1.45 (2.89) | 1.79 (1.33) |
+    | mixed (compute) | 8.10 (25.1) | 6.79 (27.2) | 16.67 (33.3) | 10.99 (21.7) |
+
+    Not done: `submit`'s timers still go to the reactor, so `pingpong-deadline`'s arm and cancel each round trip are
+    two hand-offs (33.8 µs over TCP, item 11); and Linux.

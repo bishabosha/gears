@@ -149,7 +149,8 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
   @volatile private var cancelled = false
   @volatile private var waitingOn: Selector | Null = null
 
-  def await(): Unit = {
+  /** Never finishes the op itself: the caller tries it once the selector reports the handle ready. */
+  def await(): Boolean = {
     val selector = entry.enterWait(write)
     try {
       val key = entry.channel.keyFor(selector)
@@ -162,12 +163,41 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
       waitingOn = null
       entry.exitWait()
     }
+    false
   }
 
   def cancel(): Unit = {
     cancelled = true
     val selector = waitingOn
     if selector != null then selector.wakeup(): Unit
+  }
+}
+
+/** A timer waited for on the calling thread, parked until its time has passed: `ReactorBackend.waitHere` for NIO's
+  * timers, which contend for nothing, so a caller waits this way whatever else is waiting. Cancelled with an unpark.
+  */
+private[nio] final class TimerWait(milliseconds: Int) extends asyncio.WaitHere {
+  private val deadline = System.nanoTime() + milliseconds * 1_000_000L
+  @volatile private var cancelled = false
+  @volatile private var parked: Thread | Null = null
+
+  /** Parks until the deadline, or a cancel; true once the time has passed. */
+  def await(): Boolean = {
+    parked = Thread.currentThread()
+    try {
+      var remaining = deadline - System.nanoTime()
+      while remaining > 0 && !cancelled do {
+        LockSupport.parkNanos(this, remaining)
+        remaining = deadline - System.nanoTime()
+      }
+      remaining <= 0
+    } finally parked = null
+  }
+
+  def cancel(): Unit = {
+    cancelled = true
+    val thread = parked
+    if thread != null then LockSupport.unpark(thread)
   }
 }
 

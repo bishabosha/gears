@@ -166,6 +166,22 @@ abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends Fun
     assertEquals(outcome, "true again")
   }
 
+  test("a cancelled timer stops waiting, and may be performed again") {
+    var outcome = ""
+    running { r =>
+      val timer = r.ops.timer(60_000)
+      val sleeping = Future(perform(r, timer))
+      perform(r, r.ops.timer(20)) // so that the long timer is waiting
+      val started = System.nanoTime()
+      sleeping.cancel()
+      val cancelled = sleeping.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
+      val waited = System.nanoTime() - started
+      perform(r, r.ops.timer(1)) // the op again, now for a moment
+      outcome = s"$cancelled ${waited < 1_000_000_000L}"
+    }
+    assertEquals(outcome, "true true")
+  }
+
   test("an op that fails fails perform") {
     var failure: Throwable | Null = null
     running { r =>

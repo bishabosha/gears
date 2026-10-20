@@ -199,8 +199,10 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   def blockingHere(op: Op): BlockingHere | Null = null
 
   /** A wait for `op` on the calling thread, for a caller that may block and is on no reactor's thread: it parks the
-    * caller until `op` may be worth trying again with `tryNow`, with no reactor involved. Null if `op` is not one
-    * `tryNow` can finish, or this backend waits only on its reactors. Null by default.
+    * caller until `op` is done, or may be worth trying again with `tryNow`, with no reactor involved. Null if this
+    * backend cannot wait for `op` there, or waits only on its reactors. Null by default. A wait whose tries make
+    * system calls on a handle (`triesNow`) is taken only while few ops are waiting; one that contends for nothing,
+    * such as a timer parked until its time, always.
     */
   def waitHere(op: Op): WaitHere | Null = null
 }
@@ -210,10 +212,11 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   */
 trait WaitHere extends Cancellable {
 
-  /** Parks the caller until the op's handle may be ready, or `cancel` has been called, and returns; the caller then
-    * tries the op again. Throws if the handle has been closed.
+  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, and returns:
+    * true if the wait finished the op, as a timer's does once its time has passed, so there is nothing to try; false
+    * if the caller should try the op again. Throws if the op's handle has been closed.
     */
-  def await(): Unit
+  def await(): Boolean
 
   /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
   def cancel(): Unit

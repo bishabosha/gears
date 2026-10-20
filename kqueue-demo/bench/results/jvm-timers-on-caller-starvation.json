@@ -1,0 +1,219 @@
+{
+  "started": "2026-10-20T15:56:04+02:00",
+  "finished": "2026-10-20T15:57:28+02:00",
+  "load_average": {
+    "before": [
+      5.6416015625,
+      6.5341796875,
+      5.13427734375
+    ],
+    "after": [
+      18.17626953125,
+      10.470703125,
+      6.76904296875
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "starvation",
+    "--scale",
+    "3"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "nio-jdk",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "starvation-p50": 516.29,
+        "starvation-p99": 1114.17,
+        "starvation-max": 6850.79,
+        "starvation": 7.8
+      },
+      "samples": {
+        "starvation-p50": [
+          517.75,
+          515.83,
+          516.04,
+          516.29,
+          517.29
+        ],
+        "starvation-p99": [
+          3533.13,
+          1115.04,
+          841.88,
+          1114.17,
+          791.25
+        ],
+        "starvation-max": [
+          10116.67,
+          7672.67,
+          3101.42,
+          6850.79,
+          5936.42
+        ],
+        "starvation": [
+          8.26,
+          7.52,
+          7.8,
+          8.03,
+          7.61
+        ]
+      }
+    },
+    {
+      "label": "vthread-backend",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/vthread-backend",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "-Dasyncio.backend=vthreads"
+      },
+      "median": {
+        "starvation-p50": 518.75,
+        "starvation-p99": 1652.5,
+        "starvation-max": 2901.58,
+        "starvation": 7.97
+      },
+      "samples": {
+        "starvation-p50": [
+          515.79,
+          520.67,
+          517.33,
+          519.25,
+          518.75
+        ],
+        "starvation-p99": [
+          1652.5,
+          1935.88,
+          1561.58,
+          1544.21,
+          1777.58
+        ],
+        "starvation-max": [
+          3222.38,
+          2560.5,
+          2901.58,
+          3339.04,
+          2604.42
+        ],
+        "starvation": [
+          8.09,
+          7.73,
+          8.03,
+          7.83,
+          7.97
+        ]
+      }
+    },
+    {
+      "label": "nio-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=reactors"
+      },
+      "median": {
+        "starvation-p50": 308.92,
+        "starvation-p99": 434.21,
+        "starvation-max": 2172.17,
+        "starvation": 5.91
+      },
+      "samples": {
+        "starvation-p50": [
+          305.46,
+          316.75,
+          308.92,
+          306.08,
+          313.29
+        ],
+        "starvation-p99": [
+          430.5,
+          446.96,
+          434.21,
+          487.17,
+          431.33
+        ],
+        "starvation-max": [
+          2132.46,
+          2046.83,
+          2330.71,
+          2232.88,
+          2172.17
+        ],
+        "starvation": [
+          5.75,
+          5.92,
+          5.84,
+          5.93,
+          5.91
+        ]
+      }
+    },
+    {
+      "label": "jdk-vthreads",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/jdk-vthreads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "jdk-bench",
+        "java_options": "--enable-preview"
+      },
+      "median": {
+        "starvation-p50": 514.08,
+        "starvation-p99": 2260.29,
+        "starvation-max": 11332.46,
+        "starvation": 17.94
+      },
+      "samples": {
+        "starvation-p50": [
+          513.46,
+          514.04,
+          514.13,
+          514.08,
+          514.08
+        ],
+        "starvation-p99": [
+          2455.29,
+          2260.29,
+          4836.83,
+          1101.38,
+          2066.63
+        ],
+        "starvation-max": [
+          12248.21,
+          8144.71,
+          13182.42,
+          11332.46,
+          8302.71
+        ],
+        "starvation": [
+          18.3,
+          17.88,
+          19.25,
+          17.55,
+          17.94
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

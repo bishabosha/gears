@@ -52,7 +52,8 @@ object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBack
   }
 
   /** A command tried first waits on its handle's own selector, in the caller's thread (`SelectorWait`); a regular
-    * file is always ready, so `tryNow` finishes it.
+    * file is always ready, so `tryNow` finishes it. A timer parks the caller until its time (`TimerWait`): no reactor
+    * thread to fire it and resume the caller, which the OS may keep from running while the cores are busy.
     */
   override def waitHere(op: Op): asyncio.WaitHere | Null = op match {
     case command: Command if command.tryFirst =>
@@ -61,6 +62,9 @@ object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBack
           new SelectorWait(s, command.interest == asyncio.Interest.Write, command.selectOps(s.channel))
         case _ => null
       }
+    case timer: NioTimer =>
+      require(timer.completion == null, s"$op is already pending")
+      new TimerWait(timer.milliseconds)
     case _ => null
   }
 
