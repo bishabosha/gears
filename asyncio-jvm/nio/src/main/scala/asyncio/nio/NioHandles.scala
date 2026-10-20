@@ -59,8 +59,8 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
   /** Records that `reactor` registered the channel with its selector. */
   def registered(reactor: NioReactor): Unit = registrations.add(reactor): Unit
 
-  // The channel's own selectors, one for each direction, on which `VThreadBackend`'s ops wait, taken from the pool on
-  // first use; the ops waiting on them; and whether the channel has been closed, after which none is taken, and the
+  // The channel's own selectors, one for each direction, on which callers off the pool wait (`SelectorWait`),
+  // taken from the pool on first use; the ops waiting on them; and whether the channel has been closed, after which none is taken, and the
   // selectors go back to the pool once no op waits on them. Guarded by `this`.
   private var reading: Selector | Null = null
   private var writing: Selector | Null = null

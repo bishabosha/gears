@@ -5,9 +5,6 @@
 #
 #   <output>/nio-jdk        NIO, futures on gears' own virtual threads beside reactor threads (Carriers.Jdk)
 #   <output>/nio-reactors   NIO, futures carried by the reactor pool (Carriers.Reactors)
-#   <output>/vthread-backend  gears over VThreadBackend: no reactor; an op is tried on the future's virtual thread,
-#                           yields and tries again, then waits on its handle's own selector there; the scenarios
-#                           needing a reactor or blocking ops are skipped
 #   <output>/jdk-vthreads   no reactor: blocking JDK channels on virtual threads in structured task scopes
 #   <output>/jdk-selector   no reactor: as jdk-vthreads, with non-blocking channels and a selector thread a side, the
 #                           least a design on Selector does (gearsexample.SelectorIo)
@@ -62,7 +59,6 @@ EOF
 opens=--add-opens=java.base/java.lang=ALL-UNNAMED
 write nio-jdk "$opens -Dasyncio.gears.carriers=jdk" bench
 write nio-reactors "$opens -Dasyncio.gears.carriers=reactors" bench
-write vthread-backend "-Dasyncio.backend=vthreads" bench
 write jdk-vthreads "--enable-preview" jdk-bench
 write jdk-selector "--enable-preview" "jdk-bench --selector"
 write jdk-selector-here "--enable-preview" "jdk-bench --selector-here"
@@ -77,4 +73,4 @@ EOF
 chmod +x "$output/cats-effect"
 python3 -c 'import json, sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2]))))' \
   commit "$commit" dirty "$dirty" jdk "$jdk" command bench java_options "" >"$output/cats-effect.json"
-echo "built $output: nio-jdk nio-reactors vthread-backend jdk-vthreads jdk-selector jdk-selector-here cats-effect"
+echo "built $output: nio-jdk nio-reactors jdk-vthreads jdk-selector jdk-selector-here cats-effect"

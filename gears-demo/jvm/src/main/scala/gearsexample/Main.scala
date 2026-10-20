@@ -3,9 +3,7 @@ package gearsexample
 import mainargs.{ParserForMethods, arg, main}
 import asyncio.IpAddress
 import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
 import asyncio.nio.NioBackend
-import asyncio.nio.VThreadBackend
 import asyncio.gears.TakePolicy
 
 /** The gears demos on the JVM, run as `sbt "gearsDemoJVM/run <command>"`, with the commands and flags of
@@ -14,20 +12,9 @@ import asyncio.gears.TakePolicy
   *
   * This is the edge, the one place that chooses NIO. The futures are gears' own virtual threads, beside the reactors;
   * `-Dasyncio.gears.carriers=reactors` carries them on the reactor pool instead (see `asyncio.gears.Carriers`).
-  * `bench` can run on `VThreadBackend` instead, with `-Dasyncio.backend=vthreads`.
   */
 object Main {
   given NioBackend.type = NioBackend
-
-  /** The backend `bench` runs on: NIO, or the JDK's blocking channels on virtual threads with
-    * `-Dasyncio.backend=vthreads`.
-    */
-  private def benchBackend: UnixStreamBackend =
-    sys.props.getOrElse("asyncio.backend", "nio") match {
-      case "nio"      => NioBackend
-      case "vthreads" => VThreadBackend
-      case other      => throw new IllegalArgumentException(s"asyncio.backend is nio or vthreads, not `$other`")
-    }
 
   @main
   def timer(): Unit = {
@@ -146,7 +133,7 @@ object Main {
       workers,
       takePolicy,
       warmup.value
-    )(using benchBackend)
+    )
   }
   @main(
     name = "jdk-bench",
