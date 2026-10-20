@@ -1,0 +1,361 @@
+{
+  "started": "2026-10-20T15:57:29+02:00",
+  "finished": "2026-10-20T15:58:59+02:00",
+  "load_average": {
+    "before": [
+      18.17626953125,
+      10.470703125,
+      6.76904296875
+    ],
+    "after": [
+      12.203125,
+      10.64501953125,
+      7.21728515625
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,pingpong-deadline,concurrent,concurrent-offload,timers,fairness,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "nio-jdk",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 1.47,
+        "mixed-compute": 25.08,
+        "pingpong": 5.75,
+        "pingpong-deadline": 8.51,
+        "concurrent": 5.26,
+        "concurrent-offload": 6.47,
+        "timers": 0.18,
+        "fairness": 1.91,
+        "mixed": 8.1
+      },
+      "samples": {
+        "fairness-tick": [
+          1.49,
+          1.47,
+          1.4,
+          1.47,
+          1.48
+        ],
+        "mixed-compute": [
+          25.18,
+          25.18,
+          24.83,
+          25.08,
+          25.03
+        ],
+        "pingpong": [
+          5.86,
+          5.93,
+          5.59,
+          5.75,
+          5.62
+        ],
+        "pingpong-deadline": [
+          8.45,
+          8.68,
+          8.44,
+          8.51,
+          8.62
+        ],
+        "concurrent": [
+          5.26,
+          5.38,
+          5.23,
+          5.35,
+          5.25
+        ],
+        "concurrent-offload": [
+          6.57,
+          6.47,
+          6.47,
+          6.49,
+          6.45
+        ],
+        "timers": [
+          0.18,
+          0.21,
+          0.18,
+          0.18,
+          0.21
+        ],
+        "fairness": [
+          1.91,
+          1.71,
+          1.91,
+          1.72,
+          1.95
+        ],
+        "mixed": [
+          8.14,
+          8.09,
+          8.06,
+          8.1,
+          8.2
+        ]
+      }
+    },
+    {
+      "label": "vthread-backend",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/vthread-backend",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "-Dasyncio.backend=vthreads"
+      },
+      "median": {
+        "fairness-tick": 1.67,
+        "mixed-compute": 27.17,
+        "pingpong": 5.17,
+        "concurrent": 6.24,
+        "concurrent-offload": 10.14,
+        "fairness": 2.18,
+        "mixed": 6.79
+      },
+      "samples": {
+        "fairness-tick": [
+          1.76,
+          1.66,
+          1.72,
+          1.67,
+          1.62
+        ],
+        "mixed-compute": [
+          27.24,
+          26.95,
+          27.17,
+          27.38,
+          26.68
+        ],
+        "pingpong": [
+          5.32,
+          5.09,
+          5.17,
+          5.78,
+          5.14
+        ],
+        "concurrent": [
+          6.22,
+          6.24,
+          6.16,
+          6.5,
+          6.49
+        ],
+        "concurrent-offload": [
+          10.14,
+          10.37,
+          10.08,
+          10.38,
+          10.11
+        ],
+        "fairness": [
+          1.93,
+          2.18,
+          1.95,
+          2.21,
+          2.32
+        ],
+        "mixed": [
+          6.74,
+          6.86,
+          6.79,
+          6.86,
+          6.76
+        ]
+      }
+    },
+    {
+      "label": "nio-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=reactors"
+      },
+      "median": {
+        "fairness-tick": 2.89,
+        "mixed-compute": 33.33,
+        "pingpong": 9.72,
+        "pingpong-deadline": 9.15,
+        "concurrent": 2.23,
+        "concurrent-offload": 6.6,
+        "timers": 0.14,
+        "fairness": 1.45,
+        "mixed": 16.67
+      },
+      "samples": {
+        "fairness-tick": [
+          2.74,
+          2.74,
+          2.9,
+          2.99,
+          2.89
+        ],
+        "mixed-compute": [
+          33.37,
+          33.19,
+          33.69,
+          33.31,
+          33.33
+        ],
+        "pingpong": [
+          9.74,
+          9.68,
+          9.77,
+          9.65,
+          9.72
+        ],
+        "pingpong-deadline": [
+          9.15,
+          9.22,
+          9.13,
+          9.38,
+          9.03
+        ],
+        "concurrent": [
+          2.23,
+          2.07,
+          2.29,
+          2.21,
+          2.26
+        ],
+        "concurrent-offload": [
+          6.6,
+          6.55,
+          6.61,
+          6.61,
+          6.47
+        ],
+        "timers": [
+          0.14,
+          0.13,
+          0.13,
+          0.14,
+          0.15
+        ],
+        "fairness": [
+          1.37,
+          1.37,
+          1.45,
+          1.5,
+          1.45
+        ],
+        "mixed": [
+          16.69,
+          16.6,
+          16.85,
+          16.66,
+          16.67
+        ]
+      }
+    },
+    {
+      "label": "jdk-vthreads",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/jvm21/jdk-vthreads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "b2cd0c87788670e518f4d464dfc7007e1701c648",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "jdk-bench",
+        "java_options": "--enable-preview"
+      },
+      "median": {
+        "fairness-tick": 1.33,
+        "mixed-compute": 21.69,
+        "pingpong": 10.51,
+        "pingpong-deadline": 13.45,
+        "concurrent": 10.64,
+        "concurrent-offload": 11.89,
+        "timers": 0.29,
+        "fairness": 1.79,
+        "mixed": 10.99
+      },
+      "samples": {
+        "fairness-tick": [
+          1.3,
+          1.34,
+          1.35,
+          1.25,
+          1.33
+        ],
+        "mixed-compute": [
+          21.68,
+          21.75,
+          22.0,
+          21.62,
+          21.69
+        ],
+        "pingpong": [
+          10.43,
+          10.52,
+          10.77,
+          10.51,
+          10.48
+        ],
+        "pingpong-deadline": [
+          13.36,
+          13.45,
+          13.61,
+          13.51,
+          13.32
+        ],
+        "concurrent": [
+          10.44,
+          10.57,
+          10.68,
+          10.71,
+          10.64
+        ],
+        "concurrent-offload": [
+          11.63,
+          11.99,
+          11.97,
+          11.89,
+          11.82
+        ],
+        "timers": [
+          0.3,
+          0.28,
+          0.3,
+          0.29,
+          0.28
+        ],
+        "fairness": [
+          1.86,
+          1.73,
+          1.79,
+          1.8,
+          1.77
+        ],
+        "mixed": [
+          10.95,
+          10.99,
+          11.16,
+          10.99,
+          11.07
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

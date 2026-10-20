@@ -132,9 +132,10 @@ object ReactorAsync {
     // the data often arrives, so the op needs no reactor and no wake-up. A yield puts the caller behind every other
     // thread ready to run, so this stays fair. Only for an op the backend can finish here at all, and only while few
     // ops wait on the reactors: with many, each turn of a reactor serves many of them at once, which tries on every
-    // caller's thread would only slow.
-    val few = b.triesNow(op) && RemoteWaiter.waiting.get() < RemoteWaiter.RetryBelow
-    var tries = if few then RemoteWaiter.RetriesHere else 0
+    // caller's thread, each a system call on a handle, would only slow.
+    val contends = b.triesNow(op)
+    val few = RemoteWaiter.waiting.get() < RemoteWaiter.RetryBelow
+    var tries = if contends && few then RemoteWaiter.RetriesHere else 0
     while tries > 0 do {
       tries -= 1
       Thread.`yield`()
@@ -145,18 +146,20 @@ object ReactorAsync {
       }
     }
     waiter.finishedHere = 0
-    // Still while few ops wait: wait for the handle here, parked in the caller's own thread, rather than on a reactor:
-    // no thread is woken to register the wait, and none to resume the caller. Cancelling the caller ends the wait.
-    if few && RemoteWaiter.WaitHere then {
+    // Wait here, parked in the caller's own thread, rather than on a reactor: no thread is woken to register the
+    // wait, and none to resume the caller, which under load the OS may keep from the reactor's thread for
+    // milliseconds. An op whose tries contend for the kernel waits here only while few ops wait; one that contends
+    // for nothing, such as a timer, always. Cancelling the caller ends the wait.
+    if RemoteWaiter.WaitHere && (few || !contends) then {
       val here = b.waitHere(op)
       if here != null then {
         RemoteWaiter.waiting.incrementAndGet()
         try
           cancellationScope(here) {
             while true do {
-              here.await()
+              val done = here.await()
               if ac.group.isCancelled then throw new CancellationException()
-              if b.tryNow(op) then return
+              if done || b.tryNow(op) then return
             }
           }
         finally RemoteWaiter.waiting.decrementAndGet()
