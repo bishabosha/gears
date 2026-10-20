@@ -142,7 +142,8 @@ object Main {
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: mainargs.Flag,
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
-      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine"
+      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
+      @arg(doc = "kqueue, or darwin: Network.framework, which needs --tcp") backend: String = "kqueue"
   ): Unit = {
     val address =
       if tcp.value then IpAddress.IPv4("127.0.0.1", port)
@@ -150,7 +151,13 @@ object Main {
     val takePolicy = TakePolicy.values
       .find(_.toString.equalsIgnoreCase(policy))
       .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
-    GearsBench.run(scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty), scale, connections, address, workers, takePolicy)
+    val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
+    backend match {
+      case "kqueue" => GearsBench.run(names, scale, connections, address, workers, takePolicy)
+      case "darwin" =>
+        GearsBench.run(names, scale, connections, address, workers, takePolicy)(using asyncio.darwin.DarwinBackend)
+      case other => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or darwin")
+    }
   }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)
