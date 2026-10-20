@@ -21,6 +21,7 @@ import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
 import asyncio.IpAddress
+import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixDatagramHandles
 import asyncio.UnixStreamHandles
@@ -40,7 +41,11 @@ import asyncio.unsafe.Sockets.Transport
 /** Either kind of socket address, as the system calls take them. */
 private[kqueue] type SocketAddress = IpAddress | UnixAddress
 
-object KqueueHandles extends UnixStreamHandles with UnixDatagramHandles with FifoHandles {
+object KqueueHandles
+    extends UnixStreamHandles
+    with UnixDatagramHandles
+    with FifoHandles
+    with ReadinessHandles {
   private val boundPaths = new ConcurrentHashMap[Integer, String]()
 
   /** Opens a regular file. Its descriptor is marked in `DescriptorTable`, so that the reactor never takes a short read

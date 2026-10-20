@@ -1,5 +1,7 @@
 package asyncio
 
+import _root_.gears.async.Async
+
 import java.nio.ByteBuffer
 
 /** What to do when an op finishes. The op comes back with its outcome, so one completion can own many ops. A completion
@@ -30,9 +32,9 @@ trait Completion[-C] {
   */
 trait Reactor extends AutoCloseable {
 
-  /** Something submitted to this reactor that later completes. The reactors one `Backend` opens share it, so an op
-    * built by the backend may go to any of them (see `Backend`); otherwise the type belongs to the reactor value: given
-    * `a, b: Reactor`, `a.Op` and `b.Op` are different types.
+  /** Something submitted to this reactor that later completes. The reactors one `ReactorBackend` opens share it, so an
+    * op built by the backend may go to any of them (see `ReactorBackend`); otherwise the type belongs to the reactor
+    * value: given `a, b: Reactor`, `a.Op` and `b.Op` are different types.
     */
   type Op
 
@@ -119,26 +121,43 @@ object Reactor {
   }
 }
 
-/** A kind of reactor, such as kqueue's, and what its reactors share: the ops they run and the handles those ops name.
-  * An op built by `ops` may be submitted to any reactor this backend opens, one submission at a time, so that a task
-  * moving from one reactor's thread to another's can take its ops along: once a submission has completed, failed or
-  * been cancelled on one reactor, a `Repeatable` op may go to another. Ops of another backend are a different type.
-  * Building an op or using a handle touches no reactor, so either may be done from any thread.
+/** A way of doing I/O: the ops it can perform, the handles they name, and `perform`, which runs one. A backend may run
+  * its ops on reactors (`ReactorBackend`), or do each one itself on the calling thread, as `asyncio.vthread`'s does
+  * with the JDK's blocking channels on a virtual thread. Ops of another backend are a different type. Building an op or
+  * using a handle performs nothing, so either may be done from any thread.
   *
-  * What every backend has is here: IP sockets, pipes and regular files. What only some have is a capability the backend
-  * mixes in, with its own handles and ops: `UnixStreamBackend`, `UnixDatagramBackend` and `FifoBackend`. Code that needs
-  * one asks for a backend that has it, so a backend without it is refused when compiling, not when running.
+  * What every backend has is here: IP sockets, pipes and regular files, read, written, accepted, connected, sent and
+  * received, timers, and name resolution. What only some have is a capability the backend mixes in, with its own
+  * handles and ops: a reactor (`ReactorBackend`), readiness (`ReadinessBackend`), blocking ops (`BlockingBackend`),
+  * `UnixStreamBackend`, `UnixDatagramBackend` and `FifoBackend`. Code that needs one asks for a backend that has it, so
+  * a backend without it is refused when compiling, not when running.
   */
-trait Backend extends Reactor.Factory[Reactor] {
+trait Backend {
 
-  /** The ops of every reactor this backend opens. */
+  /** What this backend performs. */
   type Op
 
-  /** Builds ops for any of this backend's reactors. */
+  /** Builds this backend's ops. */
   def ops: Ops[Op]
 
-  /** Opens, uses without waiting, and closes the handles this backend's ops name. */
+  /** Opens, uses, and closes the handles this backend's ops name. */
   def handles: Handles
+
+  /** Performs `op` and suspends the caller until it is done: it returns when the op finishes, throws its failure, or
+    * throws `CancellationException` when the caller is cancelled first. Once it returns or throws, the op's buffers and
+    * slots are the caller's again. An op marked `Repeatable` may be performed again once it has returned; any other op
+    * only once. Where the caller must be, and what cancelling it does to the op, is the backend's to say.
+    */
+  def perform(op: Op)(using Async): Unit
+}
+
+/** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
+  * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
+  * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. `perform`
+  * routes an op to a reactor of the caller's program (see `asyncio.gears.ReactorAsync`), which must have been started
+  * by `ReactorFutures.run` with this backend.
+  */
+trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   /** The caller's own data for `op`, kept across submissions and never read by a reactor, like kqueue's `udata` or
     * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
@@ -152,6 +171,11 @@ trait Backend extends Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
+
+  /** Submits `op` to a reactor of the caller's program, and suspends the caller until it finishes (see
+    * `ReactorAsync.performOnReactor`). Cancelling the caller asks the reactor to cancel the op, and waits until it has.
+    */
+  final def perform(op: Op)(using Async): Unit = asyncio.gears.ReactorAsync.performOnReactor(this, op)
 
   /** Performs `op` now, on the calling thread and on no reactor, if this backend can and the op finishes at once, as a
     * read of data already waiting or a write that fits does: then it returns true, the op's results are in the
@@ -169,7 +193,7 @@ trait Backend extends Reactor.Factory[Reactor] {
   def blockingHere(op: Op): BlockingHere | Null = null
 }
 
-/** A blocking op run on the calling thread (see `Backend.blockingHere`). */
+/** A blocking op run on the calling thread (see `ReactorBackend.blockingHere`). */
 trait BlockingHere {
 
   /** Runs the body, writing its result into the op's slot, and returns once it has; its failure is thrown. If `cancel`
@@ -180,6 +204,22 @@ trait BlockingHere {
 
   /** Cancels the op from any thread, as `Reactor.cancel` would a blocking op: skipped, or interrupted. */
   def cancel(): Unit
+}
+
+/** A backend that can say when a handle is ready, and use it without waiting (see `ReadinessOps` and
+  * `ReadinessHandles`): one over non-blocking descriptors or channels, such as kqueue's and NIO's.
+  */
+trait ReadinessBackend extends Backend {
+  def ops: ReadinessOps[Op]
+  def handles: ReadinessHandles
+}
+
+/** A backend that runs blocking code as an op, off the threads that run its other ops (see `BlockingOps`), so that it
+  * keeps them free: one whose ops run on reactors. A backend whose callers may block anyway has no need of it; they
+  * call the blocking code themselves.
+  */
+trait BlockingBackend extends Backend {
+  def ops: BlockingOps[Op]
 }
 
 /** A backend with Unix domain stream sockets (see `UnixStreamHandles`). */
@@ -212,13 +252,13 @@ enum IpAddress {
 /** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket. */
 final case class UnixAddress(path: String)
 
-/** Opening, closing, and waitless use of a reactor's handles. Every operation is synchronous and never blocks; failures
-  * throw `java.io.IOException`.
+/** Opening and closing a backend's handles. Every operation is synchronous and never blocks; failures throw
+  * `java.io.IOException`.
   *
-  * A handle is an `Int` that names an open file, socket, or other I/O object. Its meaning belongs to the reactor: it is
+  * A handle is an `Int` that names an open file, socket, or other I/O object. Its meaning belongs to the backend: it is
   * the I/O object itself where that is an integer, such as a POSIX descriptor, and otherwise an index into a table the
-  * reactor keeps of references to its I/O objects, such as JVM channels. Handles belong to the caller, who closes them
-  * with `close`; the reactor never closes them.
+  * backend keeps of references to its I/O objects, such as JVM channels. Handles belong to the caller, who closes them
+  * with `close`; the backend never closes them.
   */
 trait Handles {
 
@@ -227,7 +267,7 @@ trait Handles {
     */
   def openFile(path: String, write: Boolean): Int
 
-  /** A stream socket whose connection to `address` has started; submit `ops.connect` to wait for it to finish. */
+  /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: IpAddress): Int
 
   /** A stream socket bound to `address` and listening for connections. With `reuseAddr`, the address can be bound
@@ -242,20 +282,24 @@ trait Handles {
   /** A pipe, as its read end and its write end. */
   def pipe(): (Int, Int)
 
+  /** Closes a handle. A Unix socket path that a listener or datagram socket bound is removed with it. */
+  def close(handle: Int): Unit
+}
+
+/** Using handles without waiting, for a backend whose handles are non-blocking (see `ReadinessBackend`). */
+trait ReadinessHandles extends Handles {
+
   /** Reads what is available now into `buf`: the bytes read, 0 if nothing is, or -1 at end of stream. */
   def readNow(handle: Int, buf: ByteBuffer): Int
 
   /** Writes what fits now from `buf`: the bytes written, or -1 if nothing fits. */
   def writeNow(handle: Int, buf: ByteBuffer): Int
-
-  /** Closes a handle. A Unix socket path that a listener or datagram socket bound is removed with it. */
-  def close(handle: Int): Unit
 }
 
 /** Unix domain stream sockets, which the ops for IP stream sockets (`accept`, `connect`, `read`, `write`) also run on. */
 trait UnixStreamHandles extends Handles {
 
-  /** A stream socket whose connection to `address` has started; submit `ops.connect` to wait for it to finish. */
+  /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: UnixAddress): Int
 
   /** A stream socket bound to `address`, replacing a socket file already there, and listening for connections. */
@@ -335,8 +379,9 @@ enum AddressFamily {
 
 final case class ResolvedAddress(family: AddressFamily, host: String)
 
-/** The ops a reactor can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`).
-  * Buffers are used between position and limit, and belong to the reactor from submission until the op's completion.
+/** The ops a backend can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`).
+  * Buffers are used between position and limit, and belong to the backend while the op is being performed: on a
+  * reactor, from submission until the op's completion.
   */
 trait Ops[Op] {
 
@@ -348,12 +393,12 @@ trait Ops[Op] {
   /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. */
   def write(handle: Int, buf: ByteBuffer): Op & Repeatable
 
-  /** Accepts one connection on a listening socket. Completes after writing the new, non-blocking connection into
-    * `into`, which must be empty.
+  /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
+    * be empty.
     */
   def accept(handle: Int, into: HandleSlot): Op & Repeatable
 
-  /** Waits for a non-blocking connect on `handle` to finish. Completes once connected, or fails. */
+  /** Connects `handle`, a socket from `handles.connect`. Completes once connected, or fails. */
   def connect(handle: Int): Op
 
   /** Receives one packet on an IP datagram socket into `buf`, which is left flipped for reading, and writes its sender
@@ -372,11 +417,25 @@ trait Ops[Op] {
   /** Completes once `milliseconds` have passed. */
   def timer(milliseconds: Int): Op & Repeatable
 
+  /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form,
+    * into `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. A cancel that
+    * arrives before the write leaves `into` empty.
+    */
+  def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
+}
+
+/** Readiness, for a backend that has it (see `ReadinessBackend`). */
+trait ReadinessOps[Op] extends Ops[Op] {
+
   /** Waits until `handle` is ready for `interest`, then runs `perform` on the reactor thread. The op completes when
     * `perform` returns true; false means it was not ready after all, and the reactor waits again. For operations the
     * other ops do not cover, such as draining a FIFO.
     */
   def whenReady(handle: Int, interest: Interest)(perform: () => Boolean): Op & Repeatable
+}
+
+/** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
+trait BlockingOps[Op] extends Ops[Op] {
 
   /** Runs `body` off the reactor thread, completing when it returns. Cancelling it skips `body` if it has not started
     * and interrupts it if it is running; interruption is cooperative, and `onCancel` waits for `body` to return.
@@ -387,12 +446,6 @@ trait Ops[Op] {
     * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel.
     */
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
-
-  /** Resolves a host name without blocking the reactor. Completes after writing its addresses, in numeric form, into
-    * `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. As with `blocking`, a
-    * cancel that arrives before the write leaves `into` empty.
-    */
-  def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
 
 /** The ops of Unix domain datagram sockets, as `Ops.receive` and `Ops.send` are for IP ones. */

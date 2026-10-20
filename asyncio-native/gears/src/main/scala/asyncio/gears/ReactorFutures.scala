@@ -7,6 +7,7 @@ import gears.async.Listener
 import gears.async.native.NativeSuspend
 
 import asyncio.Backend
+import asyncio.ReactorBackend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
 object ReactorSupport extends AsyncSupport with NativeSuspend {
@@ -20,17 +21,23 @@ object ReactorFutures {
   /** Runs `program` on one worker, the calling thread (see the other `run`). */
   def run(using backend: Backend)(program: backend.type => Async.Spawn ?=> Unit): Unit = run(1)(program)
 
-  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s (see `ReactorPool`): the calling
-    * thread becomes the first. The program starts as a future, is given the backend, with its own type, so that it may
-    * use the capabilities that backend has, and performs its ops with `perform`; the workers run until it finishes.
+  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s, which must be a
+    * `ReactorBackend` (see `ReactorPool`): the calling thread becomes the first. The program starts as a future, is
+    * given the backend, with its own type, so that it may use the capabilities that backend has, and performs its ops
+    * with `perform`; the workers run until it finishes.
     * `policy` says which tasks a worker out of work may take from another. A failure of the program is rethrown. With
     * `GEARS_POOL_STATS=1`, the pool's counters are printed once its workers stop.
     */
   def run(workers: Int, policy: TakePolicy = TakePolicy.Affine)(using backend: Backend)(
       program: backend.type => Async.Spawn ?=> Unit
   ): Unit = {
+    // Scala Native suspends futures on a pool's workers, which run reactors; there is no other carrier to fall back on.
+    val reactors = backend match {
+      case reactors: ReactorBackend => reactors
+      case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")
+    }
     val stats = sys.env.get("GEARS_POOL_STATS").contains("1")
-    ReactorPool.run(backend, workers, policy, stopped = pool => if stats then printStats(pool)) { pool =>
+    ReactorPool.run(reactors, workers, policy, stopped = pool => if stats then printStats(pool)) { pool =>
       given ReactorPool = pool
       given ReactorSupport.type = ReactorSupport
       Async.blocking {

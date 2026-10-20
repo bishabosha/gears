@@ -5,7 +5,7 @@ import gears.async.Scheduler
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 
-import asyncio.Backend
+import asyncio.ReactorBackend
 import asyncio.Reactor
 
 /** A reactor and the thread that drives it: where an op is submitted, and where it is cancelled. */
@@ -24,7 +24,7 @@ private[gears] trait ReactorDriver {
   * reactor threads its runner set up (`OpRouter.ambient`).
   */
 private[gears] trait OpRouter {
-  def backend: Backend
+  def backend: ReactorBackend
 
   /** The worker running the caller, whose reactor the caller may use directly, or null if it runs on none. */
   def currentWorker: ReactorWorker | Null
@@ -45,7 +45,7 @@ private[gears] object OpRouter {
 private[gears] trait ReactorScheduler extends Scheduler with OpRouter
 
 /** A platform thread driving a reactor of `backend`'s for callers on other threads, which hand it ops with `sync`. */
-private[gears] final class ReactorThread(backend: Backend, index: Int, started: CountDownLatch)
+private[gears] final class ReactorThread(backend: ReactorBackend, index: Int, started: CountDownLatch)
     extends ReactorDriver {
   private val inbox = new ConcurrentLinkedQueue[Runnable]()
   @volatile private var opened: Reactor | Null = null
@@ -107,7 +107,7 @@ private[gears] object ReactorThread {
 /** `workers` reactor threads for a program on gears' own scheduler (see `OpRouter`). Each caller's ops go to the
   * same one, picked by its thread, so a future's ops stay together.
   */
-private[gears] final class ReactorThreads(val backend: Backend, workers: Int) extends OpRouter {
+private[gears] final class ReactorThreads(val backend: ReactorBackend, workers: Int) extends OpRouter {
   require(workers >= 1, "At least one reactor thread is needed")
 
   private val threads = {

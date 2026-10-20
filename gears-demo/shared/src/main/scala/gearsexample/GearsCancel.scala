@@ -9,7 +9,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import scala.util.Failure
 
-import asyncio.Backend
+import asyncio.BlockingBackend
+import asyncio.ReactorBackend
+import asyncio.ReadinessBackend
 import asyncio.Completion
 import asyncio.Interest
 import asyncio.Slot
@@ -57,7 +59,7 @@ object GearsCancel {
       case _                                 => false
     }
 
-  def run()(using Backend): Unit = {
+  def run()(using ReactorBackend & ReadinessBackend & BlockingBackend): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the reactor closes
     val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the reactor closes
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then

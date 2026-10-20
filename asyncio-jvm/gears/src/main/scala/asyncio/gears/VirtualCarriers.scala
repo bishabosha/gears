@@ -9,7 +9,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ThreadFactory
 import scala.concurrent.duration.FiniteDuration
 
-import asyncio.Backend
+import asyncio.ReactorBackend
 
 /** Virtual threads carried by a `ReactorPool`'s workers, through what the JDK keeps to itself: a virtual thread builder
   * that takes the executor to run its threads on, and the carrier of the running virtual thread. Both need
@@ -56,7 +56,7 @@ private[gears] object VirtualCarriers {
 }
 
 /** A pool whose workers carry virtual threads, so the worker running a caller is its carrier's. */
-private[gears] final class CarriedPool(backend: Backend, size: Int, policy: TakePolicy)
+private[gears] final class CarriedPool(backend: ReactorBackend, size: Int, policy: TakePolicy)
     extends ReactorPool(backend, size, policy) {
   override protected def callerThread(): Thread = VirtualCarriers.currentCarrier()
 }
@@ -66,7 +66,7 @@ private[gears] final class CarriedPool(backend: Backend, size: Int, policy: Take
   */
 private[gears] final class VirtualReactorScheduler(val pool: ReactorPool, factory: ThreadFactory)
     extends ReactorScheduler {
-  def backend: Backend = pool.backend
+  def backend: ReactorBackend = pool.backend
   def currentWorker: ReactorWorker | Null = pool.currentWorker
   def driverFor(caller: Thread): ReactorDriver = pool.driverFor(caller)
 

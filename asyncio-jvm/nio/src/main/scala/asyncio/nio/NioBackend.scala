@@ -1,14 +1,17 @@
 package asyncio.nio
 
+import asyncio.BlockingBackend
 import asyncio.Reactor
+import asyncio.ReactorBackend
+import asyncio.ReadinessBackend
 import asyncio.UnixStreamBackend
 
 /** NIO's reactors, each over a `Selector` of its own. They all run the same ops, which keep no state of one reactor
   * between submissions, so an op may go to any of them in turn, and handles name entries of one process-wide table.
-  * Besides what every backend has, they have Unix stream sockets, but neither Unix datagram sockets nor FIFOs, which the
-  * JDK cannot wait on.
+  * Besides what every backend has, they have readiness, blocking ops on a blocker pool, and Unix stream sockets, but
+  * neither Unix datagram sockets nor FIFOs, which the JDK cannot wait on.
   */
-object NioBackend extends UnixStreamBackend {
+object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBackend with UnixStreamBackend {
 
   type Op = NioOp
 

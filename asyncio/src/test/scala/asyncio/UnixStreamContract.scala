@@ -5,7 +5,7 @@ import java.nio.file.Files
 
 /** What a backend with Unix stream sockets must do (see `ReactorContract`). */
 trait UnixStreamContract extends ReactorContract {
-  val backend: UnixStreamBackend
+  val backend: ReactorBackend & ReadinessBackend & BlockingBackend & UnixStreamBackend
 
   test("a socket's reads end after the bytes sent before its peer closed") {
     val dir = tempDir()

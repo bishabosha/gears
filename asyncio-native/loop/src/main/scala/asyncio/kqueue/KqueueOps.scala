@@ -2,10 +2,12 @@ package asyncio.kqueue
 
 import java.nio.ByteBuffer
 
+import asyncio.BlockingOps
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.IpAddress
+import asyncio.ReadinessOps
 import asyncio.Repeatable
 import asyncio.ResolvedAddress
 import asyncio.Slot
@@ -33,7 +35,10 @@ sealed trait KqueueOp {
 }
 
 /** Builds the ops `KqueueReactor` understands. */
-object KqueueOps extends UnixDatagramOps[KqueueOp] {
+object KqueueOps
+    extends UnixDatagramOps[KqueueOp]
+    with ReadinessOps[KqueueOp]
+    with BlockingOps[KqueueOp] {
   def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
   def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
   def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)
@@ -87,10 +92,10 @@ trait Command extends KqueueOp with Repeatable {
   def registersReads: Boolean = false
 }
 
-/** A command built from a function, for `Ops.whenReady`. */
+/** A command built from a function, for `ReadinessOps.whenReady`. */
 final class WhenReady(val fd: Int, val interest: Interest, body: () => Boolean) extends Command {
   def perform(): Boolean = body()
-  override def tryFirst: Boolean = false // `Ops.whenReady` runs its body only once the descriptor is ready
+  override def tryFirst: Boolean = false // `ReadinessOps.whenReady` runs its body only once the descriptor is ready
 }
 
 /** A one-shot kqueue timer. `id` is the `EVFILT_TIMER` identifier assigned on submission, or -1 before it. */
@@ -213,12 +218,12 @@ abstract class KqueueBlocking extends KqueuePromise {
   }
 }
 
-/** A blocking task built from a function, for `Ops.blocking`. */
+/** A blocking task built from a function, for `BlockingOps.blocking`. */
 final class BlockingTask(body: () => Unit) extends KqueueBlocking {
   def block(): Unit = body()
 }
 
-/** A blocking task whose function's value is written into `into`, for `Ops.blocking`. */
+/** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends KqueueBlocking {
   def block(): Unit = {
     publish(into, body())

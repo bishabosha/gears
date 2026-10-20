@@ -2,10 +2,12 @@ package asyncio.gears
 
 import gears.async.Async
 import gears.async.FactoryVThreadSupport
+import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
 
 import asyncio.Backend
+import asyncio.ReactorBackend
 
 /** What carries a JVM program's futures: always virtual threads, so that suspending one blocks only it. */
 enum Carriers {
@@ -40,8 +42,8 @@ object Carriers {
     }
 }
 
-/** Gears futures over reactors on the JVM: `run` starts a program, and the rest is `ReactorAsync`'s, so that code
-  * calling `perform` is the same here as on Scala Native.
+/** Gears futures on the JVM: `run` starts a program over a backend's reactors, or over none for a backend that has
+  * none, and the rest is `ReactorAsync`'s, so that code calling `perform` is the same here as on Scala Native.
   */
 object ReactorFutures {
   export ReactorAsync.*
@@ -49,23 +51,35 @@ object ReactorFutures {
   /** Runs `program` with one reactor (see the other `run`). */
   def run(using backend: Backend)(program: backend.type => Async.Spawn ?=> Unit): Unit = run(1)(program)
 
-  /** Runs `program` with `workers` reactors of `backend`'s, its futures carried by `carriers` (see `Carriers`; by
-    * default, as `Carriers.default` says). The
-    * program starts as a future on a virtual thread, is given the backend, with its own type, so that it may use the
-    * capabilities that backend has, and performs its ops with `perform`; the reactors run until it finishes, and are
-    * closed afterwards. `policy` says, with `Carriers.Reactors`, which tasks a worker out of work may take from
-    * another. A failure of the program is rethrown.
+  /** Runs `program` as a future on a virtual thread, and gives it the backend, with its own type, so that it may use
+    * the capabilities that backend has; it performs its ops with `perform`. A failure of the program is rethrown.
+    *
+    * A `ReactorBackend` gets `workers` reactors of its own, which run until the program finishes and are closed
+    * afterwards, its futures carried by `carriers` (see `Carriers`; by default, as `Carriers.default` says); `policy`
+    * says, with `Carriers.Reactors`, which tasks a worker out of work may take from another. Any other backend performs
+    * its ops on the futures' own threads, which are gears' virtual threads, and has no use for workers or a policy;
+    * carrying its futures on reactors that are not there is refused.
     */
   def run(workers: Int, policy: TakePolicy = TakePolicy.Affine, carriers: Carriers = Carriers.default)(using
       backend: Backend
   )(program: backend.type => Async.Spawn ?=> Unit): Unit =
-    carriers match {
-      case Carriers.Jdk      => runBesideGears(backend, workers)(program(backend))
-      case Carriers.Reactors => runOnReactors(backend, workers, policy)(program(backend))
+    backend match {
+      case reactors: ReactorBackend =>
+        carriers match {
+          case Carriers.Jdk      => runBesideGears(reactors, workers)(program(backend))
+          case Carriers.Reactors => runOnReactors(reactors, workers, policy)(program(backend))
+        }
+      case _ =>
+        if carriers == Carriers.Reactors then
+          throw new IllegalArgumentException(s"$backend has no reactors to carry futures on: use Carriers.Jdk")
+        given VThreadSupport.type = VThreadSupport
+        given VThreadScheduler.type = VThreadScheduler
+        // `Async.blocking` runs its body on the calling thread, which may be a platform thread; a future's is virtual.
+        Async.blocking(Future(program(backend)).await)
     }
 
   /** Runs `program` on gears' own virtual threads, which find the reactor threads through `OpRouter.ambient`. */
-  private def runBesideGears(backend: Backend, workers: Int)(program: Async.Spawn ?=> Unit): Unit = {
+  private def runBesideGears(backend: ReactorBackend, workers: Int)(program: Async.Spawn ?=> Unit): Unit = {
     val router = new ReactorThreads(backend, workers)
     val previous = OpRouter.ambient.get()
     OpRouter.ambient.set(router) // inherited by the virtual thread that `Async.blocking` runs the program on
@@ -80,7 +94,9 @@ object ReactorFutures {
   }
 
   /** Runs `program` on virtual threads carried by a pool's workers; the calling thread is the first worker. */
-  private def runOnReactors(backend: Backend, workers: Int, policy: TakePolicy)(program: Async.Spawn ?=> Unit): Unit = {
+  private def runOnReactors(backend: ReactorBackend, workers: Int, policy: TakePolicy)(
+      program: Async.Spawn ?=> Unit
+  ): Unit = {
     VirtualCarriers.check()
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
