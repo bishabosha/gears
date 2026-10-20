@@ -461,6 +461,22 @@ Release-fast, conditional yieldpoints, median of 5 runs, µs/op (`kqueue-demo/be
 - The echo server is a plain read/write loop, as gears' is. Writing it as `reads.through(writes)` cost cats-effect a
   further 18% in ping-pong and 34% in `concurrent`.
 - Its run on more workers is the comparison to make once gears has a pool too.
+- **Responsiveness, after cats-effect's own measure.** `starvation` (see the NIO TODO, item 10) is cats-effect's
+  CPU starvation check as a bench scenario: while `concurrent`'s round trips run and a compute fiber per core works in
+  slices, a checker sleeps 1 ms over and over and records how late it wakes. Release-fast, median of 5, the scenario
+  three times long, lateness in µs (`kqueue-demo/bench/results/native-starvation.json`, `-4-workers.json`):
+
+  | | gears, 1 worker | cats-effect, 1 thread | gears, 4 workers | cats-effect, 4 threads |
+  |---|---|---|---|---|
+  | p50 | 109 | 827 | 17 | 1092 |
+  | p99 | 456 | 2917 | 199 | 2916 |
+  | max | 749 | 3741 | 262 | 3424 |
+  | round trip, µs/op | 5.8 | 14.2 | 3.8 | 13.6 |
+
+  The pool wakes the checker four to six times sooner at the tail on one worker and ten times on four, where it
+  spreads the compute, while cats-effect's 1 ms sleep is late by a millisecond at the median; and the pool's worst
+  case sits where its JVM counterpart's p99 does (item 12 there). `build.sh` now names the cross project's Native
+  side as `LocalProject("ceBenchNative")` in its `set`, which a project id alone cannot be.
 
 ## A thread-pooled scheduler
 

@@ -1,0 +1,133 @@
+{
+  "started": "2026-10-20T18:28:16+02:00",
+  "finished": "2026-10-20T18:28:41+02:00",
+  "load_average": {
+    "before": [
+      5.2392578125,
+      6.427734375,
+      7.91845703125
+    ],
+    "after": [
+      5.56396484375,
+      6.408203125,
+      7.86767578125
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "starvation",
+    "--scale",
+    "3",
+    "--workers",
+    "4"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "gears",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/native/kqueuedemo",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "b432ebf59cb0c820ab537194939261f8fab80abf",
+        "subject": "closing a handle ends the ops pending on it, on whichever reactor, as failures, as the JDK does for a thread blocked on a closed channel: NIO tells its reactors of the close, kqueue's handles tell every reactor with the generation that ended, and DescriptorHooks, which let only the closing thread's reactor know, goes",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-20T18:26:04+02:00"
+      },
+      "median": {
+        "starvation-p50": 17.0,
+        "starvation-p99": 198.92,
+        "starvation-max": 262.17,
+        "starvation": 3.82
+      },
+      "samples": {
+        "starvation-p50": [
+          34.54,
+          18.67,
+          15.42,
+          17.0,
+          14.67
+        ],
+        "starvation-p99": [
+          335.46,
+          198.92,
+          171.0,
+          160.17,
+          206.71
+        ],
+        "starvation-max": [
+          446.33,
+          249.88,
+          300.79,
+          243.42,
+          262.17
+        ],
+        "starvation": [
+          3.82,
+          4.46,
+          3.64,
+          3.63,
+          4.44
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/6bb386aa-72d8-404d-bcca-fe741372984a/scratchpad/native/cebench@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "d4ab1f93e90a5ac88c359bd14ff3be13e5839e98",
+        "subject": "share the gears checks across backends: ReactorFuturesSuite's body is FuturesContract in asyncio's tests, run by NIO in every carrier mode and by kqueue on one and four workers",
+        "worktree_changes": true,
+        "worktree_changes_hash": "780ba82b9d5d",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-20T18:27:30+02:00"
+      },
+      "median": {
+        "starvation-p50": 1092.17,
+        "starvation-p99": 2915.83,
+        "starvation-max": 3424.38,
+        "starvation": 13.6
+      },
+      "samples": {
+        "starvation-p50": [
+          1092.17,
+          715.21,
+          1128.71,
+          633.88,
+          1111.33
+        ],
+        "starvation-p99": [
+          3040.17,
+          2915.83,
+          2930.42,
+          2762.46,
+          2869.25
+        ],
+        "starvation-max": [
+          3617.92,
+          3424.38,
+          3392.67,
+          3869.54,
+          3197.42
+        ],
+        "starvation": [
+          14.97,
+          10.73,
+          11.04,
+          13.6,
+          14.56
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

@@ -19,9 +19,11 @@ commit=${1:?usage: build.sh <commit> <output>}
 yieldpoints=${YIELDPOINTS:-conditional}
 project=${PROJECT:-kqueueDemo}
 module=$(echo "$project" | tr '[:upper:]' '[:lower:]')
-# ceBench is a cross project, so its Scala Native side is ceBenchNative, still linked into target/out/.../cebench.
+# ceBench is a cross project, so its Scala Native side is ceBenchNative, still linked into target/out/.../cebench. A
+# `set` expression names a project by its val in the build, which a cross project's side has none of, so by id.
 sbt_project=$project
-[ "$project" = ceBench ] && sbt_project=ceBenchNative
+set_project=$project
+if [ "$project" = ceBench ]; then sbt_project=ceBenchNative; set_project='LocalProject("ceBenchNative")'; fi
 case "$yieldpoints" in
   conditional) trap_based=0 ;;
   trap) trap_based=1 ;;
@@ -66,7 +68,7 @@ grep -q SCALA_NATIVE_NIGHTLY build.sbt || printf '\nThisBuild / resolvers += Res
 echo "building $(git log --oneline -1) in release-fast against the Scala Native nightly, $yieldpoints yieldpoints..." >&2
 log="$worktree/build.log"
 if ! SCALA_NATIVE_NIGHTLY=1 SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=$trap_based sbt -batch \
-  "set $sbt_project/nativeConfig ~= (_.withMode(scala.scalanative.build.Mode.releaseFast)); show $sbt_project/libraryDependencies; $sbt_project/nativeLink" \
+  "set $set_project / nativeConfig ~= (_.withMode(scala.scalanative.build.Mode.releaseFast)); show $sbt_project/libraryDependencies; $sbt_project/nativeLink" \
   >"$log" 2>&1; then
   tail -40 "$log" >&2
   exit 1
