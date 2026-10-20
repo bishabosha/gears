@@ -554,3 +554,28 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
 
     Not done: `submit`'s timers still go to the reactor, so `pingpong-deadline`'s arm and cancel each round trip are
     two hand-offs (33.8 µs over TCP, item 11); and Linux.
+
+13. [ ] **Tried and dropped: the waiters driving one shared selector in turn.** The blend of `VThreadBackend` (no
+    thread of the backend's own, so nothing for the OS to keep from a core) and `Carriers.Jdk` (one `select` for all
+    under load) that public API allows: ops the gate would hand to a reactor, or all of them, instead waited on a
+    selector the waiters share, whichever of them arriving while no one selects becoming the leader, which selects
+    for all, wakes the owners of the ready keys, and hands the role to a parked follower once its own op is ready;
+    cancelled with `wakeup` or an unpark, the key's interest kept as what its waiters want, under their lock (a
+    read-modify-write of `interestOps` from the leader and a waiter arming the other direction lost the latter, and
+    deadlocked the echo check: everyone waiting, no one sending). Correct in every mode (the gears suites pass with
+    it off, for the overflow, and for all), and slower in every one, median of 3, µs/op, lateness in µs, `starvation`
+    three times long:
+
+    | mode | concurrent | concurrent-offload | pipelined | starvation | p99 | max |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | off (item 12) | 5.37 | 6.45 | 1.22 | 8.4 | 2117 | 14086 |
+    | overflow | 13.2 | 16.9 | 1.63 | 31.9 | 4798 | 14194 |
+    | all | 14.7 | 17.0 | 1.35 | 45.3 | 3648 | 10808 |
+
+    Each wait costs more hops than the hand-off it replaces: a follower arming while the leader selects must wake it
+    (a write, and the poller's hop to a virtual thread), the leader selects again (two `kevent`s), and the follower
+    is woken by one hop more; and the leader is woken for every arm, so nothing is batched. Batching the arms and
+    waking the leader only when it is blocked would be the reactor's thread again, as a virtual thread, which item 11
+    measured as worse than a platform one. So the blend stays as items 11 and 12 left it: a wait on the handle's own
+    selector while few ops wait, a timer parked on the caller always, the reactor beyond. The code was removed.
+
