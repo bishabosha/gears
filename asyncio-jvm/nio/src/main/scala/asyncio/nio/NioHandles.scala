@@ -23,6 +23,7 @@ import java.nio.file.StandardOpenOption
 import java.util.concurrent.atomic.AtomicReferenceArray
 
 import asyncio.IpAddress
+import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixStreamHandles
 
@@ -93,7 +94,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles {
+object NioHandles extends UnixStreamHandles with ReadinessHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128

@@ -5,7 +5,7 @@ import gears.async.Cancellable
 import java.util.concurrent.ConcurrentLinkedQueue
 import scala.concurrent.duration.FiniteDuration
 
-import asyncio.Backend
+import asyncio.ReactorBackend
 
 /** The thread of a pool's worker other than the first, which runs on the thread that started the pool. It holds its
   * worker, so that finding the worker running the caller takes no thread-local lookup beyond the current thread.
@@ -33,7 +33,8 @@ private[gears] final class ReactorWorkerThread(
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
   */
-class ReactorPool private[gears] (val backend: Backend, size: Int, val policy: TakePolicy) extends ReactorScheduler {
+class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val policy: TakePolicy)
+    extends ReactorScheduler {
   require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
 
   /** The workers, by index; filled in as each starts on its own thread. */
@@ -146,10 +147,10 @@ object ReactorPool {
     * pool. `newPool` builds the pool, for a platform whose workers are found another way.
     */
   def run(
-      backend: Backend,
+      backend: ReactorBackend,
       workers: Int,
       policy: TakePolicy,
-      newPool: (Backend, Int, TakePolicy) => ReactorPool = new ReactorPool(_, _, _),
+      newPool: (ReactorBackend, Int, TakePolicy) => ReactorPool = new ReactorPool(_, _, _),
       stopped: ReactorPool => Unit = _ => ()
   )(drive: ReactorPool => Unit): Unit = {
     val pool = newPool(backend, workers, policy)

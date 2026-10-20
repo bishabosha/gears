@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
 import asyncio.FifoBackend
+import asyncio.ReadinessBackend
 import asyncio.Interest
 import asyncio.testkit.BufferArena
 import DemoIO.drainTo
@@ -12,7 +13,7 @@ import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {
-  def run(fifo: String)(using FifoBackend): Unit = {
+  def run(fifo: String)(using FifoBackend & ReadinessBackend): Unit = {
     BufferArena.scoped { arena =>
       val chunk = arena.allocate(1024)
       val contents = new ByteArrayOutputStream()

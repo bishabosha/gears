@@ -51,17 +51,17 @@ class ReactorSuite extends FunSuite {
   test("an op built by a backend can be submitted to any reactor it opens, and not to another backend's") {
     assertEquals(
       compileErrors(
-        "def move(b: Backend): Unit = { val t = b.ops.timer(1); b.open().submit(t, _ => ()); b.open().submit(t, _ => ()) }"
+        "def move(b: ReactorBackend): Unit = { val t = b.ops.timer(1); b.open().submit(t, _ => ()); b.open().submit(t, _ => ()) }"
       ),
       ""
     )
-    val errors = compileErrors("def cross(a: Backend, b: Backend): Unit = b.open().submit(a.ops.timer(1), _ => ())")
+    val errors = compileErrors("def cross(a: ReactorBackend, b: ReactorBackend): Unit = b.open().submit(a.ops.timer(1), _ => ())")
     assert(errors.contains("a.Op"), errors)
   }
 
   test("a backend is a factory for its reactors") {
     val reactor = new ClosingReactor
-    given Backend = new Backend {
+    given ReactorBackend = new ReactorBackend {
       type Op = AnyRef
       def ops: Ops[Op] = throw new UnsupportedOperationException
       def handles: Handles = throw new UnsupportedOperationException
@@ -79,7 +79,19 @@ class ReactorSuite extends FunSuite {
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
-    assert(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.blocking(() => ())").nonEmpty)
+    assert(compileErrors("def repeat(b: BlockingBackend): Repeatable = b.ops.blocking(() => ())").nonEmpty)
+  }
+
+  test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {
+    assert(compileErrors("def ready(b: Backend)(h: Int) = b.ops.whenReady(h, Interest.Read)(() => true)").nonEmpty)
+    assert(compileErrors("def now(b: Backend)(h: Int) = b.handles.readNow(h, null)").nonEmpty)
+    assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
+    assertEquals(
+      compileErrors("def ready(b: ReadinessBackend)(h: Int) = b.ops.whenReady(h, Interest.Read)(() => true)"),
+      ""
+    )
+    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: Int) = b.handles.readNow(h, null)"), "")
+    assertEquals(compileErrors("def block(b: BlockingBackend) = b.ops.blocking(() => ())"), "")
   }
 
   test("a slot is empty until an implementation writes to it") {

@@ -11,11 +11,12 @@ import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
 import asyncio.AddressFamily
+import asyncio.BlockingOps
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
 import asyncio.IpAddress
-import asyncio.Ops
+import asyncio.ReadinessOps
 import asyncio.Repeatable
 import asyncio.ResolvedAddress
 import asyncio.Slot
@@ -41,7 +42,7 @@ sealed trait NioOp {
 }
 
 /** Builds the ops `NioReactor` understands. */
-object NioOps extends Ops[NioOp] {
+object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
   def read(handle: Int, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Int, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Int, into: HandleSlot): Accept = new Accept(handle, into)
@@ -163,7 +164,7 @@ final class Send(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends
   }
 }
 
-/** A command built from a function, for `Ops.whenReady`: it runs only once the handle is ready. */
+/** A command built from a function, for `ReadinessOps.whenReady`: it runs only once the handle is ready. */
 final class WhenReady(val handle: Int, val interest: Interest, body: () => Boolean) extends Command {
   def perform(): Boolean = body()
   override def tryFirst: Boolean = false
@@ -244,7 +245,7 @@ abstract class NioBlocking extends NioPromise {
       }
     }
 
-  /** Runs this op on the calling thread instead of the blocker pool (see `Backend.blockingHere`). */
+  /** Runs this op on the calling thread instead of the blocker pool (see `ReactorBackend.blockingHere`). */
   private[nio] def here(): asyncio.BlockingHere = {
     if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
     submitted = true
@@ -324,12 +325,12 @@ private[nio] object NioBlocking {
   private val count = new java.util.concurrent.atomic.AtomicInteger
 }
 
-/** A blocking task built from a function, for `Ops.blocking`. */
+/** A blocking task built from a function, for `BlockingOps.blocking`. */
 final class BlockingTask(body: () => Unit) extends NioBlocking {
   def block(): Unit = body()
 }
 
-/** A blocking task whose function's value is written into `into`, for `Ops.blocking`. */
+/** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NioBlocking {
   def block(): Unit = publish(into, body())
 }

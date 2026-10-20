@@ -6,11 +6,15 @@
 
 ## Capabilities, in the types
 
-Every backend has IP sockets, pipes and regular files (`Backend`, `Handles`, `Ops`). What only some have is a
-capability mixed into the backend, with its own handles and ops, so asking a backend for one it lacks fails to compile:
+Every backend has `ops`, `handles` and `perform`, over IP sockets, pipes and regular files (`Backend`, `Handles`,
+`Ops`). What only some have is a capability mixed into the backend, with its own handles and ops, so asking a backend
+for one it lacks fails to compile. Running ops on reactors is one of them: a backend may instead perform each op itself.
 
 | Capability | Traits | kqueue | NIO |
 | --- | --- | --- | --- |
+| Reactors (`open`, `submit`, attachments) | `ReactorBackend` | yes | yes |
+| Readiness and waitless use (`whenReady`, `readNow`, `writeNow`) | `ReadinessBackend`, `ReadinessOps`, `ReadinessHandles` | yes | yes |
+| Blocking ops (`blocking`) | `BlockingBackend`, `BlockingOps` | yes | yes |
 | Unix stream sockets | `UnixStreamBackend`, `UnixStreamHandles` | yes | yes (`UnixDomainSocketAddress`, JDK 16+) |
 | Unix datagram sockets | `UnixDatagramBackend`, `UnixDatagramHandles`, `UnixDatagramOps` | yes | no: the JDK has no Unix datagram channels |
 | FIFOs | `FifoBackend`, `FifoHandles` (`openFifo`) | yes | no: the JDK can only block on one |

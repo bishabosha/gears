@@ -15,25 +15,32 @@ import scala.util.Try
 import asyncio.Backend
 import asyncio.Completion
 import asyncio.Reactor
+import asyncio.ReactorBackend
 
-/** What gears futures do with a program's reactors: perform ops, submit them, and yield, the same on every platform.
-  * Each platform's `ReactorFutures.run` starts the program and its reactors: on a `ReactorPool`, whose workers run both
-  * the futures and the reactors, so an op goes to the reactor of the worker running the caller; or, on the JVM by
-  * default, beside gears' own scheduler, so that an op is handed to a reactor's thread (see `OpRouter`).
+/** What gears futures do with a program's backend: perform ops, on any backend, and, on a reactor backend, submit
+  * them; and yield. The same on every platform. For a reactor backend, each platform's `ReactorFutures.run` starts the
+  * program and its reactors: on a `ReactorPool`, whose workers run both the futures and the reactors, so an op goes to
+  * the reactor of the worker running the caller; or, on the JVM by default, beside gears' own scheduler, so that an op
+  * is handed to a reactor's thread (see `OpRouter`).
   */
 object ReactorAsync {
+
+  /** Performs `op`, which must have been built by `b.ops`, and suspends the caller until it is done, as `b.perform`
+    * says. To run an op alongside other work, call this inside a `Future`.
+    */
+  def perform(b: Backend, op: b.Op)(using Async): Unit = b.perform(op)
 
   /** Submits `op`, which must have been built by `b.ops`, to a reactor of the caller's program, and suspends the
     * caller until the reactor finishes with it: it returns when the op completes, throws its failure, or throws
     * `CancellationException` when it is cancelled. It must be called from a program that `ReactorFutures.run` started
     * with `b`. `b` only says what the op is; which reactor runs it depends on where the caller runs: on a pool's worker,
     * that worker's, and otherwise one picked by the caller's thread. A repeatable op may go to a different reactor each
-    * time. To run an op alongside other work, call this inside a `Future`.
+    * time. This is `ReactorBackend.perform`.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def perform(b: Backend, op: b.Op)(using ac: Async): Unit =
+  def performOnReactor(b: ReactorBackend, op: b.Op)(using ac: Async): Unit =
     ac.scheduler match {
       // A pool's own scheduler, as on Scala Native: matched on the class, the common case, ahead of the general one.
       case pool: ReactorPool if pool.backend eq b =>
@@ -48,7 +55,7 @@ object ReactorAsync {
     }
 
   /** `perform` on the worker running the caller: an op the reactor finishes at once returns without suspending. */
-  private def performHere(b: Backend, op: b.Op, worker: ReactorWorker)(using ac: Async): Unit = {
+  private def performHere(b: ReactorBackend, op: b.Op, worker: ReactorWorker)(using ac: Async): Unit = {
     val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
     if ac.group.isCancelled then throw new CancellationException()
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
@@ -95,7 +102,7 @@ object ReactorAsync {
   /** `perform` from a caller on no worker: the op is handed to `driver`'s thread, which submits it, and the caller
     * suspends until its completion, which runs there, resumes it.
     */
-  private def performElsewhere(b: Backend, op: b.Op, driver: ReactorDriver)(using ac: Async): Unit = {
+  private def performElsewhere(b: ReactorBackend, op: b.Op, driver: ReactorDriver)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
     val waiter = b.attachment(op) match {
       case reused: RemoteWaiter if !reused.inUse => reused
@@ -140,7 +147,7 @@ object ReactorAsync {
     * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
     * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
     */
-  def submit(b: Backend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission = {
+  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission = {
     val router = ac.scheduler match {
       case pool: ReactorPool if pool.backend eq b => pool // the common case, matched on the class
       case _                                      => routerFor(b)
@@ -188,7 +195,7 @@ object ReactorAsync {
   /** The reactors of the caller's program, which must have been started with `b`: through the caller's scheduler, if
     * it is a pool, or else those the runner set up beside gears' own scheduler.
     */
-  private def routerFor(b: Backend)(using ac: Async): OpRouter = {
+  private def routerFor(b: ReactorBackend)(using ac: Async): OpRouter = {
     val router = ac.scheduler match {
       case router: OpRouter => router
       case _                   => OpRouter.ambient.get()
@@ -322,7 +329,9 @@ object ReactorAsync {
     /** Whether a `perform` is using it. On the thread performing the op only. */
     var inUse = false
 
-    /** Submissions in a row that the backend finished on the caller's thread (`Backend.tryNow`). Caller's thread only. */
+    /** Submissions in a row that the backend finished on the caller's thread (`ReactorBackend.tryNow`). Caller's
+      * thread only.
+      */
     var finishedHere = 0
 
     @volatile private var driver = first

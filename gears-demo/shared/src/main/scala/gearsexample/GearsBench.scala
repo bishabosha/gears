@@ -11,6 +11,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
 import asyncio.Backend
+import asyncio.BlockingBackend
+import asyncio.ReactorBackend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.Completion
@@ -31,9 +33,16 @@ object GearsBench {
   inline val MessageSize = 64
 
   /** A scenario: its name, what it stresses, how many operations it performs at scale 1, and the client code that
-    * performs `count` of them against the echo server at `address`.
+    * performs `count` of them against the echo server at `address`; and whether a backend has what it needs, beyond
+    * Unix stream sockets. A backend without it skips the scenario.
     */
-  final case class Scenario(name: String, stresses: String, baseCount: Int, body: Client)
+  final case class Scenario(
+      name: String,
+      stresses: String,
+      baseCount: Int,
+      body: Client,
+      runsOn: Backend => Boolean = _ => true
+  )
 
   trait Client {
     def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit
@@ -65,7 +74,8 @@ object GearsBench {
       new Client {
         def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = true)
-      }
+      },
+      _.isInstanceOf[ReactorBackend]
     ),
     Scenario(
       "concurrent",
@@ -129,13 +139,15 @@ object GearsBench {
       100_000,
       new Client {
         def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+          val b = blocking(r)
           var i = 0
           while i < count do {
-            perform(r, r.ops.blocking(() => ()))
+            perform(b, b.ops.blocking(() => ()))
             i += 1
           }
         }
-      }
+      },
+      _.isInstanceOf[BlockingBackend]
     ),
     Scenario(
       "blocking-io",
@@ -144,7 +156,8 @@ object GearsBench {
       new Client {
         def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, blockingFirst = true)
-      }
+      },
+      _.isInstanceOf[BlockingBackend]
     ),
     Scenario(
       "timers",
@@ -152,8 +165,9 @@ object GearsBench {
       200_000,
       new Client {
         def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
-          timerStress(r, count)
-      }
+          timerStress(reactors(r), count)
+      },
+      _.isInstanceOf[ReactorBackend]
     ),
     Scenario(
       "fairness",
@@ -177,13 +191,25 @@ object GearsBench {
     )
   )
 
+  /** `r` as the reactor backend a scenario that runs only on one needs. */
+  private def reactors(r: Backend): ReactorBackend = r match {
+    case reactors: ReactorBackend => reactors
+    case _                        => throw new IllegalArgumentException(s"$r has no reactors")
+  }
+
+  /** `r` as the backend with blocking ops a scenario that runs only on one needs. */
+  private def blocking(r: Backend): BlockingBackend = r match {
+    case blocking: BlockingBackend => blocking
+    case _                         => throw new IllegalArgumentException(s"$r has no blocking ops")
+  }
+
   /** How many timers the `timers` scenario has pending at once. */
   inline val TimerBatch = 1000
 
   /** Arms timers `TimerBatch` at a time: half for 0 ms, which fire, and half for a minute, which are cancelled once the
     * others have fired. Each timer, armed and then fired or cancelled, is one operation.
     */
-  private def timerStress(r: UnixStreamBackend, count: Int)(using Async): Unit = {
+  private def timerStress(r: ReactorBackend, count: Int)(using Async): Unit = {
     var done = 0
     while done < count do {
       val batch = math.min(TimerBatch, count - done)
@@ -247,7 +273,7 @@ object GearsBench {
     report("mixed-compute", slices, seconds)
   }
 
-  /** Connects to `address`, runs `body` on the connection, and closes it. */
+  /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */
   private def withConnection(r: UnixStreamBackend, address: StreamAddress)(body: Int => Unit)(using Async): Unit = {
     val fd = Sockets.connect(r, address)
     try {
@@ -281,13 +307,13 @@ object GearsBench {
         val buf = arena.allocate(MessageSize)
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
-        var timer = r.ops.timer(60_000)
+        val timeout = if deadline then new Deadline(reactors(r)) else null
+        val blocker = if blockingFirst then blocking(r) else null
         var worked = 0L
         var i = 0
         while i < count do {
-          if blockingFirst then perform(r, r.ops.blocking(() => ()))
-          val pending =
-            if deadline then submit(r, timer, _ => throw new IOException("A round trip timed out")) else null
+          if blocker != null then perform(blocker, blocker.ops.blocking(() => ()))
+          if timeout != null then timeout.arm()
           buf.clear()
           while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
           buf.clear()
@@ -296,9 +322,7 @@ object GearsBench {
             perform(r, if freshOps then r.ops.read(fd, buf) else read)
             if buf.position() == before then throw new IOException("The server closed the connection")
           }
-          // Cancelled at once if this task is still on the worker the timer went to; otherwise the cancel runs there
-          // soon, and the timer cannot be submitted again before it has, so the next round trip gets a new one.
-          if pending != null && !pending.cancel() then timer = r.ops.timer(60_000)
+          if timeout != null then timeout.disarm()
           work match {
             case Work.NoWork  => ()
             case Work.Inline  => worked += computeSlice(i, WorkSteps)
@@ -309,6 +333,19 @@ object GearsBench {
         if worked == 1L then computeSink = worked // only so that the work cannot be optimised away
       } finally arena.close()
     }
+
+  /** A reactor timer armed before each round trip and cancelled once the echo is back, like a timeout. */
+  private final class Deadline(r: ReactorBackend)(using Async) {
+    private var timer = r.ops.timer(60_000)
+    private var pending: Submission | Null = null
+
+    def arm(): Unit = pending = submit(r, timer, _ => throw new IOException("A round trip timed out"))
+
+    /** Cancelled at once if this task is still on the worker the timer went to; otherwise the cancel runs there soon,
+      * and the timer cannot be submitted again before it has, so the next round trip gets a new one.
+      */
+    def disarm(): Unit = if !pending.nn.cancel() then timer = r.ops.timer(60_000)
+  }
 
   /** Writes `count` messages, each as its own write, from one future while reading the echoes in another. */
   private def pipelined(r: UnixStreamBackend, address: StreamAddress, count: Int)(using Async.Spawn): Unit =
@@ -450,6 +487,10 @@ object GearsBench {
               )
             )
         )
+    val backend = summon[UnixStreamBackend]
+    for scenario <- selected if !scenario.runsOn(backend) do
+      System.err.println(s"skipping ${scenario.name}: $backend does not have what it needs")
+    val runnable = selected.filter(_.runsOn(backend))
     address match {
       case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))
       case _                  => ()
@@ -460,9 +501,9 @@ object GearsBench {
         // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
         // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
         if warmup then
-          for scenario <- selected do scenario.body(r, address, math.max(1, (scenario.baseCount * scale / 5).toInt), connections)
+          for scenario <- runnable do scenario.body(r, address, math.max(1, (scenario.baseCount * scale / 5).toInt), connections)
         println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s")
-        for scenario <- selected do {
+        for scenario <- runnable do {
           val count = math.max(1, (scenario.baseCount * scale).toInt)
           val start = System.nanoTime()
           scenario.body(r, address, count, connections)

@@ -5,7 +5,7 @@ import java.nio.file.Files
 
 /** What a backend with FIFOs must do (see `ReactorContract`). */
 trait FifoContract extends ReactorContract {
-  val backend: FifoBackend
+  val backend: ReactorBackend & ReadinessBackend & BlockingBackend & FifoBackend
 
   test("a FIFO carries what its writer writes, then ends when the writer closes") {
     val dir = tempDir()
