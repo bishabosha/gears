@@ -588,6 +588,45 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     that much in common with the first was not worth that. Its checks that NIO's suite lacked are in
     `ReactorFuturesSuite`: a read cancelled on a socket leaving the connection usable, `whenReady`, a refused
     connection and a one-shot op performed twice in all four carrier modes; closing a handle waking its waiter under
-    `Carriers.Jdk` only, where the waiter is on the handle's own selector, since an op pending on a reactor stays
-    pending, a handle with ops pending being the caller's to keep open (`Reactor.close`). The bench's
+    `Carriers.Jdk` only at first, where the waiter is on the handle's own selector, since an op pending on a reactor
+    stayed pending (item 15 ended that). The bench's
     `-Dasyncio.backend` switch and the `vthread-backend` build went with it; its results stay cited in items 7 to 13.
+
+15. [x] **Closing a handle ends the ops pending on it.** Found by item 14's check: `Selectable.close` woke the reactors
+    the channel was registered with, so that their selectors dropped the cancelled key and released the descriptor,
+    but the command attached to that key was never completed, and a `perform` on it in `Carriers.Reactors` waited
+    for ever; kqueue the same one step earlier, its pending command kept by descriptor number. `Reactor.close` had
+    only ever said that handles belong to the caller. Now `Handles.close` says what the JDK does for a thread blocked
+    on a channel that is closed: the ops pending on the handle, on whichever reactor, fail with an `IOException`,
+    their completions getting `onFailure` from that reactor's loop, a `perform` waiting on one throwing it.
+    - **NIO:** `Selectable.close` hands each registered reactor its entry (`NioReactor.closed`, a queue like the
+      resolved promises', with the wake-up), and the loop fails the entry's pending commands with
+      `ClosedChannelException`. They are found through the reactor's own map from entry to waiting commands, not the
+      selector's key: the select that the wake-up ends deregisters a closed channel's key before the loop gets there,
+      which the first version found out on a reactor blocked on another thread.
+    - **kqueue:** `KqueueHandles.close` ends the descriptor's generation in `DescriptorTable` while the number is
+      still its, closes, then tells every open reactor (`KqueueReactor.descriptorClosed`, a registry kept by `open`
+      and `close`), with the generation that ended: a slot that knows a later generation knows a reused number and is
+      left alone. The reactor queues the close, fails the slot's pending commands as commands that failed when
+      submitted, so their completions run from the next turn and never inside a submit, and forgets the slot; and
+      `currentSlot`, meeting a changed generation with commands still pending, does the same, which was the orphaning
+      when a number was reused before the close was seen. Every close in `KqueueHandles` goes through `close`, the
+      error paths after an open included, so generations never go stale.
+    - **Untangled on the way:** `DescriptorHooks` is gone, and with it the rule that a descriptor had to be closed on
+      its reactor's thread. It was a thread-local list of listeners that `PosixSockets.close` called, so that the
+      closing thread's reactor, and only that one, forgot the descriptor: the system-call layer knew about reactors,
+      and a close elsewhere was seen only as a generation change at the next submit. Now `PosixSockets.close` is a
+      close, `DescriptorTable` is written by `KqueueHandles.close` alone, and the reactors are told by it, from any
+      thread, one way.
+    - **Checks:** two in `ReactorContract`, on the test's own reactor and on one blocked on another thread, both
+      backends; the gears check back in all four carrier modes; and the cancel demo, which had encoded the old
+      semantics ("cancelling after close"), now shows the failure instead.
+
+16. [ ] **Open: an intermittent hang of the pipe check on four workers.** Once, in a full run of the gears suite on the
+    day of item 15, `ReactorCarriersOnFourSuite`'s "two futures stream bytes through a pipe" never finished: the
+    writer's and the reader's virtual threads both parked in `performHere` waiting for their ops, every reactor idle in
+    `select`, one of the two inside `UnlinkedAwaitListener.run`, that is, being resumed. Both waiting on one pipe at
+    once means a completion or a resume was lost between workers. Run alone, the suite passed three times out of
+    three afterwards, and every other full run of the day passed. Not reproduced, so not understood; the pool's resume
+    path across workers is where the dump points. Thread dump kept with the day's scratch files.
+

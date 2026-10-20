@@ -73,6 +73,12 @@ final class NioReactor private (selector: Selector) extends Reactor {
   // Turns in a row that delivered completions without selecting (see `KqueueReactor`).
   private var turnsWithoutPoll = 0
 
+  // Handles close on other threads; their entries queue here and wake the selector, so that the commands pending on
+  // them fail (see `closed`). The waiting commands are found through the reactor's own map, not the selector's key:
+  // the select the wake-up ends deregisters a closed channel's key before the loop gets here. Loop thread only.
+  private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Selectable]()
+  private val waitingByEntry = new java.util.IdentityHashMap[Selectable, Waiting]()
+
   // Promises resolve on other threads; they queue here and wake the selector.
   private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioPromise]()
 
@@ -208,7 +214,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
     else {
       var key = s.channel.keyFor(selector)
       if key == null then {
-        key = s.channel.register(selector, 0, new Waiting)
+        val waiting = new Waiting
+        key = s.channel.register(selector, 0, waiting)
+        waitingByEntry.put(s, waiting)
         s.registered(this)
       }
       command.key = key
@@ -300,6 +308,42 @@ final class NioReactor private (selector: Selector) extends Reactor {
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
+  /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from
+    * the loop, with `ClosedChannelException`, as `Handles.close` says.
+    */
+  private[nio] def closed(entry: Selectable): Unit =
+    if !closed then {
+      closedQueue.add(entry)
+      if !(Thread.currentThread() eq loopThread) then wakeup()
+    }
+
+  /** Fails the commands pending on the handles closed since the last turn. Their keys, cancelled by the close, are
+    * dropped by the next select.
+    */
+  private def deliverClosed(): Boolean = {
+    var any = false
+    var entry = closedQueue.poll()
+    while entry != null do {
+      val waiting = waitingByEntry.remove(entry)
+      if waiting != null then {
+        val read = waiting.read
+        val write = waiting.write
+        waiting.read = null
+        waiting.write = null
+        if read != null then {
+          any = true
+          fail(read, new java.nio.channels.ClosedChannelException())
+        }
+        if write != null then {
+          any = true
+          fail(write, new java.nio.channels.ClosedChannelException())
+        }
+      }
+      entry = closedQueue.poll()
+    }
+    any
+  }
+
   def wakeup(): Unit = {
     wakeRequested = true
     if parked && wakePending.compareAndSet(false, true) then
@@ -371,6 +415,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
       }
       cancellingBlockers.clear()
       resolvedQueue.clear()
+      closedQueue.clear()
+      waitingByEntry.clear()
       wakeLock.synchronized {
         closed = true
         selector.close() // deregisters every channel; the channels stay open
@@ -461,7 +507,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     * `NioReactor.PollEvery` turns.
     */
   def runOnce(block: Boolean): Unit = {
-    val delivered = deliverReady() | deliverResolved() | deliverAgain()
+    val delivered = deliverReady() | deliverResolved() | deliverAgain() | deliverClosed()
     updateInterest()
     val select =
       if !delivered then {
@@ -481,7 +527,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
       else {
         parked = true
         try
-          if wakeRequested || !resolvedQueue.isEmpty then selector.selectNow(collect)
+          if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty then selector.selectNow(collect)
           else if timers.isEmpty then selector.select(collect)
           else {
             // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.

@@ -15,6 +15,7 @@ import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
+import asyncio.kqueue.KqueueHandles
 import KQueueExampleIO.*
 
 object KQueueExampleServerSocket {
@@ -126,7 +127,7 @@ object KQueueExampleServerSocket {
 
     def close(): Unit =
       zone.close()
-      PosixSockets.close(fd)
+      KqueueHandles.close(fd)
       println(s"Closed client socket: ${fd}")
   }
 

@@ -13,6 +13,7 @@ import asyncio.unsafe.Bracket.FileOperation
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixErr.cError
 import asyncio.unsafe.PosixSockets
+import asyncio.kqueue.KqueueHandles
 
 /** Building blocks shared by the kqueue demos: the stream framing (from `gearsexample.DemoIO`), non-blocking I/O that
   * reports would-block and EOF as values instead of exceptions, and datagram peers.
@@ -47,8 +48,8 @@ object KQueueExampleIO {
       PosixSockets.setNonBlocking(writeFd)
       use(readFd, writeFd)
     } finally {
-      PosixSockets.close(readFd)
-      PosixSockets.close(writeFd)
+      KqueueHandles.close(readFd)
+      KqueueHandles.close(writeFd)
     }
   }
 
@@ -63,7 +64,7 @@ object KQueueExampleIO {
     Bracket.fileResource(fd)(closeFile)(use)
   }
 
-  private def closeFile(fd: Int): Unit = PosixSockets.close(fd) // which tells the reactor the descriptor is gone
+  private def closeFile(fd: Int): Unit = KqueueHandles.close(fd) // which tells the reactor the descriptor is gone
 
   // Datagrams
 

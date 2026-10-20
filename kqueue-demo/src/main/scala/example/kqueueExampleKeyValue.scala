@@ -18,6 +18,7 @@ import asyncio.kqueue.WriteFromBuffer
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
+import asyncio.kqueue.KqueueHandles
 import KQueueExampleIO.*
 
 /** A pipelined key-value service over the length-framed stream protocol, in the style of a Redis client and server. A
@@ -128,7 +129,7 @@ object KQueueExampleKeyValue {
       r.cancel(readCommands)
       r.cancel(writeReplies)
       zone.close()
-      PosixSockets.close(fd)
+      KqueueHandles.close(fd)
       println(s"Closed client socket: $fd")
     }
   }

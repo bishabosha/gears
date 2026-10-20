@@ -116,7 +116,8 @@ object GearsCancel {
             } catch case _: IllegalStateException => true
           println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
 
-          // Closing a handle may remove what the reactor watches, so a read still pending on it must stay cancellable.
+          // Closing a handle fails the ops pending on it, on whichever reactor (`Handles.close`), so a future waiting on
+          // one is rejected by that failure, with nothing left for a cancel to do.
           val (orphanRead, orphanWrite) = r.handles.pipe()
           val reading = Promise[Unit]()
           val orphan = Future {
@@ -130,9 +131,9 @@ object GearsCancel {
           perform(r, r.ops.timer(20))
           r.handles.close(orphanRead)
           r.handles.close(orphanWrite)
-          orphan.cancel()
-          orphan.awaitResult
-          println(s"cancelling after close: ${isCancelled(orphan)}")
+          val closedFailed = orphan.awaitResult.failed.toOption.exists(_.isInstanceOf[java.io.IOException])
+          orphan.cancel() // nothing left to cancel
+          println(s"closing fails a pending read: $closedFailed")
 
           stubbornTask.awaitResult
           println(s"a running blocking task had stopped before onCancel: ${stubbornFinished.get()}")

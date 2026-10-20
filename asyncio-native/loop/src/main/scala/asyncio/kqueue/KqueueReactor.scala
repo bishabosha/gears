@@ -8,7 +8,6 @@ import asyncio.Completion
 import asyncio.Interest
 import asyncio.Reactor
 import asyncio.Repeatable
-import asyncio.unsafe.DescriptorHooks
 import asyncio.unsafe.DescriptorTable
 import asyncio.unsafe.KqueueLoop
 import asyncio.unsafe.KqueueLoop.Event
@@ -18,8 +17,9 @@ import asyncio.unsafe.KqueueLoop.Event
   * otherwise, or when it would block, it waits for readiness and is performed on the loop thread. The reactor's own
   * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
   * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
-  * be closed through `PosixSockets.close` (as `KqueueHandles.close` does) on the reactor's thread, which tells the
-  * reactor to forget them before their numbers are reused; timers are kept in a heap on the loop thread, by deadline,
+  * be closed through `KqueueHandles.close`, from any thread, which tells every reactor (`closed`): the commands
+  * pending on the descriptor fail, and its slot is forgotten before the number is reused; timers are kept in a heap on
+  * the loop thread, by deadline,
   * and bound how long a poll blocks, so setting or cancelling one costs no syscall; `wakeup`, and blocking tasks
   * finishing on other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll
   * returns up to `maxEvents` events.
@@ -118,11 +118,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Distinguishes this reactor from the others sharing descriptors with it, in `DescriptorTable`. */
   private val id = KqueueReactor.nextId.incrementAndGet()
 
-  // Forgets a descriptor closed on this thread: kqueue drops its filters, and its number may be reused. A close on
-  // another thread shows as a new generation instead (see `currentSlot`).
-  private val forgetClosed: Int => Unit = fd =>
-    if fd >= 0 && fd < slots.length && slots(fd) != null then slots(fd).nn.forget()
-  DescriptorHooks.onClose(forgetClosed)
+  // Descriptors close on any thread (`KqueueHandles.close`): each close queues here, as the number with the generation
+  // that ended, and wakes a blocked poll, so that the commands pending on it fail (see `closed`).
+  private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
   private val timers = new TimerHeap
@@ -291,6 +289,55 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     any
   }
 
+  /** Called from any thread when descriptor `fd`, whose generation in `DescriptorTable` was `generation`, is closed:
+    * the commands pending on it here fail, from the loop, as `Handles.close` says, and its slot forgets it. A slot
+    * that knows a later generation knows a reused number, and is left alone.
+    */
+  private[kqueue] def closed(fd: Int, generation: Int): Unit =
+    if !closed then {
+      closedQueue.add((generation.toLong << 32) | (fd.toLong & 0xffffffffL))
+      if !(Thread.currentThread() eq loopThread) then wakeup()
+    }
+
+  /** Fails the commands pending on the descriptors closed since the last turn, where the slot still knows that
+    * descriptor and not a reused number. Returns whether any were.
+    */
+  private def deliverClosed(): Boolean = {
+    var any = false
+    var packed = closedQueue.poll()
+    while packed != null do {
+      val fd = (packed.longValue & 0xffffffffL).toInt
+      val generation = (packed.longValue >>> 32).toInt
+      if fd >= 0 && fd < slots.length then {
+        val slot = slots(fd)
+        if slot != null && slot.nn.generation == generation then any |= failClosed(slot.nn, fd)
+      }
+      packed = closedQueue.poll()
+    }
+    any
+  }
+
+  /** Queues the failure of the commands pending in `slot`, whose descriptor was closed, as commands that failed when
+    * submitted, so their completions run from the next turn and never inside a submit; and forgets the descriptor.
+    * Returns whether there were any.
+    */
+  private def failClosed(slot: Slot, fd: Int): Boolean = {
+    val read = slot.read
+    val write = slot.write
+    slot.read = null
+    slot.write = null
+    slot.forget()
+    if read != null then {
+      read.atOnceFailure = new IOException(s"Descriptor $fd was closed")
+      ready.add(read)
+    }
+    if write != null then {
+      write.atOnceFailure = new IOException(s"Descriptor $fd was closed")
+      ready.add(write)
+    }
+    read != null || write != null
+  }
+
   /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
     * loop is not polling, so queueing is enough.
     */
@@ -373,11 +420,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       }
       cancellingBlockers.clear()
       resolvedQueue.clear()
+      closedQueue.clear()
       wakeLock.synchronized {
         closed = true
         KqueueLoop.close(kq) // Its filters, timers, and wake event go with it.
         KqueueLoop.freeQueue(events)
-        DescriptorHooks.removeOnClose(forgetClosed)
+        KqueueReactor.all.remove(this)
       }
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
@@ -464,7 +512,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     val entry = DescriptorTable.get(fd)
     val generation = DescriptorTable.generation(entry)
     if generation != slot.generation then {
-      slot.forget()
+      // Its number was closed, and reused, since: whatever is still pending belonged to the closed descriptor.
+      failClosed(slot, fd)
       slot.generation = generation
     }
     slot.alwaysTry = DescriptorTable.alwaysTry(entry)
@@ -577,7 +626,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private val events = KqueueLoop.allocateQueue(maxEvents)
 
   def runOnce(block: Boolean): Unit = {
-    val delivered = deliverReady() | deliverResolved() // both, without short-circuiting
+    val delivered = deliverClosed() | deliverReady() | deliverResolved() // all three, without short-circuiting
     val polled =
       if !delivered then {
         turnsWithoutPoll = 0
@@ -598,6 +647,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       i += 1
     }
     fireDueTimers()
+    deliverClosed() // their failures are delivered next turn, which a wake-up makes immediate
     deliverResolved() // including any whose wake-up was merged into an event just dispatched
   }
 
@@ -734,6 +784,12 @@ object KqueueReactor {
   /** The last id given to a reactor (see `DescriptorTable`); ids start at 1, since 0 means no owner. */
   private val nextId = new java.util.concurrent.atomic.AtomicInteger(0)
 
+  /** The open reactors of the process, told of every descriptor closed (`KqueueHandles.close`). */
+  private val all = java.util.concurrent.ConcurrentHashMap.newKeySet[KqueueReactor]()
+
+  /** Tells every open reactor that `fd`, whose generation was `generation`, has been closed (see `closed`). */
+  private[kqueue] def descriptorClosed(fd: Int, generation: Int): Unit = all.forEach(_.closed(fd, generation))
+
   // What a slot knows of its descriptor's read readiness. `Ready`: kqueue reported it readable, or the last read
   // probably left data, so a read is performed at once. `NotReady`: a read would block, so the next waits for an edge.
   // `Unknown`: a new or reused descriptor, which a read may try first.
@@ -750,7 +806,9 @@ object KqueueReactor {
     */
   def open(maxEvents: Int = 255, spinPolls: Int = DefaultSpinPolls): KqueueReactor = {
     require(spinPolls >= 0, "spinPolls must not be negative")
-    new KqueueReactor(KqueueLoop.open(), maxEvents, spinPolls)
+    val reactor = new KqueueReactor(KqueueLoop.open(), maxEvents, spinPolls)
+    all.add(reactor)
+    reactor
   }
 
   /** Non-blocking polls before blocking, by default: the benchmark's request/response scenarios gained most of what
