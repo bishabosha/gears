@@ -123,7 +123,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
-  private val timers = new TimerHeap
+  private val timers = new asyncio.unsafe.TimerHeap[KqueueTimer]
   private var nextTimerOrder = 0L
   private var running = false
 
@@ -198,7 +198,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         promise.completion = pending
         pendingPromises += promise
         promise match {
-          case blocking: KqueueBlocking => Blockers.run(blocking)
+          case blocking: KqueueBlocking => asyncio.unsafe.Blockers.run(blocking)
         }
     }
     op.submitted = true
@@ -693,84 +693,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         complete(timers.poll())
       }
     }
-
-  /** Pending timers in a binary min-heap ordered by deadline, then submission order. Each timer knows its index, so it
-    * can be removed when cancelled.
-    */
-  private final class TimerHeap {
-    private var heap = new Array[KqueueTimer | Null](16)
-    private var size = 0
-
-    def isEmpty: Boolean = size == 0
-    def peek: KqueueTimer = heap(0).nn
-
-    def add(timer: KqueueTimer): Unit = {
-      if size == heap.length then heap = java.util.Arrays.copyOf(heap, size * 2)
-      place(timer, size)
-      size += 1
-      siftUp(size - 1)
-    }
-
-    def poll(): KqueueTimer = {
-      val timer = peek
-      remove(timer)
-      timer
-    }
-
-    def remove(timer: KqueueTimer): Unit = {
-      val index = timer.heapIndex
-      size -= 1
-      val last = heap(size).nn
-      heap(size) = null
-      timer.heapIndex = -1
-      if index != size then {
-        place(last, index)
-        siftDown(index)
-        siftUp(index)
-      }
-    }
-
-    private def before(a: KqueueTimer, b: KqueueTimer): Boolean =
-      a.deadline < b.deadline || (a.deadline == b.deadline && a.order < b.order)
-
-    private def place(timer: KqueueTimer, index: Int): Unit = {
-      heap(index) = timer
-      timer.heapIndex = index
-    }
-
-    private def siftUp(start: Int): Unit = {
-      var index = start
-      val timer = heap(index).nn
-      var moving = true
-      while moving && index > 0 do {
-        val parent = (index - 1) / 2
-        if before(timer, heap(parent).nn) then {
-          place(heap(parent).nn, index)
-          index = parent
-        } else moving = false
-      }
-      place(timer, index)
-    }
-
-    private def siftDown(start: Int): Unit = {
-      var index = start
-      val timer = heap(index).nn
-      var moving = true
-      while moving do {
-        val left = 2 * index + 1
-        if left >= size then moving = false
-        else {
-          val right = left + 1
-          val child = if right < size && before(heap(right).nn, heap(left).nn) then right else left
-          if before(heap(child).nn, timer) then {
-            place(heap(child).nn, index)
-            index = child
-          } else moving = false
-        }
-      }
-      place(timer, index)
-    }
-  }
 
   def run(): Unit = {
     loopThread = Thread.currentThread()

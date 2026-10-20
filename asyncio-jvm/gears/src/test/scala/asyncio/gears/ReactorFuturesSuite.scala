@@ -5,7 +5,7 @@ import gears.async.Async
 import asyncio.nio.NioBackend
 
 /** `FuturesContract` over NIO's reactors, carried by `carriers`, on `workers` reactors. */
-abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends FuturesContract {
+abstract class ReactorFuturesSuite(carriers: Carriers, workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: NioBackend.type = NioBackend
 
   protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit =
