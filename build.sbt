@@ -175,10 +175,13 @@ lazy val kqueueDemo =
     )
     .dependsOn(gearsDemo.native)
 
-// The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py
+// The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py.
+// The same code on Scala Native (kqueue, through build.sh) and on the JVM (its selector poller, through
+// gears-demo/bench/build-jvm.sh).
 lazy val ceBench =
-  (project in file("kqueue-demo/ce-bench"))
-    .enablePlugins(ScalaNativePlugin)
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Full)
+    .in(file("kqueue-demo/ce-bench"))
     .settings(
       publish / skip := true,
       Compile / mainClass := Some("cebench.CeBench"),
@@ -186,9 +189,9 @@ lazy val ceBench =
         "org.typelevel" %% "cats-effect" % "3.7.1",
         "co.fs2" %% "fs2-io" % "3.14.0",
         "com.lihaoyi" %% "mainargs" % "0.7.8"
-      ),
-      nativeConfig ~= { _.withMultithreading(true) }
+      )
     )
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
 
 // JVM tests that drive the linked kqueueDemo executable as a subprocess (macOS only)
 lazy val kqueueDemoTests =
