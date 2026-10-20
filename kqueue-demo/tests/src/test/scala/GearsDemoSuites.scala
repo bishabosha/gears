@@ -21,6 +21,24 @@ trait GearsBenchCheck extends KQueueDemoSuite {
 /** The same checks against the gears demos in `gears-demo`, on kqueue, run as `kqueuedemo gears <command>`. */
 class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   override def commandPrefix: Seq[String] = Seq("gears")
+
+  demoTest("bench: every scenario runs on the Darwin backend over TCP, at a tiny scale") {
+    val output = run("bench", "--backend", "darwin", "--tcp", "--scale", "0.01", "--connections", "8")
+    for (
+      scenario <- Seq(
+        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
+        "connections", "pipelined", "blocking", "blocking-io", "timers", "fairness", "fairness-tick", "starvation-p99",
+        "mixed", "mixed-compute"
+      )
+    )
+      assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
+    assert(!output.contains("Exception"), output)
+  }
+
+  demoTest("bench: the Darwin backend refuses a Unix socket address") {
+    val output = runFailing("bench", "--backend", "darwin", "--scale", "0.01", "--scenarios", "pingpong")
+    assert(output.contains("no Unix domain sockets"), output)
+  }
 }
 
 class GearsSocketDemoSuite extends SocketDemoSuite {

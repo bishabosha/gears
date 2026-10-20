@@ -142,6 +142,22 @@ lazy val nativeAsyncioGears =
     )
     .dependsOn(nativeAsyncioLoop % "compile->compile;test->test")
 
+// The Darwin backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
+// their C side in its resources (see asyncio-native/darwin/TODO.md). macOS only; every executable that links it needs
+// Network.framework.
+val networkFramework: Seq[String] =
+  if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil
+lazy val nativeAsyncioDarwin =
+  (project in file("asyncio-native/darwin"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework,
+      nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
+    )
+    .dependsOn(nativeAsyncioGears % "compile->compile;test->test")
+
 // The gears demos, written against `asyncio` alone, so the same code runs on kqueue (Scala Native, through
 // kqueueDemo's `kqueuedemo gears ...`) and on NIO (the JVM, `gearsDemoJVM/run ...`). A demo that needs a capability
 // asks for it, so one NIO lacks does not compile against it.
@@ -170,10 +186,10 @@ lazy val kqueueDemo =
       publish / skip := true,
       Compile / mainClass := Some("example.Main"),
       libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
-      // The gears demos run futures on a pool of worker threads.
-      nativeConfig ~= { _.withMultithreading(true) }
+      // The gears demos run futures on a pool of worker threads; `gears bench --backend darwin` links Network.framework.
+      nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
     )
-    .dependsOn(gearsDemo.native)
+    .dependsOn(gearsDemo.native, nativeAsyncioDarwin)
 
 // The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py.
 // The same code on Scala Native (kqueue, through build.sh) and on the JVM (its selector poller, through

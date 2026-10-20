@@ -1,0 +1,284 @@
+{
+  "started": "2026-10-20T23:19:15+02:00",
+  "finished": "2026-10-20T23:21:14+02:00",
+  "load_average": {
+    "before": [
+      3.9208984375,
+      3.10595703125,
+      3.17626953125
+    ],
+    "after": [
+      3.58349609375,
+      3.166015625,
+      3.1845703125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--workers",
+    "4",
+    "--scenarios",
+    "pingpong,pingpong-fresh-ops,pingpong-deadline,concurrent,concurrent-compute,concurrent-offload,pipelined,blocking,blocking-io,timers,fairness,starvation,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.darwin",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "5ee77f8372acf53b31ec7180a716345c995f4ce7",
+        "subject": "measure kqueue's responsiveness against cats-effect on Native with the starvation scenario, and fix build.sh for the cross project's Native side",
+        "worktree_changes": true,
+        "worktree_changes_hash": "6b6e706cbd66",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-20T19:37:55+02:00"
+      },
+      "median": {
+        "pingpong": 16.57,
+        "pingpong-fresh-ops": 16.99,
+        "pingpong-deadline": 17.27,
+        "concurrent": 4.71,
+        "concurrent-compute": 4.62,
+        "concurrent-offload": 5.04,
+        "pipelined": 0.74,
+        "blocking": 6.91,
+        "blocking-io": 28.69,
+        "timers": 0.21,
+        "fairness-tick": 3.32,
+        "fairness": 1.66,
+        "starvation-p50": 30.96,
+        "starvation-p99": 141.5,
+        "starvation-max": 383.96,
+        "starvation": 6.62,
+        "mixed-compute": 34.28,
+        "mixed": 17.05
+      },
+      "samples": {
+        "pingpong": [
+          16.57,
+          20.05,
+          16.27
+        ],
+        "pingpong-fresh-ops": [
+          17.22,
+          16.96,
+          16.99
+        ],
+        "pingpong-deadline": [
+          17.45,
+          17.27,
+          17.18
+        ],
+        "concurrent": [
+          4.95,
+          4.71,
+          4.56
+        ],
+        "concurrent-compute": [
+          4.88,
+          4.58,
+          4.62
+        ],
+        "concurrent-offload": [
+          4.7,
+          5.04,
+          5.13
+        ],
+        "pipelined": [
+          0.74,
+          0.74,
+          0.8
+        ],
+        "blocking": [
+          6.82,
+          6.94,
+          6.91
+        ],
+        "blocking-io": [
+          28.69,
+          28.84,
+          28.4
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.32,
+          3.34,
+          3.29
+        ],
+        "fairness": [
+          1.66,
+          1.67,
+          1.65
+        ],
+        "starvation-p50": [
+          17.5,
+          30.96,
+          125.63
+        ],
+        "starvation-p99": [
+          141.5,
+          112.17,
+          386.0
+        ],
+        "starvation-max": [
+          354.25,
+          383.96,
+          545.71
+        ],
+        "starvation": [
+          6.62,
+          7.01,
+          6.58
+        ],
+        "mixed-compute": [
+          34.26,
+          34.29,
+          34.28
+        ],
+        "mixed": [
+          17.05,
+          17.06,
+          17.0
+        ]
+      }
+    },
+    {
+      "label": "darwin",
+      "executable": "/tmp/kqueuedemo.darwin@darwin",
+      "benchmark": "darwin",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "5ee77f8372acf53b31ec7180a716345c995f4ce7",
+        "subject": "measure kqueue's responsiveness against cats-effect on Native with the starvation scenario, and fix build.sh for the cross project's Native side",
+        "worktree_changes": true,
+        "worktree_changes_hash": "6b6e706cbd66",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-20T19:37:55+02:00"
+      },
+      "median": {
+        "pingpong": 58.91,
+        "pingpong-fresh-ops": 59.06,
+        "pingpong-deadline": 59.71,
+        "concurrent": 20.13,
+        "concurrent-compute": 21.37,
+        "concurrent-offload": 22.07,
+        "pipelined": 22.27,
+        "blocking": 7.16,
+        "blocking-io": 69.71,
+        "timers": 0.21,
+        "fairness-tick": 1.21,
+        "fairness": 14.32,
+        "starvation-p50": 37.42,
+        "starvation-p99": 130.83,
+        "starvation-max": 561.46,
+        "starvation": 18.85,
+        "mixed-compute": 20.98,
+        "mixed": 61.31
+      },
+      "samples": {
+        "pingpong": [
+          58.91,
+          59.3,
+          58.86
+        ],
+        "pingpong-fresh-ops": [
+          58.91,
+          59.26,
+          59.06
+        ],
+        "pingpong-deadline": [
+          59.92,
+          59.43,
+          59.71
+        ],
+        "concurrent": [
+          19.78,
+          20.26,
+          20.13
+        ],
+        "concurrent-compute": [
+          21.37,
+          21.37,
+          21.2
+        ],
+        "concurrent-offload": [
+          22.25,
+          21.75,
+          22.07
+        ],
+        "pipelined": [
+          19.51,
+          22.27,
+          22.31
+        ],
+        "blocking": [
+          7.17,
+          7.16,
+          7.08
+        ],
+        "blocking-io": [
+          68.88,
+          69.73,
+          69.71
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          1.25,
+          1.2,
+          1.21
+        ],
+        "fairness": [
+          12.21,
+          14.32,
+          14.54
+        ],
+        "starvation-p50": [
+          99.08,
+          9.92,
+          37.42
+        ],
+        "starvation-p99": [
+          252.17,
+          26.29,
+          130.83
+        ],
+        "starvation-max": [
+          693.83,
+          452.96,
+          561.46
+        ],
+        "starvation": [
+          19.95,
+          18.85,
+          18.84
+        ],
+        "mixed-compute": [
+          20.86,
+          21.11,
+          20.98
+        ],
+        "mixed": [
+          61.31,
+          61.42,
+          61.24
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

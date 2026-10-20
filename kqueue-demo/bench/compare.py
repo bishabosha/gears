@@ -9,7 +9,8 @@ Scala Native nightly (0.5.12's GC can crash multithreaded release builds), then 
     kqueue-demo/bench/compare.py before=/tmp/kqueuedemo.before after=/tmp/kqueuedemo.after raw=/tmp/kqueuedemo.after@raw
 
 A build runs the gears benchmark, `gears bench`; suffix its path with `@raw` to run the same scenarios written against
-`KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`.
+`KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`; or with `@darwin` to run them on the Darwin backend
+(Network.framework) instead of kqueue: `darwin=<path>@darwin`, with `-- --tcp`, since it has no Unix sockets.
 
 Each build runs `--runs` times, alternating between builds so drift in machine load affects them alike. The table
 shows each scenario's median microseconds per operation, and each later build's change against the first.
@@ -31,9 +32,14 @@ import sys
 
 
 def run_once(path, bench_args, retries, crashes):
-    command = [path[: -len("@raw")], "bench"] if path.endswith("@raw") else [path, "gears", "bench"]
+    if path.endswith("@raw"):
+        command = [path[: -len("@raw")], "bench"]
+    elif path.endswith("@darwin"):
+        command = [path[: -len("@darwin")], "gears", "bench", "--backend", "darwin"]
+    else:
+        command = [path, "gears", "bench"]
     for attempt in range(retries + 1):
-        result = subprocess.run([*command, *bench_args], capture_output=True, text=True, timeout=600)
+        result = subprocess.run([*command, *bench_args], capture_output=True, text=True, timeout=1800)
         if result.returncode == 0:
             break
         crashes.append(f"{' '.join(command)} exited with {result.returncode}: {result.stderr.strip()[-300:]}")
@@ -60,7 +66,7 @@ def main():
         argv, bench_args = argv[:split], argv[split + 1 :]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "builds", nargs="+", metavar="label=path[@raw]", help="a demo executable and a label for it"
+        "builds", nargs="+", metavar="label=path[@raw|@darwin]", help="a demo executable and a label for it"
     )
     parser.add_argument("--runs", type=int, default=3, help="runs per build (default 3)")
     parser.add_argument(
@@ -122,7 +128,7 @@ def main():
 
 def provenance(path):
     """The build.sh record beside an executable, if there is one."""
-    record = pathlib.Path(path.removesuffix("@raw") + ".json")
+    record = pathlib.Path(path.removesuffix("@raw").removesuffix("@darwin") + ".json")
     return json.loads(record.read_text()) if record.exists() else None
 
 
@@ -146,7 +152,7 @@ def save(file, builds, samples, crashes, bench_args, runs, started, load_before)
                     {
                         "label": label,
                         "executable": path,
-                        "benchmark": "raw" if path.endswith("@raw") else "gears",
+                        "benchmark": "raw" if path.endswith("@raw") else "darwin" if path.endswith("@darwin") else "gears",
                         "build": provenance(path),
                         "median": {scenario: statistics.median(values) for scenario, values in samples[label].items()},
                         "samples": samples[label],
