@@ -430,10 +430,11 @@ object KQueueExampleBench {
     val known = GearsBench.scenarios.map(_.name)
     for name <- names if !known.contains(name) do
       throw new IllegalArgumentException(s"Unknown scenario `$name`; try ${known.mkString(", ")}")
-    // `mixed` and the compute variants of `concurrent` measure gears scheduling against compute work, and
-    // `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written loop has a
-    // counterpart for.
-    val gearsOnly = Set("mixed", "pingpong-fresh-ops", "fairness", "concurrent-compute", "concurrent-offload")
+    // `mixed`, `fairness`, `starvation` and the compute variants of `concurrent` measure gears scheduling against
+    // compute work, and `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written
+    // loop has a counterpart for.
+    val gearsOnly =
+      Set("mixed", "pingpong-fresh-ops", "fairness", "starvation", "concurrent-compute", "concurrent-offload")
     val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
       case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))

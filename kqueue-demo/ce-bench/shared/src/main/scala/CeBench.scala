@@ -64,6 +64,7 @@ object CeBench {
     ),
     Scenario("timers", 200_000, (_, count, _) => timerStress(count)),
     Scenario("fairness", 200_000, (address, count, _) => fairness(address, count)),
+    Scenario("starvation", 100_000, (address, count, connections) => starvation(address, count, connections)),
     Scenario("mixed", 50_000, (address, count, _) => mixed(address, count))
   )
 
@@ -185,6 +186,49 @@ object CeBench {
       sliced <- slices.get
       _ <- IO(report("mixed-compute", math.max(sliced, 1L), (end - start).toNanos / 1e9))
     } yield ()
+
+  /** As `GearsBench`'s: `concurrent`'s round trips while a compute fiber per core works in slices, ceding between
+    * them, and a checker sleeps 1 ms over and over, recording how late it wakes, as cats-effect's own CPU starvation
+    * check does (`CpuStarvationCheck`, which sleeps a second). Reports the median, 99th percentile and worst lateness,
+    * in µs, as `starvation-p50`, `-p99` and `-max`.
+    */
+  private def starvation(address: GenSocketAddress, count: Int, connections: Int): IO[Unit] = {
+    val interval = 1.millis
+    for {
+      done <- Ref[IO].of(false)
+      late <- Ref[IO].of(Vector.empty[Long])
+      checker <- {
+        val check = for {
+          started <- IO.monotonic
+          _ <- IO.sleep(interval)
+          ended <- IO.monotonic
+          _ <- late.update(_ :+ math.max(0L, (ended - started - interval).toNanos))
+        } yield ()
+        def loop: IO[Unit] = done.get.flatMap(if _ then IO.unit else check >> loop)
+        loop.start
+      }
+      computes <- (1 to Runtime.getRuntime.availableProcessors).toList.traverse { core =>
+        def loop(slice: Long): IO[Unit] =
+          done.get.flatMap(
+            if _ then IO.unit
+            else IO(computeSink += computeSlice(slice)) >> IO.cede >> loop(slice + 1)
+          )
+        loop(core.toLong).start
+      }
+      each = math.max(1, count / connections)
+      _ <- (1 to connections).toList.parTraverse_(_ => pingPong(address, each, deadline = false))
+      _ <- done.set(true)
+      _ <- checker.join
+      _ <- computes.traverse_(_.join)
+      sorted <- late.get.map(_.sorted)
+      _ <- IO {
+        def at(fraction: Double): Long = if sorted.isEmpty then 0L else sorted(((sorted.length - 1) * fraction).toInt)
+        report("starvation-p50", 1, at(0.5) / 1e9)
+        report("starvation-p99", 1, at(0.99) / 1e9)
+        report("starvation-max", 1, at(1.0) / 1e9)
+      }
+    } yield ()
+  }
 
   /** Prints one result line, in the format `kqueue-demo/bench/compare.py` reads. */
   def report(name: String, count: Long, seconds: Double): Unit =

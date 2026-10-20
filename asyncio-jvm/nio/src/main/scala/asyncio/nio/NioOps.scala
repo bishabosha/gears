@@ -337,19 +337,22 @@ final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extend
 
 /** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
-  def block(): Unit = {
+  def block(): Unit = publish(into, Resolve.addresses(host))
+}
+
+private[nio] object Resolve {
+
+  /** `host`'s addresses, in numeric form, looked up with `InetAddress`, which blocks. */
+  def addresses(host: String): List[ResolvedAddress] = {
     val addresses =
       try InetAddress.getAllByName(host).toList
       catch case e: IOException => throw new IOException(s"Failed to resolve $host: ${e.getMessage}", e)
-    publish(
-      into,
-      addresses.map {
-        case v4: Inet4Address => ResolvedAddress(AddressFamily.IPv4, v4.getHostAddress)
-        case v6               =>
-          val text = v6.getHostAddress
-          val scope = text.indexOf('%')
-          ResolvedAddress(AddressFamily.IPv6, if scope < 0 then text else text.substring(0, scope))
-      }
-    )
+    addresses.map {
+      case v4: Inet4Address => ResolvedAddress(AddressFamily.IPv4, v4.getHostAddress)
+      case v6               =>
+        val text = v6.getHostAddress
+        val scope = text.indexOf('%')
+        ResolvedAddress(AddressFamily.IPv6, if scope < 0 then text else text.substring(0, scope))
+    }
   }
 }

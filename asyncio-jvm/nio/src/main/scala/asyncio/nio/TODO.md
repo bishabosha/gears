@@ -10,14 +10,14 @@ Every backend has `ops`, `handles` and `perform`, over IP sockets, pipes and reg
 `Ops`). What only some have is a capability mixed into the backend, with its own handles and ops, so asking a backend
 for one it lacks fails to compile. Running ops on reactors is one of them: a backend may instead perform each op itself.
 
-| Capability | Traits | kqueue | NIO |
-| --- | --- | --- | --- |
-| Reactors (`open`, `submit`, attachments) | `ReactorBackend` | yes | yes |
-| Readiness and waitless use (`whenReady`, `readNow`, `writeNow`) | `ReadinessBackend`, `ReadinessOps`, `ReadinessHandles` | yes | yes |
-| Blocking ops (`blocking`) | `BlockingBackend`, `BlockingOps` | yes | yes |
-| Unix stream sockets | `UnixStreamBackend`, `UnixStreamHandles` | yes | yes (`UnixDomainSocketAddress`, JDK 16+) |
-| Unix datagram sockets | `UnixDatagramBackend`, `UnixDatagramHandles`, `UnixDatagramOps` | yes | no: the JDK has no Unix datagram channels |
-| FIFOs | `FifoBackend`, `FifoHandles` (`openFifo`) | yes | no: the JDK can only block on one |
+| Capability | Traits | kqueue | NIO | VThread |
+| --- | --- | --- | --- | --- |
+| Reactors (`open`, `submit`, attachments) | `ReactorBackend` | yes | yes | no: an op waits on the caller's virtual thread |
+| Readiness and waitless use (`whenReady`, `readNow`, `writeNow`) | `ReadinessBackend`, `ReadinessOps`, `ReadinessHandles` | yes | yes | yes: NIO's handles, each waiting on a selector of its own |
+| Blocking ops (`blocking`) | `BlockingBackend`, `BlockingOps` | yes | yes | no: a caller that may block calls the code itself |
+| Unix stream sockets | `UnixStreamBackend`, `UnixStreamHandles` | yes | yes (`UnixDomainSocketAddress`, JDK 16+) | yes |
+| Unix datagram sockets | `UnixDatagramBackend`, `UnixDatagramHandles`, `UnixDatagramOps` | yes | no: the JDK has no Unix datagram channels | no |
+| FIFOs | `FifoBackend`, `FifoHandles` (`openFifo`) | yes | no: the JDK can only block on one | no |
 
 Addresses are typed by family: `IpAddress` (IPv4, IPv6) and `UnixAddress`; `send` takes an address of its socket's
 family, or none for a connected socket's peer. `openFile` opens only regular files, on both backends; a FIFO is
@@ -253,3 +253,164 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
      calling thread and is not comparable, as on Native.
    - As on Native, its `mixed` starves the ping-pong behind a compute fiber that only `cede`s (about 1 to 2 ms a round
      trip), its compute side the fastest for it.
+7. [x] **Readiness and blocking ops as capabilities, and a backend with no reactor.** The base `Backend` is now `ops`,
+   `handles` and `perform(op)(using Async)`. Reactors, readiness, and blocking ops are capabilities like the others
+   (see the table above): `ReactorBackend` (`open`, attachments, `tryNow`, `blockingHere`; its `perform` is
+   `ReactorAsync.performOnReactor`), `ReadinessBackend` (`ReadinessOps.whenReady`, `ReadinessHandles.readNow`/
+   `writeNow`) and `BlockingBackend` (`BlockingOps.blocking`). kqueue and NIO have all three. `ReactorAsync.perform`
+   is `b.perform(op)`, so demos call it as before; `submit` takes a `ReactorBackend`. `GearsCancel` asks for all
+   three, `GearsFileRead` for readiness, and `GearsBench` skips the scenarios a backend cannot run: `pingpong-deadline`
+   and `timers` submit timers to a reactor, `blocking` and `blocking-io` perform blocking ops.
+
+   `VThreadBackend` (`asyncio.nio`, beside NIO, whose address handling and handle table, `HandleTable`, it shares)
+   has no reactor: `perform` refuses a platform thread, then makes the JDK's blocking call on the caller's virtual
+   thread, which the JDK parks on its own poller. The op is the caller group's `Cancellable` while it runs, so
+   cancelling the caller interrupts the thread; the interrupt is cleared before `perform` returns. The JDK closes a
+   channel whose blocking call is interrupted, so a cancelled read or write leaves its channel closed, unlike on a
+   reactor; a cancelled timer just stops sleeping. `ReactorFutures.run` on the JVM starts a program over a backend with
+   no reactors as a future of gears' own, since `Async.blocking` runs its body on the calling thread, a platform
+   thread in a test, which `perform` found. Checked by `VThreadBackendSuite`. Benched as `vthread-backend`
+   (`-Dasyncio.backend=vthreads`). Median of 5, µs/op, Unix sockets (`kqueue-demo/bench/results/jvm-vthread-backend.json`):
+
+   | scenario | nio-jdk | nio-reactors | vthread-backend | jdk-vthreads |
+   | --- | --- | --- | --- | --- |
+   | pingpong | 17.8 | 9.8 | 16.6 | 10.6 |
+   | concurrent | 5.4 | 2.3 | 10.7 | 10.6 |
+   | concurrent-offload | 6.4 | 6.7 | 11.8 | 11.9 |
+   | connections | 54 | 48 | 50 | 25 |
+   | pipelined | 0.84 | 0.45 | 1.08 | 1.13 |
+   | fairness (tick) | 0.93 (21.1) | 1.51 (3.0) | 1.55 (1.7) | 1.81 (1.4) |
+   | mixed (compute) | 21.4 (26.2) | 16.9 (33.6) | 18.9 (25.2) | 11.2 (21.8) |
+
+   (Superseded by item 10: the backend now waits on selectors, and a cancel leaves the channel open.) It matches the
+   JDK alone wherever many ops are in flight (`concurrent`, `pipelined`, `fairness`), so the JDK's
+   poller does the work there either way. On one connection it is 6 µs a round trip slower (16.6 against 10.6), and
+   twice as slow at `connections`, which is gears' cost over a bare virtual thread, not yet looked into: per op, the
+   caller-group link and unlink and the op's state; per connection, a gears future on the server and the handle
+   table.
+8. [x] **Measured: waiting on a channel's own selector, on the waiting virtual thread (`SelectorHereIo`).** The JDK can
+   only cancel a blocking channel call by interrupting it, which closes the channel, so a backend that must keep the
+   handle open has to wait on readiness itself, and with public API only that means a `Selector`. Here each channel
+   has a selector for each direction, made on its first wait, and the virtual thread that would block selects on it
+   itself: no selector thread to hand a wait to or wake. On a virtual thread, `select` makes one non-blocking `kevent`,
+   parks on the JDK's poller only if nothing is ready (`Poller.pollSelector`, the JDK's own; no pinning), and makes
+   one more. A wait is cancelled with `Selector.wakeup()`: checked with a single-file program, the waiter returns, is
+   not interrupted, the channel stays open, and a later read gets the data. `jdk-bench --selector-here`, the
+   `jdk-selector-here` build. Median of 5, µs/op, Unix sockets, load average 4 to 7
+   (`kqueue-demo/bench/results/jvm-selector-here.json`):
+
+   | scenario | nio-jdk | selector-here | Selector floor | JDK blocking channels | nio-reactors |
+   | --- | --- | --- | --- | --- | --- |
+   | pingpong | 17.9 | 6.8 | 16.4 | 10.5 | 9.9 |
+   | pingpong-deadline | 20.4 | 9.1 | 21.1 | 13.6 | 9.5 |
+   | concurrent | 5.3 | 16.6 | 8.5 | 10.8 | 2.2 |
+   | connections | 55 | 30 | 34 | 25 | 48 |
+   | pipelined | 0.85 | 1.06 | 0.95 | 1.06 | 0.45 |
+   | blocking-io | 18.1 | 16.0 | 24.3 | 18.5 | 16.5 |
+   | mixed | 21.9 | 7.2 | 17.6 | 11.1 | 16.7 |
+
+   - **Fastest on one connection of every JVM way measured**, below the JDK's own blocking channels (6.8 against
+     10.5 µs). Likely, the non-blocking `kevent` that `select` makes first often finds the echo already there, so the
+     thread does not park: spinning once before blocking, which the blocking channels do not do. Not confirmed.
+   - **Slowest with many connections** (`concurrent` 16.6, three times NIO's 5.3). Not the descriptor lock between
+     carriers: held to two carriers (`-Djdk.virtualThreadScheduler.parallelism=2`), the JDK's blocking channels drop
+     from 10.7 to 3.6 µs, this only from 16.3 to 15.2. Likely the cost of each wait, a kqueue nested in the JDK
+     poller's, which its poller thread handles for every waiting connection, where NIO's reactor handles them all in
+     one `select`. Not profiled yet.
+9. [x] **`SelectorHereIo` profiled and tuned, public API only.** JFR on `concurrent` (`jfr view native-methods`, and
+   `jdk.NativeMethodSample` by thread and caller): against the JDK's blocking channels, the virtual threads spend their
+   extra time in the two `kevent`s `select` makes on the channel's selector (105 samples, none for blocking channels),
+   and in registering the selector's descriptor with the JDK's poller (78, against 52 for the socket's own), almost
+   all of it system time: 23 of the process's 25 CPU seconds, as the carriers' system calls contend for macOS's
+   per-process descriptor lock (see the kqueue TODO). Two changes, each found by sweeping it:
+   - **Yield before waiting** (`-Dgears.selectorHere.yields`, now 32 by default): a read that would block yields and
+     tries again, up to 32 times, before it selects. Other virtual threads run meanwhile and the data often arrives, so
+     most reads never wait. With nothing else to run a yield returns at once, so this spins briefly, like the kqueue
+     pool's spin before blocking. 1 to 3 yields made things worse; from 16 on the scenarios level off.
+   - **Two carriers** (`-Djdk.virtualThreadScheduler.parallelism=2`, as many threads as one worker each side), so
+     fewer threads contend in the kernel. This is the JDK's process-wide setting, for whoever deploys, not something a
+     library can choose; without yields it barely helped (`concurrent` 16.3 to 15.0).
+
+   Median of 5, µs/op, Unix sockets, 32 yields, load average up to 14 by the end
+   (`kqueue-demo/bench/results/jvm-selector-here-tuned.json`):
+
+   | scenario | nio-jdk | nio-reactors | selector-here | selector-here, 2 carriers | JDK blocking | JDK blocking, 2 carriers |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | pingpong | 17.6 | 9.7 | 4.8 | 3.0 | 10.5 | 10.2 |
+   | pingpong-deadline | 19.7 | 9.5 | 8.2 | 6.0 | 13.6 | 13.2 |
+   | concurrent | 5.4 | 2.2 | 6.6 | 1.45 | 10.5 | 3.4 |
+   | concurrent-offload | 6.3 | 6.5 | 8.1 | 3.8 | 11.5 | 5.2 |
+   | connections | 55 | 47 | 22 | 21 | 24 | 24 |
+   | pipelined | 0.84 | 0.48 | 1.15 | 0.91 | 0.90 | 1.06 |
+   | blocking-io | 17.9 | 16.4 | 13.2 | 8.9 | 18.2 | 16.5 |
+   | fairness (tick) | 0.92 (20.1) | 1.54 (3.1) | 1.56 (1.3) | 0.69 (0.14) | 1.78 (1.3) | 0.41 (0.16) |
+   | mixed (compute) | 20.7 (26.1) | 16.8 (33.6) | 4.6 (21.9) | 1.5 (16.9) | 11.1 (21.7) | 10.2 (20.4) |
+
+   On two carriers it is the fastest of every JVM way measured, and below kqueue on Scala Native, wherever latency
+   counts (ping-pong 3.0 against 7.0; `mixed` 1.5), and level with or ahead of the reactor with many connections
+   (`concurrent` 1.45 against 2.2). Only `pipelined`, a stream of writes, stays the reactor's (0.48 against 0.91).
+   The spinning costs nothing overall: whole-process CPU, start-up and warm-up included, with two carriers, against
+   the JDK's blocking channels on two and NIO's reactors: ping-pong 1.06 s against 1.27 and 2.34; `concurrent` 1.14
+   against 1.91 and 1.91; `mixed` 0.91 against 2.06 and 2.92. On one carrier, `mixed` crawls: every reader's yield
+   gives the computation a whole slice.
+
+   Next: build it into a backend, with cancellation by `wakeup` and the handle left open, and look into the 6 µs a
+   round trip gears adds over a bare virtual thread (item 7).
+10. [x] **`VThreadBackend` on selectors, cancelled with `Selector.wakeup`, and a starvation scenario.** The backend now
+    runs over `NioHandles`' non-blocking channels, so a handle works with either backend, and has readiness
+    (`whenReady`, `readNow`, `writeNow`). An op tries its operation on the caller's virtual thread, yields and tries
+    again up to 8 times (`-Dasyncio.vthread.yields`), then waits on a selector of the handle's own for that direction,
+    in the virtual thread itself. Cancelling sets a flag and calls `Selector.wakeup()`, or unparks a timer: nothing is
+    interrupted and the handle stays open. Selectors come from a pool (`SelectorPool`), go back once the handle is
+    closed and no op waits on them, and a `selectNow` first releases the closed channel's descriptor. A timer of no time
+    yields. Checked by `VThreadBackendSuite` (16): cancelling a read on a pipe and on a socket leaves it usable, closing
+    a handle wakes its waiter, `whenReady`, refused connections.
+
+    Tuning, at the JDK's default carrier count (two carriers is the JDK's process-wide setting, and would cap an
+    application's compute): busy spinning before yielding (`Thread.onSpinWait`) gave ping-pong 1.6 µs, but holds the
+    carrier, and starved work handed to other virtual threads (`concurrent-offload` 26 against 10); it was dropped
+    for fairness, as was spinning on accept. A yield puts the thread behind every other one ready to run. Pooling
+    selectors made no difference to `connections`; yielding before accepting did (110 to 72 µs), so a listener waits
+    at once.
+
+    **`starvation`**, after cats-effect's CPU starvation check (`CpuStarvationCheck`: a fiber sleeps
+    `cpuStarvationCheckInterval`, a second by default, and warns when it wakes more than 10% late): `concurrent`'s round
+    trips, while a compute task per core works in slices, yielding between them, and a checker sleeps 1 ms over and
+    over, recording how late it wakes; `starvation-p50`, `-p99` and `-max` are that lateness in µs, which includes the
+    sleep's own overhead (about 0.3 ms even unloaded). In `GearsBench`, `JdkBench` and `CeBench`.
+
+    Median of 5, µs/op, Unix sockets, load average 5 to 7 (`kqueue-demo/bench/results/jvm-vthread-backend-selector.json`):
+
+    | scenario | nio-jdk | nio-reactors | vthread-backend | jdk-vthreads |
+    | --- | --- | --- | --- | --- |
+    | pingpong | 18.0 | 10.1 | 5.5 | 10.6 |
+    | concurrent | 5.4 | 2.1 | 7.0 | 10.8 |
+    | concurrent-offload | 6.3 | 6.6 | 10.3 | 12.0 |
+    | connections | 56 | 47 | 75 | 25 |
+    | pipelined | 0.86 | 0.44 | 1.77 | 1.08 |
+    | fairness (tick) | 0.94 (22.4) | 1.68 (3.4) | 2.20 (1.9) | 1.70 (1.5) |
+    | mixed (compute) | 21.4 (26.1) | 16.8 (33.5) | 6.8 (26.7) | 11.2 (21.9) |
+    | starvation | 8.1 | 6.0 | 8.6 | 11.9 |
+    | starvation p50 / p99 / max | 282 / 4383 / 10113 | 356 / 494 / 1928 | 316 / 1180 / 1751 | 266 / 1891 / 8991 |
+
+    Over TCP, against cats-effect on its selector (`jvm-vthread-backend-vs-cats-effect-tcp.json`):
+
+    | scenario | nio-reactors | vthread-backend | cats-effect |
+    | --- | --- | --- | --- |
+    | pingpong | 19.6 | 26.0 | 25.0 |
+    | concurrent | 4.6 | 10.2 | 7.1 |
+    | pipelined | 0.77 | 2.75 | 1.49 |
+    | fairness (tick) | 1.84 (3.7) | 1.82 (2.0) | 1.52 (54.2) |
+    | mixed (compute) | 26.4 (43.6) | 30.3 (27.7) | 1016 (16.7) |
+    | starvation | 9.4 | 10.4 | 14.6 |
+    | starvation p50 / p99 / max | 230 / 741 / 2772 | 302 / 1344 / 2074 | 755 / 1381 / 2770 |
+
+    - **Over Unix sockets, the lowest latency and worst-case lateness:** ping-pong 5.5 against the reactor's 10.1;
+      `mixed` 6.8 against 16.8; the worst wake-up 1.75 ms, the best of the four, where `Carriers.Jdk` and the JDK's
+      blocking channels go to 9 to 10 ms. The reactor keeps the best p99 (0.49 ms against 1.18).
+    - **Behind the reactor with many connections or a stream** (`concurrent` 7.0 against 2.1, `pipelined` 1.77
+      against 0.44) and the slowest at `connections` (75): every virtual thread makes its own system calls, which on
+      macOS contend for the per-process descriptor lock, where the reactor makes them from one thread.
+    - **Over TCP its single-connection advantage is gone** (ping-pong 26 against the reactor's 19.6), and it trails on
+      `concurrent` and `pipelined`; cats-effect sits between the two except at `mixed`, where its fibers starve.
+    - Not done: Linux, where the descriptor lock should not apply; why TCP loses the advantage.
