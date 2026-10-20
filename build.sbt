@@ -127,7 +127,7 @@ lazy val jvmAsyncioGears =
       // `Carriers.Reactors` gives virtual threads the pool as their scheduler, which the JDK keeps to itself.
       Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
     )
-    .dependsOn(asyncio.jvm, jvmAsyncioNio % Test, asyncioTestkit.jvm % Test)
+    .dependsOn(asyncio.jvm % "compile->compile;test->test", jvmAsyncioNio % Test, asyncioTestkit.jvm % Test)
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
 // asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
@@ -140,7 +140,7 @@ lazy val nativeAsyncioGears =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop)
+    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test")
 
 // The gears demos, written against `asyncio` alone, so the same code runs on kqueue (Scala Native, through
 // kqueueDemo's `kqueuedemo gears ...`) and on NIO (the JVM, `gearsDemoJVM/run ...`). A demo that needs a capability
