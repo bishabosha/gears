@@ -8,11 +8,13 @@ import java.net.StandardProtocolFamily
 import java.net.StandardSocketOptions
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
+import java.nio.channels.ClosedChannelException
 import java.nio.channels.DatagramChannel
 import java.nio.channels.FileChannel
 import java.nio.channels.Pipe
 import java.nio.channels.ReadableByteChannel
 import java.nio.channels.SelectableChannel
+import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.nio.channels.WritableByteChannel
@@ -20,7 +22,6 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.atomic.AtomicReferenceArray
 
 import asyncio.IpAddress
 import asyncio.ReadinessHandles
@@ -58,20 +59,116 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
   /** Records that `reactor` registered the channel with its selector. */
   def registered(reactor: NioReactor): Unit = registrations.add(reactor): Unit
 
+  // The channel's own selectors, one for each direction, on which `VThreadBackend`'s ops wait, taken from the pool on
+  // first use; the ops waiting on them; and whether the channel has been closed, after which none is taken, and the
+  // selectors go back to the pool once no op waits on them. Guarded by `this`.
+  private var reading: Selector | Null = null
+  private var writing: Selector | Null = null
+  private var waiters = 0
+  private var closed = false
+
+  /** The channel's own selector for writing (connecting, too) or for reading (accepting, too), with the channel
+    * registered on it, for an op to wait on until it calls `exitWait`. Throws once the handle is closed.
+    */
+  def enterWait(write: Boolean): Selector = synchronized {
+    if closed then throw new ClosedChannelException()
+    val existing = if write then writing else reading
+    val selector =
+      if existing != null then existing
+      else {
+        val taken = SelectorPool.take()
+        try channel.register(taken, 0)
+        catch {
+          case t: Throwable =>
+            SelectorPool.give(taken)
+            throw t
+        }
+        if write then writing = taken else reading = taken
+        taken
+      }
+    waiters += 1
+    selector
+  }
+
+  /** An op has stopped waiting; the last one to leave a closed handle gives its selectors back to the pool. */
+  def exitWait(): Unit = {
+    val released = synchronized {
+      waiters -= 1
+      if closed && waiters == 0 then releaseSelectors() else Nil
+    }
+    released.foreach(SelectorPool.give)
+  }
+
+  /** Takes the selectors off this handle, for the pool. Holding `this`. */
+  private def releaseSelectors(): List[Selector] = {
+    val all = List(reading, writing).collect { case s: Selector => s }
+    reading = null
+    writing = null
+    all
+  }
+
   /** Closes the channel, and wakes the reactors it is registered with: a registered channel's descriptor is released
     * only once each selector has seen its key cancelled, which one blocked with nothing else to do would never get to,
-    * so the other end of a pipe or socket would never see it close.
+    * so the other end of a pipe or socket would never see it close. An op waiting on one of its own selectors is woken,
+    * to find the channel closed, and the selectors go back to the pool once none waits.
     */
-  def close(): Unit =
+  def close(): Unit = {
+    val (waking, released) = synchronized {
+      closed = true
+      val waking = List(reading, writing).collect { case s: Selector => s }
+      (waking, if waiters == 0 then releaseSelectors() else Nil)
+    }
     try {
       channel.close()
       registrations.forEach(_.wakeup())
-    } finally if boundPath != null then Files.deleteIfExists(boundPath): Unit
+    } finally {
+      try {
+        waking.foreach(_.wakeup())
+        released.foreach(SelectorPool.give)
+      } finally if boundPath != null then Files.deleteIfExists(boundPath): Unit
+    }
+  }
 
   /** The channel, as the kind an op needs. */
   def as[C <: SelectableChannel](kind: Class[C], op: String): C =
     if kind.isInstance(channel) then kind.cast(channel)
     else throw new IOException(s"$op needs a ${kind.getSimpleName}, not $channel")
+}
+
+/** Selectors for `Selectable.selector` to reuse: on macOS, opening one makes a kqueue and a wake-up pipe, and closing
+  * it closes them, which a connection's ops would otherwise pay for on every connection.
+  */
+private[nio] object SelectorPool {
+
+  /** Selectors kept at most, beyond which a returned one is closed. */
+  private inline val Kept = 256
+
+  private val idle = new java.util.concurrent.ConcurrentLinkedQueue[Selector]()
+  private val count = new java.util.concurrent.atomic.AtomicInteger()
+
+  def take(): Selector = {
+    val kept = idle.poll()
+    if kept == null then Selector.open()
+    else {
+      count.decrementAndGet()
+      kept
+    }
+  }
+
+  /** Takes back a selector no op waits on, whose channel has been closed. A `selectNow` drops the cancelled key, which
+    * also lets the JDK release the channel's descriptor, so the other end sees it close at once, and clears a wake-up
+    * left from a cancel or the close.
+    */
+  def give(selector: Selector): Unit = {
+    try {
+      selector.selectNow(): Unit
+      if count.incrementAndGet() <= Kept then idle.add(selector): Unit
+      else {
+        count.decrementAndGet()
+        selector.close()
+      }
+    } catch case _: java.io.IOException | _: java.nio.channels.ClosedSelectorException => selector.close()
+  }
 }
 
 /** A regular file. Like POSIX, which reports a regular file always ready, it never waits: reads and writes go straight
@@ -99,37 +196,13 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
 
-  private val lock = new Object
-  @volatile private var table = new AtomicReferenceArray[Entry | Null](64)
-  private val free = new java.util.ArrayDeque[Integer]() // guarded by `lock`
-  private var next = 0 // guarded by `lock`
+  private val table = new HandleTable[Entry]
 
   /** Gives `entry` a handle. */
-  private[nio] def add(entry: Entry): Int = lock.synchronized {
-    val handle = if free.isEmpty then { next += 1; next - 1 }
-    else free.pop().intValue
-    var current = table
-    if handle >= current.length() then {
-      val grown = new AtomicReferenceArray[Entry | Null](current.length() * 2)
-      var i = 0
-      while i < current.length() do {
-        grown.set(i, current.get(i))
-        i += 1
-      }
-      table = grown
-      current = grown
-    }
-    current.set(handle, entry)
-    handle
-  }
+  private[nio] def add(entry: Entry): Int = table.add(entry)
 
   /** What `handle` names; throws if it is not open. */
-  private[nio] def entry(handle: Int): Entry = {
-    val current = table
-    val found = if handle >= 0 && handle < current.length() then current.get(handle) else null
-    if found == null then throw new IOException(s"Not an open handle: $handle")
-    found
-  }
+  private[nio] def entry(handle: Int): Entry = table(handle)
 
   def openFile(path: String, write: Boolean): Int = {
     val file = Path.of(path)
@@ -201,19 +274,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   def readNow(handle: Int, buf: ByteBuffer): Int = entry(handle).read(buf)
   def writeNow(handle: Int, buf: ByteBuffer): Int = entry(handle).write(buf)
 
-  def close(handle: Int): Unit = {
-    val closing = lock.synchronized {
-      val current = table
-      val found = if handle >= 0 && handle < current.length() then current.get(handle) else null
-      if found != null then {
-        current.set(handle, null)
-        free.push(handle)
-      }
-      found
-    }
-    if closing == null then throw new IOException(s"Not an open handle: $handle")
-    closing.close()
-  }
+  def close(handle: Int): Unit = table.remove(handle).close()
 
   /** Runs `setup` on `channel` and gives it a handle, closing it again if `setup` fails. */
   private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Int =
@@ -227,7 +288,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
         throw t
     }
 
-  private def familyOf(address: SocketAddress): StandardProtocolFamily = address match {
+  private[nio] def familyOf(address: SocketAddress): StandardProtocolFamily = address match {
     case UnixAddress(_)       => StandardProtocolFamily.UNIX
     case IpAddress.IPv4(_, _) => StandardProtocolFamily.INET
     case IpAddress.IPv6(_, _) => StandardProtocolFamily.INET6
@@ -255,7 +316,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   }
 
   /** Checks a port as the kqueue backend does, with its message. */
-  private def port(port: Int): Int = {
+  private[nio] def port(port: Int): Int = {
     require(port >= 0 && port <= 65535, s"Port must be between 0 and 65535: $port")
     port
   }

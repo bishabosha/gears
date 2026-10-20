@@ -180,6 +180,17 @@ object GearsBench {
       }
     ),
     Scenario(
+      "starvation",
+      "concurrent's round trips while a compute future per core works in slices, yielding between them, and a checker "
+        + "sleeps 1 ms over and over, as cats-effect's CPU starvation check does; also reports starvation-p50, -p99 "
+        + "and -max: how late, in µs, the checker woke",
+      100_000,
+      new Client {
+        def apply(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+          starvation(r, address, count, connections)
+      }
+    ),
+    Scenario(
       "mixed",
       "pingpong while a compute future on the same thread works in slices, yielding between them; also reports "
         + "mixed-compute, the time per slice meanwhile",
@@ -271,6 +282,54 @@ object GearsBench {
     val seconds = (System.nanoTime() - start) / 1e9
     compute.await
     report("mixed-compute", slices, seconds)
+  }
+
+  /** How long the `starvation` checker sleeps each time: cats-effect's checker sleeps a second, too long for a bench. */
+  inline val StarvationCheckMillis = 1
+
+  /** Runs `concurrent`'s round trips while a compute future per core works in slices, yielding between them, and a
+    * checker future sleeps `StarvationCheckMillis` over and over, recording how late it wakes, as cats-effect's CPU
+    * starvation check does (`CpuStarvationCheck`): a new event waits for a thread as the checker's wake-up does, so its
+    * lateness is how long the program takes to respond, whatever else it is doing. Reports the median, 99th
+    * percentile and worst lateness, in µs, as `starvation-p50`, `-p99` and `-max`.
+    */
+  private def starvation(r: UnixStreamBackend, address: StreamAddress, count: Int, connections: Int)(using
+      Async.Spawn
+  ): Unit = {
+    val done = new java.util.concurrent.atomic.AtomicBoolean // read by the other futures, maybe on other threads
+    val interval = StarvationCheckMillis * 1_000_000L
+    val late = scala.collection.mutable.ArrayBuffer.empty[Long]
+    val checker = Future {
+      val timer = r.ops.timer(StarvationCheckMillis)
+      while !done.get() do {
+        val started = System.nanoTime()
+        perform(r, timer)
+        late += math.max(0L, System.nanoTime() - started - interval)
+      }
+    }
+    val computes = (1 to Runtime.getRuntime.availableProcessors).map { core =>
+      Future {
+        var result = 0L
+        var slice = core.toLong
+        while !done.get() do {
+          result += computeSlice(slice)
+          yieldNow()
+          slice += 1
+        }
+        if result == 1L then computeSink = result // only so that the work cannot be optimised away
+      }
+    }
+    val each = math.max(1, count / connections)
+    (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false))).awaitAll
+    done.set(true)
+    checker.await
+    computes.awaitAll
+    val sorted = late.sorted
+    def at(fraction: Double): Long = if sorted.isEmpty then 0L else sorted(((sorted.length - 1) * fraction).toInt)
+    // As one op taking the lateness, so that `compare.py` shows it in µs.
+    report("starvation-p50", 1, at(0.5) / 1e9)
+    report("starvation-p99", 1, at(0.99) / 1e9)
+    report("starvation-max", 1, at(1.0) / 1e9)
   }
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */

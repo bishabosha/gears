@@ -52,6 +52,7 @@ object JdkBench {
     ("blocking-io", 50_000, (a, n, _) => pingPong(a, n, blockingFirst = true)),
     ("timers", 200_000, (_, n, _) => timerStress(n)),
     ("fairness", 200_000, (a, n, _) => fairness(a, n)),
+    ("starvation", 100_000, (a, n, c) => starvation(a, n, c)),
     ("mixed", 50_000, (a, n, _) => mixed(a, n))
   )
 
@@ -123,7 +124,7 @@ object JdkBench {
         i += 1
       }
       if worked == 1L then sink = worked
-    } finally channel.close()
+    } finally clientIo.close(channel)
   }
 
   private def concurrent(address: SocketAddress, count: Int, connections: Int, work: GearsBench.Work): Unit = {
@@ -154,7 +155,7 @@ object JdkBench {
           received += n
         }
       }
-    finally channel.close()
+    finally clientIo.close(channel)
   }
 
   private def timerStress(count: Int): Unit = {
@@ -212,6 +213,42 @@ object JdkBench {
     report("mixed-compute", slices, (System.nanoTime() - start) / 1e9)
   }
 
+  /** As `GearsBench`'s: `concurrent`'s round trips while a compute thread per core works in slices, yielding between
+    * them, and a checker sleeps over and over, recording how late it wakes, as cats-effect's CPU starvation check does.
+    */
+  private def starvation(address: SocketAddress, count: Int, connections: Int): Unit = {
+    val done = new AtomicBoolean
+    val interval = GearsBench.StarvationCheckMillis * 1_000_000L
+    val late = scala.collection.mutable.ArrayBuffer.empty[Long]
+    scoped { scope =>
+      scope.fork { () =>
+        while !done.get() do {
+          val started = System.nanoTime()
+          Thread.sleep(GearsBench.StarvationCheckMillis)
+          late += math.max(0L, System.nanoTime() - started - interval)
+        }
+      }
+      for core <- 1 to Runtime.getRuntime.availableProcessors do
+        scope.fork { () =>
+          var result = 0L
+          var slice = core.toLong
+          while !done.get() do {
+            result += computeSlice(slice)
+            Thread.`yield`()
+            slice += 1
+          }
+          if result == 1L then sink = result
+        }
+      concurrent(address, count, connections, GearsBench.Work.NoWork)
+      done.set(true)
+    }
+    val sorted = late.sorted
+    def at(fraction: Double): Long = if sorted.isEmpty then 0L else sorted(((sorted.length - 1) * fraction).toInt)
+    report("starvation-p50", 1, at(0.5) / 1e9)
+    report("starvation-p99", 1, at(0.99) / 1e9)
+    report("starvation-max", 1, at(1.0) / 1e9)
+  }
+
   /** Echoes every connection on a virtual thread of its own, in a scope that lasts as long as the process. */
   private def startServer(path: Path): SocketAddress = {
     Files.deleteIfExists(path)
@@ -230,7 +267,7 @@ object JdkBench {
               while buf.hasRemaining do serverIo.write(client, buf)
             }
           } catch case _: IOException => ()
-          finally client.close()
+          finally serverIo.close(client)
         }
       }
     }
@@ -239,12 +276,25 @@ object JdkBench {
 
   /** Runs the named scenarios, or all of them, as `GearsBench.run` does, over a Unix socket at `path`; with `warmup`,
     * each runs first at a fifth of its count, unreported, so the JIT has compiled it. With `selector`, the clients and
-    * the server each do their I/O through a selector of their own (`SelectorIo`) instead of blocking channels.
+    * the server each do their I/O through a selector of their own (`SelectorIo`) instead of blocking channels; with
+    * `selectorHere`, each virtual thread waits on a selector of the channel's own (`SelectorHereIo`).
     */
-  def run(names: Seq[String], scale: Double, connections: Int, path: Path, warmup: Boolean, selector: Boolean): Unit = {
+  def run(
+      names: Seq[String],
+      scale: Double,
+      connections: Int,
+      path: Path,
+      warmup: Boolean,
+      selector: Boolean,
+      selectorHere: Boolean = false
+  ): Unit = {
     if selector then {
       clientIo = new SelectorIo
       serverIo = new SelectorIo
+    }
+    if selectorHere then {
+      clientIo = SelectorHereIo
+      serverIo = SelectorHereIo
     }
     val selected =
       if names.isEmpty then scenarios

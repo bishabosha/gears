@@ -8,6 +8,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.locks.LockSupport
 
@@ -21,6 +22,9 @@ trait Io {
 
   /** Writes at least one byte of `buf`, waiting for room. */
   def write(channel: SocketChannel, buf: ByteBuffer): Unit
+
+  /** Closes `channel`, and whatever this keeps for it. */
+  def close(channel: SocketChannel): Unit = channel.close()
 }
 
 /** Blocking channels: a virtual thread blocked on one parks on the JDK's own poller. */
@@ -152,4 +156,99 @@ final class SelectorIo extends Io {
 
   def write(channel: SocketChannel, buf: ByteBuffer): Unit =
     while channel.write(buf) == 0 && buf.hasRemaining do await(channel, SelectionKey.OP_WRITE)
+}
+
+/** A `Selector` design with no selector thread: non-blocking channels, each operation tried on the calling virtual
+  * thread first; one that would block waits on a selector of the channel's own, one for each direction, in which the
+  * waiting virtual thread itself selects, so registering a wait wakes no other thread. A wait could be cancelled with
+  * `Selector.wakeup`, leaving the channel open. Measures what that costs over the JDK's blocking channels, which park
+  * on the JDK's poller directly.
+  */
+object SelectorHereIo extends Io {
+
+  /** A channel's selectors, made the first time it waits in each direction, with the channel registered for it. */
+  private final class Selectors(channel: SelectableChannel) {
+    private var reading: Selector | Null = null
+    private var writing: Selector | Null = null
+
+    def forOps(ops: Int): Selector =
+      if (ops & (SelectionKey.OP_READ | SelectionKey.OP_ACCEPT)) != 0 then {
+        if reading == null then reading = opened(ops)
+        reading.nn
+      } else {
+        if writing == null then writing = opened(ops)
+        writing.nn
+      }
+
+    private def opened(ops: Int): Selector = {
+      val selector = Selector.open()
+      channel.register(selector, ops)
+      selector
+    }
+
+    def close(): Unit = {
+      if reading != null then reading.nn.close()
+      if writing != null then writing.nn.close()
+    }
+  }
+
+  // Keyed by channel: what a backend would keep on the handle's entry.
+  private val selectors = new ConcurrentHashMap[SelectableChannel, Selectors]()
+
+  /** Waits on the caller until `channel` is ready for `ops`. One thread waits in each direction at a time. */
+  private def await(channel: SelectableChannel, ops: Int): Unit = {
+    val waiting = selectors.computeIfAbsent(channel, new Selectors(_))
+    // The `Selectors` of a channel are used by one reader and one writer, each on its own selector.
+    val selector = waiting.synchronized(waiting.forOps(ops))
+    selector.select(_ => ()): Unit
+  }
+
+  def connect(address: SocketAddress): SocketChannel = {
+    val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
+    channel.configureBlocking(false)
+    if !channel.connect(address) then {
+      while !channel.finishConnect() do await(channel, SelectionKey.OP_CONNECT)
+    }
+    channel
+  }
+
+  def accept(server: ServerSocketChannel): SocketChannel = {
+    server.configureBlocking(false)
+    var client = server.accept()
+    while client == null do {
+      await(server, SelectionKey.OP_ACCEPT)
+      client = server.accept()
+    }
+    client.configureBlocking(false)
+    client
+  }
+
+  /** Reads that would block, each followed by `Thread.yield`, before waiting on the selector
+    * (`-Dgears.selectorHere.yields`): other virtual threads run meanwhile, and the data may arrive, so most reads never
+    * wait, each wait costing two `kevent`s on the channel's selector and a registration with the JDK's poller. With
+    * nothing else to run, a yield returns at once, so this spins, briefly: 32, where the bench scenarios level off.
+    */
+  private val Yields = Integer.getInteger("gears.selectorHere.yields", 32).intValue
+
+  def read(channel: SocketChannel, buf: ByteBuffer): Int = {
+    var n = channel.read(buf)
+    var yields = Yields
+    while n == 0 do {
+      if yields > 0 then {
+        yields -= 1
+        Thread.`yield`()
+      } else await(channel, SelectionKey.OP_READ)
+      n = channel.read(buf)
+    }
+    n
+  }
+
+  def write(channel: SocketChannel, buf: ByteBuffer): Unit =
+    while channel.write(buf) == 0 && buf.hasRemaining do await(channel, SelectionKey.OP_WRITE)
+
+  override def close(channel: SocketChannel): Unit = {
+    val kept = selectors.remove(channel)
+    try channel.close()
+    finally if kept != null then kept.close()
+  }
 }
