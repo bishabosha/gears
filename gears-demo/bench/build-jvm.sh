@@ -8,9 +8,12 @@
 #   <output>/jdk-vthreads   no reactor: blocking JDK channels on virtual threads in structured task scopes
 #   <output>/jdk-selector   no reactor: as jdk-vthreads, with non-blocking channels and a selector thread a side, the
 #                           least a design on Selector does (gearsexample.SelectorIo)
+#   <output>/cats-effect    the same scenarios with cats-effect and fs2 (kqueue-demo/ce-bench), a selector per worker;
+#                           it runs as `<this> bench <args>`, so compare it as `<label>=<output>/cats-effect@raw`
 #
 #   gears-demo/bench/build-jvm.sh <output>
-#   kqueue-demo/bench/compare.py nio-jdk=<output>/nio-jdk nio-reactors=<output>/nio-reactors jdk=<output>/jdk-vthreads
+#   kqueue-demo/bench/compare.py nio-jdk=<output>/nio-jdk nio-reactors=<output>/nio-reactors jdk=<output>/jdk-vthreads \
+#     ce=<output>/cats-effect@raw
 #
 # Every run first runs each scenario at a fifth of its count, unreported (`--warmup`), so the JIT has compiled what is
 # measured. They run the `java` on the PATH, or $JAVA. Where they came from is written to <executable>.json beside each,
@@ -21,15 +24,19 @@ case "$output" in /*) ;; *) output="$PWD/$output" ;; esac
 repo=$(git rev-parse --show-toplevel)
 cd "$repo"
 
-sbt --client "gearsDemoJVM/Compile/packageBin" >/dev/null
-classpath=$(sbt --client "export gearsDemoJVM/Runtime/fullClasspath" | grep -o 'List(.*)' | sed 's/^List(//; s/)$//')
-rm -rf "$output/lib"
-mkdir -p "$output/lib"
-IFS=',' read -ra entries <<<"$classpath"
-for entry in "${entries[@]}"; do
-  path=$(echo "$entry" | sed 's/^ *//; s/>.*$//; s#\${OUT}#'"$repo"'/target/out#; s#\${CSR_CACHE}#'"$HOME"'/Library/Caches/Coursier/v1#')
-  cp "$path" "$output/lib/"
-done
+package() { # package <project> <directory>: copies the project's runtime classpath into <output>/<directory>
+  sbt --client "$1/Compile/packageBin" >/dev/null
+  classpath=$(sbt --client "export $1/Runtime/fullClasspath" | grep -o 'List(.*)' | sed 's/^List(//; s/)$//')
+  rm -rf "$output/$2"
+  mkdir -p "$output/$2"
+  IFS=',' read -ra entries <<<"$classpath"
+  for entry in "${entries[@]}"; do
+    path=$(echo "$entry" | sed 's/^ *//; s/>.*$//; s#\${OUT}#'"$repo"'/target/out#; s#\${CSR_CACHE}#'"$HOME"'/Library/Caches/Coursier/v1#')
+    cp "$path" "$output/$2/"
+  done
+}
+package gearsDemoJVM lib
+package ceBenchJVM lib-ce
 
 java=${JAVA:-$(command -v java)}
 commit=$(git rev-parse HEAD)
@@ -52,4 +59,15 @@ write nio-jdk "$opens -Dasyncio.gears.carriers=jdk" bench
 write nio-reactors "$opens -Dasyncio.gears.carriers=reactors" bench
 write jdk-vthreads "--enable-preview" jdk-bench
 write jdk-selector "--enable-preview" "jdk-bench --selector"
-echo "built $output: nio-jdk nio-reactors jdk-vthreads"
+# compare.py runs `<this> bench <args>` for a build marked @raw.
+cat >"$output/cats-effect" <<EOF
+#!/bin/bash
+# compare.py runs \`<this> bench <args>\`; see gears-demo/bench/build-jvm.sh.
+command=\$1
+shift
+exec "$java" -cp "$output/lib-ce/*" cebench.CeBench "\$command" --warmup "\$@"
+EOF
+chmod +x "$output/cats-effect"
+python3 -c 'import json, sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2]))))' \
+  commit "$commit" dirty "$dirty" jdk "$jdk" command bench java_options "" >"$output/cats-effect.json"
+echo "built $output: nio-jdk nio-reactors jdk-vthreads jdk-selector cats-effect"

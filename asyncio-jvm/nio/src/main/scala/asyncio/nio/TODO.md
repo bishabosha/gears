@@ -221,3 +221,31 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
    reactor, so closing the reactor no longer interrupts it; the caller's own cancellation, which a program's end
    brings, does (the cancel demo's checks still pass).
 
+
+6. [x] **Measured: cats-effect on the JVM.** `kqueue-demo/ce-bench` is now a cross project, the same scenarios on the
+   JVM (`ceBenchJVM`, packaged by `build-jvm.sh` as `cats-effect`, run `@raw`) with `--warmup`. On the JVM, fs2 3.14
+   does TCP through cats-effect's selector poller, but Unix sockets as blocking calls on its blocking pool, so it was
+   measured both ways. fs2 listens with the JDK's default backlog of 50, which `concurrent`'s 64 connections overflow,
+   so its clients retry a refused connect. Median of 5, µs/op, JDK 27, one worker each side; over TCP without
+   `connections`, which ran out of ephemeral ports (`kqueue-demo/bench/results/jvm-vs-cats-effect.json`,
+   `jvm-vs-cats-effect-tcp.json`):
+
+   | scenario | nio-jdk | nio-reactors | jdk-vthreads | cats-effect | nio-jdk TCP | nio-reactors TCP | cats-effect TCP |
+   | --- | --- | --- | --- | --- | --- | --- | --- |
+   | pingpong | 17.7 | 9.7 | 10.4 | 52.2 | 33.5 | 19.4 | 29.6 |
+   | pingpong-deadline | 20.2 | 9.4 | 13.7 | 64.7 | 34.9 | 18.5 | 34.7 |
+   | concurrent | 5.2 | 2.0 | 10.6 | 19.7 | 7.1 | 4.6 | 18.8 |
+   | connections | 55 | 48 | 24 | 411 | | | |
+   | pipelined | 0.84 | 0.46 | 1.05 | 20.9 | 1.13 | 0.81 | 1.47 |
+   | blocking-io | 18.2 | 16.7 | 18.3 | 53.6 | 34.1 | 31.6 | 35.7 |
+   | timers | 0.17 | 0.14 | 0.26 | 0.45 | 0.18 | 0.15 | 0.42 |
+   | fairness (tick) | 0.86 (19.8) | 1.60 (3.2) | 1.78 (1.4) | 22.5 (0.21) | 1.20 (23.1) | 1.87 (3.7) | 1.53 (54.1) |
+   | mixed (compute) | 21.2 (26.1) | 16.1 (32.1) | 11.1 (21.8) | 1921 (15.8) | 39.5 (26.2) | 25.0 (43.7) | 969 (15.9) |
+
+   - Over Unix sockets, cats-effect's blocking-pool path is 3 to 25 times slower than NIO; that is fs2's JVM Unix
+     sockets, not cats-effect's runtime.
+   - Over TCP, on its selector, cats-effect is level with `Carriers.Jdk` on one connection's latency, 1.5 times
+     `Carriers.Reactors`, and 2.6 to 4 times slower with many connections. Its `blocking` (0.05 µs) runs on the
+     calling thread and is not comparable, as on Native.
+   - As on Native, its `mixed` starves the ping-pong behind a compute fiber that only `cede`s (about 1 to 2 ms a round
+     trip), its compute side the fastest for it.

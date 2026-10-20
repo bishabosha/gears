@@ -24,13 +24,14 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.CountDownLatch
 import scala.concurrent.duration.*
-import scala.scalanative.meta.LinktimeInfo
 
 /** The scenarios of `GearsBench` written with cats-effect and fs2, to compare against: the same echo server, message
   * size, operation counts and result lines, so `kqueue-demo/bench/compare.py` reads them alike (pass the executable as
   * `<label>=<path>@raw`, since it runs as `cebench bench`). As in `GearsBench`, the echo server runs on a runtime of its
   * own and the clients on another, each with one worker thread, polling its own kqueue, unless `--workers` says
-  * otherwise. `pingpong-fresh-ops` has no counterpart: fs2 builds no op values to reuse.
+  * otherwise. `pingpong-fresh-ops` has no counterpart: fs2 builds no op values to reuse. On the JVM the workers poll a
+  * `Selector` each instead, for TCP only: fs2 does Unix sockets there as blocking calls on the blocking pool.
+  * `--warmup` runs every scenario first at a fifth of its count, as `GearsBench` does.
   */
 object CeBench {
 
@@ -59,7 +60,7 @@ object CeBench {
     Scenario(
       "blocking-io",
       50_000,
-      (address, count, _) => Network[IO].connect(address).use(s => repeat(count)(IO.blocking(()) >> roundTrip(s)))
+      (address, count, _) => connect(address).use(s => repeat(count)(IO.blocking(()) >> roundTrip(s)))
     ),
     Scenario("timers", 200_000, (_, count, _) => timerStress(count)),
     Scenario("fairness", 200_000, (address, count, _) => fairness(address, count)),
@@ -76,6 +77,16 @@ object CeBench {
   private def until(done: Ref[IO, Boolean], count: Ref[IO, Long])(io: IO[Unit]): IO[Unit] =
     done.get.flatMap(if _ then IO.unit else io >> count.update(_ + 1) >> until(done, count)(io))
 
+  /** Connects to `address`, trying again while the server turns the connection away. On the JVM, fs2 listens with the
+    * JDK's default backlog of 50, which `concurrent`'s 64 connections at once overflow; on Scala Native it is 128.
+    */
+  private def connect(address: GenSocketAddress): cats.effect.Resource[IO, Socket[IO]] =
+    Network[IO].connect(address).handleErrorWith {
+      case _: java.net.ConnectException | _: java.net.SocketException =>
+        cats.effect.Resource.eval(IO.sleep(100.micros)) >> connect(address)
+      case e => cats.effect.Resource.raiseError[IO, Socket[IO], Throwable](e)
+    }
+
   /** Sends one message and waits for all of its echo. */
   private def roundTrip(socket: Socket[IO]): IO[Unit] =
     socket.write(message) >> socket.readN(MessageSize).flatMap { echoed =>
@@ -87,13 +98,13 @@ object CeBench {
     * trip also has a timeout, which is cancelled once the echo is back.
     */
   private def pingPong(address: GenSocketAddress, count: Int, deadline: Boolean): IO[Unit] =
-    Network[IO].connect(address).use { socket =>
+    connect(address).use { socket =>
       repeat(count)(if deadline then roundTrip(socket).timeout(60.seconds) else roundTrip(socket))
     }
 
   /** Writes `count` messages, each as its own write, from one fiber while reading the echoes in another. */
   private def pipelined(address: GenSocketAddress, count: Int): IO[Unit] =
-    Network[IO].connect(address).use { socket =>
+    connect(address).use { socket =>
       val total = count.toLong * MessageSize
       def read(received: Long): IO[Unit] =
         if received >= total then IO.unit
@@ -197,7 +208,9 @@ object CeBench {
         server.accept.map(socket => Stream.eval(echo(socket))).parJoinUnbounded.compile.drain
     }
 
-  /** A runtime of `workers` threads, each polling its own kqueue, as cats-effect's default runtime is built. */
+  /** A runtime of `workers` threads, each polling its own kqueue (a `Selector` on the JVM), as cats-effect's default
+    * runtime is built.
+    */
   private def runtime(workers: Int, prefix: String): IORuntime = {
     val (compute, poller, computeDown) =
       IORuntime.createWorkStealingComputeThreadPool(threads = workers, threadPrefix = prefix)
@@ -212,7 +225,8 @@ object CeBench {
       @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
       @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: Flag,
       @arg port: Int = 19876,
-      @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1
+      @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
+      @arg(doc = "run every scenario once at a fifth of its count first, so the JIT has compiled it") warmup: Flag
   ): Unit = {
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
     val selected =
@@ -236,8 +250,16 @@ object CeBench {
       val listening = new CountDownLatch(1)
       serve(address, listening).unsafeRunAndForget()(using serverRuntime)
       listening.await()
+      // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; the few results
+      // a scenario prints itself come before the measured ones, which `compare.py` keeps.
+      val warm =
+        if warmup.value then
+          selected.toList.traverse_(scenario =>
+            scenario.body(address, math.max(1, (scenario.baseCount * scale / 5).toInt), connections)
+          )
+        else IO.unit
       val program =
-        IO.println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s") >>
+        warm >> IO.println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s") >>
           selected.toList.traverse_ { scenario =>
             val count = math.max(1, (scenario.baseCount * scale).toInt)
             for {
@@ -255,10 +277,7 @@ object CeBench {
   }
 
   @main(name = "target-info", doc = "How the executable was built")
-  def targetInfo(): Unit = {
-    println(s"multithreaded: ${LinktimeInfo.isMultithreadingEnabled}")
-    println(s"release: ${LinktimeInfo.releaseMode}")
-  }
+  def targetInfo(): Unit = Platform.targetInfo.foreach(println)
 
   def main(args: Array[String]): Unit = ParserForMethods(this).runOrExit(args.toIndexedSeq)
 }
