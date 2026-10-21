@@ -434,7 +434,8 @@ object KQueueExampleBench {
     // compute work, and `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written
     // loop has a counterpart for.
     val gearsOnly =
-      Set("mixed", "pingpong-fresh-ops", "pingpong-pooled", "fairness", "starvation", "concurrent-compute", "concurrent-offload")
+      Set("mixed", "pingpong-fresh-ops", "pingpong-pooled", "large", "large-pooled", "fairness", "starvation",
+        "concurrent-compute", "concurrent-offload")
     val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
       case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))

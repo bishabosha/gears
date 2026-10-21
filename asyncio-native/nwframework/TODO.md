@@ -153,11 +153,24 @@ receives straight into on Dispatch's thread (`native-pooled-reads-tcp.json`, rel
 | pingpong | 8.29 | 15.5 | 73.3 |
 | pingpong-pooled | 11.0 | 15.5 | 72.9 |
 
-So the saved copy does not show: 64 bytes a message is nothing against a thread wake-up, and on kqueue over Unix
-sockets the pooled read costs 2.7 µs more, the pool's lock taken twice a read and the slot handed over, where the
-plain read is one call on a buffer the caller holds. The change earns its place for what it allows, a backend that
-owns its buffers handing them over, and for io_uring's multishot receive, not for this backend's latency; a larger
-message, or a receive that brings several, would be where it shows. Listening and closing as ops removed this
+So the saved copy does not show at 64 bytes a message, which is nothing against a thread wake-up, and on kqueue over
+Unix sockets the pooled read costs 2.7 µs more, the pool's lock taken twice a read and the slot handed over, where
+the plain read is one call on a buffer the caller holds. At a size where a copy counts it does show: the `large`
+scenarios send 128 KB messages (`GEARS_BENCH_LARGE` sets the size) as `pipelined` does, writing and reading at
+once, since a ping-pong of messages larger than a Unix socket's 8 KB buffers deadlocks both sides on their writes;
+`large-pooled` reads into pool buffers the size of a message (`native-large-unix.json`, `native-large-tcp.json`,
+µs a message):
+
+| | kqueue, Unix socket | kqueue, TCP | NWFramework, TCP |
+|---|---|---|---|
+| large | 78.1 | 41.0 | 396 |
+| large-pooled | 77.6 | 40.0 | 373 |
+
+NWFramework saves 23 µs a message, two copies of 128 KB, 6% of its cost; kqueue saves nothing measurable, its plain
+read copying once, from the kernel into the caller's buffer, as the pooled one does into the pool's. The change
+earns its place for a backend that owns its buffers, this one and io_uring's multishot receive, and costs the others
+nothing at this size. The table's other lesson is Network.framework at bulk over loopback: nine times kqueue's cost
+a message, against three and a half at 64 bytes. Listening and closing as ops removed this
 backend's two blocking waits and the semantic deviation they were, at no cost to the others. The issue-point wording
 changes nothing yet: batching was not implemented, its gain over loopback being nil for a framework whose cost is
 the hop.
