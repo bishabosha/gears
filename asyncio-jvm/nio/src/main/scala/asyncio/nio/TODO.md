@@ -60,7 +60,8 @@ Gears suspends a future on the JVM by blocking its virtual thread, so `perform` 
 what differs is what carries the futures, `Carriers`:
 
 - **`Carriers.Jdk`, the default:** gears' own virtual threads, on the JDK's scheduler, with `workers` reactor threads
-  beside them (`ReactorThreads`), found through an inheritable thread local the runner sets (`OpRouter.ambient`).
+  beside them (a `ReactorPool` whose workers carry no futures, `ReactorPool.start`), found through an inheritable
+  thread local the runner sets (`OpRouter.ambient`).
   `perform` first tries the op on the caller's own thread (`ReactorBackend.tryNow`); one that would block, while few
   ops are waiting, is tried again after a yield, up to 16 times, then waited for on the handle's own selector in the
   caller's thread (`ReactorBackend.waitHere`, cancelled with `Selector.wakeup`); otherwise, or with many ops waiting,
@@ -75,6 +76,29 @@ what differs is what carries the futures, `Carriers`:
   (Executor)` and `Thread.currentCarrierThread` by reflection, and needs `--add-opens java.base/java.lang=ALL-UNNAMED`;
   without it, `run` says so. Its gears support is `FactoryVThreadSupport`, gears' `VThreadSupport` with the threads
   from the pool's factory.
+- **`Carriers.Reactors` is unsound on JDK 24 and later (JEP 491), found 2026-10-21:** a virtual thread that blocks on
+  a contended monitor (a `synchronized` block, `Object.wait`, or a class another thread is initialising) is now
+  unmounted, and the JDK's `VirtualThread-unblocker` thread later resubmits its continuation to the thread's
+  scheduler, which is the pool: from a thread that is no worker, so it goes to the pool's shared queue, and whichever
+  worker is free takes it. The future has changed carrier without parking. `performHere` assumes it cannot: it reads
+  `currentWorker`, submits straight into that worker's reactor, and registers its waiter's listener in a plain field,
+  all on the premise that the caller stays on that worker's thread. When the migration lands inside that window, a
+  reactor gets a submission from a foreign thread while it is parked in `select`, with no wake-up, and nothing in
+  `submit` is thread-safe. Seen as hangs of `ReactorCarriersOnFourSuite` in 4 of 10 runs of the JVM gears tests, in
+  whichever test came first, with several suites running in one JVM, which is what makes monitors contend; never with
+  one worker, which takes its own resubmitted continuation back. Pinned by a probe in `NioReactor.submit` comparing
+  the caller's carrier with the loop thread: a timer added to reactor 0's heap from worker 1's thread (the program's
+  thread said `runnable@reactor-worker-1`, the waiter said it was made for worker 0), and a read registered on reactor
+  2's key from another thread, the key's interest still 0 and still marked dirty; every injection into the pool
+  logged from `VirtualThread.unblock` on `VirtualThread-unblocker`. `Carriers.Jdk` is unaffected: its ops are handed to
+  a reactor thread through its inbox and a wake-up, and its waiter is built for two threads. Scala Native's pool is
+  unaffected: its futures are continuations run on the worker's own thread, which nothing moves. The ways out, each a
+  design choice: (a) pin the virtual thread across `currentWorker` and the submit with `jdk.internal.vm.Continuation
+  .pin`, as the JDK itself does when submitting a task from a virtual thread, one more internal (`--add-exports
+  java.base/jdk.internal.vm=ALL-UNNAMED`) for a mode that already needs `--add-opens`, and make the waiter's state
+  atomic, since the park that follows must not be pinned; (b) give up the direct submit, handing every op to the
+  worker's inbox as `Carriers.Jdk` does, which loses the fast path that is this mode's reason to exist; (c) retire
+  the mode. Until one is chosen, the four-worker suite can hang under load.
 
 `perform` finds its reactors through `OpRouter` in both cases (`ReactorAsync`): on a worker, that worker's reactor,
 with the fast path; anywhere else, a hand-off to a driver's thread, with a waiter whose state is locked, since the caller
