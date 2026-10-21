@@ -6,9 +6,11 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import asyncio.HandleSlot
+import asyncio.Received
 import asyncio.Interest
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
+import asyncio.unsafe.NativePool
 import asyncio.unsafe.NonBlocking
 import asyncio.unsafe.PosixSockets
 
@@ -28,6 +30,33 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   }
   override def transferred: Int = read // -1 at EOF, which stays readable, so readiness is not known from it
   override def mayStillBeReady: Boolean = read < 0 || filled // a short read drained the socket
+  override def edgeTriggered: Boolean = true
+}
+
+/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): as `ReadIntoBuffer`, into a buffer
+  * taken when the descriptor is ready, and given back if it was not after all.
+  */
+final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
+  def interest: Interest = Interest.Read
+  private var read = 0
+  private var filled = false
+  def perform(): Boolean = {
+    val slot = pool.take()
+    if slot == null then throw new java.io.IOException("The pool has no buffer free")
+    val buffer = slot.nn.buffer
+    read = NonBlocking.read(fd, buffer) // -1 at EOF, which leaves the buffer as it was
+    if read == 0 then {
+      slot.nn.release()
+      false
+    } else {
+      filled = !buffer.hasRemaining()
+      buffer.flip()
+      into.set(slot.nn)
+      true
+    }
+  }
+  override def transferred: Int = read
+  override def mayStillBeReady: Boolean = read < 0 || filled
   override def edgeTriggered: Boolean = true
 }
 

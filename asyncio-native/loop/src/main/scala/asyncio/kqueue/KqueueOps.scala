@@ -3,6 +3,10 @@ package asyncio.kqueue
 import java.nio.ByteBuffer
 
 import asyncio.BlockingOps
+import asyncio.BufferPool
+import asyncio.LifecycleOps
+import asyncio.PooledReadOps
+import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
@@ -14,6 +18,7 @@ import asyncio.Slot
 import asyncio.UnixAddress
 import asyncio.UnixDatagramOps
 import asyncio.unsafe.BlockingRun
+import asyncio.unsafe.NativePool
 
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below
   * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -39,7 +44,9 @@ sealed trait KqueueOp {
 object KqueueOps
     extends UnixDatagramOps[KqueueOp]
     with ReadinessOps[KqueueOp]
-    with BlockingOps[KqueueOp] {
+    with BlockingOps[KqueueOp]
+    with PooledReadOps[KqueueOp]
+    with LifecycleOps[KqueueOp] {
   def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
   def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
   def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)
@@ -55,6 +62,31 @@ object KqueueOps
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
+  def read(fd: Int, pool: BufferPool, into: Slot[Received]): PooledRead = PooledRead(fd, KqueueOps.native(pool), into)
+  def listening(fd: Int): KqueueOp = new Listening(fd)
+  def close(fd: Int): KqueueOp = new Close(fd)
+
+  private def native(pool: BufferPool): NativePool = pool match {
+    case native: NativePool => native
+    case other              => throw new IllegalArgumentException(s"$other is not a pool of this backend's")
+  }
+}
+
+/** An op the reactor performs as soon as it is submitted, with no descriptor to wait for: its completion runs on the
+  * next turn, with the failure `perform` threw, if any. One-shot.
+  */
+sealed abstract class KqueueAtOnce extends KqueueOp {
+  def perform(): Unit
+}
+
+/** Binds and listens a socket from `KqueueHandles.listener` (see `LifecycleOps.listening`). */
+final class Listening(val fd: Int) extends KqueueAtOnce {
+  def perform(): Unit = KqueueHandles.bindAndListen(fd)
+}
+
+/** Closes a descriptor (see `LifecycleOps.close`): at once, as `KqueueHandles.close` does. */
+final class Close(val fd: Int) extends KqueueAtOnce {
+  def perform(): Unit = KqueueHandles.close(fd)
 }
 
 /** What to do with a descriptor once kqueue reports it ready. `perform` runs a non-blocking operation on the reactor

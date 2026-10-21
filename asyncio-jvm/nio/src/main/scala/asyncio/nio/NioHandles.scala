@@ -24,6 +24,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 import asyncio.IpAddress
+import asyncio.LifecycleHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixStreamHandles
@@ -192,7 +193,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles with ReadinessHandles {
+object NioHandles extends UnixStreamHandles with ReadinessHandles with LifecycleHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
@@ -222,6 +223,30 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
       // A Unix socket usually connects at once; `ops.connect` checks.
       try channel.connect(socketAddress(address))
       catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
+    }
+  }
+
+  // Listeners from `listener`, with where they are to listen, until their `listening` op binds them.
+  private val toListen = new java.util.concurrent.ConcurrentHashMap[Integer, (IpAddress, Boolean)]()
+
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+    val channel = ServerSocketChannel.open(familyOf(address))
+    val handle = selectable(channel, null)(channel.configureBlocking(false))
+    toListen.put(handle, (address, reuseAddr))
+    handle
+  }
+
+  /** Binds a listener from `listener`, for its `listening` op; throws if it is not one, or the bind fails. */
+  private[nio] def bind(handle: Int): Unit = {
+    val pending = toListen.remove(handle)
+    if pending == null then throw new IOException(s"Handle $handle is not a listener waiting to listen")
+    val (address, reuseAddr) = pending
+    entry(handle) match {
+      case s: Selectable =>
+        val channel = s.as(classOf[ServerSocketChannel], "Listening")
+        if reuseAddr then channel.setOption(StandardSocketOptions.SO_REUSEADDR, true)
+        channel.bind(socketAddress(address), Backlog)
+      case other => throw new IOException(s"Listening needs a socket, not $other")
     }
   }
 
@@ -275,7 +300,10 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   def readNow(handle: Int, buf: ByteBuffer): Int = entry(handle).read(buf)
   def writeNow(handle: Int, buf: ByteBuffer): Int = entry(handle).write(buf)
 
-  def close(handle: Int): Unit = table.remove(handle).close()
+  def close(handle: Int): Unit = {
+    toListen.remove(handle)
+    table.remove(handle).close()
+  }
 
   /** Runs `setup` on `channel` and gives it a handle, closing it again if `setup` fails. */
   private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Int =

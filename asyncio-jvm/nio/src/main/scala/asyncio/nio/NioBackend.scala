@@ -1,6 +1,9 @@
 package asyncio.nio
 
 import asyncio.BlockingBackend
+import asyncio.BufferPool
+import asyncio.LifecycleBackend
+import asyncio.PooledReadBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.ReadinessBackend
@@ -11,7 +14,13 @@ import asyncio.UnixStreamBackend
   * Besides what every backend has, they have readiness, blocking ops on a blocker pool, and Unix stream sockets, but
   * neither Unix datagram sockets nor FIFOs, which the JDK cannot wait on.
   */
-object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBackend with UnixStreamBackend {
+object NioBackend
+    extends ReactorBackend
+    with ReadinessBackend
+    with BlockingBackend
+    with UnixStreamBackend
+    with PooledReadBackend
+    with LifecycleBackend {
 
   type Op = NioOp
 
@@ -24,6 +33,8 @@ object NioBackend extends ReactorBackend with ReadinessBackend with BlockingBack
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   def open(): Reactor.Of[Op] = NioReactor.open()
+
+  def pool(bufferSize: Int, buffers: Int): BufferPool = new DirectPool(bufferSize, buffers)
 
   /** A command tried first is tried here: a non-blocking channel may be read and written from any thread, and trying
     * touches no reactor. A `whenReady`, a timer or a blocking op is not.

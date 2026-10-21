@@ -1,6 +1,9 @@
 package asyncio.kqueue
 
 import asyncio.BlockingBackend
+import asyncio.BufferPool
+import asyncio.LifecycleBackend
+import asyncio.PooledReadBackend
 import asyncio.FifoBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
@@ -19,7 +22,9 @@ object KqueueBackend
     with BlockingBackend
     with UnixStreamBackend
     with UnixDatagramBackend
-    with FifoBackend {
+    with FifoBackend
+    with PooledReadBackend
+    with LifecycleBackend {
 
   type Op = KqueueOp
 
@@ -34,4 +39,6 @@ object KqueueBackend
 
   /** Opens a reactor with `KqueueReactor.open`'s defaults. */
   def open(): Reactor.Of[Op] = KqueueReactor.open()
+
+  def pool(bufferSize: Int, buffers: Int): BufferPool = new asyncio.unsafe.NativePool(bufferSize, buffers)
 }

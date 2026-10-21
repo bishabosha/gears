@@ -200,6 +200,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         promise match {
           case blocking: KqueueBlocking => asyncio.unsafe.Blockers.run(blocking)
         }
+      case atOnce: KqueueAtOnce =>
+        atOnce.completion = pending
+        try atOnce.perform()
+        catch case t: Throwable => atOnce.atOnceFailure = t
+        if finishNow then finished = true else ready.add(atOnce)
     }
     op.submitted = true
     if finished then {
@@ -470,6 +475,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           take(timer)
         }
       case promise: KqueuePromise => detach(promise)
+      case _: KqueueAtOnce        => null // performed when submitted, so finished
     }
     if completion == null then false
     else {

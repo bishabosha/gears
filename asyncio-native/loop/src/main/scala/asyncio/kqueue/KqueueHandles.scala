@@ -17,6 +17,7 @@ import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
 import asyncio.IpAddress
+import asyncio.LifecycleHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixDatagramHandles
@@ -42,8 +43,28 @@ object KqueueHandles
     extends UnixStreamHandles
     with UnixDatagramHandles
     with FifoHandles
-    with ReadinessHandles {
+    with ReadinessHandles
+    with LifecycleHandles {
   private val boundPaths = new ConcurrentHashMap[Integer, String]()
+
+  // Sockets from `listener`, with where they are to listen, until their `listening` op binds them.
+  private val toListen = new ConcurrentHashMap[Integer, (SocketAddress, Boolean)]()
+
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+    val fd = socketFor(address, Transport.Stream)(_ => ())
+    toListen.put(fd, (address, reuseAddr))
+    fd
+  }
+
+  /** Binds and listens a socket from `listener`, for its `listening` op; throws if it is not one, or the bind fails. */
+  private[kqueue] def bindAndListen(fd: Int): Unit = {
+    val pending = toListen.remove(fd)
+    if pending == null then throw new IOException(s"Descriptor $fd is not a listener waiting to listen")
+    val (address, reuseAddr) = pending
+    if reuseAddr then PosixSockets.setReuseAddress(fd)
+    bindTo(fd, address)
+    PosixSockets.listen(fd, PosixSockets.maxConnections)
+  }
 
   /** Opens a regular file. Its descriptor is marked in `DescriptorTable`, so that the reactor never takes a short read
     * of it to mean it is drained: kqueue reports a regular file readable only while its offset is short of the end, so
@@ -110,6 +131,7 @@ object KqueueHandles
     * while it is being closed.
     */
   def close(handle: Int): Unit = {
+    toListen.remove(handle)
     val path = boundPaths.remove(handle) // before closing, while the number is still ours
     val generation = DescriptorTable.generation(DescriptorTable.get(handle))
     DescriptorTable.closing(handle)
