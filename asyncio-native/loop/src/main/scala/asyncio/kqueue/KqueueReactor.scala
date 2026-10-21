@@ -198,7 +198,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         promise.completion = pending
         pendingPromises += promise
         promise match {
-          case blocking: KqueueBlocking => asyncio.unsafe.Blockers.run(blocking)
+          case blocking: KqueueBlocking => asyncio.Blockers.run(blocking)
         }
       case atOnce: KqueueAtOnce =>
         atOnce.completion = pending

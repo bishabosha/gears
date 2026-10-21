@@ -31,7 +31,7 @@ same scenarios.
   its queues and that drain: the reactor parked, with no timer to bound the park, on a blocking op's result already
   queued. It showed once in thirty runs of the demo suite, in `blocking`.
 - **The rest is `KqueueReactor`'s**: timers in a user-space heap (`asyncio.unsafe.TimerHeap`, now shared), blocking
-  ops and `resolve` on the shared blocker pool (`asyncio.unsafe.Blockers`, now shared), completions of ops finished at
+  ops and `resolve` on the shared blocker pool (`asyncio.Blockers`, shared by every backend, NIO too), completions of ops finished at
   submission queued for the next turn, `trySubmit` finishing them on the caller.
 - Every executable that links it needs `-framework Network` (`networkFramework` in build.sbt).
 
