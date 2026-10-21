@@ -13,17 +13,18 @@ import asyncio.unsafe.TimerHeap
 
 /** A `Reactor` over Apple's Network.framework, for ops built by `DarwinOps`. Network.framework is completion-based:
   * a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback. The C side
-  * (`darwin_io.c`) keeps what the callbacks deliver on the handle, and posts a notification to the queue of the
-  * reactor whose op waits for it; this reactor's thread drains the queue each turn, and parks on it between turns,
-  * so that every completion runs here, as `Reactor` promises. An op is attempted when submitted, so a read of bytes
-  * already received, an accept of a connection already accepted, or a connect of a connection already ready finishes
-  * at once; otherwise it registers a waiter on the handle's C side and is attempted again when notified.
+  * (`darwin_io.c`) queues what the callbacks deliver as events on the handle, and wakes the reactor watching the
+  * handle; this reactor's thread drains the handles with events each turn, and parks between turns, so that every
+  * completion runs here, as `Reactor` promises. The handle (`DarwinHandle`) applies the events and tells the op
+  * waiting for them, which is attempted again; an op is attempted when submitted, so a read of bytes already
+  * received, an accept of a connection already accepted, or a connect of a connection already ready finishes at
+  * once.
   *
   * A receive once issued cannot be withdrawn, so cancelling a read leaves its receive outstanding, and what it brings
   * waits on the handle for the next read; a write copies its bytes when submitted, so cancelling it leaves the
-  * caller's buffer alone, the bytes already in the stack. Timers are kept in a heap here, and bound how long the
+  * caller's buffer alone, the bytes already with the stack. Timers are kept in a heap here, and bound how long the
   * thread parks. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a handle, from any
-  * thread, notifies the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
+  * thread, tells the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
   */
 final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
 
@@ -34,12 +35,14 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
 
   def handles: DarwinHandles.type = DarwinHandles
 
-  /** The C side's queue of notifications for this reactor, and the condition its thread parks on. */
+  /** The C side's list of handles with events for this reactor, and the condition its thread parks on. */
   private[darwin] val ptr: DarwinIo.Reactor = DarwinIo.dn_reactor_create()
-  DarwinIo.dn_reactor_thread_qos() // the opening thread drives the reactor, unless `run` is called elsewhere
 
-  // The notifications a turn drains, allocated once and freed by `close`.
-  private val drained: Ptr[DarwinIo.Done] = stdlib.malloc((sizeOf[DarwinIo.Done] * maxDrained).toCSize).asInstanceOf[Ptr[DarwinIo.Done]]
+  // The handles a turn drains, and the event a handle copies out, allocated once and freed by `close`.
+  private val drained: Ptr[DarwinIo.Handle] =
+    stdlib.malloc((sizeOf[Ptr[Byte]] * maxDrained).toCSize).asInstanceOf[Ptr[DarwinIo.Handle]]
+  private[darwin] val event: Ptr[DarwinIo.Event] =
+    stdlib.malloc(sizeOf[DarwinIo.Event].toCSize).asInstanceOf[Ptr[DarwinIo.Event]]
 
   private def take(op: DarwinOp): Completion[DarwinOp] = {
     val completion = op.completion.nn
@@ -53,9 +56,15 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
-  // Commands waiting on a handle, by the token of their submission, which the notification carries. Loop thread only.
+  // Commands waiting on a handle, by the token of their submission, which a handle's notification carries. Loop
+  // thread only.
   private val waiting = scala.collection.mutable.LongMap.empty[DarwinCommand]
   private var nextToken = 1L
+
+  // Tokens of commands a handle told are worth attempting again: from this thread, in a turn, unboxed; and from any
+  // other thread, boxed, which is rare: another reactor draining a handle an op here waits on.
+  private val notifiedHere = new DarwinReactor.Tokens
+  private val notifiedElsewhere = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   // Ops that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
   private val ready = new java.util.ArrayDeque[DarwinOp]()
@@ -132,9 +141,12 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     finished
   }
 
-  /** Attempts `command`: true if it finished, or failed, with the failure kept for its completion. */
-  private def attempted(command: DarwinCommand): Boolean =
-    try command.attempt(this)
+  /** Attempts `command`: true if it finished, or failed, with the failure kept for its completion. On submission the
+    * handle takes in its events first, so that an op finishes at once when it can; attempted again after a
+    * notification, the events were taken in by the drain that led to it.
+    */
+  private def attempted(command: DarwinCommand, drainFirst: Boolean = true): Boolean =
+    try command.attempt(this, drainFirst)
     catch {
       case t: Throwable =>
         command.atOnceFailure = t
@@ -156,9 +168,17 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     any
   }
 
-  /** Drains the C side's notifications and attempts the commands they are for: one that finishes has its completion
-    * run; one that must still wait is registered again by its attempt. A notification for a token no longer waiting,
-    * such as a cancelled command's, is dropped. Returns whether there were any.
+  /** A handle tells the reactor that the command of `token`, waiting there, is worth attempting again. Any thread. */
+  private[darwin] def notified(token: Long): Unit =
+    if Thread.currentThread() eq loopThread then notifiedHere.add(token)
+    else {
+      notifiedElsewhere.add(token)
+      wakeup()
+    }
+
+  /** Drains the handles with events for this reactor, which apply them and tell the waiting commands, then attempts
+    * those commands: one that finishes has its completion run; one that must still wait is registered again by its
+    * attempt. A token no longer waiting, such as a cancelled command's, is dropped. Returns whether there were any.
     */
   private def deliverNotified(): Boolean = {
     var any = false
@@ -167,22 +187,31 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
       any = true
       var i = 0
       while i < n do {
-        val token = (drained + i)._1
-        val command = waiting.remove(token)
-        command match {
-          case Some(command) =>
-            if attempted(command) then {
-              val failure = command.atOnceFailure
-              if failure != null then {
-                command.atOnceFailure = null
-                fail(command, failure)
-              } else complete(command)
-            } else waiting.put(token, command)
-          case None => ()
-        }
+        val handle = DarwinHandles.at(drained(i))
+        if handle != null then handle.drain(event)
         i += 1
       }
       n = if n == maxDrained then DarwinIo.dn_reactor_drain(ptr, drained, maxDrained) else 0
+    }
+    var token = notifiedElsewhere.poll()
+    while token != null do {
+      notifiedHere.add(token.longValue)
+      token = notifiedElsewhere.poll()
+    }
+    while !notifiedHere.isEmpty do {
+      any = true
+      val t = notifiedHere.poll()
+      waiting.remove(t) match {
+        case Some(command) =>
+          if attempted(command, drainFirst = false) then {
+            val failure = command.atOnceFailure
+            if failure != null then {
+              command.atOnceFailure = null
+              fail(command, failure)
+            } else complete(command)
+          } else waiting.put(t, command)
+        case None => ()
+      }
     }
     any
   }
@@ -221,18 +250,21 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     any
   }
 
+  private def withdraw(command: DarwinCommand): Unit = {
+    command.target.nn.unwait(command.kind, command.token)
+    command match {
+      case write: DarwinWrite => write.reset()
+      case send: DarwinSend   => send.reset()
+      case _                  => ()
+    }
+  }
+
   def cancel(op: Op): Boolean = {
     val completion: Completion[DarwinOp] | Null = op match {
       case command: DarwinCommand =>
         if command.completion == null || !waiting.remove(command.token).isDefined then null // finished, or never here
         else {
-          // The waiter goes if it has not been notified yet; a notification already posted is dropped when drained.
-          DarwinIo.dn_cancel_wait(command.target.nn.ptr, command.kind, command.token)
-          command match {
-            case write: DarwinWrite => write.reset()
-            case send: DarwinSend   => send.reset()
-            case _                  => ()
-          }
+          withdraw(command) // a notification already queued for it is dropped when drained
           take(command)
         }
       case timer: DarwinTimer =>
@@ -274,13 +306,13 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     deliverResolved()
   }
 
-  /** Parks the thread until a notification, a wake-up, or the earliest timer is due, after checking for a notification
+  /** Parks the thread until a handle has events, a wake-up, or the earliest timer is due, after checking for events
     * `spinChecks` times without parking.
     */
   private def parkUntilNotified(): Unit = {
     var spins = 0
     while spins < spinChecks do {
-      if DarwinIo.dn_reactor_ready(ptr) != 0 || !resolvedQueue.isEmpty then return
+      if DarwinIo.dn_reactor_ready(ptr) != 0 || !resolvedQueue.isEmpty || !notifiedElsewhere.isEmpty then return
       Thread.onSpinWait()
       spins += 1
     }
@@ -301,7 +333,6 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
 
   def run(): Unit = {
     loopThread = Thread.currentThread()
-    DarwinIo.dn_reactor_thread_qos()
     running = true
     while running do runOnce(block = true)
   }
@@ -313,16 +344,12 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     if !closed then {
       val dropped = scala.collection.mutable.ArrayBuffer.empty[(DarwinOp, Completion[DarwinOp])]
       def drop(op: DarwinOp): Unit = dropped += ((op, take(op)))
-      for (token, command) <- waiting.toList do {
-        DarwinIo.dn_cancel_wait(command.target.nn.ptr, command.kind, token)
-        command match {
-          case write: DarwinWrite => write.reset()
-          case send: DarwinSend   => send.reset()
-          case _                  => ()
-        }
+      for (_, command) <- waiting.toList do {
+        withdraw(command)
         drop(command)
       }
       waiting.clear()
+      notifiedHere.clear()
       while !timers.isEmpty do drop(timers.poll())
       while !ready.isEmpty do drop(ready.poll().nn)
       val running = scala.collection.mutable.ArrayBuffer.empty[DarwinBlocking]
@@ -341,25 +368,63 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
       cancellingBlockers.clear()
       closed = true
       resolvedQueue.clear()
+      notifiedElsewhere.clear()
       running.foreach(_.awaitEnd())
       DarwinIo.dn_reactor_destroy(ptr)
       stdlib.free(drained.asInstanceOf[Ptr[Byte]])
+      stdlib.free(event.asInstanceOf[Ptr[Byte]])
       dropped.foreach((op, completion) => completion.onCancel(op))
     }
 }
 
 object DarwinReactor {
 
-  /** Opens a reactor. Before parking for a notification it checks for one `spinChecks` times; each turn drains up to
-    * `maxDrained` notifications at a time. Close it when done.
+  /** Opens a reactor. Before parking for events it checks for them `spinChecks` times; each turn drains up to
+    * `maxDrained` handles with events at a time. Close it when done.
     */
   def open(spinChecks: Int = DefaultSpinChecks, maxDrained: Int = 256): DarwinReactor = {
     require(spinChecks >= 0 && maxDrained > 0)
     new DarwinReactor(spinChecks, maxDrained)
   }
 
-  /** How many times a reactor checks for a notification before parking, by default: `ASYNCIO_DARWIN_SPIN` in the
+  /** How many times a reactor checks for events before parking, by default: `ASYNCIO_DARWIN_SPIN` in the
     * environment, for measuring, else none.
     */
   val DefaultSpinChecks: Int = sys.env.get("ASYNCIO_DARWIN_SPIN").map(_.toInt).getOrElse(0)
+
+  /** A queue of tokens that allocates nothing per token: a ring of longs, grown when full. */
+  private[darwin] final class Tokens {
+    private var ring = new Array[Long](64)
+    private var head = 0
+    private var size = 0
+
+    def isEmpty: Boolean = size == 0
+
+    def add(token: Long): Unit = {
+      if size == ring.length then {
+        val grown = new Array[Long](ring.length * 2)
+        var i = 0
+        while i < size do {
+          grown(i) = ring((head + i) % ring.length)
+          i += 1
+        }
+        ring = grown
+        head = 0
+      }
+      ring((head + size) % ring.length) = token
+      size += 1
+    }
+
+    def poll(): Long = {
+      val token = ring(head)
+      head = (head + 1) % ring.length
+      size -= 1
+      token
+    }
+
+    def clear(): Unit = {
+      head = 0
+      size = 0
+    }
+  }
 }
