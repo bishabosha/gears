@@ -50,7 +50,7 @@ object GearsWhois {
             }
           }
           println(s"--- server closed the connection after $received bytes")
-        } finally r.handles.close(fd)
+        } finally perform(r, r.ops.close(fd))
       }
     }
   }

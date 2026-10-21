@@ -47,6 +47,36 @@ trait ReactorContract extends FunSuite {
     finally reactor.close()
   }
 
+  /** Runs `op` on `r`, turning until it is done, and returns its failure, if any. */
+  protected def run(r: R, op: backend.Op)(using munit.Location): Throwable | Null = {
+    val outcome = Outcome()
+    r.submit(op, outcome)
+    turnUntil(r)(outcome.finished)
+    outcome.failure
+  }
+
+  /** Closes `handle` through `r`, as the interface has it, and throws the close's failure. */
+  protected def close(r: R, handle: Int)(using munit.Location): Unit = {
+    val failure = run(r, backend.ops.close(handle))
+    if failure != null then throw failure
+  }
+
+  /** Closes `handle` from a thread with no reactor, on a reactor opened for it. */
+  protected def closeAlone(handle: Int)(using munit.Location): Unit = withReactor(r => close(r, handle))
+
+  /** A listener on `address`, listening: `handles.listener` and the `listening` op, whose failure is thrown, with
+    * the handle closed.
+    */
+  protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Int = {
+    val handle = backend.handles.listener(address, reuseAddr)
+    val failure = run(r, backend.ops.listening(handle))
+    if failure != null then {
+      close(r, handle)
+      throw failure
+    }
+    handle
+  }
+
   /** Turns `reactors` without blocking until `cond` holds, failing after a few seconds. */
   protected def turnUntil(reactors: Reactor*)(cond: => Boolean)(using loc: munit.Location): Unit = {
     val deadline = System.nanoTime() + 5_000_000_000L
@@ -126,8 +156,8 @@ trait ReactorContract extends FunSuite {
         assertEquals(outcome.completed, 1)
         assertEquals(text(buf), "hello")
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        close(r, in)
+        close(r, out)
       }
     }
   }
@@ -136,14 +166,14 @@ trait ReactorContract extends FunSuite {
     withReactor { r =>
       val (in, out) = r.handles.pipe()
       try {
-        r.handles.close(out)
+        close(r, out)
         val buf = allocate(16)
         val outcome = Outcome()
         r.submit(backend.ops.read(in, buf), outcome)
         turnUntil(r)(outcome.finished)
         assertEquals(outcome.completed, 1)
         assertEquals(buf.position(), 0)
-      } finally r.handles.close(in)
+      } finally close(r, in)
     }
   }
 
@@ -168,10 +198,10 @@ trait ReactorContract extends FunSuite {
         val sent = Outcome()
         r.submit(backend.ops.write(out, bytes("then the end")), sent)
         turnUntil(r)(sent.finished)
-        r.handles.close(out)
+        close(r, out)
         val buf = allocate(64)
         assertEquals(readToEnd(r, backend.ops.read(in, buf), buf), "then the end")
-      } finally r.handles.close(in)
+      } finally close(r, in)
     }
   }
 
@@ -191,6 +221,7 @@ trait ReactorContract extends FunSuite {
         r.submit(write, onWrite)
         r.submit(read, onRead)
         turnUntil(r)(!sink.hasRemaining)
+        r.runOnce(block = false) // the last read's completion, deferred to this turn, finds nothing left to read
         sink.flip()
         var i = 0
         while i < size do {
@@ -198,8 +229,8 @@ trait ReactorContract extends FunSuite {
           i += 1
         }
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        close(r, in)
+        close(r, out)
       }
     }
   }
@@ -225,8 +256,8 @@ trait ReactorContract extends FunSuite {
         assertEquals(first.completed, 0)
         assertEquals(text(buf), "again")
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        close(r, in)
+        close(r, out)
       }
     }
   }
@@ -313,7 +344,7 @@ trait ReactorContract extends FunSuite {
 
   test("an IPv4 stream socket accepts, connects and echoes") {
     withReactor { r =>
-      val (listener, port) = onFreePort(port => r.handles.listen(IpAddress.IPv4("127.0.0.1", port)))
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
         val accepted = HandleSlot()
         val acceptDone = Outcome()
@@ -340,10 +371,10 @@ trait ReactorContract extends FunSuite {
           r.submit(backend.ops.read(client, reply), replied)
           turnUntil(r)(echoed.finished && replied.finished)
           assertEquals(text(reply), "tcp ping")
-          r.handles.close(server)
+          close(r, server)
           assertEquals(readToEnd(r, backend.ops.read(client, reply), reply), "tcp ping")
-        } finally r.handles.close(client)
-      } finally r.handles.close(listener)
+        } finally close(r, client)
+      } finally close(r, listener)
     }
   }
 
@@ -376,8 +407,8 @@ trait ReactorContract extends FunSuite {
               assert(senderPort > 0)
             case other => fail(s"unexpected sender $other")
           }
-        } finally r.handles.close(client)
-      } finally r.handles.close(server)
+        } finally close(r, client)
+      } finally close(r, server)
     }
   }
 
@@ -400,8 +431,8 @@ trait ReactorContract extends FunSuite {
           assertEquals((first.completed, second.completed), (1, 1))
           assertEquals(text(buf), "ab")
         } finally {
-          a.handles.close(in)
-          a.handles.close(out)
+          close(a, in)
+          close(a, out)
         }
       }
     }
@@ -422,7 +453,7 @@ trait ReactorContract extends FunSuite {
     try {
       registered.await()
       Thread.sleep(20) // so that the other reactor is blocked again
-      backend.handles.close(out)
+      closeAlone(out)
       withReactor { r =>
         val buf = allocate(16)
         assertEquals(readToEnd(r, backend.ops.read(in, buf), buf), "x")
@@ -434,7 +465,7 @@ trait ReactorContract extends FunSuite {
         b.wakeup()
       }
       blocked.join()
-      backend.handles.close(in)
+      closeAlone(in)
     }
   }
 
@@ -445,12 +476,12 @@ trait ReactorContract extends FunSuite {
         val outcome = Outcome()
         r.submit(backend.ops.read(in, allocate(16)), outcome)
         r.runOnce(block = false) // the read is registered, and waiting
-        backend.handles.close(in)
+        closeAlone(in)
         turnUntil(r)(outcome.finished)
         assert(outcome.failure.isInstanceOf[IOException], String.valueOf(outcome.failure))
         assertEquals(outcome.completed, 0)
       }
-    finally backend.handles.close(out)
+    finally closeAlone(out)
   }
 
   test("closing a handle fails the op pending on it on a reactor blocked on another thread") {
@@ -480,7 +511,7 @@ trait ReactorContract extends FunSuite {
     try {
       registered.await()
       Thread.sleep(20) // so that the other reactor is blocked again
-      backend.handles.close(in)
+      closeAlone(in)
       assert(failed.await(5, java.util.concurrent.TimeUnit.SECONDS), "the pending read was not ended by the close")
       assert(failure.isInstanceOf[IOException], String.valueOf(failure))
     } finally {
@@ -490,7 +521,7 @@ trait ReactorContract extends FunSuite {
         b.wakeup()
       }
       blocked.join()
-      backend.handles.close(out)
+      closeAlone(out)
     }
   }
 
@@ -507,16 +538,16 @@ trait ReactorContract extends FunSuite {
       assertEquals((read.cancelled, timer.cancelled), (1, 1))
       assertEquals((read.completed, timer.completed), (0, 0))
     } finally {
-      backend.handles.close(in)
-      backend.handles.close(out)
+      closeAlone(in)
+      closeAlone(out)
     }
   }
 
   test("an op on a closed handle fails") {
     withReactor { r =>
       val (in, out) = r.handles.pipe()
-      r.handles.close(out)
-      r.handles.close(in)
+      close(r, out)
+      close(r, in)
       val outcome = Outcome()
       r.submit(backend.ops.read(in, allocate(16)), outcome)
       turnUntil(r)(outcome.finished)
@@ -533,8 +564,246 @@ trait ReactorContract extends FunSuite {
       try {
         val buf = allocate(64)
         assertEquals(readToEnd(r, backend.ops.read(file, buf), buf), "file contents")
-      } finally r.handles.close(file)
+      } finally close(r, file)
     } finally deleteAll(dir)
   }
 
+
+  // ---- Reads into the backend's own buffers
+
+  /** The bytes a pooled read received, as text, consuming them. */
+  private def textOf(received: Received): String = {
+    val buf = received.buffer
+    val out = new Array[Byte](buf.remaining())
+    buf.get(out)
+    new String(out, StandardCharsets.UTF_8)
+  }
+
+  test("a pooled read fills a buffer of the pool's, which release gives back") {
+    val pool = backend.pool(bufferSize = 64, buffers = 2)
+    try withReactor { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val into = Slot[Received]()
+        val outcome = Outcome()
+        r.submit(backend.ops.read(in, pool, into), outcome)
+        for _ <- 1 to 3 do r.runOnce(block = false)
+        assertEquals(outcome.completed, 0)
+        r.submit(backend.ops.write(out, bytes("pooled")), Outcome())
+        turnUntil(r)(outcome.finished)
+        assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+        val received = into.clear()
+        assertEquals(received.buffer.position(), 0)
+        assertEquals(textOf(received), "pooled")
+        assertEquals(pool.available, 1)
+        received.release()
+        assertEquals(pool.available, 2)
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    } finally pool.close()
+  }
+
+  test("a pooled read at the end of the stream completes with an empty buffer") {
+    val pool = backend.pool(bufferSize = 16, buffers = 1)
+    try withReactor { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        close(r, out)
+        val into = Slot[Received]()
+        val outcome = Outcome()
+        r.submit(backend.ops.read(in, pool, into), outcome)
+        turnUntil(r)(outcome.finished)
+        assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+        val received = into.clear()
+        assertEquals(received.buffer.remaining(), 0)
+        received.release()
+      } finally close(r, in)
+    } finally pool.close()
+  }
+
+  test("a pooled read fails when the pool has no buffer free, and goes on once one is released") {
+    val pool = backend.pool(bufferSize = 16, buffers = 1)
+    try withReactor { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        r.submit(backend.ops.write(out, bytes("one")), Outcome())
+        val first = Slot[Received]()
+        val got = Outcome()
+        r.submit(backend.ops.read(in, pool, first), got)
+        turnUntil(r)(got.finished)
+        assertEquals(got.completed, 1, String.valueOf(got.failure))
+        val held = first.clear()
+        assertEquals(pool.available, 0)
+        r.submit(backend.ops.write(out, bytes("two")), Outcome())
+        val second = Slot[Received]()
+        val refused = Outcome()
+        r.submit(backend.ops.read(in, pool, second), refused)
+        turnUntil(r)(refused.finished)
+        assert(refused.failure.isInstanceOf[IOException], String.valueOf(refused.failure))
+        held.release()
+        val again = Outcome()
+        r.submit(backend.ops.read(in, pool, second), again)
+        turnUntil(r)(again.finished)
+        assertEquals(again.completed, 1, String.valueOf(again.failure))
+        val received = second.clear()
+        assertEquals(textOf(received), "two")
+        received.release()
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    } finally pool.close()
+  }
+
+  test("a pooled read and a read into the caller's buffer take turns on one socket") {
+    val pool = backend.pool(bufferSize = 64, buffers = 2)
+    try withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val accepted = HandleSlot()
+        r.submit(backend.ops.accept(listener, accepted), Outcome())
+        val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        try {
+          val connected = Outcome()
+          r.submit(backend.ops.connect(client), connected)
+          turnUntil(r)(connected.finished && { accepted.toString; true })
+          turnUntil(r)(connected.finished)
+          val server = {
+            var h = -1
+            turnUntil(r) { try { h = accepted.clear(); true } catch case _: IllegalStateException => false }
+            h
+          }
+          try {
+            r.submit(backend.ops.write(client, bytes("first")), Outcome())
+            val into = Slot[Received]()
+            val pooled = Outcome()
+            r.submit(backend.ops.read(server, pool, into), pooled)
+            turnUntil(r)(pooled.finished)
+            assertEquals(pooled.completed, 1, String.valueOf(pooled.failure))
+            val received = into.clear()
+            assertEquals(textOf(received), "first")
+            received.release()
+            r.submit(backend.ops.write(client, bytes("second")), Outcome())
+            val buf = allocate(64)
+            val plain = Outcome()
+            r.submit(backend.ops.read(server, buf), plain)
+            turnUntil(r)(plain.finished)
+            assertEquals(plain.completed, 1, String.valueOf(plain.failure))
+            assertEquals(text(buf), "second")
+          } finally close(r, server)
+        } finally close(r, client)
+      } finally close(r, listener)
+    } finally pool.close()
+  }
+
+  // ---- Listening and closing as ops
+
+  test("a listener listens once its listening op completes, and accepts") {
+    withReactor { r =>
+      val (listener, port) = onFreePort { port =>
+        val h = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port))
+        val listening = Outcome()
+        r.submit(backend.ops.listening(h), listening)
+        turnUntil(r)(listening.finished)
+        if listening.failure != null then {
+          close(r, h)
+          throw new IOException(String.valueOf(listening.failure))
+        }
+        h
+      }
+      try {
+        val accepted = HandleSlot()
+        val acceptDone = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptDone)
+        val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        try {
+          val connected = Outcome()
+          r.submit(backend.ops.connect(client), connected)
+          turnUntil(r)(acceptDone.finished && connected.finished)
+          assertEquals(acceptDone.completed, 1, String.valueOf(acceptDone.failure))
+          close(r, accepted.clear())
+        } finally close(r, client)
+      } finally close(r, listener)
+    }
+  }
+
+  test("listening on an address in use fails the listening op, not the handle's creation") {
+    withReactor { r =>
+      val (taken, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val h = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port), reuseAddr = false)
+        try {
+          val listening = Outcome()
+          r.submit(backend.ops.listening(h), listening)
+          turnUntil(r)(listening.finished)
+          assert(listening.failure.isInstanceOf[IOException], String.valueOf(listening.failure))
+        } finally close(r, h)
+      } finally close(r, taken)
+    }
+  }
+
+  test("a close op completes once the handle is closed, and fails the op pending on it") {
+    withReactor { r =>
+      val (in, out) = r.handles.pipe()
+      val read = Outcome()
+      r.submit(backend.ops.read(in, allocate(16)), read)
+      r.runOnce(block = false)
+      val closed = Outcome()
+      r.submit(backend.ops.close(in), closed)
+      turnUntil(r)(closed.finished && read.finished)
+      assertEquals(closed.completed, 1, String.valueOf(closed.failure))
+      assert(read.failure.isInstanceOf[IOException], String.valueOf(read.failure))
+      val again = Outcome()
+      r.submit(backend.ops.close(in), again)
+      turnUntil(r)(again.finished)
+      assert(again.failure.isInstanceOf[IOException], "closing a closed handle fails")
+      val outClosed = Outcome()
+      r.submit(backend.ops.close(out), outClosed)
+      turnUntil(r)(outClosed.finished)
+      assertEquals(outClosed.completed, 1, String.valueOf(outClosed.failure))
+    }
+  }
+
+  test("a closed listener's port can be listened on again once its close op completes") {
+    withReactor { r =>
+      val (first, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      val closed = Outcome()
+      r.submit(backend.ops.close(first), closed)
+      turnUntil(r)(closed.finished)
+      assertEquals(closed.completed, 1, String.valueOf(closed.failure))
+      val second = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port), reuseAddr = false)
+      try {
+        val listening = Outcome()
+        r.submit(backend.ops.listening(second), listening)
+        turnUntil(r)(listening.finished)
+        assertEquals(listening.completed, 1, String.valueOf(listening.failure))
+      } finally close(r, second)
+    }
+  }
+
+  test("a close op on a connection ends its peer's stream") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val accepted = HandleSlot()
+        val acceptDone = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptDone)
+        val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        val connected = Outcome()
+        r.submit(backend.ops.connect(client), connected)
+        turnUntil(r)(acceptDone.finished && connected.finished)
+        val server = accepted.clear()
+        try {
+          val closed = Outcome()
+          r.submit(backend.ops.close(client), closed)
+          turnUntil(r)(closed.finished)
+          assertEquals(closed.completed, 1, String.valueOf(closed.failure))
+          val buf = allocate(16)
+          assertEquals(readToEnd(r, backend.ops.read(server, buf), buf), "")
+        } finally close(r, server)
+      } finally close(r, listener)
+    }
+  }
 }

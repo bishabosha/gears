@@ -132,10 +132,13 @@ object Reactor {
   * using a handle performs nothing, so either may be done from any thread.
   *
   * What every backend has is here: IP sockets, pipes and regular files, read, written, accepted, connected, sent and
-  * received, timers, and name resolution. What only some have is a capability the backend mixes in, with its own
-  * handles and ops: a reactor (`ReactorBackend`), readiness (`ReadinessBackend`), blocking ops (`BlockingBackend`),
-  * `UnixStreamBackend`, `UnixDatagramBackend` and `FifoBackend`. Code that needs one asks for a backend that has it, so
-  * a backend without it is refused when compiling, not when running.
+  * received, timers, and name resolution; reads into buffers of the backend's (`pool`); handles that listen and close
+  * as ops (`Ops.listening`, `Ops.close`), since a backend whose I/O facility opens and closes asynchronously, such as
+  * Network.framework or io_uring, reports an address in use, or a close done, through a completion rather than by
+  * blocking the caller. What only some have is a capability the backend mixes in, with its own handles and ops: a
+  * reactor (`ReactorBackend`), readiness (`ReadinessBackend`), blocking ops (`BlockingBackend`), `UnixStreamBackend`,
+  * `UnixDatagramBackend` and `FifoBackend`. Code that needs one asks for a backend that has it, so a backend without
+  * it is refused when compiling, not when running.
   */
 trait Backend {
 
@@ -154,6 +157,11 @@ trait Backend {
     * only once. Where the caller must be, and what cancelling it does to the op, is the backend's to say.
     */
   def perform(op: Op)(using Async): Unit
+
+  /** Opens a pool of `buffers` buffers of `bufferSize` bytes each, for the reads into buffers of the backend's
+    * (`Ops.read` with a pool). Close it once nothing of it is held.
+    */
+  def pool(bufferSize: Int, buffers: Int): BufferPool
 }
 
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
@@ -271,19 +279,7 @@ trait FifoBackend extends Backend {
   def handles: FifoHandles
 }
 
-/** A backend that reads into buffers of its own (see `PooledReadOps.read`): a completion-based one, such as
-  * Network.framework's or io_uring's, receives continuously into buffers it owns and hands each one over, where a
-  * read into the caller's buffer costs it a copy; a readiness-based one reads into a pool buffer as it would into the
-  * caller's.
-  */
-trait PooledReadBackend extends Backend {
-  def ops: PooledReadOps[Op]
-
-  /** Opens a pool of `buffers` buffers of `bufferSize` bytes each, for `ops.read`. Close it once nothing of it is held. */
-  def pool(bufferSize: Int, buffers: Int): BufferPool
-}
-
-/** Buffers a backend fills for pooled reads, opened by `PooledReadBackend.pool`. A pool may be used from any thread.
+/** Buffers a backend fills for the reads into its own buffers, opened by `Backend.pool`. A pool may be used from any thread.
   * `close` frees its buffers, and must come once no read is pending on it and every `Received` from it has been
   * released.
   */
@@ -306,49 +302,6 @@ trait Received {
   def release(): Unit
 }
 
-/** Reads into a backend's own buffers (see `PooledReadBackend`). */
-trait PooledReadOps[Op] extends Ops[Op] {
-
-  /** Fills a buffer of `pool`'s, as `read` fills the caller's: completes once at least one byte has been read, or at
-    * the end of the stream, writing what it read into `into`, which must be empty, as a `Received` to release. Fails
-    * if `pool` has no buffer free when the read needs one.
-    */
-  def read(handle: Int, pool: BufferPool, into: Slot[Received]): Op & Repeatable
-}
-
-/** A backend whose handles listen and close as ops (see `LifecycleOps`): one whose I/O facility opens and closes
-  * asynchronously, such as Network.framework or io_uring, reports a port in use, or a close done, through a
-  * completion rather than by blocking the caller; a readiness-based one does both at once, in the op.
-  */
-trait LifecycleBackend extends Backend {
-  def ops: LifecycleOps[Op]
-  def handles: LifecycleHandles
-}
-
-/** Handles that listen through an op (see `LifecycleOps.listening`). */
-trait LifecycleHandles extends Handles {
-
-  /** A stream socket that will listen on `address` once `ops.listening` is performed on it: binding and listening
-    * happen there, so an address in use fails that op, not this. `reuseAddr` as for `listen`.
-    */
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Int
-}
-
-/** A handle's listening and closing as ops (see `LifecycleBackend`). */
-trait LifecycleOps[Op] extends Ops[Op] {
-
-  /** Completes once `handle`, from `LifecycleHandles.listener`, is listening, or fails, as `connect` does for a socket
-    * to connect: with an `IOException` if the address is in use or cannot be bound.
-    */
-  def listening(handle: Int): Op
-
-  /** Closes `handle`, completing once it is closed: the ops pending on it, on whichever reactor, have failed as
-    * `Handles.close` says, and its number is free for reuse. A Unix socket path it bound is removed with it. Fails
-    * if `handle` is not open.
-    */
-  def close(handle: Int): Op
-}
-
 /** The readiness a custom op waits for before it runs. */
 enum Interest {
   case Read, Write
@@ -363,13 +316,13 @@ enum IpAddress {
 /** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket. */
 final case class UnixAddress(path: String)
 
-/** Opening and closing a backend's handles. Every operation is synchronous and never blocks; failures throw
-  * `java.io.IOException`.
+/** Opening a backend's handles; `Ops.close` closes them. Every operation is synchronous and never blocks; failures
+  * throw `java.io.IOException`.
   *
   * A handle is an `Int` that names an open file, socket, or other I/O object. Its meaning belongs to the backend: it is
   * the I/O object itself where that is an integer, such as a POSIX descriptor, and otherwise an index into a table the
   * backend keeps of references to its I/O objects, such as JVM channels. Handles belong to the caller, who closes them
-  * with `close`; the backend never closes them.
+  * with `Ops.close`; the backend never closes them.
   */
 trait Handles {
 
@@ -381,24 +334,18 @@ trait Handles {
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: IpAddress): Int
 
-  /** A stream socket bound to `address` and listening for connections. With `reuseAddr`, the address can be bound
-    * while connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
+  /** A stream socket that will listen on `address` once `ops.listening` is performed on it: binding and listening
+    * happen there, so an address in use fails that op, not this. With `reuseAddr`, the address can be bound while
+    * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
     * them to expire.
     */
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Int
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int
 
   /** A datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family. */
   def datagram(local: IpAddress | Null, remote: IpAddress | Null): Int
 
   /** A pipe, as its read end and its write end. */
   def pipe(): (Int, Int)
-
-  /** Closes a handle. The ops pending on it, on whichever reactor they are, fail with an `IOException` (a closed
-    * channel's), their completions getting `onFailure` from that reactor's loop and a `perform` waiting on one
-    * throwing it, as the JDK fails a thread blocked on a channel that is closed. A Unix socket path that a listener or
-    * datagram socket bound is removed with it.
-    */
-  def close(handle: Int): Unit
 }
 
 /** Using handles without waiting, for a backend whose handles are non-blocking (see `ReadinessBackend`). */
@@ -417,8 +364,10 @@ trait UnixStreamHandles extends Handles {
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: UnixAddress): Int
 
-  /** A stream socket bound to `address`, replacing a socket file already there, and listening for connections. */
-  def listen(address: UnixAddress): Int
+  /** A stream socket that will listen on `address` once `ops.listening` is performed on it, replacing a socket file
+    * already there then.
+    */
+  def listener(address: UnixAddress): Int
 }
 
 /** Unix domain datagram sockets, whose packets `UnixDatagramOps` sends and receives. */
@@ -537,6 +486,27 @@ trait Ops[Op] {
     * arrives before the write leaves `into` empty.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
+
+  /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
+    * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a
+    * `Received` to release. Fails if `pool` has no buffer free when the read needs one. A completion-based backend,
+    * such as Network.framework's or io_uring's, receives straight into the pool's buffer and hands it over, where a
+    * read into the caller's buffer costs it a copy.
+    */
+  def read(handle: Int, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+
+  /** Completes once `handle`, from `Handles.listener`, is listening, or fails, as `connect` does for a socket to
+    * connect: with an `IOException` if the address is in use or cannot be bound.
+    */
+  def listening(handle: Int): Op
+
+  /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever reactor they are, have failed
+    * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from
+    * that reactor's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel
+    * that is closed; its number is then free for reuse. A Unix socket path that a listener or datagram socket bound is
+    * removed with it. Fails if `handle` is not open.
+    */
+  def close(handle: Int): Op
 }
 
 /** Readiness, for a backend that has it (see `ReadinessBackend`). */

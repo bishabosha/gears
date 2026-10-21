@@ -16,7 +16,6 @@ import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
 import asyncio.IpAddress
-import asyncio.LifecycleHandles
 import asyncio.Received
 import asyncio.unsafe.Descriptors
 import asyncio.unsafe.NativePool
@@ -118,10 +117,11 @@ private[nwframework] final class NWFrameworkHandle(
           if e.intoBuffer != null then { // straight into a pool buffer, for a pooled read
             val slot = pooledSlot.nn
             pooledSlot = null
-            if e.len > 0 then {
+            if e.len > 0 && !closed then {
               slot.buffer.limit(e.len)
               pooledReady = slot
-            } else slot.release()
+            } else slot.release() // nothing came, or the handle is closing: the buffer goes back to the pool
+            if closed && state == 3 && closeReactor != null then finishClose() // the cancelled state came first
           } else if e.len > 0 then stashAppend(e.bytes, e.len)
           if e.complete && e.isFinal then eof = true
           if e.error != 0 then readError = e.error
@@ -143,7 +143,9 @@ private[nwframework] final class NWFrameworkHandle(
           take(Write)
         case Cancelled =>
           state = 3
-          if closeReactor != null then finishClose() // the close op waiting for it
+          // The close op waiting for it; unless a receive into a pool buffer is still outstanding, whose completion
+          // the framework may deliver after the cancelled state: finished when it comes, so the buffer is given back.
+          if closeReactor != null && pooledSlot == null then finishClose()
         case Accepted =>
           accepted.add(e.accepted)
           take(Read)
@@ -283,7 +285,7 @@ private[nwframework] final class NWFrameworkHandle(
       (if readReactor != null then NWFrameworkEvent.ForRead else 0) |
         (if writeReactor != null then NWFrameworkEvent.ForWrite else 0) |
         (if connectReactor != null then NWFrameworkEvent.ForConnect else 0) |
-        (if closeReactor != null then NWFrameworkEvent.Ending else 0)
+        (if closeReactor != null then NWFrameworkEvent.Ending | NWFrameworkEvent.ForRead else 0) // a late receive too
     if !(wanted eq watcher) || mask != watchMask then {
       watcher = wanted
       watchMask = mask
@@ -525,7 +527,11 @@ private[nwframework] final class NWFrameworkHandle(
   /** Whether the close op is done: the connection's cancelled state came (see `closeAsync`). */
   def closeDone: Boolean = synchronized(released)
 
-  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock. */
+  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock.
+    * A receive outstanding into a pool buffer keeps that buffer, since the framework may still write it: the close
+    * op waits for the cancelled state, by when that receive has completed and given the buffer back; the synchronous
+    * `close` does not, and leaks it to the pool, which is why the interface's way is the op.
+    */
   private def finishClose(): Unit = {
     if !released then {
       released = true
@@ -618,7 +624,7 @@ private[nwframework] object NWFrameworkHandle {
   * descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are descriptors, which
   * Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there are none.
   */
-object NWFrameworkHandles extends FifoHandles with LifecycleHandles {
+object NWFrameworkHandles extends FifoHandles {
 
   // The table: a handle number is an index, reused once closed. Grown under the lock, and published through the
   // volatile field so that any thread reads the current table.

@@ -13,8 +13,6 @@ import java.nio.channels.SocketChannel
 import asyncio.AddressFamily
 import asyncio.BlockingOps
 import asyncio.BufferPool
-import asyncio.LifecycleOps
-import asyncio.PooledReadOps
 import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
@@ -46,7 +44,7 @@ sealed trait NioOp {
 }
 
 /** Builds the ops `NioReactor` understands. */
-object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] with PooledReadOps[NioOp] with LifecycleOps[NioOp] {
+object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
   def read(handle: Int, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Int, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Int, into: HandleSlot): Accept = new Accept(handle, into)

@@ -41,6 +41,11 @@ same scenarios.
   bytes; what arrives goes to the handle's stash, and a read takes from the stash. After a read that took bytes the
   next receive is issued at once (`ASYNCIO_NWFRAMEWORK_PREFETCH=0` turns that off), so the next read finds its bytes
   waiting and finishes at submission, which is how `trySubmit` finishes a read without suspending the caller.
+- **A read into the backend's own buffer skips the stash.** `ops.read(handle, pool, into)`, now in the base
+  interface for every backend, receives straight into a buffer of the pool's on Dispatch's thread, and the reactor
+  hands that buffer over as a `Received`: one copy, the framework's own, where a read into the caller's buffer costs
+  the stash copy and another into the caller's. A plain read after a pooled one takes what the pooled receive
+  brought first.
 - **Cancelling a read runs `onCancel` at once, and the op can be performed again.** A receive once issued cannot be
   withdrawn, so a cancelled read leaves it outstanding; its bytes land in the stash, for the next read on the handle.
   The op's buffer is never written from a Dispatch thread, only on the loop thread when the read is delivered, so
@@ -53,10 +58,12 @@ same scenarios.
 - **A connect completes once connected, or fails.** Network.framework keeps a refused or unreachable connection in its
   `waiting` state, for a path to appear, rather than failing it; the backend takes a `waiting` state with an error as
   the failure, as POSIX `connect` reports it.
-- **`listen` fails where it is called, and a closed listener's port is free at once.** A listener is asynchronous;
-  `nwf_listen` waits for its ready or failed state, so that a port in use throws `IOException` from `handles.listen`,
-  as the contract has it, and `nwf_close` waits for its cancelled state, so that the port can be listened on again
-  when `close` returns (the futures contract's `freePort` depends on it). A connection's close does not wait.
+- **Listening and closing are ops.** A listener is asynchronous, and so is a connection's cancellation; the interface
+  now has `handles.listener` with the `listening` op, whose completion carries an address in use, and the `close` op,
+  which completes once the handle is closed: for a connection, at its cancelled state, for a listener, at its, and
+  for a descriptor at once. Nothing waits on a semaphore any more; the earlier synchronous `listen` and `close` are
+  kept on `NWFrameworkHandles` only for code with no reactor.
+
 - **Closing a handle fails the ops pending on it, on whichever reactor.** The C side takes the handle's waiters, each
   knowing its reactor, and notifies them as closed; then it cancels the connection, whose outstanding receives and
   sends complete with errors and find no waiter. The handle is freed by Network.framework's last callback, the
@@ -77,8 +84,6 @@ same scenarios.
   contract tests that used readiness (`writeNow` to feed a pipe, `whenReady`, `trySubmit` finishing a read of waiting
   bytes) were moved to `ReadinessContract` and `ReadinessFuturesChecks`, which kqueue and NIO keep, and the base
   `ReactorContract` and `FuturesContract` now use ops alone, so that they run on every backend.
-- **`listen` and a listener's `close` block for a moment**, until the listener is ready, or cancelled, where the
-  contract says handle operations never block.
 - **Sender of a datagram on a connected socket** is its peer, as given at creation: Network.framework reports no
   per-packet sender on a connection; a bound socket's flows report theirs.
 - **A bound datagram socket is a listener with flows.** Network.framework opens a flow per peer that sends to it, each

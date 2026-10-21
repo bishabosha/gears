@@ -53,7 +53,7 @@ object GearsFileRead {
             println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
             contents.reset() // Start over for the next writer
           }
-        } finally r.handles.close(file)
+        } finally perform(r, r.ops.close(file))
       }
     }
   }

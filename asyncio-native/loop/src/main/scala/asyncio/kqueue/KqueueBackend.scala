@@ -2,8 +2,6 @@ package asyncio.kqueue
 
 import asyncio.BlockingBackend
 import asyncio.BufferPool
-import asyncio.LifecycleBackend
-import asyncio.PooledReadBackend
 import asyncio.FifoBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
@@ -22,9 +20,7 @@ object KqueueBackend
     with BlockingBackend
     with UnixStreamBackend
     with UnixDatagramBackend
-    with FifoBackend
-    with PooledReadBackend
-    with LifecycleBackend {
+    with FifoBackend {
 
   type Op = KqueueOp
 

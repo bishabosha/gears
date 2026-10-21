@@ -30,8 +30,8 @@ trait ReadinessFuturesChecks extends FuturesContract {
         waiting.await
         outcome = s"${text(buf)} after ${runs.get()}"
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        perform(r, r.ops.close(in))
+        perform(r, r.ops.close(out))
       }
     }
     assertEquals(outcome, "ready after 1")

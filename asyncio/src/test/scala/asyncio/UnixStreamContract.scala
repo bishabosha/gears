@@ -7,11 +7,22 @@ import java.nio.file.Files
 trait UnixStreamContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & UnixStreamBackend
 
+  /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
+  protected def listen(r: R, address: UnixAddress)(using munit.Location): Int = {
+    val handle = backend.handles.listener(address)
+    val failure = run(r, backend.ops.listening(handle))
+    if failure != null then {
+      close(r, handle)
+      throw failure
+    }
+    handle
+  }
+
   test("a socket's reads end after the bytes sent before its peer closed") {
     val dir = tempDir()
     try withReactor { r =>
       val address = UnixAddress(dir.resolve("end.sock").toString)
-      val listener = backend.handles.listen(address)
+      val listener = listen(r, address)
       try {
         val client = backend.handles.connect(address)
         val accepted = HandleSlot()
@@ -26,11 +37,11 @@ trait UnixStreamContract extends ReactorContract {
           val sent = Outcome()
           r.submit(backend.ops.write(client, bytes("last words")), sent)
           turnUntil(r)(sent.finished)
-          backend.handles.close(client)
+          closeAlone(client)
           val buf = allocate(64)
           assertEquals(readToEnd(r, backend.ops.read(server, buf), buf), "last words")
-        } finally backend.handles.close(server)
-      } finally backend.handles.close(listener)
+        } finally closeAlone(server)
+      } finally closeAlone(listener)
     } finally deleteAll(dir)
   }
 
@@ -38,7 +49,7 @@ trait UnixStreamContract extends ReactorContract {
     val dir = tempDir()
     try withReactor { r =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
-      val listener = backend.handles.listen(address)
+      val listener = listen(r, address)
       try {
         val accepted = HandleSlot()
         val acceptDone = Outcome()
@@ -67,9 +78,9 @@ trait UnixStreamContract extends ReactorContract {
           r.submit(backend.ops.read(client, clientBuf), reply)
           turnUntil(r)(echoed.finished && reply.finished)
           assertEquals(text(clientBuf), "ping")
-        } finally backend.handles.close(server)
-        backend.handles.close(client)
-      } finally backend.handles.close(listener)
+        } finally closeAlone(server)
+        closeAlone(client)
+      } finally closeAlone(listener)
     } finally deleteAll(dir)
   }
 
@@ -77,9 +88,9 @@ trait UnixStreamContract extends ReactorContract {
     val dir = tempDir()
     try withReactor { r =>
       val path = dir.resolve("gone.sock")
-      val listener = backend.handles.listen(UnixAddress(path.toString))
+      val listener = listen(r, UnixAddress(path.toString))
       assert(Files.exists(path))
-      backend.handles.close(listener)
+      closeAlone(listener)
       assert(!Files.exists(path))
     } finally deleteAll(dir)
   }

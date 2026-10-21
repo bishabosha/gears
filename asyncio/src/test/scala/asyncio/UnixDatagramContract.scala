@@ -28,8 +28,8 @@ trait UnixDatagramContract extends ReactorContract {
           buf.get(copy)
           assertEquals(new String(copy, StandardCharsets.UTF_8), "unix datagram")
           assertEquals(from.clear(), UnixAddress(clientPath))
-        } finally backend.handles.close(client)
-      } finally backend.handles.close(server)
+        } finally closeAlone(client)
+      } finally closeAlone(server)
       assert(!Files.exists(java.nio.file.Path.of(serverPath)), "closing a bound datagram socket removes its path")
     } finally deleteAll(dir)
   }

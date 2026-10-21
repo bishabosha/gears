@@ -16,6 +16,8 @@ import asyncio.ReactorBackend
 import asyncio.UnixAddress
 import asyncio.Completion
 import asyncio.HandleSlot
+import asyncio.Received
+import asyncio.Slot
 import asyncio.testkit.BufferArena
 import asyncio.gears.ReactorFutures
 import asyncio.gears.ReactorFutures.*
@@ -64,6 +66,16 @@ object GearsBench {
       new Client {
         def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, freshOps = true)
+      }
+    ),
+    Scenario(
+      "pingpong-pooled",
+      "as pingpong, reading each echo into a buffer of the backend's pool, which a backend that receives into it hands "
+        + "over without a copy",
+      50_000,
+      new Client {
+        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+          pingPong(r, address, count, deadline = false, pooled = true)
       }
     ),
     Scenario(
@@ -337,7 +349,7 @@ object GearsBench {
     try {
       perform(r, r.ops.connect(fd))
       body(fd)
-    } finally r.handles.close(fd)
+    } finally perform(r, r.ops.close(fd))
   }
 
   /** Computation done after each round trip by the compute variants of `concurrent`. */
@@ -357,14 +369,20 @@ object GearsBench {
       deadline: Boolean,
       freshOps: Boolean = false,
       blockingFirst: Boolean = false,
-      work: Work = Work.NoWork
-  )(using Async.Spawn): Unit =
-    withConnection(r, address) { fd =>
+      work: Work = Work.NoWork,
+      pooled: Boolean = false
+  )(using Async.Spawn): Unit = {
+    // The pool outlives the connection: a receive into one of its buffers may be outstanding until the close op is
+    // done, which gives the buffer back.
+    val pool = if pooled then r.pool(MessageSize, 2) else null
+    try withConnection(r, address) { fd =>
       val arena = BufferArena.open()
       try {
         val buf = arena.allocate(MessageSize)
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
+        val into = Slot[Received]()
+        val pooledRead = if pooled then r.ops.read(fd, pool.nn, into) else null
         val timeout = if deadline then new Deadline(reactors(r)) else null
         val blocker = if blockingFirst then blocking(r) else null
         var worked = 0L
@@ -374,11 +392,23 @@ object GearsBench {
           if timeout != null then timeout.arm()
           buf.clear()
           while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
-          buf.clear()
-          while buf.hasRemaining() do {
-            val before = buf.position()
-            perform(r, if freshOps then r.ops.read(fd, buf) else read)
-            if buf.position() == before then throw new IOException("The server closed the connection")
+          if pooled then {
+            var got = 0
+            while got < MessageSize do {
+              perform(r, pooledRead.nn)
+              val received = into.clear()
+              val n = received.buffer.remaining()
+              received.release()
+              if n == 0 then throw new IOException("The server closed the connection")
+              got += n
+            }
+          } else {
+            buf.clear()
+            while buf.hasRemaining() do {
+              val before = buf.position()
+              perform(r, if freshOps then r.ops.read(fd, buf) else read)
+              if buf.position() == before then throw new IOException("The server closed the connection")
+            }
           }
           if timeout != null then timeout.disarm()
           work match {
@@ -390,7 +420,8 @@ object GearsBench {
         }
         if worked == 1L then computeSink = worked // only so that the work cannot be optimised away
       } finally arena.close()
-    }
+    } finally if pool != null then pool.close()
+  }
 
   /** A reactor timer armed before each round trip and cancelled once the echo is back, like a timeout. */
   private final class Deadline(r: ReactorBackend)(using Async) {
@@ -475,7 +506,7 @@ object GearsBench {
     } catch case _: IOException => () // a client that goes away mid-write ends only its own connection
     finally {
       arena.close()
-      r.handles.close(client)
+      perform(r, r.ops.close(client))
     }
   }
 

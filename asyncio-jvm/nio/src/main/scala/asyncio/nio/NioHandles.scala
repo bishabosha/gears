@@ -24,7 +24,6 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 import asyncio.IpAddress
-import asyncio.LifecycleHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixStreamHandles
@@ -193,7 +192,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles with ReadinessHandles with LifecycleHandles {
+object NioHandles extends UnixStreamHandles with ReadinessHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
@@ -227,12 +226,19 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles with Lifecycle
   }
 
   // Listeners from `listener`, with where they are to listen, until their `listening` op binds them.
-  private val toListen = new java.util.concurrent.ConcurrentHashMap[Integer, (IpAddress, Boolean)]()
+  private val toListen = new java.util.concurrent.ConcurrentHashMap[Integer, (SocketAddress, Boolean)]()
 
   def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
     val channel = ServerSocketChannel.open(familyOf(address))
     val handle = selectable(channel, null)(channel.configureBlocking(false))
     toListen.put(handle, (address, reuseAddr))
+    handle
+  }
+
+  def listener(address: UnixAddress): Int = {
+    val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+    val handle = selectable(channel, Path.of(address.path))(channel.configureBlocking(false))
+    toListen.put(handle, (address, false))
     handle
   }
 
@@ -245,11 +251,18 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles with Lifecycle
       case s: Selectable =>
         val channel = s.as(classOf[ServerSocketChannel], "Listening")
         if reuseAddr then channel.setOption(StandardSocketOptions.SO_REUSEADDR, true)
+        address match {
+          case UnixAddress(path) => Files.deleteIfExists(Path.of(path)) // as kqueue, replacing a socket file there
+          case _                 => ()
+        }
         channel.bind(socketAddress(address), Backlog)
       case other => throw new IOException(s"Listening needs a socket, not $other")
     }
   }
 
+  /** A listening socket, bound and listening at once: for code with no reactor to perform `listening` on; the
+    * interface's way is `listener` and that op.
+    */
   def listen(address: IpAddress, reuseAddr: Boolean = true): Int = {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {

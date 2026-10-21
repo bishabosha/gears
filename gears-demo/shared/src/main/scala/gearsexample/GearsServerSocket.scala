@@ -75,7 +75,7 @@ object GearsServerSocket {
         println(s"Client socket $client failed: ${e.getMessage}")
     } finally {
       arena.close()
-      r.handles.close(client)
+      perform(r, r.ops.close(client))
       println(s"Closed client socket: $client")
     }
   }
@@ -95,7 +95,7 @@ object GearsServerSocket {
           println(s"Accepted new client connection: $client")
           Future(serve(r, client))
         }
-      } finally r.handles.close(server)
+      } finally perform(r, r.ops.close(server))
     }
   }
 }
