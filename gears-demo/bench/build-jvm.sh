@@ -56,7 +56,7 @@ EOF
   python3 -c 'import json, sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2]))))' \
     commit "$commit" dirty "$dirty" jdk "$jdk" command "$3" java_options "$2" >"$output/$1.json"
 }
-opens=--add-opens=java.base/java.lang=ALL-UNNAMED
+opens="--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
 write nio-jdk "$opens -Dasyncio.gears.carriers=jdk" bench
 write nio-reactors "$opens -Dasyncio.gears.carriers=reactors" bench
 write jdk-vthreads "--enable-preview" jdk-bench

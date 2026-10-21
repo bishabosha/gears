@@ -100,7 +100,16 @@ what differs is what carries the futures, `Carriers`:
   java.base/jdk.internal.vm=ALL-UNNAMED`) for a mode that already needs `--add-opens`, and make the waiter's state
   atomic, since the park that follows must not be pinned; (b) give up the direct submit, handing every op to the
   worker's inbox as `Carriers.Jdk` does, which loses the fast path that is this mode's reason to exist; (c) retire
-  the mode. Until one is chosen, the four-worker suite can hang under load.
+  the mode. Taken, the same day: (a). `OpRouter.pin` and `unpin`, which `VirtualReactorScheduler` and `CarriedPool`
+  make `jdk.internal.vm.Continuation.pin` and `unpin` (`VirtualCarriers`, `--add-opens
+  java.base/jdk.internal.vm=ALL-UNNAMED`), hold the virtual thread on its carrier from `currentWorker` to the end of
+  the submit, in `performOnReactor` and `ReactorAsync.submit`, and are released before the await parks, which pinned
+  would park the worker's thread. The waiter's state is an `AtomicReference`, since the listener may be registered
+  from another worker than the one whose reactor completes the op. On Scala Native nothing moves a future and `pin`
+  does nothing; a plain field there, tried as a platform split, measured within noise of the atomic (kqueue ping-pong
+  8.74 before, 8.67 atomic, 8.75 field), so the field stays shared. Pinned, `Carriers.Reactors`
+  costs about the same as before on ping-pong (9.81 to 9.94 µs) and 10% on `concurrent` (2.12 to 2.36); the JVM gears
+  suites, which hung in 4 runs of 10, passed 21 of 21.
 
 `perform` finds its reactors through `OpRouter` in both cases (`ReactorAsync`): on a worker, that worker's reactor,
 with the fast path; anywhere else, a hand-off to a driver's thread, with a waiter whose state is locked, since the caller

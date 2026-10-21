@@ -7,6 +7,7 @@ import gears.async.Listener
 import gears.async.cancellationScope
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import scala.util.Failure
 import scala.util.Success
@@ -40,36 +41,48 @@ object ReactorAsync {
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def performOnReactor(b: ReactorBackend, op: b.Op)(using ac: Async): Unit =
-    ac.scheduler match {
+  def performOnReactor(b: ReactorBackend, op: b.Op)(using ac: Async): Unit = {
+    val router = ac.scheduler match {
       // A pool's own scheduler, as on Scala Native: matched on the class, the common case, ahead of the general one.
-      case pool: ReactorPool if pool.backend eq b =>
-        val worker = pool.currentWorker
-        if worker != null then performHere(b, op, worker)
-        else performElsewhere(b, op, pool.driverFor(Thread.currentThread()))
-      case _ =>
-        val router = routerFor(b)
-        val worker = router.currentWorker
-        if worker != null then performHere(b, op, worker)
-        else performElsewhere(b, op, router.driverFor(Thread.currentThread()))
+      case pool: ReactorPool if pool.backend eq b => pool
+      case _                                      => routerFor(b)
     }
+    // Pinned to its thread from finding the worker to submitting on it (see `OpRouter.pin`): `performHere` unpins
+    // once the op is submitted, before it waits.
+    router.pin()
+    val worker = router.currentWorker
+    if worker != null then performHere(b, op, worker, router)
+    else {
+      router.unpin()
+      performElsewhere(b, op, router.driverFor(Thread.currentThread()))
+    }
+  }
 
-  /** `perform` on the worker running the caller: an op the reactor finishes at once returns without suspending. */
-  private def performHere(b: ReactorBackend, op: b.Op, worker: ReactorWorker)(using ac: Async): Unit = {
+  /** `perform` on the worker running the caller, which `pinned` keeps there until the op is submitted: an op the
+    * reactor finishes at once returns without suspending.
+    */
+  private def performHere(b: ReactorBackend, op: b.Op, worker: ReactorWorker, pinned: OpRouter)(using ac: Async): Unit = {
     val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
-    if ac.group.isCancelled then throw new CancellationException()
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
     // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
     // reactor refuses) is left alone.
-    val waiter = b.attachment(op) match {
-      case reused: OpWaiter if !reused.inUse =>
-        reused.reset(worker)
-        reused
-      case _ =>
-        val fresh = new OpWaiter(worker, op)
-        b.attach(op, fresh)
-        fresh
-    }
+    val waiter =
+      try {
+        if ac.group.isCancelled then throw new CancellationException()
+        b.attachment(op) match {
+          case reused: OpWaiter if !reused.inUse =>
+            reused.reset(worker)
+            reused
+          case _ =>
+            val fresh = new OpWaiter(worker, op)
+            b.attach(op, fresh)
+            fresh
+        }
+      } catch {
+        case t: Throwable =>
+          pinned.unpin()
+          throw t
+      }
     waiter.inUse = true
     try {
       // The fast path: an op the reactor finishes at once returns here without suspending, which skips the whole await
@@ -78,18 +91,20 @@ object ReactorAsync {
       // round of the scheduler, so the reactor still polls for futures waiting on events.
       // A refused op, such as a one-shot op submitted twice, throws from either call.
       val finished =
-        if worker.turnFastPathsLeft > 0 then {
-          val now = r.trySubmit(op, waiter.completion)
-          if now then worker.turnFastPathsLeft -= 1
-          now
-        } else if worker.fastPathsLeft > 0 && worker.isIdle then {
-          val now = r.trySubmit(op, waiter.completion)
-          if now then worker.fastPathsLeft -= 1
-          now
-        } else {
-          r.submit(op, waiter.completion)
-          false
-        }
+        try
+          if worker.turnFastPathsLeft > 0 then {
+            val now = r.trySubmit(op, waiter.completion)
+            if now then worker.turnFastPathsLeft -= 1
+            now
+          } else if worker.fastPathsLeft > 0 && worker.isIdle then {
+            val now = r.trySubmit(op, waiter.completion)
+            if now then worker.fastPathsLeft -= 1
+            now
+          } else {
+            r.submit(op, waiter.completion)
+            false
+          }
+        finally pinned.unpin() // before the await parks, which pinned would park the worker's thread
       if !finished then {
         waiter.link() // Cancelling the caller now cancels the op; if it already was, this cancels it at once.
         // Awaited outside the caller's group, so cancellation cannot resume it before the reactor has confirmed.
@@ -192,11 +207,14 @@ object ReactorAsync {
       case pool: ReactorPool if pool.backend eq b => pool // the common case, matched on the class
       case _                                      => routerFor(b)
     }
+    router.pin() // as `performOnReactor` does, until the op is submitted on the worker found
     val worker = router.currentWorker
     if worker != null then {
-      worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion) // its reactor is one of `b`'s
+      try worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion) // its reactor is one of `b`'s
+      finally router.unpin()
       new Submission(worker, op)
     } else {
+      router.unpin()
       val driver = router.driverFor(Thread.currentThread())
       driver.sync(submitOn(driver, op, completion.asInstanceOf[Completion[Any]])) // its ops are `b`'s, as is the reactor
       new Submission(driver, op)
@@ -288,14 +306,17 @@ object ReactorAsync {
     def reset(next: ReactorWorker): Unit = {
       if worker ne next then worker = next // usually the same, and a volatile write costs more than a read
       generation += 1
-      state = OpWaiter.Empty
+      state.set(OpWaiter.Empty)
     }
 
     // Empty, then either the suspended caller's listener or the outcome, and finally the outcome, so exactly one side
     // delivers the outcome: `finish` to a listener it finds, or `onComplete` to itself when it finds the outcome
-    // already there. On the reactor thread only, where completions run, where the caller awaits, and where `cancel`
-    // reads it, so a plain field: Scala Native's `AtomicReference` computes a `ClassTag` on every operation.
-    private var state: AnyRef = OpWaiter.Empty
+    // already there. The completion runs on the reactor's thread; the caller registers its listener on the thread
+    // it is on by then, which on the JVM may be another worker's, since a virtual thread is pinned only until its op
+    // is submitted (see `OpRouter.pin`), so the two race, and the field is atomic. On Scala Native nothing moves the
+    // caller, and a plain field would do, but measured against this it is within noise (kqueue ping-pong 8.74 against
+    // 8.67 µs), so one shared field it is.
+    private val state = new AtomicReference[AnyRef](OpWaiter.Empty)
 
     // Completions are contravariant, so this one fits the op of any reactor.
     val completion: Completion[Any] = new Completion[Any] {
@@ -304,38 +325,40 @@ object ReactorAsync {
       override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
     }
 
-    private def finish(outcome: Try[Unit]): Unit = {
-      val previous = state
-      state = outcome
-      previous match {
+    private def finish(outcome: Try[Unit]): Unit =
+      state.getAndSet(outcome) match {
         case k: Listener[Try[Unit]] @unchecked => k.completeNow(outcome, this)
         case _                                 => ()
       }
-    }
 
     // gears' `await` calls this first; the default builds a listener and an `Option` to find out.
     override def poll(): Option[Try[Unit]] =
-      state match {
+      state.get() match {
         case outcome: Try[Unit] @unchecked => Some(outcome)
         case _                             => None
       }
 
     def poll(k: Listener[Try[Unit]]): Boolean =
-      state match {
+      state.get() match {
         case outcome: Try[Unit] @unchecked =>
           k.completeNow(outcome, this)
           true
         case _ => false
       }
 
-    def onComplete(k: Listener[Try[Unit]]): Unit =
-      state match {
-        case outcome: Try[Unit] @unchecked => k.completeNow(outcome, this)
-        case OpWaiter.Empty                => state = k
-        case _                             => () // Only the one caller ever waits.
-      }
+    def onComplete(k: Listener[Try[Unit]]): Unit = {
+      var done = false
+      while !done do
+        state.get() match {
+          case outcome: Try[Unit] @unchecked =>
+            k.completeNow(outcome, this)
+            done = true
+          case OpWaiter.Empty => done = state.compareAndSet(OpWaiter.Empty, k) // or the outcome arrived: look again
+          case _              => done = true // Only the one caller ever waits.
+        }
+    }
 
-    def dropListener(k: Listener[Try[Unit]]): Unit = if state eq k then state = OpWaiter.Empty
+    def dropListener(k: Listener[Try[Unit]]): Unit = state.compareAndSet(k, OpWaiter.Empty): Unit
 
     // Cancellation can come from any thread, so it is carried out on the thread of the reactor the op was submitted to.
     // By then the op may have finished, and a repeatable op may even have been submitted again, there or elsewhere,
@@ -344,7 +367,7 @@ object ReactorAsync {
       val submission = generation
       val target = worker
       target.sync(
-        if submission == generation && !state.isInstanceOf[Try[?]] then
+        if submission == generation && !state.get().isInstanceOf[Try[?]] then
           cancelOn(target, op)
       )
     }

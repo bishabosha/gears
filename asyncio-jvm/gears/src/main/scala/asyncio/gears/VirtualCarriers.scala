@@ -12,18 +12,19 @@ import scala.concurrent.duration.FiniteDuration
 import asyncio.ReactorBackend
 
 /** Virtual threads carried by a `ReactorPool`'s workers, through what the JDK keeps to itself: a virtual thread builder
-  * that takes the executor to run its threads on, and the carrier of the running virtual thread. Both need
-  * `--add-opens java.base/java.lang=ALL-UNNAMED`.
+  * that takes the executor to run its threads on, the carrier of the running virtual thread, and the pin that keeps a
+  * virtual thread on its carrier. The first two need `--add-opens java.base/java.lang=ALL-UNNAMED`, the pin
+  * `--add-opens java.base/jdk.internal.vm=ALL-UNNAMED`.
   */
 private[gears] object VirtualCarriers {
 
-  private def opened[A](what: String)(get: => A): A =
+  private def opened[A](what: String, pkg: String = "java.lang")(get: => A): A =
     try get
     catch {
       case e: (ReflectiveOperationException | RuntimeException) =>
         throw new UnsupportedOperationException(
           s"Running virtual threads on the reactor pool needs $what, which the JDK opens only with " +
-            "--add-opens java.base/java.lang=ALL-UNNAMED",
+            s"--add-opens java.base/$pkg=ALL-UNNAMED",
           e
         )
     }
@@ -41,11 +42,30 @@ private[gears] object VirtualCarriers {
       .findStatic(classOf[Thread], "currentCarrierThread", MethodType.methodType(classOf[Thread]))
   }
 
+  // `jdk.internal.vm.Continuation.pin` and `unpin`: a critical section of the running virtual thread, which cannot be
+  // unmounted while it lasts. On a platform thread, which runs no continuation, both do nothing.
+  private lazy val (pinHandle, unpinHandle) = opened("Continuation.pin and unpin", "jdk.internal.vm") {
+    val continuation = Class.forName("jdk.internal.vm.Continuation")
+    val lookup = MethodHandles.privateLookupIn(continuation, MethodHandles.lookup())
+    val none = MethodType.methodType(classOf[Unit])
+    (lookup.findStatic(continuation, "pin", none), lookup.findStatic(continuation, "unpin", none))
+  }
+
   /** Checks, before any thread starts, that the JDK lets the pool carry virtual threads. */
   def check(): Unit = {
     builder
-    carrier: Unit
+    carrier
+    pinHandle: Unit
   }
+
+  /** Keeps the running virtual thread on its carrier until `unpin`: a JDK that unmounts a virtual thread blocked on a
+    * monitor (JEP 491, JDK 24) would otherwise resume it on another worker in the middle of a submission to this one's
+    * reactor. Pinned, such a block parks the carrier instead, as before JDK 24. A park while pinned parks the carrier
+    * too, so a caller unpins before it waits.
+    */
+  def pin(): Unit = pinHandle.invoke(): Unit
+
+  def unpin(): Unit = unpinHandle.invoke(): Unit
 
   /** Makes virtual threads that `executor` runs: it is given each thread's continuation whenever it is to run. */
   def factory(executor: Executor): ThreadFactory =
@@ -59,6 +79,8 @@ private[gears] object VirtualCarriers {
 private[gears] final class CarriedPool(backend: ReactorBackend, size: Int, policy: TakePolicy)
     extends ReactorPool(backend, size, policy) {
   override protected def callerThread(): Thread = VirtualCarriers.currentCarrier()
+  override def pin(): Unit = VirtualCarriers.pin()
+  override def unpin(): Unit = VirtualCarriers.unpin()
 }
 
 /** The gears scheduler of a program whose futures are virtual threads carried by `pool`: a task is a new virtual
@@ -69,6 +91,8 @@ private[gears] final class VirtualReactorScheduler(val pool: ReactorPool, factor
   def backend: ReactorBackend = pool.backend
   def currentWorker: ReactorWorker | Null = pool.currentWorker
   def driverFor(caller: Thread): ReactorDriver = pool.driverFor(caller)
+  override def pin(): Unit = VirtualCarriers.pin()
+  override def unpin(): Unit = VirtualCarriers.unpin()
 
   def execute(body: Runnable): Unit = factory.newThread(body).start()
 

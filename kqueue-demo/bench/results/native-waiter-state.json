@@ -1,0 +1,175 @@
+{
+  "started": "2026-10-21T17:54:44+02:00",
+  "finished": "2026-10-21T17:54:54+02:00",
+  "load_average": {
+    "before": [
+      16.26904296875,
+      11.34423828125,
+      7.802734375
+    ],
+    "after": [
+      16.31005859375,
+      11.52685546875,
+      7.9091796875
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,concurrent,pipelined,fairness"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/tmp/kq-before",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:03+02:00"
+      },
+      "median": {
+        "pingpong": 8.74,
+        "concurrent": 1.69,
+        "pipelined": 0.59,
+        "fairness-tick": 2.54,
+        "fairness": 1.27
+      },
+      "samples": {
+        "pingpong": [
+          8.74,
+          8.66,
+          8.82
+        ],
+        "concurrent": [
+          1.69,
+          1.67,
+          1.76
+        ],
+        "pipelined": [
+          0.59,
+          0.59,
+          0.6
+        ],
+        "fairness-tick": [
+          2.49,
+          2.54,
+          2.66
+        ],
+        "fairness": [
+          1.25,
+          1.27,
+          1.33
+        ]
+      }
+    },
+    {
+      "label": "atomic",
+      "executable": "/tmp/kq-after",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": true,
+        "worktree_changes_hash": "08258c1edf7e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:30+02:00"
+      },
+      "median": {
+        "pingpong": 8.67,
+        "concurrent": 1.71,
+        "pipelined": 0.59,
+        "fairness-tick": 2.63,
+        "fairness": 1.31
+      },
+      "samples": {
+        "pingpong": [
+          8.7,
+          8.34,
+          8.67
+        ],
+        "concurrent": [
+          1.69,
+          1.89,
+          1.71
+        ],
+        "pipelined": [
+          0.57,
+          0.59,
+          0.59
+        ],
+        "fairness-tick": [
+          2.54,
+          2.63,
+          3.21
+        ],
+        "fairness": [
+          1.27,
+          1.31,
+          1.61
+        ]
+      }
+    },
+    {
+      "label": "field",
+      "executable": "/tmp/kq-after2",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": true,
+        "worktree_changes_hash": "2ac918c00b11",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:54:44+02:00"
+      },
+      "median": {
+        "pingpong": 8.75,
+        "concurrent": 1.74,
+        "pipelined": 0.64,
+        "fairness-tick": 2.55,
+        "fairness": 1.27
+      },
+      "samples": {
+        "pingpong": [
+          8.79,
+          8.53,
+          8.75
+        ],
+        "concurrent": [
+          1.68,
+          1.89,
+          1.74
+        ],
+        "pipelined": [
+          0.58,
+          0.64,
+          0.64
+        ],
+        "fairness-tick": [
+          2.52,
+          2.65,
+          2.55
+        ],
+        "fairness": [
+          1.26,
+          1.32,
+          1.27
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

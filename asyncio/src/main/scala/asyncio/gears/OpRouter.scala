@@ -31,6 +31,14 @@ private[gears] trait OpRouter {
     * future's ops stay together.
     */
   def driverFor(caller: Thread): ReactorDriver
+
+  /** Keeps the caller on the thread `currentWorker` names until `unpin`, so that an op found a worker is submitted on
+    * that worker's thread: nothing to do where a caller cannot change thread, as on Scala Native, or runs on no worker;
+    * on the JVM, a virtual thread carried by a worker is pinned to it (see `VirtualCarriers.pin`).
+    */
+  def pin(): Unit = ()
+
+  def unpin(): Unit = ()
 }
 
 private[gears] object OpRouter {

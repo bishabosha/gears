@@ -22,7 +22,8 @@ enum Carriers {
     * Scala Native: an op goes to the reactor of the worker carrying its future, which may finish it at once, and its
     * completion resumes the future on that worker, under the pool's `TakePolicy`. Needs
     * `--add-opens java.base/java.lang=ALL-UNNAMED`, since the JDK keeps both a virtual thread's scheduler and its
-    * carrier to itself.
+    * carrier to itself, and `--add-opens java.base/jdk.internal.vm=ALL-UNNAMED`, for the pin that keeps a future on
+    * its worker while its op is submitted there (see `VirtualCarriers.pin`).
     */
   case Reactors
 }
