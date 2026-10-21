@@ -107,8 +107,32 @@ measured on one worker over TCP, 3 runs:
   worker; on four, `concurrent` 19.6, `pipelined` 2.34. So the slim backend stands at about 10 µs a round trip over
   the version with its state in C (55 µs on the same machine, 17 for kqueue), with `concurrent`, `pipelined` and
   `fairness` level. What remains between them: the handle's Scala monitor, taken twice per event and once per
-  attempt, and two more C calls per op (`dn_handle_watch` on each registration and each take). Worth a profile
-  before deciding whether that is the price of the cleaner split.
+  attempt, and two more C calls per op (`dn_handle_watch` on each registration and each take). Profiled, below.
+
+### Where the slim backend's 10 µs a round trip go
+
+Profiled on 2026-10-21 against the state-in-C build, both release, ping-pong over loopback TCP:
+
+- **Not CPU.** `time` gives the slim build 7 µs more user time a round trip, but `sample` finds it spread thin: the
+  reactor thread runs 2.8 µs a round trip against 1.65, and Dispatch's threads the same per operation in both. No
+  hot spot: the reactor's extra is allocation (`Allocator_Alloc`, `memset`), the handle's `apply`, and thread-local
+  reads, each a few samples in a thousand.
+- **Wait latency, measured.** `ASYNCIO_DARWIN_TRACE=1` times each received event from the callback queueing it to
+  the reactor taking it, and the callback itself, on both builds (the state-in-C one instrumented in a worktree of
+  its commit): the callback costs the same, 1.0 against 1.1 µs; the wait is 4.8 µs against 6.2, 60% of events under
+  5 µs against 10%. So each hop reaches the reactor 1.4 µs later, 3 µs of the round trip, and the rest is the
+  reactor's work between taking the event and issuing the next operation, 1 to 2 µs a hop.
+- **What did not help**: keeping the reactor that reads a handle as its watcher so that a read registers no change
+  of watcher on the C side, and taking tokens out of the waiting map without an `Option` each: ping-pong 72.9 against
+  72.2 µs in the same runs (a slow run of the machine; kqueue 18.5), `concurrent` 25.4 against 23.5. Neither is kept.
+- **Where the 1.4 µs is**: a second trace point, at the reactor's drain of the C side before the Scala side looks
+  the handle up and locks it, measures 5.3 to 5.7 µs from queueing, the same as the state-in-C build measures at its
+  drain (4.8 to 5.0, a faster run of the machine). So the wake-up itself costs the same in both; the 1.4 µs is the
+  Scala side's way into the handle, `DarwinHandles.at` and the handle's `synchronized`, before `dn_handle_next`.
+  That is more than a thin lock should cost, and the next thing to try is the monitor: Scala Native's, once a monitor
+  has been contended (the handle's is, at close, from another thread), may stay inflated; a spin lock of an
+  `AtomicInteger` on the handle would tell. The rest, 1 to 2 µs a hop, is the reactor's processing after it has the
+  event. The state-in-C design is the previous commit (`1fd5fd7`), and the measurements are its.
 
 ## Measured: against kqueue over TCP
 
