@@ -1,0 +1,282 @@
+{
+  "started": "2026-10-21T08:54:18+02:00",
+  "finished": "2026-10-21T08:55:59+02:00",
+  "load_average": {
+    "before": [
+      8.55908203125,
+      5.724609375,
+      5.16455078125
+    ],
+    "after": [
+      5.73388671875,
+      5.40283203125,
+      5.0908203125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--scenarios",
+    "pingpong,pingpong-fresh-ops,pingpong-deadline,concurrent,concurrent-compute,concurrent-offload,pipelined,blocking,blocking-io,timers,fairness,starvation,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.darwin2",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "1c6ac50b67b439d4299f1bf808661ea9d845e0db",
+        "subject": "a Darwin backend: reactors over Apple's Network.framework, measured against kqueue",
+        "worktree_changes": true,
+        "worktree_changes_hash": "8b6d79224792",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T08:54:17+02:00"
+      },
+      "median": {
+        "pingpong": 17.03,
+        "pingpong-fresh-ops": 16.68,
+        "pingpong-deadline": 16.89,
+        "concurrent": 3.73,
+        "concurrent-compute": 7.44,
+        "concurrent-offload": 8.42,
+        "pipelined": 0.74,
+        "blocking": 6.58,
+        "blocking-io": 28.11,
+        "timers": 0.21,
+        "fairness-tick": 3.15,
+        "fairness": 1.57,
+        "starvation-p50": 446.42,
+        "starvation-p99": 687.83,
+        "starvation-max": 763.75,
+        "starvation": 7.65,
+        "mixed-compute": 24.59,
+        "mixed": 24.61
+      },
+      "samples": {
+        "pingpong": [
+          17.03,
+          16.75,
+          17.09
+        ],
+        "pingpong-fresh-ops": [
+          15.27,
+          17.16,
+          16.68
+        ],
+        "pingpong-deadline": [
+          16.81,
+          17.07,
+          16.89
+        ],
+        "concurrent": [
+          3.73,
+          3.67,
+          3.84
+        ],
+        "concurrent-compute": [
+          7.44,
+          7.42,
+          7.55
+        ],
+        "concurrent-offload": [
+          8.36,
+          8.46,
+          8.42
+        ],
+        "pipelined": [
+          0.74,
+          0.74,
+          0.75
+        ],
+        "blocking": [
+          6.59,
+          6.58,
+          6.58
+        ],
+        "blocking-io": [
+          28.11,
+          27.5,
+          28.57
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.11,
+          3.19,
+          3.15
+        ],
+        "fairness": [
+          1.56,
+          1.59,
+          1.57
+        ],
+        "starvation-p50": [
+          443.29,
+          450.38,
+          446.42
+        ],
+        "starvation-p99": [
+          676.96,
+          693.96,
+          687.83
+        ],
+        "starvation-max": [
+          761.67,
+          951.5,
+          763.75
+        ],
+        "starvation": [
+          7.65,
+          7.85,
+          7.65
+        ],
+        "mixed-compute": [
+          24.62,
+          24.59,
+          24.37
+        ],
+        "mixed": [
+          24.64,
+          24.61,
+          24.39
+        ]
+      }
+    },
+    {
+      "label": "darwin",
+      "executable": "/tmp/kqueuedemo.darwin2@darwin",
+      "benchmark": "darwin",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "1c6ac50b67b439d4299f1bf808661ea9d845e0db",
+        "subject": "a Darwin backend: reactors over Apple's Network.framework, measured against kqueue",
+        "worktree_changes": true,
+        "worktree_changes_hash": "8b6d79224792",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T08:54:17+02:00"
+      },
+      "median": {
+        "pingpong": 54.71,
+        "pingpong-fresh-ops": 54.55,
+        "pingpong-deadline": 55.57,
+        "concurrent": 19.16,
+        "concurrent-compute": 20.45,
+        "concurrent-offload": 19.82,
+        "pipelined": 2.4,
+        "blocking": 6.54,
+        "blocking-io": 66.4,
+        "timers": 0.22,
+        "fairness-tick": 2.22,
+        "fairness": 2.42,
+        "starvation-p50": 85.54,
+        "starvation-p99": 394.54,
+        "starvation-max": 620.96,
+        "starvation": 17.71,
+        "mixed-compute": 21.74,
+        "mixed": 65.96
+      },
+      "samples": {
+        "pingpong": [
+          55.46,
+          54.71,
+          53.84
+        ],
+        "pingpong-fresh-ops": [
+          55.39,
+          54.42,
+          54.55
+        ],
+        "pingpong-deadline": [
+          55.76,
+          55.57,
+          48.28
+        ],
+        "concurrent": [
+          18.96,
+          19.16,
+          23.29
+        ],
+        "concurrent-compute": [
+          20.14,
+          20.45,
+          21.82
+        ],
+        "concurrent-offload": [
+          19.8,
+          19.82,
+          22.0
+        ],
+        "pipelined": [
+          2.36,
+          2.4,
+          2.44
+        ],
+        "blocking": [
+          6.59,
+          6.54,
+          6.12
+        ],
+        "blocking-io": [
+          67.43,
+          66.4,
+          59.35
+        ],
+        "timers": [
+          0.21,
+          0.22,
+          0.22
+        ],
+        "fairness-tick": [
+          2.24,
+          2.22,
+          2.14
+        ],
+        "fairness": [
+          2.4,
+          2.42,
+          2.51
+        ],
+        "starvation-p50": [
+          77.42,
+          85.54,
+          102.33
+        ],
+        "starvation-p99": [
+          394.54,
+          376.04,
+          395.75
+        ],
+        "starvation-max": [
+          620.96,
+          563.29,
+          866.88
+        ],
+        "starvation": [
+          17.61,
+          17.71,
+          20.1
+        ],
+        "mixed-compute": [
+          21.74,
+          21.75,
+          21.44
+        ],
+        "mixed": [
+          65.97,
+          65.96,
+          64.83
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

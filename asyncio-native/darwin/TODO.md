@@ -80,58 +80,65 @@ same scenarios.
 
 The gears bench on the same release build (`kqueue-demo/bench/build.sh WORKTREE`, Scala Native nightly, release-fast),
 kqueue and Darwin in turn, over loopback TCP since Darwin has no Unix sockets, median of 3 runs, µs an operation
-(`kqueue-demo/bench/results/native-darwin-tcp.json`, `-4-workers.json`, `-connections.json`; `connections` at a tenth
-of its scale and 2 runs, since 20,000 connections exhaust the ephemeral ports, and after a pause for `TIME_WAIT`):
+(`kqueue-demo/bench/results/native-darwin-tcp-window.json`, `-4-workers.json`, `-connections.json`; `connections` at a
+tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral ports, and after a pause for
+`TIME_WAIT`). The `native-darwin-tcp*.json` results without `window` are the first cut, before the send window.
 
 | scenario | kqueue, 1 worker | Darwin, 1 worker | kqueue, 4 workers | Darwin, 4 workers |
 |---|---|---|---|---|
-| pingpong | 15.9 | 58.7 (+268%) | 16.6 | 58.9 (+256%) |
-| pingpong-fresh-ops | 16.5 | 58.5 | 17.0 | 59.1 |
-| pingpong-deadline | 17.0 | 59.4 | 17.3 | 59.7 |
-| concurrent | 3.67 | 20.1 (+448%) | 4.71 | 20.1 |
-| concurrent-compute | 7.48 | 21.2 | 4.62 | 21.4 |
-| concurrent-offload | 8.34 | 20.8 | 5.04 | 22.1 |
-| connections | 61.0 | 413 (+577%) | | |
-| pipelined | 0.75 | 19.1 (+2445%) | 0.74 | 22.3 |
-| blocking | 6.45 | 6.34 | 6.91 | 7.16 |
-| blocking-io | 28.0 | 68.6 (+145%) | 28.7 | 69.7 |
-| timers | 0.21 | 0.21 | 0.21 | 0.21 |
-| fairness | 1.59 | 12.1 | 1.66 | 14.3 |
-| fairness-tick | 3.18 | 1.09 (-66%) | 3.32 | 1.21 |
-| starvation (round trips) | 7.54 | 18.2 | 6.62 | 18.9 |
-| starvation-p50 | 422 | 131 (-69%) | 31.0 | 37.4 |
-| starvation-p99 | 641 | 437 (-32%) | 142 | 131 |
-| starvation-max | 749 | 722 | 384 | 561 |
-| mixed | 24.1 | 66.7 | 17.1 | 61.3 |
-| mixed-compute | 24.1 | 22.0 | 34.3 | 21.0 |
+| pingpong | 17.0 | 54.7 (+221%) | 17.3 | 55.6 (+222%) |
+| pingpong-fresh-ops | 16.7 | 54.6 | 17.0 | 55.7 |
+| pingpong-deadline | 16.9 | 55.6 | 17.2 | 55.9 |
+| concurrent | 3.73 | 19.2 (+414%) | 5.02 | 19.4 |
+| concurrent-compute | 7.44 | 20.5 | 4.88 | 19.6 |
+| concurrent-offload | 8.42 | 19.8 | 5.14 | 21.5 |
+| connections | 59.2 | 405 (+584%) | | |
+| pipelined | 0.74 | 2.40 (+224%) | 0.77 | 2.30 |
+| blocking | 6.58 | 6.54 | 6.94 | 7.27 |
+| blocking-io | 28.1 | 66.4 (+136%) | 28.7 | 68.2 |
+| timers | 0.21 | 0.22 | 0.21 | 0.21 |
+| fairness | 1.57 | 2.42 | 1.65 | 2.34 |
+| fairness-tick | 3.15 | 2.22 (-30%) | 3.30 | 3.14 |
+| starvation (round trips) | 7.65 | 17.7 | 6.52 | 18.7 |
+| starvation-p50 | 446 | 85.5 (-81%) | 29.3 | 19.3 |
+| starvation-p99 | 688 | 395 (-43%) | 199 | 43.1 (-78%) |
+| starvation-max | 764 | 621 | 509 | 535 |
+| mixed | 24.6 | 66.0 | 17.0 | 58.9 |
+| mixed-compute | 24.6 | 21.7 | 34.4 | 21.0 |
 
-- **Round trips cost 3.5 times what kqueue's do** (59 against 16 µs a ping-pong), and a connection 7 times. A read
+- **Round trips cost 3.2 times what kqueue's do** (55 against 17 µs a ping-pong), and a connection 7 times. A read
   or write on kqueue is one system call on the reactor's thread, woken once by the kernel; on Darwin it is a hand-off
   to Network.framework, whose Dispatch thread does the socket call, posts to the reactor's queue, and wakes the reactor
-  thread: two thread wake-ups where kqueue has one, each about what the earlier C measurement found
-  (`network-framework.c`: 60 against 27 µs a round trip). Nothing in the backend's own path is close to that: a
-  waiter is a `malloc`, a notification a mutex and condition variable.
-- **Pipelined writes cost 25 times**: every write waits for its send's completion, as the framework advises, where
-  kqueue's write returns once the kernel took the bytes. A window of outstanding sends per handle would bring this down
-  (a write finishing at once while fewer than N sends are outstanding, which is what a kernel socket buffer is) and is
-  the one evident improvement left; it was not tried, since round trips, not throughput, are what the backend is slow
-  at.
+  thread: two thread wake-ups where kqueue has one. The framework used as Apple intends, with no reactor and every
+  connection's work in its own blocks on a serial queue (`kqueue-demo/bench/network-framework.c`), measured 59.9 µs a
+  round trip on this machine, so the backend costs nothing over the idiomatic usage; what costs is the framework's own
+  path over loopback. Nothing in the backend's own path is close to that: a waiter is a `malloc`, a notification a
+  mutex and condition variable.
+- **The send window matters, and is the idiom**: Network.framework asks that completions pace sends, not serialise
+  them. The first cut had every write wait for its send's completion, a hand-off and a wake-up per write; now a write
+  is done at once while the handle has less than 256 KB of sends outstanding (`ASYNCIO_DARWIN_SEND_WINDOW`, 0 for
+  the old behaviour). `pipelined` went from 19.1 to 2.4 µs, `fairness` from 12.1 to 2.4, ping-pong from 58.7 to 54.7.
+  A kernel socket's send buffer does the same for kqueue, which is why its `pipelined` is 0.74. It needed one more
+  piece of socket semantics: `nw_connection_cancel` drops sends still queued, so closing a connection right after a
+  write lost the last message, where a kernel socket sends its buffer first; the close now cancels once the last send
+  has completed.
 - **Blocking ops and timers cost the same**: they never touch Network.framework. `blocking` is the blocker pool's
   hand-off, shared code.
-- **Responsiveness is better**: the ticker and the starvation checker wake sooner (`fairness-tick` 1.1 against
-  3.2 µs, `starvation-p50` 131 against 422 µs on one worker), because the reactor's thread does no socket calls and
-  parks on a condition variable, which a Dispatch thread signals, while kqueue's thread is in `kevent` and the socket
-  calls themselves; on four workers kqueue catches up. The compute slices (`mixed-compute`) are not slower either.
-- **Knobs make little difference** (Darwin alone, 2 runs): checking the queue 2,000 times before parking
-  (`ASYNCIO_DARWIN_SPIN=2000`) takes `pipelined` from 19 to 13 µs and `starvation-p99` from 437 to 423, and costs
-  `fairness-tick` (1.1 to 8.6 µs); no receive prefetch (`ASYNCIO_DARWIN_PREFETCH=0`) changes nothing beyond noise.
-  Both stay off by default.
+- **Responsiveness is better**: the starvation checker wakes sooner (`starvation-p50` 86 against 446 µs on one
+  worker, `-p99` 43 against 199 on four), because the reactor's thread does no socket calls and parks on a condition
+  variable, which a Dispatch thread signals, while kqueue's thread is in `kevent` and the socket calls themselves. The
+  compute slices (`mixed-compute`) are not slower either.
+- **QoS makes no difference** (Darwin alone, 2 runs): the reactor thread at the queue's QoS class or left as it is,
+  the queue user-interactive, user-initiated or default, all within noise (ping-pong 54.4 to 54.9 µs). Checking the
+  queue 2,000 times before parking and turning the receive prefetch off, measured on the first cut, did nothing useful
+  either. All stay at their defaults: user-initiated, thread QoS set, no spinning, prefetch on.
 - **Four workers change nothing for Darwin**: its socket calls are on Dispatch's threads already, and its round trips
-  are bound by the hand-offs; kqueue's `concurrent` costs more on four workers (4.7 against 3.7 µs), the descriptor
+  are bound by the hand-offs; kqueue's `concurrent` costs more on four workers (5.0 against 3.7 µs), the descriptor
   lock again.
 
 So, as the earlier measurement had it, Network.framework over loopback is the kernel's sockets with more threads in
-the way, and as a backend it loses every I/O scenario to kqueue by a factor of two and a half to seven; what it is for,
-Apple's user-space stack on a real interface, needs a second machine to measure. The semantics survive, except where
-the framework has no counterpart (above), and the backend is kept as the reference for a completion-based reactor,
-which io_uring's would resemble.
+the way, and as a backend it loses every I/O scenario to kqueue by two to seven times, pipelined writes by three; what
+it is for, Apple's user-space stack on a real interface, needs a second machine to measure. The semantics survive,
+except where the framework has no counterpart (above), and the backend is kept as the reference for a completion-based
+reactor, which io_uring's would resemble, with one difference that matters for cost: io_uring's completions land in a
+ring the submitting thread reads, with no second thread between the kernel and the loop.
