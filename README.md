@@ -86,8 +86,8 @@ as `reactor.ops` for building reads, writes, accepts, connects, timers, custom r
 ops, blocking tasks, and name resolution. The reactor has no promise op: code written
 against it uses gears promises. A scheduler drives the loop with `runOnce`, and other
 threads wake it with `wakeup`. `nativeAsyncioLoop` implements it in
-`asyncio.kqueue`: `KqueueReactor`, `KqueueOps`, the concrete op classes, and the blocker
-pool. The kqueue demos use those internals directly. The gears demos use only the interface,
+`asyncio.kqueue`: `KqueueReactor`, `KqueueOps`, and the concrete op classes; the blocker
+pool (`asyncio.Blockers`) is shared by every backend. The kqueue demos use those internals directly. The gears demos use only the interface,
 including `reactor.handles` for opening files, sockets, and pipes by `Address`, so they
 work with any reactor's handle type; they receive a `Reactor.Factory` from their `Main`,
 the one place naming kqueue.

@@ -13,7 +13,7 @@ import asyncio.Ops
 import asyncio.Repeatable
 import asyncio.ResolvedAddress
 import asyncio.Slot
-import asyncio.unsafe.BlockingRun
+import asyncio.BlockingRun
 import asyncio.unsafe.NativePool
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking

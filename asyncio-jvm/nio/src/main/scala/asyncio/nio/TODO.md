@@ -43,8 +43,10 @@ the backend has Unix streams and not elsewhere.
   reactors; checked by the contract's "closing a handle that a reactor blocked on another thread has used").
 - **Regular files** are `FileChannel`s, always ready, as POSIX reports one; a command on one that is not done is
   performed again next turn.
-- **Blocking ops and `resolve`** run on a blocker pool of daemon platform threads, which a cancel interrupts, with the
-  kqueue backend's rules for `onCancel` and slots. `resolve` uses `InetAddress.getAllByName`. They were virtual threads
+- **Blocking ops and `resolve`** run on the blocker pool every backend shares (`asyncio.Blockers`, since 2026-10-21:
+  daemon platform threads started as tasks find none idle and ending after a minute without one), which a cancel
+  interrupts, with the kqueue backend's rules for `onCancel` and slots (`asyncio.BlockingRun`, which `NioBlocking` now
+  is). `resolve` uses `InetAddress.getAllByName`. They were virtual threads
   at first, but one started from a virtual thread inherits its scheduler: under `Carriers.Reactors` a blocking op then
   took one of the pool's workers, and the cancel demo hung, its reactor closing on the only worker while waiting for an
   interrupted sleep that needed that worker to wake (found running `gears cancel` on the JVM).

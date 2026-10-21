@@ -11,7 +11,9 @@ import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
 import asyncio.AddressFamily
+import asyncio.Blockers
 import asyncio.BlockingOps
+import asyncio.BlockingRun
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
@@ -261,114 +263,31 @@ object NioPromise {
   private[nio] final case class Failed(failure: Throwable)
 }
 
-/** A promise the reactor completes by running `block` on the blocker pool (`NioBlocking.blockers`). An exception thrown by `block` is the op's
-  * failure. Cancelling it skips `block` if it has not started, and interrupts its thread if it is running; either way
-  * the completion's `onCancel` waits until `block` has returned. As with the kqueue backend's blocking ops, a subclass
-  * writes its result into its slot through `publish`, which skips the write once cancelled.
+/** A promise the reactor completes by running `block` on the blocker pool (`Blockers`), with `BlockingRun`'s
+  * cancellation: skipped if not started, interrupted if running, and `onCancel` waits for `block` to return. An
+  * exception thrown by `block` is the op's failure. As with the kqueue backend's blocking ops, a subclass writes its
+  * result into its slot through `publish`, which skips the write once cancelled.
   */
-abstract class NioBlocking extends NioPromise {
-  def block(): Unit
-
-  // Guarded by `this`: the thread running `block`, whether the task was cancelled, and whether `block` has returned.
-  private var runner: Thread | Null = null
-  private var cancelled = false
-  private var ended = false
+abstract class NioBlocking extends NioPromise with BlockingRun {
 
   /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
   private[nio] var cancelling: Completion[NioOp] | Null = null
 
   /** Runs `block` on the blocker pool and completes the promise with the outcome, unless it is cancelled first. */
-  private[nio] def start(): Unit =
-    NioBlocking.blockers.execute { () =>
-      if begin() then {
-        var failure: Throwable | Null = null
-        try block()
-        catch case t: Throwable => failure = t
-        finally end()
-        // A cancelled task is detached, so neither outcome reaches its completion, but the reactor learns from it that
-        // `block` has returned, which is when its `onCancel` runs.
-        if failure != null then fail(failure) else signal()
-      }
-    }
+  private[nio] def start(): Unit = Blockers.run(this)
+
+  protected def settled(failure: Throwable | Null): Unit =
+    if failure != null then fail(failure) else signal()
 
   /** Runs this op on the calling thread instead of the blocker pool (see `ReactorBackend.blockingHere`). */
   private[nio] def here(): asyncio.BlockingHere = {
     if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
     submitted = true
     new asyncio.BlockingHere {
-      def run(): Unit = {
-        if !begin() then throw new java.util.concurrent.CancellationException()
-        var failure: Throwable | Null = null
-        try block()
-        catch case t: Throwable => failure = t
-        finally end()
-        if synchronized(cancelled) then throw new java.util.concurrent.CancellationException()
-        if failure != null then throw failure
-      }
+      def run(): Unit = runHere()
       def cancel(): Unit = interrupt(): Unit
     }
   }
-
-  private def begin(): Boolean = synchronized {
-    if cancelled then false
-    else {
-      runner = Thread.currentThread()
-      true
-    }
-  }
-
-  /** Once this returns no cancel can interrupt the thread, so an interrupt that raced in is cleared, and cannot leak
-    * into the thread's next task.
-    */
-  private def end(): Unit = {
-    synchronized {
-      runner = null
-      ended = true
-      notifyAll()
-    }
-    Thread.interrupted(): Unit
-  }
-
-  /** Marks the task cancelled and interrupts its thread if it is running. Returns true if it was running. */
-  private[nio] def interrupt(): Boolean = synchronized {
-    cancelled = true
-    val running = runner
-    if running != null then running.interrupt()
-    running != null
-  }
-
-  /** Writes `value` into `into` unless the task has been cancelled. */
-  protected final def publish[A <: AnyRef](into: Slot[A], value: A): Unit = synchronized {
-    if !cancelled then into.set(value)
-  }
-
-  /** Waits until a running `block` has returned. An interrupt of the waiting thread is kept for later. */
-  private[nio] def awaitEnd(): Unit = {
-    var interrupted = false
-    synchronized {
-      while !ended do
-        try wait()
-        catch case _: InterruptedException => interrupted = true
-    }
-    if interrupted then Thread.currentThread().interrupt()
-  }
-}
-
-private[nio] object NioBlocking {
-
-  /** The blocker pool: daemon platform threads, made as needed and kept a while. Not virtual threads, since one started
-    * from a virtual thread inherits its scheduler: from a future carried by a reactor pool (`Carriers.Reactors`), a
-    * blocking op would then take one of the pool's workers, and a reactor closing on that worker would wait for it
-    * forever.
-    */
-  lazy val blockers: java.util.concurrent.ExecutorService =
-    java.util.concurrent.Executors.newCachedThreadPool { (task: Runnable) =>
-      val thread = new Thread(task, s"nio-blocker-${count.incrementAndGet()}")
-      thread.setDaemon(true)
-      thread
-    }
-
-  private val count = new java.util.concurrent.atomic.AtomicInteger
 }
 
 /** A blocking task built from a function, for `BlockingOps.blocking`. */
