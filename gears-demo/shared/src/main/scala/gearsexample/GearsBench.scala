@@ -33,6 +33,9 @@ object GearsBench {
   /** The size of each message a client sends and the server echoes back. */
   inline val MessageSize = 64
 
+  /** The size of the `large` scenarios' messages: 128 KB, or `GEARS_BENCH_LARGE` in the environment, in bytes. */
+  val LargeMessage: Int = sys.env.get("GEARS_BENCH_LARGE").map(_.toInt).getOrElse(128 * 1024)
+
   /** A scenario: its name, what it stresses, how many operations it performs at scale 1, and the client code that
     * performs `count` of them against the echo server at `address`; and whether a backend has what it needs, beyond
     * Unix stream sockets. A backend without it skips the scenario.
@@ -76,6 +79,25 @@ object GearsBench {
       new Client {
         def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, pooled = true)
+      }
+    ),
+    Scenario(
+      "large",
+      s"as pipelined, with messages of $LargeMessage bytes and reads into a buffer that fits one: a read's copies, "
+        + "at a size where they count",
+      2_000,
+      new Client {
+        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+          pipelined(r, address, count, messageSize = LargeMessage)
+      }
+    ),
+    Scenario(
+      "large-pooled",
+      "as large, reading into the backend's pool, whose buffers fit one message too",
+      2_000,
+      new Client {
+        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+          pipelined(r, address, count, messageSize = LargeMessage, pooled = true)
       }
     ),
     Scenario(
@@ -370,15 +392,16 @@ object GearsBench {
       freshOps: Boolean = false,
       blockingFirst: Boolean = false,
       work: Work = Work.NoWork,
-      pooled: Boolean = false
+      pooled: Boolean = false,
+      messageSize: Int = MessageSize
   )(using Async.Spawn): Unit = {
     // The pool outlives the connection: a receive into one of its buffers may be outstanding until the close op is
     // done, which gives the buffer back.
-    val pool = if pooled then r.pool(MessageSize, 2) else null
+    val pool = if pooled then r.pool(messageSize, 2) else null
     try withConnection(r, address) { fd =>
       val arena = BufferArena.open()
       try {
-        val buf = arena.allocate(MessageSize)
+        val buf = arena.allocate(messageSize)
         val write = r.ops.write(fd, buf)
         val read = r.ops.read(fd, buf)
         val into = Slot[Received]()
@@ -394,7 +417,7 @@ object GearsBench {
           while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
           if pooled then {
             var got = 0
-            while got < MessageSize do {
+            while got < messageSize do {
               perform(r, pooledRead.nn)
               val received = into.clear()
               val n = received.buffer.remaining()
@@ -436,14 +459,23 @@ object GearsBench {
     def disarm(): Unit = if !pending.nn.cancel() then timer = r.ops.timer(60_000)
   }
 
-  /** Writes `count` messages, each as its own write, from one future while reading the echoes in another. */
-  private def pipelined(r: Backend, address: StreamAddress, count: Int)(using Async.Spawn): Unit =
-    withConnection(r, address) { fd =>
+  /** Writes `count` messages of `messageSize` bytes, each as its own write, from one future while reading the echoes
+    * in another, into a buffer of 8 KB, or, with `pooled`, into the backend's pool of buffers the size of a message.
+    */
+  private def pipelined(
+      r: Backend,
+      address: StreamAddress,
+      count: Int,
+      messageSize: Int = MessageSize,
+      pooled: Boolean = false
+  )(using Async.Spawn): Unit = {
+    val pool = if pooled then r.pool(messageSize, 2) else null // outlives the connection: see `pingPong`
+    try withConnection(r, address) { fd =>
       val arena = BufferArena.open()
       try {
-        val total = count.toLong * MessageSize
-        val out = arena.allocate(MessageSize)
-        val in = arena.allocate(8192)
+        val total = count.toLong * messageSize
+        val out = arena.allocate(messageSize)
+        val in = arena.allocate(if messageSize > 8192 then messageSize else 8192)
         val writer = Future {
           val write = r.ops.write(fd, out)
           var i = 0
@@ -453,17 +485,31 @@ object GearsBench {
             i += 1
           }
         }
-        val read = r.ops.read(fd, in)
         var received = 0L
-        while received < total do {
-          in.clear()
-          perform(r, read)
-          if in.position() == 0 then throw new IOException("The server closed the connection")
-          received += in.position()
+        if pooled then {
+          val into = Slot[Received]()
+          val read = r.ops.read(fd, pool.nn, into)
+          while received < total do {
+            perform(r, read)
+            val got = into.clear()
+            val n = got.buffer.remaining()
+            got.release()
+            if n == 0 then throw new IOException("The server closed the connection")
+            received += n
+          }
+        } else {
+          val read = r.ops.read(fd, in)
+          while received < total do {
+            in.clear()
+            perform(r, read)
+            if in.position() == 0 then throw new IOException("The server closed the connection")
+            received += in.position()
+          }
         }
         writer.await
       } finally arena.close()
-    }
+    } finally if pool != null then pool.close()
+  }
 
   /** Runs `pipelined` while a ticker future on the same reactor thread performs zero-length timers one after another,
     * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations

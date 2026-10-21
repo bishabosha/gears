@@ -1,0 +1,90 @@
+{
+  "started": "2026-10-21T14:57:19+02:00",
+  "finished": "2026-10-21T14:57:25+02:00",
+  "load_average": {
+    "before": [
+      6.39111328125,
+      5.068359375,
+      8.84033203125
+    ],
+    "after": [
+      6.279296875,
+      5.06689453125,
+      8.8173828125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--scenarios",
+    "large,large-pooled"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.large2",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "a35c2d804c53cf1b11cfd4f87316e37e04e40957",
+        "subject": "measure pooled reads: no gain at 64 bytes a message on NWFramework, 2.7 \u00b5s dearer on kqueue over Unix sockets; what the interface change is for, recorded",
+        "worktree_changes": true,
+        "worktree_changes_hash": "8a1161c453ca",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T14:57:17+02:00"
+      },
+      "median": {
+        "large": 40.96,
+        "large-pooled": 39.99
+      },
+      "samples": {
+        "large": [
+          55.64,
+          40.96,
+          40.65
+        ],
+        "large-pooled": [
+          39.99,
+          39.92,
+          40.71
+        ]
+      }
+    },
+    {
+      "label": "nwframework",
+      "executable": "/tmp/kqueuedemo.large2@nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "a35c2d804c53cf1b11cfd4f87316e37e04e40957",
+        "subject": "measure pooled reads: no gain at 64 bytes a message on NWFramework, 2.7 \u00b5s dearer on kqueue over Unix sockets; what the interface change is for, recorded",
+        "worktree_changes": true,
+        "worktree_changes_hash": "8a1161c453ca",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T14:57:17+02:00"
+      },
+      "median": {
+        "large": 396.16,
+        "large-pooled": 373.08
+      },
+      "samples": {
+        "large": [
+          388.9,
+          418.16,
+          396.16
+        ],
+        "large-pooled": [
+          373.08,
+          375.06,
+          370.98
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
