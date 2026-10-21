@@ -153,9 +153,11 @@ receives straight into on Dispatch's thread (`native-pooled-reads-tcp.json`, rel
 | pingpong | 8.29 | 15.5 | 73.3 |
 | pingpong-pooled | 11.0 | 15.5 | 72.9 |
 
-So the saved copy does not show at 64 bytes a message, which is nothing against a thread wake-up, and on kqueue over
-Unix sockets the pooled read costs 2.7 µs more, the pool's lock taken twice a read and the slot handed over, where
-the plain read is one call on a buffer the caller holds. At a size where a copy counts it does show: the `large`
+So the saved copy does not show at 64 bytes a message, which is nothing against a thread wake-up. On kqueue over Unix
+sockets a first run had the pooled read 2.7 µs dearer, which a later pair of runs did not reproduce (8.48 against
+8.39 µs with the pool's free list under a lock, 8.44 against 7.87 with it lock-free, a compare-and-set stack of
+slot indexes tagged against ABA, which is what `NativePool` is now): the pooled read costs a readiness backend a few
+hundred nanoseconds at most, the slot handed over and taken back. At a size where a copy counts the saving shows: the `large`
 scenarios send 128 KB messages (`GEARS_BENCH_LARGE` sets the size) as `pipelined` does, writing and reading at
 once, since a ping-pong of messages larger than a Unix socket's 8 KB buffers deadlocks both sides on their writes;
 `large-pooled` reads into pool buffers the size of a message (`native-large-unix.json`, `native-large-tcp.json`,
