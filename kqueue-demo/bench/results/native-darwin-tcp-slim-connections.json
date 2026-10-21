@@ -1,0 +1,78 @@
+{
+  "started": "2026-10-21T12:15:28+02:00",
+  "finished": "2026-10-21T12:15:30+02:00",
+  "load_average": {
+    "before": [
+      32.140625,
+      29.17626953125,
+      18.4462890625
+    ],
+    "after": [
+      32.12890625,
+      29.22314453125,
+      18.525390625
+    ]
+  },
+  "runs": 2,
+  "bench_args": [
+    "--tcp",
+    "--scenarios",
+    "connections",
+    "--scale",
+    "0.1"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.darwin8",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "23e112c6403b7d60091c42033986178198dfbf4d",
+        "subject": "gears bench: --host and --no-server, and bench-serve, for a bench against an echo server on another machine",
+        "worktree_changes": true,
+        "worktree_changes_hash": "f65f9efac32f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T12:09:48+02:00"
+      },
+      "median": {
+        "connections": 60.505
+      },
+      "samples": {
+        "connections": [
+          65.31,
+          55.7
+        ]
+      }
+    },
+    {
+      "label": "darwin",
+      "executable": "/tmp/kqueuedemo.darwin8@darwin",
+      "benchmark": "darwin",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "23e112c6403b7d60091c42033986178198dfbf4d",
+        "subject": "gears bench: --host and --no-server, and bench-serve, for a bench against an echo server on another machine",
+        "worktree_changes": true,
+        "worktree_changes_hash": "f65f9efac32f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T12:09:48+02:00"
+      },
+      "median": {
+        "connections": 414.70500000000004
+      },
+      "samples": {
+        "connections": [
+          412.17,
+          417.24
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
