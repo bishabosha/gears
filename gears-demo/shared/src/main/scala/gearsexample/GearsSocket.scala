@@ -46,7 +46,7 @@ object GearsSocket {
             }
           }
           println(s"Received message: `${new String(response.toByteArray, StandardCharsets.UTF_8)}`")
-        } finally r.handles.close(socket)
+        } finally perform(r, r.ops.close(socket))
       }
     }
   }

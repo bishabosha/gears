@@ -36,13 +36,31 @@ trait FuturesContract extends FunSuite {
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.
     */
-  protected def listenAndConnect(dir: java.nio.file.Path): (Int, () => Int) = backend match {
+  protected def listenAndConnect(dir: java.nio.file.Path)(using Async): (Int, () => Int) = backend match {
     case unix: UnixStreamBackend =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
-      (unix.handles.listen(address), () => unix.handles.connect(address))
+      val listener = unix.handles.listener(address)
+      perform(unix, unix.ops.listening(listener))
+      (listener, () => unix.handles.connect(address))
     case _ =>
-      val address = IpAddress.IPv4("127.0.0.1", freePort())
-      (backend.handles.listen(address), () => backend.handles.connect(address))
+      // A port nothing listens on: the first the listening op does not fail on.
+      val random = new java.util.Random()
+      var attempts = 0
+      var found: (Int, () => Int) | Null = null
+      while found == null do {
+        val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
+        val listener = backend.handles.listener(address)
+        try {
+          perform(backend, backend.ops.listening(listener))
+          found = (listener, () => backend.handles.connect(address))
+        } catch {
+          case e: IOException =>
+            perform(backend, backend.ops.close(listener))
+            attempts += 1
+            if attempts > 10 then throw e
+        }
+      }
+      found.nn
   }
 
   /** Runs `body` as a program over `backend`, the platform's way. */
@@ -50,18 +68,21 @@ trait FuturesContract extends FunSuite {
 
   /** A port nothing listens on, found by listening on it with the backend and letting it go. */
   protected def freePort(): Int = {
-    val random = new java.util.Random()
-    var attempts = 0
     var port = -1
-    while port < 0 do {
-      val candidate = 20000 + random.nextInt(30000)
-      try {
-        backend.handles.close(backend.handles.listen(IpAddress.IPv4("127.0.0.1", candidate)))
-        port = candidate
-      } catch {
-        case e: IOException =>
-          attempts += 1
-          if attempts > 10 then throw e
+    running { r =>
+      val random = new java.util.Random()
+      var attempts = 0
+      while port < 0 do {
+        val candidate = 20000 + random.nextInt(30000)
+        val listener = r.handles.listener(IpAddress.IPv4("127.0.0.1", candidate))
+        try {
+          perform(r, r.ops.listening(listener))
+          port = candidate
+        } catch {
+          case e: IOException =>
+            attempts += 1
+            if attempts > 10 then throw e
+        } finally perform(r, r.ops.close(listener))
       }
     }
     port
@@ -116,7 +137,7 @@ trait FuturesContract extends FunSuite {
             while buf.hasRemaining do perform(r, write)
             sent += buf.limit()
           }
-          r.handles.close(out)
+          perform(r, r.ops.close(out))
         }
         val reader = Future {
           val buf = arena.allocate(8192)
@@ -129,7 +150,7 @@ trait FuturesContract extends FunSuite {
           }
         }
         Seq(writer, reader).awaitAll
-      } finally r.handles.close(in)
+      } finally perform(r, r.ops.close(in))
     }
     assertEquals(received, total)
   }
@@ -159,7 +180,7 @@ trait FuturesContract extends FunSuite {
                   buf.flip()
                   while buf.hasRemaining do perform(r, write)
                 }
-              finally r.handles.close(socket)
+              finally perform(r, r.ops.close(socket))
             }
           }
           connections.awaitAll
@@ -180,12 +201,12 @@ trait FuturesContract extends FunSuite {
                 assertEquals(text(buf), "hello")
               }
               1
-            } finally r.handles.close(socket)
+            } finally perform(r, r.ops.close(socket))
           }
         }
         echoed = done.awaitAll.sum
         server.await
-      } finally r.handles.close(listener)
+      } finally perform(r, r.ops.close(listener))
     } finally if Files.exists(dir) then {
       Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
       Files.deleteIfExists(dir): Unit
@@ -208,8 +229,8 @@ trait FuturesContract extends FunSuite {
         perform(r, read)
         outcome = s"$cancelled ${text(buf)}"
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        perform(r, r.ops.close(in))
+        perform(r, r.ops.close(out))
       }
     }
     assertEquals(outcome, "true again")
@@ -252,10 +273,10 @@ trait FuturesContract extends FunSuite {
             perform(r, r.ops.write(server, arena.of("still".getBytes(StandardCharsets.UTF_8))))
             perform(r, read)
             outcome = s"$cancelled ${text(buf)}"
-          } finally r.handles.close(server)
+          } finally perform(r, r.ops.close(server))
         } finally {
-          r.handles.close(client)
-          r.handles.close(listener)
+          perform(r, r.ops.close(client))
+          perform(r, r.ops.close(listener))
         }
       }
     }
@@ -269,9 +290,9 @@ trait FuturesContract extends FunSuite {
       try {
         val waiting = Future(perform(r, r.ops.read(in, arena.allocate(4))))
         perform(r, r.ops.timer(20))
-        r.handles.close(in)
+        perform(r, r.ops.close(in))
         failure = waiting.awaitResult.failed.toOption.orNull
-      } finally r.handles.close(out)
+      } finally perform(r, r.ops.close(out))
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
   }
@@ -283,7 +304,7 @@ trait FuturesContract extends FunSuite {
       try {
         val socket = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
         try perform(r, r.ops.connect(socket))
-        finally r.handles.close(socket)
+        finally perform(r, r.ops.close(socket))
       } catch case t: Throwable => failure = t
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
@@ -306,8 +327,8 @@ trait FuturesContract extends FunSuite {
     var failure: Throwable | Null = null
     running { r =>
       val (in, out) = r.handles.pipe()
-      r.handles.close(in)
-      r.handles.close(out)
+      perform(r, r.ops.close(in))
+      perform(r, r.ops.close(out))
       try perform(r, r.ops.read(in, arena.allocate(4)))
       catch case t: Throwable => failure = t
     }

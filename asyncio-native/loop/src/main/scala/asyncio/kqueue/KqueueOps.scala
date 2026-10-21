@@ -4,8 +4,6 @@ import java.nio.ByteBuffer
 
 import asyncio.BlockingOps
 import asyncio.BufferPool
-import asyncio.LifecycleOps
-import asyncio.PooledReadOps
 import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
@@ -44,9 +42,7 @@ sealed trait KqueueOp {
 object KqueueOps
     extends UnixDatagramOps[KqueueOp]
     with ReadinessOps[KqueueOp]
-    with BlockingOps[KqueueOp]
-    with PooledReadOps[KqueueOp]
-    with LifecycleOps[KqueueOp] {
+    with BlockingOps[KqueueOp] {
   def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
   def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
   def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)

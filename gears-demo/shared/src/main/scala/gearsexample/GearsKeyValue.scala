@@ -128,7 +128,7 @@ object GearsKeyValue {
       case e: IOException => println(s"Client socket $fd failed: ${e.getMessage}")
     } finally {
       arena.close()
-      r.handles.close(fd)
+      perform(r, r.ops.close(fd))
       println(s"Closed client socket: $fd")
     }
   }
@@ -147,7 +147,7 @@ object GearsKeyValue {
           println(s"Accepted new client connection: $client")
           Future(session(r, client, store))
         }
-      } finally r.handles.close(server)
+      } finally perform(r, r.ops.close(server))
     }
   }
 
@@ -198,7 +198,7 @@ object GearsKeyValue {
             println(s"Received $received replies; last reply: `$lastReply`")
           }
           Seq(sender, receiver).awaitAllOrCancel
-        } finally r.handles.close(socket)
+        } finally perform(r, r.ops.close(socket))
       }
     }
   }

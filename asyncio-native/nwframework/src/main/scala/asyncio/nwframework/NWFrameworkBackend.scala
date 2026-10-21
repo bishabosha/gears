@@ -3,8 +3,6 @@ package asyncio.nwframework
 import asyncio.BlockingBackend
 import asyncio.BufferPool
 import asyncio.FifoBackend
-import asyncio.LifecycleBackend
-import asyncio.PooledReadBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
 
@@ -17,9 +15,7 @@ import asyncio.ReactorBackend
 object NWFrameworkBackend
     extends ReactorBackend
     with BlockingBackend
-    with FifoBackend
-    with PooledReadBackend
-    with LifecycleBackend {
+    with FifoBackend {
 
   type Op = NWFrameworkOp
 

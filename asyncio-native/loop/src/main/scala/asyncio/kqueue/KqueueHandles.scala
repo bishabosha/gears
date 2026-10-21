@@ -17,7 +17,6 @@ import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
 import asyncio.IpAddress
-import asyncio.LifecycleHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixDatagramHandles
@@ -43,14 +42,16 @@ object KqueueHandles
     extends UnixStreamHandles
     with UnixDatagramHandles
     with FifoHandles
-    with ReadinessHandles
-    with LifecycleHandles {
+    with ReadinessHandles {
   private val boundPaths = new ConcurrentHashMap[Integer, String]()
 
   // Sockets from `listener`, with where they are to listen, until their `listening` op binds them.
   private val toListen = new ConcurrentHashMap[Integer, (SocketAddress, Boolean)]()
 
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = listenerOn(address, reuseAddr)
+  def listener(address: UnixAddress): Int = listenerOn(address, reuseAddr = false)
+
+  private def listenerOn(address: SocketAddress, reuseAddr: Boolean): Int = {
     val fd = socketFor(address, Transport.Stream)(_ => ())
     toListen.put(fd, (address, reuseAddr))
     fd
@@ -91,6 +92,9 @@ object KqueueHandles
   private def connectStream(address: SocketAddress): Int =
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
 
+  /** A listening socket, bound and listening at once: for kqueue's own demos, which have no reactor to perform
+    * `listening` on; the interface's way is `listener` and that op.
+    */
   def listen(address: IpAddress, reuseAddr: Boolean = true): Int = listenStream(address, reuseAddr)
   def listen(address: UnixAddress): Int = listenStream(address, reuseAddr = false)
 

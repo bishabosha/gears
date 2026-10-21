@@ -129,8 +129,8 @@ object GearsCancel {
           // which the timer gives time for.
           reading.await
           perform(r, r.ops.timer(20))
-          r.handles.close(orphanRead)
-          r.handles.close(orphanWrite)
+          perform(r, r.ops.close(orphanRead))
+          perform(r, r.ops.close(orphanWrite))
           val closedFailed = orphan.awaitResult.failed.toOption.exists(_.isInstanceOf[java.io.IOException])
           orphan.cancel() // nothing left to cancel
           println(s"closing fails a pending read: $closedFailed")
@@ -154,8 +154,8 @@ object GearsCancel {
           // Each future can only have been rejected by its completion's onCancel.
           println(s"cancel notifications: ${pending.count((_, future) => isCancelled(future))}")
         } finally {
-          r.handles.close(readFd)
-          r.handles.close(writeFd)
+          perform(r, r.ops.close(readFd))
+          perform(r, r.ops.close(writeFd))
         }
       }
     }

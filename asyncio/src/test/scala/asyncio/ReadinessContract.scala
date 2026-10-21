@@ -20,8 +20,8 @@ trait ReadinessContract extends ReactorContract {
         for _ <- 1 to 3 do r.runOnce(block = false)
         assertEquals(outcome.completed, 0)
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        close(r, in)
+        close(r, out)
       }
     }
   }
@@ -49,8 +49,8 @@ trait ReadinessContract extends ReactorContract {
         assertEquals(outcome.completed, 1)
         assertEquals(text(buf), "part!")
       } finally {
-        r.handles.close(in)
-        r.handles.close(out)
+        close(r, in)
+        close(r, out)
       }
     }
   }
@@ -70,7 +70,7 @@ trait ReadinessContract extends ReactorContract {
     try {
       registered.await()
       Thread.sleep(20) // so that the other reactor is blocked again
-      backend.handles.close(out)
+      closeAlone(out)
       withReactor { r =>
         val buf = allocate(16)
         val outcome = Outcome()
@@ -85,15 +85,15 @@ trait ReadinessContract extends ReactorContract {
         b.wakeup()
       }
       blocked.join()
-      backend.handles.close(in)
+      closeAlone(in)
     }
   }
 
   test("readNow reports the end of the stream") {
     val (in, out) = backend.handles.pipe()
     try {
-      backend.handles.close(out)
+      closeAlone(out)
       assertEquals(backend.handles.readNow(in, allocate(16)), -1)
-    } finally backend.handles.close(in)
+    } finally closeAlone(in)
   }
 }

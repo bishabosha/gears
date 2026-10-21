@@ -2,8 +2,6 @@ package asyncio.nio
 
 import asyncio.BlockingBackend
 import asyncio.BufferPool
-import asyncio.LifecycleBackend
-import asyncio.PooledReadBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.ReadinessBackend
@@ -18,9 +16,7 @@ object NioBackend
     extends ReactorBackend
     with ReadinessBackend
     with BlockingBackend
-    with UnixStreamBackend
-    with PooledReadBackend
-    with LifecycleBackend {
+    with UnixStreamBackend {
 
   type Op = NioOp
 

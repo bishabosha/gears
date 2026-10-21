@@ -5,8 +5,6 @@ import java.nio.ByteBuffer
 
 import asyncio.BlockingOps
 import asyncio.BufferPool
-import asyncio.LifecycleOps
-import asyncio.PooledReadOps
 import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
@@ -41,7 +39,7 @@ sealed trait NWFrameworkOp {
 }
 
 /** Builds the ops `NWFrameworkReactor` understands. */
-object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] with PooledReadOps[NWFrameworkOp] with LifecycleOps[NWFrameworkOp] {
+object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] {
   def read(handle: Int, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
   def write(handle: Int, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
   def accept(handle: Int, into: HandleSlot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)

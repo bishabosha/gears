@@ -33,7 +33,7 @@ object GearsDatagram {
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
         try exchange(r, sock, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[UnixAddress]()), request, response)
-        finally r.handles.close(socket)
+        finally perform(r, r.ops.close(socket))
       }
     }
   }
@@ -46,7 +46,7 @@ object GearsDatagram {
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(null, address)
         try exchange(r, address, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[IpAddress]()), request, response)
-        finally r.handles.close(socket)
+        finally perform(r, r.ops.close(socket))
       }
     }
   }
@@ -83,7 +83,7 @@ object GearsDatagram {
         val socket = r.handles.datagram(address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
         try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally r.handles.close(socket)
+        finally perform(r, r.ops.close(socket))
       }
     }
 
@@ -95,7 +95,7 @@ object GearsDatagram {
         val socket = r.handles.datagram(address, null)
         val sender = Slot[IpAddress]()
         try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally r.handles.close(socket)
+        finally perform(r, r.ops.close(socket))
       }
     }
 

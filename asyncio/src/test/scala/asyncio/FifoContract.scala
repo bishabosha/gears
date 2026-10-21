@@ -20,10 +20,10 @@ trait FifoContract extends ReactorContract {
         r.submit(backend.ops.write(writer, bytes("through the fifo")), sent)
         turnUntil(r)(sent.finished)
         assertEquals(sent.completed, 1, String.valueOf(sent.failure))
-        backend.handles.close(writer)
+        closeAlone(writer)
         val buf = allocate(64)
         assertEquals(readToEnd(r, backend.ops.read(reader, buf), buf), "through the fifo")
-      } finally backend.handles.close(reader)
+      } finally closeAlone(reader)
     } finally deleteAll(dir)
   }
   test("openFile refuses a FIFO, and openFifo a regular file") {
