@@ -139,6 +139,29 @@ Profiled on 2026-10-21 against the state-in-C build, both release, ping-pong ove
   `AtomicInteger` on the handle would tell. The rest, 1 to 2 µs a hop, is the reactor's processing after it has the
   event. The state-in-C design is the previous commit (`1fd5fd7`), and the measurements are its.
 
+## The interface, changed for it, measured
+
+Three changes to `Reactor`'s interfaces were made for a completion-based backend, staged as capability traits,
+implemented by NWFramework, kqueue and NIO in turn, then folded into the base interface with the synchronous forms
+removed: reads into the backend's own buffers (`Backend.pool`, `Ops.read(handle, pool, into)`), listening and closing
+as ops (`Handles.listener`, `Ops.listening`, `Ops.close`), and `Reactor.submit` stating that a turn's ops may be
+issued together at its end. The `pingpong-pooled` scenario reads each echo into a pool buffer, which this backend
+receives straight into on Dispatch's thread (`native-pooled-reads-tcp.json`, release, 3 runs, µs a round trip):
+
+| | kqueue, Unix socket | kqueue, TCP | NWFramework, TCP |
+|---|---|---|---|
+| pingpong | 8.29 | 15.5 | 73.3 |
+| pingpong-pooled | 11.0 | 15.5 | 72.9 |
+
+So the saved copy does not show: 64 bytes a message is nothing against a thread wake-up, and on kqueue over Unix
+sockets the pooled read costs 2.7 µs more, the pool's lock taken twice a read and the slot handed over, where the
+plain read is one call on a buffer the caller holds. The change earns its place for what it allows, a backend that
+owns its buffers handing them over, and for io_uring's multishot receive, not for this backend's latency; a larger
+message, or a receive that brings several, would be where it shows. Listening and closing as ops removed this
+backend's two blocking waits and the semantic deviation they were, at no cost to the others. The issue-point wording
+changes nothing yet: batching was not implemented, its gain over loopback being nil for a framework whose cost is
+the hop.
+
 ## Measured: against kqueue over TCP
 
 The gears bench on the same release build (`kqueue-demo/bench/build.sh WORKTREE`, Scala Native nightly, release-fast),

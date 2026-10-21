@@ -1,0 +1,102 @@
+{
+  "started": "2026-10-21T14:27:40+02:00",
+  "finished": "2026-10-21T14:28:21+02:00",
+  "load_average": {
+    "before": [
+      10.7314453125,
+      9.84765625,
+      8.3115234375
+    ],
+    "after": [
+      9.0859375,
+      9.548828125,
+      8.2724609375
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--scenarios",
+    "pingpong,pingpong-pooled,pingpong-fresh-ops"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.pooled",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "024c711647ad789f94c08bacecd9f77945f8527e",
+        "subject": "the base interface takes in pooled reads, and listening and closing as ops; synchronous listen and close go",
+        "worktree_changes": true,
+        "worktree_changes_hash": "da39a3ee5e6b",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T14:27:35+02:00"
+      },
+      "median": {
+        "pingpong": 15.45,
+        "pingpong-pooled": 15.54,
+        "pingpong-fresh-ops": 20.62
+      },
+      "samples": {
+        "pingpong": [
+          15.98,
+          15.08,
+          15.45
+        ],
+        "pingpong-pooled": [
+          15.54,
+          15.47,
+          15.54
+        ],
+        "pingpong-fresh-ops": [
+          17.24,
+          20.62,
+          21.46
+        ]
+      }
+    },
+    {
+      "label": "nwframework",
+      "executable": "/tmp/kqueuedemo.pooled@nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "024c711647ad789f94c08bacecd9f77945f8527e",
+        "subject": "the base interface takes in pooled reads, and listening and closing as ops; synchronous listen and close go",
+        "worktree_changes": true,
+        "worktree_changes_hash": "da39a3ee5e6b",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T14:27:35+02:00"
+      },
+      "median": {
+        "pingpong": 73.3,
+        "pingpong-pooled": 72.85,
+        "pingpong-fresh-ops": 71.83
+      },
+      "samples": {
+        "pingpong": [
+          73.66,
+          72.5,
+          73.3
+        ],
+        "pingpong-pooled": [
+          72.85,
+          71.66,
+          73.15
+        ],
+        "pingpong-fresh-ops": [
+          71.83,
+          71.38,
+          73.42
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
