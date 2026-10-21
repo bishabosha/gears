@@ -78,18 +78,21 @@ object ReactorFutures {
         Async.blocking(Future(program(backend)).await)
     }
 
-  /** Runs `program` on gears' own virtual threads, which find the reactor threads through `OpRouter.ambient`. */
+  /** Runs `program` on gears' own virtual threads, which find the reactors, a pool of workers carrying no futures,
+    * through `OpRouter.ambient`.
+    */
   private def runBesideGears(backend: ReactorBackend, workers: Int)(program: Async.Spawn ?=> Unit): Unit = {
-    val router = new ReactorThreads(backend, workers)
+    val pool = ReactorPool.start(backend, workers)
     val previous = OpRouter.ambient.get()
-    OpRouter.ambient.set(router) // inherited by the virtual thread that `Async.blocking` runs the program on
+    OpRouter.ambient.set(pool) // inherited by the virtual thread that `Async.blocking` runs the program on
     try {
       given VThreadSupport.type = VThreadSupport
       given VThreadScheduler.type = VThreadScheduler
       Async.blocking(program)
     } finally {
       OpRouter.ambient.set(previous)
-      router.stop()
+      pool.stop() // Pending ops are cancelled as each reactor closes, rejecting any futures still waiting on them.
+      pool.join()
     }
   }
 
