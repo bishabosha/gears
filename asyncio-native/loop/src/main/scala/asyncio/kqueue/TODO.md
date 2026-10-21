@@ -838,7 +838,7 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
      in one process, stops at about 25,000 round trips a second however many connections, where separate processes
      reach 74,000: something of its own, or of Dispatch's, is serialised per process. Whether it uses the user-space
      stack over a real interface, and does better there, needs a second machine. As a backend, it would not help.
-   - **Built as a backend all the same: `asyncio.darwin.DarwinBackend`** (asyncio-native/darwin/TODO.md), to see
+   - **Built as a backend all the same: `asyncio.nwframework.NWFrameworkBackend`** (asyncio-native/nwframework/TODO.md), to see
      whether the reactor semantics survive a completion-based framework and what it costs on the gears bench. They do,
      except for Unix domain sockets and readiness, which public Network.framework has no counterpart for; and over
      loopback TCP it loses every I/O scenario to kqueue by two to seven times (55 against 17 µs a ping-pong), the same

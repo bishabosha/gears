@@ -22,8 +22,8 @@ trait GearsBenchCheck extends KQueueDemoSuite {
 class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   override def commandPrefix: Seq[String] = Seq("gears")
 
-  demoTest("bench: every scenario runs on the Darwin backend over TCP, at a tiny scale") {
-    val output = run("bench", "--backend", "darwin", "--tcp", "--scale", "0.01", "--connections", "8")
+  demoTest("bench: every scenario runs on the NWFramework backend over TCP, at a tiny scale") {
+    val output = run("bench", "--backend", "nwframework", "--tcp", "--scale", "0.01", "--connections", "8")
     for (
       scenario <- Seq(
         "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
@@ -35,8 +35,8 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
     assert(!output.contains("Exception"), output)
   }
 
-  demoTest("bench: the Darwin backend refuses a Unix socket address") {
-    val output = runFailing("bench", "--backend", "darwin", "--scale", "0.01", "--scenarios", "pingpong")
+  demoTest("bench: the NWFramework backend refuses a Unix socket address") {
+    val output = runFailing("bench", "--backend", "nwframework", "--scale", "0.01", "--scenarios", "pingpong")
     assert(output.contains("no Unix domain sockets"), output)
   }
 }

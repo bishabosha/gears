@@ -146,7 +146,7 @@ object Main {
       @arg(doc = "connect to an echo server already listening (`bench-serve`), instead of starting one") noServer: mainargs.Flag,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
-      @arg(doc = "kqueue, or darwin: Network.framework, which needs --tcp") backend: String = "kqueue"
+      @arg(doc = "kqueue, or nwframework: Network.framework, which needs --tcp") backend: String = "kqueue"
   ): Unit = {
     val address =
       if tcp.value then IpAddress.IPv4(host, port)
@@ -162,7 +162,7 @@ object Main {
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
-      @arg(doc = "kqueue, or darwin: Network.framework") backend: String = "kqueue"
+      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
   ): Unit =
     withBackend(backend) { b =>
       GearsBench.serveForever(IpAddress.IPv4(host, port), workers, takePolicy(policy))(using b)
@@ -172,11 +172,11 @@ object Main {
     .find(_.toString.equalsIgnoreCase(policy))
     .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
 
-  /** Runs `body` with the backend named: kqueue, or darwin, Network.framework. */
+  /** Runs `body` with the backend named: kqueue, or nwframework, Network.framework. */
   private def withBackend(backend: String)(body: asyncio.Backend => Unit): Unit = backend match {
     case "kqueue" => body(KqueueBackend)
-    case "darwin" => body(asyncio.darwin.DarwinBackend)
-    case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or darwin")
+    case "nwframework" => body(asyncio.nwframework.NWFrameworkBackend)
+    case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
   }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)

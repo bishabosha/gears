@@ -142,13 +142,13 @@ lazy val nativeAsyncioGears =
     )
     .dependsOn(nativeAsyncioLoop % "compile->compile;test->test")
 
-// The Darwin backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
-// their C side in its resources (see asyncio-native/darwin/TODO.md). macOS only; every executable that links it needs
+// The NWFramework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
+// their C side in its resources (see asyncio-native/nwframework/TODO.md). macOS only; every executable that links it needs
 // Network.framework.
 val networkFramework: Seq[String] =
   if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil
-lazy val nativeAsyncioDarwin =
-  (project in file("asyncio-native/darwin"))
+lazy val nativeAsyncioNWFramework =
+  (project in file("asyncio-native/nwframework"))
     .enablePlugins(ScalaNativePlugin)
     .settings(
       publish / skip := true,
@@ -186,10 +186,10 @@ lazy val kqueueDemo =
       publish / skip := true,
       Compile / mainClass := Some("example.Main"),
       libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
-      // The gears demos run futures on a pool of worker threads; `gears bench --backend darwin` links Network.framework.
+      // The gears demos run futures on a pool of worker threads; `gears bench --backend nwframework` links Network.framework.
       nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
     )
-    .dependsOn(gearsDemo.native, nativeAsyncioDarwin)
+    .dependsOn(gearsDemo.native, nativeAsyncioNWFramework)
 
 // The kqueueDemo bench scenarios written with cats-effect and fs2, to compare against; see kqueue-demo/bench/compare.py.
 // The same code on Scala Native (kqueue, through build.sh) and on the JVM (its selector poller, through

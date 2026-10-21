@@ -1,6 +1,6 @@
-# The Darwin backend: Network.framework as a reactor
+# The NWFramework backend: Network.framework as a reactor
 
-`asyncio.darwin.DarwinBackend` runs `asyncio`'s ops over Apple's Network.framework, the user-space networking stack
+`asyncio.nwframework.NWFrameworkBackend` runs `asyncio`'s ops over Apple's Network.framework, the user-space networking stack
 Apple offers instead of BSD sockets (see "SwiftNIO meets the same lock" in `asyncio/kqueue/TODO.md`), through its C
 interface, with Dispatch for what it does not cover. It was built to answer two questions: whether the `Reactor`,
 `Ops` and `Handles` semantics can be kept over a completion-based framework, and what it costs against kqueue on the
@@ -10,23 +10,23 @@ same scenarios.
 
 - **Sockets are Network.framework's**: `nw_connection_t` for stream and datagram connections, `nw_listener_t` for
   listeners; a bound, unconnected datagram socket is a UDP listener whose inbound flows, one `nw_connection_t` per
-  peer, are received from and replied to (`dn_datagram_bind`, `dn_send_to`).
+  peer, are received from and replied to (`nwf_datagram_bind`, `nwf_send_to`).
 - **Pipes and FIFOs are Dispatch sources** (`DISPATCH_SOURCE_TYPE_READ`/`WRITE`) over non-blocking descriptors, since
   Network.framework has nothing for descriptors; regular files are read and written at submission, as they never wait.
 - **Nothing calls back into Scala, and C does only what Scala cannot.** Network.framework delivers everything as
   blocks, which Scala Native cannot build, on Dispatch's threads, which it cannot run managed code on. The C side
-  (`src/main/resources/scala-native/darwin_io.c`) is therefore trampolines: each block copies its arguments into an
+  (`src/main/resources/scala-native/nwframework_io.c`) is therefore trampolines: each block copies its arguments into an
   event, queues it on the handle, and wakes the reactor watching the handle; the reactor's thread drains the handles
   with events each turn and parks on a condition variable between turns, bounded by its earliest timer. Everything
-  else is Scala, on `DarwinHandle`: the received bytes in a stash, datagrams, accepted connections, the connection's
-  state and errors, the ops waiting and which reactor to wake for them (`dn_handle_watch`), the send window. So every
+  else is Scala, on `NWFrameworkHandle`: the received bytes in a stash, datagrams, accepted connections, the connection's
+  state and errors, the ops waiting and which reactor to wake for them (`nwf_handle_watch`), the send window. So every
   completion runs on the loop thread, as `Reactor` promises, and an op is a waiter registered on the handle, attempted
   again when the handle tells its reactor. A first cut kept all that state in C, with a waiter per op registered
   there; moving it out halved the C and put the semantics next to the kqueue backend's, where they are compared. The
   one piece of state C keeps is the count of sends outstanding, so that a closed connection is cancelled once they
   have gone (below) whichever reactor, if any, is still watching it.
 - **One wake-up, consumed only by the wait.** The reactor's wake-up flag on the C side is set by `wakeup` and by a
-  blocker thread or another reactor queueing something on the Scala side; `dn_reactor_wait` consumes it. Draining
+  blocker thread or another reactor queueing something on the Scala side; `nwf_reactor_wait` consumes it. Draining
   the handles with events used to consume it too, which lost a wake-up that landed between the Scala side emptying
   its queues and that drain: the reactor parked, with no timer to bound the park, on a blocking op's result already
   queued. It showed once in thirty runs of the demo suite, in `blocking`.
@@ -39,7 +39,7 @@ same scenarios.
 
 - **A read completes with at least one byte, or at the end of the stream.** A receive asks for 1 to `remaining`
   bytes; what arrives goes to the handle's stash, and a read takes from the stash. After a read that took bytes the
-  next receive is issued at once (`ASYNCIO_DARWIN_PREFETCH=0` turns that off), so the next read finds its bytes
+  next receive is issued at once (`ASYNCIO_NWFRAMEWORK_PREFETCH=0` turns that off), so the next read finds its bytes
   waiting and finishes at submission, which is how `trySubmit` finishes a read without suspending the caller.
 - **Cancelling a read runs `onCancel` at once, and the op can be performed again.** A receive once issued cannot be
   withdrawn, so a cancelled read leaves it outstanding; its bytes land in the stash, for the next read on the handle.
@@ -54,8 +54,8 @@ same scenarios.
   `waiting` state, for a path to appear, rather than failing it; the backend takes a `waiting` state with an error as
   the failure, as POSIX `connect` reports it.
 - **`listen` fails where it is called, and a closed listener's port is free at once.** A listener is asynchronous;
-  `dn_listen` waits for its ready or failed state, so that a port in use throws `IOException` from `handles.listen`,
-  as the contract has it, and `dn_close` waits for its cancelled state, so that the port can be listened on again
+  `nwf_listen` waits for its ready or failed state, so that a port in use throws `IOException` from `handles.listen`,
+  as the contract has it, and `nwf_close` waits for its cancelled state, so that the port can be listened on again
   when `close` returns (the futures contract's `freePort` depends on it). A connection's close does not wait.
 - **Closing a handle fails the ops pending on it, on whichever reactor.** The C side takes the handle's waiters, each
   knowing its reactor, and notifies them as closed; then it cancels the connection, whose outstanding receives and
@@ -70,7 +70,7 @@ same scenarios.
 ## Semantics that cannot be kept with public Network.framework
 
 - **No Unix domain sockets.** The C headers define endpoints of type address, host, Bonjour and URL only; Swift's
-  `NWEndpoint.unix` is private API. So `DarwinBackend` is neither a `UnixStreamBackend` nor a `UnixDatagramBackend`,
+  `NWEndpoint.unix` is private API. So `NWFrameworkBackend` is neither a `UnixStreamBackend` nor a `UnixDatagramBackend`,
   the gears demos that need Unix sockets do not compile against it, and the bench compares it with kqueue over TCP.
 - **No readiness.** There is nothing to try on a connection without waiting, and no event says a connection is
   readable: `whenReady`, `readNow` and `writeNow` have no counterpart, so it is not a `ReadinessBackend`. The
@@ -94,7 +94,7 @@ measured on one worker over TCP, 3 runs:
 
 - **Every send's completion woke the reactor**, where the C side had posted only when a write waited for one; with the
   send window nothing does, so that was a spurious wake-up per message per side. The reactor now tells the C side
-  which kinds of event to wake it for (`dn_handle_watch`'s mask, from what is waiting); the rest only queue.
+  which kinds of event to wake it for (`nwf_handle_watch`'s mask, from what is waiting); the rest only queue.
   `concurrent` went back from 26.5 to 19.4 µs, ping-pong from 64.9 to 63.5.
 - **The reactor's thread mapped and released the framework's `dispatch_data`**; the callback now copies the bytes
   into the event on Dispatch's thread, so nothing of Dispatch's crosses over. Within noise on its own.
@@ -107,7 +107,7 @@ measured on one worker over TCP, 3 runs:
   worker; on four, `concurrent` 19.6, `pipelined` 2.34. So the slim backend stands at about 10 µs a round trip over
   the version with its state in C (55 µs on the same machine, 17 for kqueue), with `concurrent`, `pipelined` and
   `fairness` level. What remains between them: the handle's Scala monitor, taken twice per event and once per
-  attempt, and two more C calls per op (`dn_handle_watch` on each registration and each take). Profiled, below.
+  attempt, and two more C calls per op (`nwf_handle_watch` on each registration and each take). Profiled, below.
 
 ### Where the slim backend's 10 µs a round trip go
 
@@ -117,7 +117,7 @@ Profiled on 2026-10-21 against the state-in-C build, both release, ping-pong ove
   reactor thread runs 2.8 µs a round trip against 1.65, and Dispatch's threads the same per operation in both. No
   hot spot: the reactor's extra is allocation (`Allocator_Alloc`, `memset`), the handle's `apply`, and thread-local
   reads, each a few samples in a thousand.
-- **Wait latency, measured.** `ASYNCIO_DARWIN_TRACE=1` times each received event from the callback queueing it to
+- **Wait latency, measured.** `ASYNCIO_NWFRAMEWORK_TRACE=1` times each received event from the callback queueing it to
   the reactor taking it, and the callback itself, on both builds (the state-in-C one instrumented in a worktree of
   its commit): the callback costs the same, 1.0 against 1.1 µs; the wait is 4.8 µs against 6.2, 60% of events under
   5 µs against 10%. So each hop reaches the reactor 1.4 µs later, 3 µs of the round trip, and the rest is the
@@ -128,7 +128,7 @@ Profiled on 2026-10-21 against the state-in-C build, both release, ping-pong ove
 - **Where the 1.4 µs is**: a second trace point, at the reactor's drain of the C side before the Scala side looks
   the handle up and locks it, measures 5.3 to 5.7 µs from queueing, the same as the state-in-C build measures at its
   drain (4.8 to 5.0, a faster run of the machine). So the wake-up itself costs the same in both; the 1.4 µs is the
-  Scala side's way into the handle, `DarwinHandles.at` and the handle's `synchronized`, before `dn_handle_next`.
+  Scala side's way into the handle, `NWFrameworkHandles.at` and the handle's `synchronized`, before `nwf_handle_next`.
   That is more than a thin lock should cost, and the next thing to try is the monitor: Scala Native's, once a monitor
   has been contended (the handle's is, at close, from another thread), may stay inflated; a spin lock of an
   `AtomicInteger` on the handle would tell. The rest, 1 to 2 µs a hop, is the reactor's processing after it has the
@@ -137,12 +137,12 @@ Profiled on 2026-10-21 against the state-in-C build, both release, ping-pong ove
 ## Measured: against kqueue over TCP
 
 The gears bench on the same release build (`kqueue-demo/bench/build.sh WORKTREE`, Scala Native nightly, release-fast),
-kqueue and Darwin in turn, over loopback TCP since Darwin has no Unix sockets, median of 3 runs, µs an operation
+kqueue and NWFramework in turn, over loopback TCP since NWFramework has no Unix sockets, median of 3 runs, µs an operation
 (`kqueue-demo/bench/results/native-darwin-tcp-window.json`, `-4-workers.json`, `-connections.json`; `connections` at a
 tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral ports, and after a pause for
 `TIME_WAIT`). The `native-darwin-tcp*.json` results without `window` are the first cut, before the send window.
 
-| scenario | kqueue, 1 worker | Darwin, 1 worker | kqueue, 4 workers | Darwin, 4 workers |
+| scenario | kqueue, 1 worker | NWFramework, 1 worker | kqueue, 4 workers | NWFramework, 4 workers |
 |---|---|---|---|---|
 | pingpong | 17.0 | 54.7 (+221%) | 17.3 | 55.6 (+222%) |
 | pingpong-fresh-ops | 16.7 | 54.6 | 17.0 | 55.7 |
@@ -165,7 +165,7 @@ tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral po
 | mixed-compute | 24.6 | 21.7 | 34.4 | 21.0 |
 
 - **Round trips cost 3.2 times what kqueue's do** (55 against 17 µs a ping-pong), and a connection 7 times. A read
-  or write on kqueue is one system call on the reactor's thread, woken once by the kernel; on Darwin it is a hand-off
+  or write on kqueue is one system call on the reactor's thread, woken once by the kernel; on NWFramework it is a hand-off
   to Network.framework, whose Dispatch thread does the socket call, posts to the reactor's queue, and wakes the reactor
   thread: two thread wake-ups where kqueue has one. The framework used as Apple intends, with no reactor and every
   connection's work in its own blocks on a serial queue (`kqueue-demo/bench/network-framework.c`), measured 59.9 µs a
@@ -174,7 +174,7 @@ tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral po
   mutex and condition variable.
 - **The send window matters, and is the idiom**: Network.framework asks that completions pace sends, not serialise
   them. The first cut had every write wait for its send's completion, a hand-off and a wake-up per write; now a write
-  is done at once while the handle has less than 256 KB of sends outstanding (`ASYNCIO_DARWIN_SEND_WINDOW`, 0 for
+  is done at once while the handle has less than 256 KB of sends outstanding (`ASYNCIO_NWFRAMEWORK_SEND_WINDOW`, 0 for
   the old behaviour). `pipelined` went from 19.1 to 2.4 µs, `fairness` from 12.1 to 2.4, ping-pong from 58.7 to 54.7.
   A kernel socket's send buffer does the same for kqueue, which is why its `pipelined` is 0.74. It needed one more
   piece of socket semantics: `nw_connection_cancel` drops sends still queued, so closing a connection right after a
@@ -186,19 +186,19 @@ tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral po
   worker, `-p99` 43 against 199 on four), because the reactor's thread does no socket calls and parks on a condition
   variable, which a Dispatch thread signals, while kqueue's thread is in `kevent` and the socket calls themselves. The
   compute slices (`mixed-compute`) are not slower either.
-- **QoS makes no difference** (Darwin alone, 2 runs): the reactor thread at the queue's QoS class or left as it is,
+- **QoS makes no difference** (NWFramework alone, 2 runs): the reactor thread at the queue's QoS class or left as it is,
   the queue user-interactive, user-initiated or default, all within noise (ping-pong 54.4 to 54.9 µs). Checking the
   queue 2,000 times before parking and turning the receive prefetch off, measured on the first cut, did nothing useful
   either. All stay at their defaults: user-initiated, thread QoS set, no spinning, prefetch on.
-- **Four workers change nothing for Darwin**: its socket calls are on Dispatch's threads already, and its round trips
+- **Four workers change nothing for NWFramework**: its socket calls are on Dispatch's threads already, and its round trips
   are bound by the hand-offs; kqueue's `concurrent` costs more on four workers (5.0 against 3.7 µs), the descriptor
   lock again.
 
 - **The machine's own LAN address is loopback too**: `--host 192.168.0.186` (en0's address; macOS routes it through
   `lo0`) measured the same as `127.0.0.1` on both backends, within noise (debug build: kqueue 22 against 25 µs a
-  ping-pong, Darwin 65 against 63). A real interface needs a second machine: on it, `kqueuedemo gears bench-serve
-  --host 0.0.0.0 --port 19876 --backend kqueue` (or `darwin`), and here `kqueuedemo gears bench --tcp --host <its
-  address> --no-server --backend darwin` against the same with `kqueue`, both as `compare.py ... -- --tcp --host ...
+  ping-pong, NWFramework 65 against 63). A real interface needs a second machine: on it, `kqueuedemo gears bench-serve
+  --host 0.0.0.0 --port 19876 --backend kqueue` (or `nwframework`), and here `kqueuedemo gears bench --tcp --host <its
+  address> --no-server --backend nwframework` against the same with `kqueue`, both as `compare.py ... -- --tcp --host ...
   --no-server`. On a LAN nothing rate-limits the traffic; on the internet a round trip's time is the network's, so the
   backends would differ only in CPU and in throughput at concurrency (`concurrent`, `pipelined`), not in latency.
 
