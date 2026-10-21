@@ -16,9 +16,12 @@ import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
 import asyncio.IpAddress
+import asyncio.LifecycleHandles
+import asyncio.Received
 import asyncio.unsafe.Descriptors
+import asyncio.unsafe.NativePool
 import NWFrameworkEvent.*
-import NWFrameworkHandle.{Connect, Read, Write}
+import NWFrameworkHandle.{Close, Connect, Read, Write}
 
 /** A datagram taken in, with its sender. */
 private[nwframework] final class Datagram(val bytes: Array[Byte], val from: IpAddress)
@@ -43,7 +46,8 @@ private[nwframework] final class NWFrameworkHandle(
   def isDescriptor: Boolean = kind == NWFrameworkHandle.Descriptor
 
   // Guarded by `this`, from here on.
-  private var closed = false
+  private var closed = false   // no more ops: closing, or closed
+  private var released = false // the C side is let go: no more calls to it
 
   /** The connection's or listener's state: 0 not ready yet, 1 ready, 2 failed, 3 cancelled; and its errors. */
   private var state = 0
@@ -57,6 +61,15 @@ private[nwframework] final class NWFrameworkHandle(
   private var stashCapacity = 0
   private var receiving = false
   private var eof = false
+
+  // A pooled read's receive outstanding into a buffer of the pool's, and one that completed, waiting to be taken by
+  // the next pooled read, or copied by a plain one (its position is what a plain read took).
+  private var pooledSlot: NativePool#Slot | Null = null
+  private var pooledReady: NativePool#Slot | Null = null
+
+  // The close op waiting for the connection's cancelled state, if any.
+  private var closeReactor: NWFrameworkReactor | Null = null
+  private var closeToken = 0L
 
   // Sends outstanding, in bytes, for the window (`NWFrameworkHandle.SendWindow`).
   private var sentBytes = 0L
@@ -86,7 +99,7 @@ private[nwframework] final class NWFrameworkHandle(
     * the reactor attempting an op here, or draining this handle as its watcher. Nothing is taken once closed.
     */
   def drain(event: Ptr[NWFrameworkIo.Event]): Unit = synchronized {
-    while !closed && NWFrameworkIo.nwf_handle_next(ptr, event) != 0 do
+    while !released && NWFrameworkIo.nwf_handle_next(ptr, event) != 0 do
       try apply(event)
       finally NWFrameworkIo.nwf_event_done(event)
   }
@@ -102,7 +115,14 @@ private[nwframework] final class NWFrameworkHandle(
       e.kind match {
         case Received =>
           receiving = false
-          if e.len > 0 then stashAppend(e.bytes, e.len)
+          if e.intoBuffer != null then { // straight into a pool buffer, for a pooled read
+            val slot = pooledSlot.nn
+            pooledSlot = null
+            if e.len > 0 then {
+              slot.buffer.limit(e.len)
+              pooledReady = slot
+            } else slot.release()
+          } else if e.len > 0 then stashAppend(e.bytes, e.len)
           if e.complete && e.isFinal then eof = true
           if e.error != 0 then readError = e.error
           take(Read)
@@ -123,6 +143,7 @@ private[nwframework] final class NWFrameworkHandle(
           take(Write)
         case Cancelled =>
           state = 3
+          if closeReactor != null then finishClose() // the close op waiting for it
         case Accepted =>
           accepted.add(e.accepted)
           take(Read)
@@ -240,6 +261,7 @@ private[nwframework] final class NWFrameworkHandle(
       case Read    => if readReactor != null && readToken == token then readReactor = null
       case Write   => if writeReactor != null && writeToken == token then writeReactor = null
       case Connect => if connectReactor != null && connectToken == token then connectReactor = null
+      case Close   => if closeReactor != null && closeToken == token then closeReactor = null
     }
     updateWatcher()
   }
@@ -255,15 +277,18 @@ private[nwframework] final class NWFrameworkHandle(
       if readReactor != null then readReactor
       else if writeReactor != null then writeReactor
       else if connectReactor != null then connectReactor
+      else if closeReactor != null then closeReactor
       else null
     val mask =
       (if readReactor != null then NWFrameworkEvent.ForRead else 0) |
         (if writeReactor != null then NWFrameworkEvent.ForWrite else 0) |
-        (if connectReactor != null then NWFrameworkEvent.ForConnect else 0)
+        (if connectReactor != null then NWFrameworkEvent.ForConnect else 0) |
+        (if closeReactor != null then NWFrameworkEvent.Ending else 0)
     if !(wanted eq watcher) || mask != watchMask then {
       watcher = wanted
       watchMask = mask
-      if !closed && ptr != null then NWFrameworkIo.nwf_handle_watch(ptr, if wanted == null then null else wanted.nn.ptr, mask)
+      if !released && ptr != null then
+        NWFrameworkIo.nwf_handle_watch(ptr, if wanted == null then null else wanted.nn.ptr, mask)
     }
   }
 
@@ -277,7 +302,20 @@ private[nwframework] final class NWFrameworkHandle(
     */
   def read(into: Ptr[Byte], cap: Int, reactor: NWFrameworkReactor, token: Long): Int = synchronized {
     checkOpen()
-    if stashLength > 0 then {
+    if pooledReady != null then {
+      // What a pooled read's receive brought, taken by a plain read: copied, and the buffer released once empty.
+      val slot = pooledReady.nn
+      val buffer = slot.buffer
+      val n = math.min(buffer.remaining(), cap)
+      string.memcpy(into, slot.address + buffer.position(), n.toCSize)
+      buffer.position(buffer.position() + n)
+      if !buffer.hasRemaining() then {
+        pooledReady = null
+        slot.release()
+        if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 then receive(cap)
+      }
+      n
+    } else if stashLength > 0 then {
       val n = math.min(stashLength, cap)
       string.memcpy(into, stash, n.toCSize)
       stashLength -= n
@@ -292,6 +330,66 @@ private[nwframework] final class NWFrameworkHandle(
       if !receiving then receive(cap)
       -1
     }
+  }
+
+  /** A pooled read: a buffer of `pool`'s with what was received, its limit at the bytes, or null with the read
+    * waiter registered and a receive outstanding straight into a buffer of the pool's. Bytes already received, into
+    * the stash by a plain read or a pool buffer by an earlier pooled read, are handed over first. Fails if the pool
+    * has no buffer free when one is needed.
+    */
+  def readPooled(pool: NativePool, reactor: NWFrameworkReactor, token: Long): Received | Null = synchronized {
+    checkOpen()
+    if pooledReady != null then {
+      val slot = pooledReady.nn
+      pooledReady = null
+      val buffer = slot.buffer
+      if buffer.position() > 0 then { // partly taken by a plain read: what is left, from the start
+        val left = buffer.remaining()
+        string.memmove(slot.address, slot.address + buffer.position(), left.toCSize)
+        buffer.position(0).limit(left)
+      }
+      prefetchPooled(pool)
+      slot
+    } else if stashLength > 0 then {
+      val slot = takeFrom(pool)
+      val n = math.min(stashLength, pool.bufferSize)
+      string.memcpy(slot.address, stash, n.toCSize)
+      stashLength -= n
+      if stashLength > 0 then string.memmove(stash, stash + n, stashLength.toCSize)
+      slot.buffer.limit(n)
+      if stashLength == 0 then prefetchPooled(pool)
+      slot
+    } else if eof then {
+      val slot = takeFrom(pool)
+      slot.buffer.limit(0)
+      slot
+    } else if readError != 0 then throw failure("read", readError)
+    else {
+      await(Read, reactor, token)
+      if !receiving then receiveInto(takeFrom(pool))
+      null
+    }
+  }
+
+  private def takeFrom(pool: NativePool): NativePool#Slot = {
+    val slot = pool.take()
+    if slot == null then throw new IOException("The pool has no buffer free")
+    slot.nn
+  }
+
+  /** Keeps a receive outstanding into a buffer of `pool`'s, if it has one free, so that the next read finds its
+    * bytes waiting.
+    */
+  private def prefetchPooled(pool: NativePool): Unit =
+    if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 && pool.available > 0 then {
+      val slot = pool.take()
+      if slot != null then receiveInto(slot.nn)
+    }
+
+  private def receiveInto(slot: NativePool#Slot): Unit = {
+    receiving = true
+    pooledSlot = slot
+    NWFrameworkIo.nwf_receive_into(ptr, slot.address, slot.buffer.capacity().toUInt)
   }
 
   private def receive(cap: Int): Unit = {
@@ -396,6 +494,73 @@ private[nwframework] final class NWFrameworkHandle(
     * is cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
     * connections not taken and flows go with it.
     */
+  /** The close op: begins closing, as `close` does, but a connection's cancellation is not waited for: false, with
+    * the close waiter registered, told once the connection is cancelled, when `closeDone` is true; a descriptor, a
+    * file or a listener is closed at once: true.
+    */
+  def closeAsync(reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
+    if closed then throw closedFailure
+    closed = true
+    take(Connect)
+    take(Read)
+    take(Write)
+    if ptr == null then {
+      unistd.close(fd)
+      released = true
+      true
+    } else if kind == NWFrameworkHandle.Stream || kind == NWFrameworkHandle.Datagram then {
+      closeReactor = reactor
+      closeToken = token
+      updateWatcher()
+      NWFrameworkIo.nwf_cancel_async(ptr)
+      false
+    } else {
+      cancelChildren()
+      NWFrameworkIo.nwf_cancel_async(ptr)
+      finishClose()
+      true
+    }
+  }
+
+  /** Whether the close op is done: the connection's cancelled state came (see `closeAsync`). */
+  def closeDone: Boolean = synchronized(released)
+
+  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock. */
+  private def finishClose(): Unit = {
+    if !released then {
+      released = true
+      if stash != null then {
+        stdlib.free(stash)
+        stash = null
+      }
+      if pooledReady != null then {
+        pooledReady.nn.release()
+        pooledReady = null
+      }
+      NWFrameworkIo.nwf_handle_release(ptr)
+    }
+    val reactor = closeReactor
+    closeReactor = null
+    if reactor != null then reactor.nn.notified(closeToken)
+  }
+
+  /** Cancels and releases a listener's accepted connections not taken, and a bound datagram socket's flows. Under the
+    * lock.
+    */
+  private def cancelChildren(): Unit = {
+    while !accepted.isEmpty do {
+      val a = accepted.poll()
+      NWFrameworkIo.nwf_cancel(a)
+      NWFrameworkIo.nwf_handle_release(a)
+    }
+    for flow <- flows.values do {
+      NWFrameworkIo.nwf_cancel(flow.ptr)
+      NWFrameworkIo.nwf_handle_release(flow.ptr)
+    }
+    flows.clear()
+    flowsByPeer.clear()
+  }
+
   def close(): Unit =
     synchronized {
       if closed then return
@@ -406,23 +571,12 @@ private[nwframework] final class NWFrameworkHandle(
       watcher = null
       if ptr != null then {
         NWFrameworkIo.nwf_handle_watch(ptr, null, 0)
-        while !accepted.isEmpty do {
-          val a = accepted.poll()
-          NWFrameworkIo.nwf_cancel(a)
-          NWFrameworkIo.nwf_handle_release(a)
-        }
-        for flow <- flows.values do {
-          NWFrameworkIo.nwf_cancel(flow.ptr)
-          NWFrameworkIo.nwf_handle_release(flow.ptr)
-        }
-        flows.clear()
-        flowsByPeer.clear()
+        cancelChildren()
         NWFrameworkIo.nwf_cancel(ptr)
-        NWFrameworkIo.nwf_handle_release(ptr)
-      } else unistd.close(fd)
-      if stash != null then {
-        stdlib.free(stash)
-        stash = null
+        finishClose()
+      } else {
+        unistd.close(fd)
+        released = true
       }
     }
 }
@@ -439,11 +593,13 @@ private[nwframework] object NWFrameworkHandle {
   inline val Read = 1
   inline val Write = 2
   inline val Connect = 3
+  inline val Close = 4
 
   private def name(kind: Int): String = kind match {
     case Read    => "read"
     case Write   => "write"
     case Connect => "connect"
+    case Close   => "close"
   }
 
   /** How many bytes of sends a handle may have outstanding before a write waits for a completion: the pacing
@@ -462,7 +618,7 @@ private[nwframework] object NWFrameworkHandle {
   * descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are descriptors, which
   * Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there are none.
   */
-object NWFrameworkHandles extends FifoHandles {
+object NWFrameworkHandles extends FifoHandles with LifecycleHandles {
 
   // The table: a handle number is an index, reused once closed. Grown under the lock, and published through the
   // volatile field so that any thread reads the current table.
@@ -534,6 +690,13 @@ object NWFrameworkHandles extends FifoHandles {
     add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, address))
   }
 
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+    val (host, port) = hostAndPort(address)
+    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0) }
+    if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
+    add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
+  }
+
   def listen(address: IpAddress, reuseAddr: Boolean = true): Int = {
     val (host, port) = hostAndPort(address)
     val error = stackalloc[CInt]()
@@ -569,7 +732,10 @@ object NWFrameworkHandles extends FifoHandles {
   /** Closes a handle, from any thread: the ops pending on it, on whichever reactor, fail there (see `Handles.close`
     * and `NWFrameworkHandle.close`). The number is free for reuse at once.
     */
-  def close(handle: Int): Unit = {
+  def close(handle: Int): Unit = remove(handle).close()
+
+  /** Takes `handle` out of the table, its number free for reuse at once, for closing; throws if it is not open. */
+  private[nwframework] def remove(handle: Int): NWFrameworkHandle = {
     val found = synchronized {
       val current = table
       val found = if handle >= 0 && handle < current.length then current.get(handle) else null
@@ -580,7 +746,7 @@ object NWFrameworkHandles extends FifoHandles {
       found
     }
     if found == null then throw new IOException(s"Handle $handle is not open")
-    found.close()
+    found
   }
 
   private[nwframework] def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))

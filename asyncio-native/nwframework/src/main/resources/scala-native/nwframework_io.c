@@ -29,20 +29,20 @@
 
 /* Kinds of event, in `nwf_event.kind`. */
 enum {
-  DN_EV_RECEIVED = 1,  /* bytes of a stream, or none: `len`, `complete`, `final`, `error` */
-  DN_EV_SENT = 2,      /* a send was processed: `len` bytes, `error` */
-  DN_EV_READY = 3,     /* the connection is ready */
-  DN_EV_FAILED = 4,    /* the connection or listener failed: `error` */
-  DN_EV_CANCELLED = 5, /* the framework's last callback */
-  DN_EV_ACCEPTED = 6,  /* a listener accepted `accepted`, a started connection handle */
-  DN_EV_PACKET = 7,    /* a datagram: `len` bytes from `from`, on `flow` if a bound socket's */
-  DN_EV_FLOW = 8,      /* a bound datagram socket has a new inbound flow, `flow` */
-  DN_EV_READABLE = 9,  /* a descriptor's read source fired */
-  DN_EV_WRITABLE = 10  /* a descriptor's write source fired */
+  NWF_EV_RECEIVED = 1,  /* bytes of a stream, or none: `len`, `complete`, `final`, `error` */
+  NWF_EV_SENT = 2,      /* a send was processed: `len` bytes, `error` */
+  NWF_EV_READY = 3,     /* the connection is ready */
+  NWF_EV_FAILED = 4,    /* the connection or listener failed: `error` */
+  NWF_EV_CANCELLED = 5, /* the framework's last callback */
+  NWF_EV_ACCEPTED = 6,  /* a listener accepted `accepted`, a started connection handle */
+  NWF_EV_PACKET = 7,    /* a datagram: `len` bytes from `from`, on `flow` if a bound socket's */
+  NWF_EV_FLOW = 8,      /* a bound datagram socket has a new inbound flow, `flow` */
+  NWF_EV_READABLE = 9,  /* a descriptor's read source fired */
+  NWF_EV_WRITABLE = 10  /* a descriptor's write source fired */
 };
 
 /* Kinds of handle. */
-enum { DN_STREAM = 1, DN_LISTENER = 2, DN_DGRAM = 3, DN_DGRAM_BOUND = 4, DN_FLOW = 5, DN_FD = 6 };
+enum { NWF_STREAM = 1, NWF_LISTENER = 2, NWF_DGRAM = 3, NWF_DGRAM_BOUND = 4, NWF_FLOW = 5, NWF_FD = 6 };
 
 typedef struct nwf_reactor nwf_reactor_t;
 typedef struct nwf_handle nwf_handle_t;
@@ -263,7 +263,7 @@ static nwf_handle_t *nwf_handle_new(int kind) {
 static void nwf_handle_retain(nwf_handle_t *h) { atomic_fetch_add(&h->refs, 1); }
 
 static void nwf_event_free(nwf_event_t *e) {
-  free(e->bytes);
+  if (e->map == NULL) free(e->bytes); /* bytes received into the caller's buffer are the caller's */
   free(e);
 }
 
@@ -330,7 +330,7 @@ static void nwf_enqueue(nwf_handle_t *h, nwf_event_t *e) {
   else target->head = e;
   target->tail = e;
   nwf_reactor_t *watcher = (target->watch_mask & (1 << e->kind)) ? target->watcher : NULL;
-  if (nwf_tracing() && e->kind == DN_EV_RECEIVED) target->trace_queued_at = mach_absolute_time();
+  if (nwf_tracing() && e->kind == NWF_EV_RECEIVED) target->trace_queued_at = mach_absolute_time();
   pthread_mutex_unlock(&target->lock);
   if (watcher) nwf_reactor_offer(watcher, target);
 }
@@ -360,7 +360,7 @@ int nwf_handle_next(nwf_handle_t *h, nwf_event_t *out) {
   if (e) {
     h->head = e->next;
     if (!h->head) h->tail = NULL;
-    if (e->kind == DN_EV_RECEIVED && nwf_tracing()) {
+    if (e->kind == NWF_EV_RECEIVED && nwf_tracing()) {
       nwf_trace_taken(h->trace_queued_at);
       h->trace_queued_at = 0;
     }
@@ -374,8 +374,9 @@ int nwf_handle_next(nwf_handle_t *h, nwf_event_t *out) {
 }
 
 void nwf_event_done(nwf_event_t *e) {
-  free(e->bytes);
+  if (e->map == NULL) free(e->bytes);
   e->bytes = NULL;
+  e->map = NULL;
 }
 
 /* The errno of a Network.framework error; `EIO` for one of another domain. */
@@ -418,13 +419,13 @@ static void nwf_connection_start(nwf_handle_t *h) {
   nwf_handle_retain(h); /* until the cancelled state, the framework's last callback */
   nw_connection_set_queue(h->connection, nwf_queue());
   nw_connection_set_state_changed_handler(h->connection, ^(nw_connection_state_t state, nw_error_t error) {
-    if (state == nw_connection_state_ready) nwf_enqueue(h, nwf_event(DN_EV_READY));
+    if (state == nw_connection_state_ready) nwf_enqueue(h, nwf_event(NWF_EV_READY));
     else if (state == nw_connection_state_failed || (state == nw_connection_state_waiting && error != NULL)) {
-      nwf_event_t *e = nwf_event(DN_EV_FAILED);
+      nwf_event_t *e = nwf_event(NWF_EV_FAILED);
       e->error = nwf_errno(error);
       nwf_enqueue(h, e);
     } else if (state == nw_connection_state_cancelled) {
-      nwf_enqueue(h, nwf_event(DN_EV_CANCELLED));
+      nwf_enqueue(h, nwf_event(NWF_EV_CANCELLED));
       nwf_handle_release(h);
     }
   });
@@ -433,7 +434,7 @@ static void nwf_connection_start(nwf_handle_t *h) {
 
 /* A stream connection to `host`:`port`, started. */
 nwf_handle_t *nwf_connect(const char *host, int port) {
-  nwf_handle_t *h = nwf_handle_new(DN_STREAM);
+  nwf_handle_t *h = nwf_handle_new(NWF_STREAM);
   nw_endpoint_t endpoint = nwf_endpoint(host, port);
   nw_parameters_t parameters = nwf_tcp_parameters();
   h->connection = nw_connection_create(endpoint, parameters);
@@ -443,13 +444,13 @@ nwf_handle_t *nwf_connect(const char *host, int port) {
   return h;
 }
 
-/* Issues a receive of 1 to `max` bytes; what arrives is a `DN_EV_RECEIVED` event. */
+/* Issues a receive of 1 to `max` bytes; what arrives is a `NWF_EV_RECEIVED` event. */
 void nwf_receive(nwf_handle_t *h, uint32_t max) {
   nwf_handle_retain(h);
   nw_connection_receive(h->connection, 1, max,
                         ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
                           uint64_t entered = nwf_tracing() ? mach_absolute_time() : 0;
-                          nwf_event_t *e = nwf_event(DN_EV_RECEIVED);
+                          nwf_event_t *e = nwf_event(NWF_EV_RECEIVED);
                           if (content) nwf_event_copy(e, content);
                           e->complete = is_complete;
                           e->final = context != NULL && nw_content_context_get_is_final(context);
@@ -460,12 +461,40 @@ void nwf_receive(nwf_handle_t *h, uint32_t max) {
                         });
 }
 
-/* Issues a receive of one datagram; it is a `DN_EV_PACKET` event, with the flow's peer as its sender. */
+/* Issues a receive of 1 to `cap` bytes straight into `into`, a buffer the caller owns, such as a pool's: the
+ * `NWF_EV_RECEIVED` event's `bytes` is `into`, and `map` is set to it to say so, so that nothing is freed. */
+void nwf_receive_into(nwf_handle_t *h, uint8_t *into, uint32_t cap) {
+  nwf_handle_retain(h);
+  nw_connection_receive(h->connection, 1, cap,
+                        ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
+                          uint64_t entered = nwf_tracing() ? mach_absolute_time() : 0;
+                          nwf_event_t *e = nwf_event(NWF_EV_RECEIVED);
+                          if (content) {
+                            __block size_t at = 0;
+                            dispatch_data_apply(content, ^bool(dispatch_data_t region, size_t offset, const void *buffer, size_t length) {
+                              memcpy(into + at, buffer, length);
+                              at += length;
+                              return true;
+                            });
+                            e->len = at;
+                          }
+                          e->bytes = into;
+                          e->map = into;
+                          e->complete = is_complete;
+                          e->final = context != NULL && nw_content_context_get_is_final(context);
+                          e->error = nwf_errno(error);
+                          nwf_enqueue(h, e);
+                          if (entered) nwf_trace_callback(entered);
+                          nwf_handle_release(h);
+                        });
+}
+
+/* Issues a receive of one datagram; it is a `NWF_EV_PACKET` event, with the flow's peer as its sender. */
 void nwf_receive_message(nwf_handle_t *h) {
   nwf_handle_retain(h);
   nw_connection_receive_message(h->connection, ^(dispatch_data_t content, nw_content_context_t context,
                                                  bool is_complete, nw_error_t error) {
-    nwf_event_t *e = nwf_event(DN_EV_PACKET);
+    nwf_event_t *e = nwf_event(NWF_EV_PACKET);
     if (content) nwf_event_copy(e, content);
     e->error = nwf_errno(error);
     if (h->remote_len) {
@@ -477,7 +506,7 @@ void nwf_receive_message(nwf_handle_t *h) {
   });
 }
 
-/* Sends `len` bytes, copied, as one message: bytes of a stream, or one datagram; `DN_EV_SENT` once processed. */
+/* Sends `len` bytes, copied, as one message: bytes of a stream, or one datagram; `NWF_EV_SENT` once processed. */
 void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
   dispatch_data_t data = dispatch_data_create(bytes, len, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
   nwf_handle_retain(h);
@@ -485,7 +514,7 @@ void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
   h->sends++;
   pthread_mutex_unlock(&h->lock);
   nw_connection_send(h->connection, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t error) {
-    nwf_event_t *e = nwf_event(DN_EV_SENT);
+    nwf_event_t *e = nwf_event(NWF_EV_SENT);
     e->len = len;
     e->error = nwf_errno(error);
     pthread_mutex_lock(&h->lock);
@@ -501,44 +530,47 @@ void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
 
 /* ---- Listeners ---- */
 
-/* Starts `h`'s listener and waits until it is ready, or failed: 0, or the errno. Its new connections, and a bound
- * datagram socket's new flows, are started and become events. */
-static int nwf_listener_start(nwf_handle_t *h) {
-  dispatch_semaphore_t settled = dispatch_semaphore_create(0);
+/* Starts `h`'s listener. With `wait`, waits until it is ready, or failed, and returns 0 or the errno; without,
+ * returns 0 at once and the ready or failed state is an event, for a `listening` op. Its new connections, and a
+ * bound datagram socket's new flows, are started and become events. */
+static int nwf_listener_start(nwf_handle_t *h, int wait) {
+  dispatch_semaphore_t settled = wait ? dispatch_semaphore_create(0) : NULL;
   __block int outcome = -1;
   nwf_handle_retain(h);
   nw_listener_set_queue(h->listener, nwf_queue());
   nw_listener_set_state_changed_handler(h->listener, ^(nw_listener_state_t state, nw_error_t error) {
     if (state == nw_listener_state_ready) {
-      if (outcome < 0) {
+      if (settled && outcome < 0) {
         outcome = 0;
         dispatch_semaphore_signal(settled);
-      }
+      } else if (!settled) nwf_enqueue(h, nwf_event(NWF_EV_READY));
     } else if (state == nw_listener_state_failed) {
       int code = nwf_errno(error);
-      if (outcome < 0) {
+      if (settled && outcome < 0) {
         outcome = code ? code : EIO;
         dispatch_semaphore_signal(settled);
       } else {
-        nwf_event_t *e = nwf_event(DN_EV_FAILED);
-        e->error = code;
+        nwf_event_t *e = nwf_event(NWF_EV_FAILED);
+        e->error = code ? code : EIO;
         nwf_enqueue(h, e);
       }
     } else if (state == nw_listener_state_cancelled) {
-      nwf_enqueue(h, nwf_event(DN_EV_CANCELLED));
+      nwf_enqueue(h, nwf_event(NWF_EV_CANCELLED));
       if (h->cancelled) dispatch_semaphore_signal(h->cancelled);
       nwf_handle_release(h);
     }
   });
   nw_listener_start(h->listener);
+  if (!settled) return 0;
   dispatch_semaphore_wait(settled, DISPATCH_TIME_FOREVER);
   dispatch_release(settled);
   return outcome;
 }
 
-/* A stream listener on `host`:`port`, ready; or NULL with `*error` set. */
-nwf_handle_t *nwf_listen(const char *host, int port, int reuse, int *error) {
-  nwf_handle_t *h = nwf_handle_new(DN_LISTENER);
+/* A stream listener on `host`:`port`: with `wait`, ready, or NULL with `*error` set; without, started, its ready or
+ * failed state to come as an event. */
+static nwf_handle_t *nwf_listen_on(const char *host, int port, int reuse, int wait, int *error) {
+  nwf_handle_t *h = nwf_handle_new(NWF_LISTENER);
   nw_parameters_t parameters = nwf_tcp_parameters();
   if (reuse) nw_parameters_set_reuse_local_address(parameters, true);
   nwf_restrict_family(parameters, host);
@@ -553,15 +585,15 @@ nwf_handle_t *nwf_listen(const char *host, int port, int reuse, int *error) {
     return NULL;
   }
   nw_listener_set_new_connection_handler(h->listener, ^(nw_connection_t connection) {
-    nwf_handle_t *accepted = nwf_handle_new(DN_STREAM);
+    nwf_handle_t *accepted = nwf_handle_new(NWF_STREAM);
     nw_retain(connection);
     accepted->connection = connection;
     nwf_connection_start(accepted);
-    nwf_event_t *e = nwf_event(DN_EV_ACCEPTED);
+    nwf_event_t *e = nwf_event(NWF_EV_ACCEPTED);
     e->accepted = accepted;
     nwf_enqueue(h, e);
   });
-  *error = nwf_listener_start(h);
+  *error = nwf_listener_start(h, wait);
   if (*error) {
     nw_listener_cancel(h->listener);
     nwf_handle_release(h);
@@ -570,11 +602,20 @@ nwf_handle_t *nwf_listen(const char *host, int port, int reuse, int *error) {
   return h;
 }
 
+nwf_handle_t *nwf_listen(const char *host, int port, int reuse, int *error) {
+  return nwf_listen_on(host, port, reuse, 1, error);
+}
+
+nwf_handle_t *nwf_listen_async(const char *host, int port, int reuse) {
+  int error = 0;
+  return nwf_listen_on(host, port, reuse, 0, &error);
+}
+
 /* ---- Datagrams ---- */
 
 /* A datagram socket connected to `host`:`port`, bound to `local_host`:`local_port` if `local_host` is given. */
 nwf_handle_t *nwf_datagram_connect(const char *host, int port, const char *local_host, int local_port) {
-  nwf_handle_t *h = nwf_handle_new(DN_DGRAM);
+  nwf_handle_t *h = nwf_handle_new(NWF_DGRAM);
   nw_endpoint_t endpoint = nwf_endpoint(host, port);
   nw_parameters_t parameters = nwf_udp_parameters();
   if (local_host) {
@@ -604,7 +645,7 @@ static void nwf_remote_from(nwf_handle_t *h, nw_endpoint_t endpoint) {
 /* A flow of a bound datagram socket: a connection to one peer, inbound from its listener or opened to send; its
  * events go to the bound socket's queue, naming the flow. */
 static nwf_handle_t *nwf_flow(nwf_handle_t *bound, nw_connection_t connection) {
-  nwf_handle_t *flow = nwf_handle_new(DN_FLOW);
+  nwf_handle_t *flow = nwf_handle_new(NWF_FLOW);
   flow->connection = connection;
   flow->parent = bound;
   nw_endpoint_t endpoint = nw_connection_copy_endpoint(connection);
@@ -616,9 +657,9 @@ static nwf_handle_t *nwf_flow(nwf_handle_t *bound, nw_connection_t connection) {
 }
 
 /* A datagram socket bound to `host`:`port`, receiving from anyone and sending to anyone, as Network.framework has it:
- * a listener whose inbound flows, one per peer, are `DN_EV_FLOW` events. */
+ * a listener whose inbound flows, one per peer, are `NWF_EV_FLOW` events. */
 nwf_handle_t *nwf_datagram_bind(const char *host, int port, int *error) {
-  nwf_handle_t *h = nwf_handle_new(DN_DGRAM_BOUND);
+  nwf_handle_t *h = nwf_handle_new(NWF_DGRAM_BOUND);
   h->parameters = nwf_udp_parameters();
   nw_parameters_set_reuse_local_address(h->parameters, true);
   nwf_restrict_family(h->parameters, host);
@@ -633,11 +674,11 @@ nwf_handle_t *nwf_datagram_bind(const char *host, int port, int *error) {
   nw_listener_set_new_connection_handler(h->listener, ^(nw_connection_t connection) {
     nw_retain(connection);
     nwf_handle_t *flow = nwf_flow(h, connection);
-    nwf_event_t *e = nwf_event(DN_EV_FLOW);
+    nwf_event_t *e = nwf_event(NWF_EV_FLOW);
     e->flow = flow;
     nwf_enqueue(h, e);
   });
-  *error = nwf_listener_start(h);
+  *error = nwf_listener_start(h, 1);
   if (*error) {
     nw_listener_cancel(h->listener);
     nwf_handle_release(h);
@@ -687,7 +728,7 @@ int nwf_flow_remote(nwf_handle_t *flow, struct sockaddr_storage *from) {
 /* ---- Descriptors: pipes and FIFOs, through Dispatch sources ---- */
 
 nwf_handle_t *nwf_fd_open(int fd) {
-  nwf_handle_t *h = nwf_handle_new(DN_FD);
+  nwf_handle_t *h = nwf_handle_new(NWF_FD);
   h->fd = fd;
   return h;
 }
@@ -704,7 +745,7 @@ static dispatch_source_t nwf_source(nwf_handle_t *h, int read) {
     if (read) h->read_suspended = 1;
     else h->write_suspended = 1;
     pthread_mutex_unlock(&h->lock);
-    nwf_enqueue(h, nwf_event(read ? DN_EV_READABLE : DN_EV_WRITABLE));
+    nwf_enqueue(h, nwf_event(read ? NWF_EV_READABLE : NWF_EV_WRITABLE));
   });
   dispatch_source_set_cancel_handler(source, ^{
     pthread_mutex_lock(&h->lock);
@@ -720,7 +761,7 @@ static dispatch_source_t nwf_source(nwf_handle_t *h, int read) {
   return source;
 }
 
-/* Arms the source for `read`: `DN_EV_READABLE` or `DN_EV_WRITABLE` once the descriptor is ready. */
+/* Arms the source for `read`: `NWF_EV_READABLE` or `NWF_EV_WRITABLE` once the descriptor is ready. */
 void nwf_fd_arm(nwf_handle_t *h, int read) {
   pthread_mutex_lock(&h->lock);
   if (read) {
@@ -746,7 +787,7 @@ void nwf_fd_arm(nwf_handle_t *h, int read) {
  * state, so that its port is free when this returns; a descriptor is closed once its sources are cancelled. The
  * caller still holds its reference, released with `nwf_handle_release`. A connection with sends outstanding is
  * cancelled once they have gone, since cancelling drops sends still queued. */
-void nwf_cancel(nwf_handle_t *h) {
+static void nwf_cancel_waiting(nwf_handle_t *h, int wait) {
   if (h->connection) {
     pthread_mutex_lock(&h->lock);
     int now = h->sends == 0;
@@ -755,13 +796,15 @@ void nwf_cancel(nwf_handle_t *h) {
     if (now) nw_connection_cancel(h->connection);
   }
   if (h->listener) {
-    pthread_mutex_lock(&h->lock);
-    if (!h->cancelled) h->cancelled = dispatch_semaphore_create(0);
-    pthread_mutex_unlock(&h->lock);
+    if (wait) {
+      pthread_mutex_lock(&h->lock);
+      if (!h->cancelled) h->cancelled = dispatch_semaphore_create(0);
+      pthread_mutex_unlock(&h->lock);
+    }
     nw_listener_cancel(h->listener);
-    dispatch_semaphore_wait(h->cancelled, DISPATCH_TIME_FOREVER);
+    if (wait) dispatch_semaphore_wait(h->cancelled, DISPATCH_TIME_FOREVER);
   }
-  if (h->kind == DN_FD) {
+  if (h->kind == NWF_FD) {
     pthread_mutex_lock(&h->lock);
     dispatch_source_t rs = h->read_source, ws = h->write_source;
     int resume_r = h->read_suspended, resume_w = h->write_suspended;
@@ -778,5 +821,10 @@ void nwf_cancel(nwf_handle_t *h) {
     if (!rs && !ws) close(h->fd);
   }
 }
+
+void nwf_cancel(nwf_handle_t *h) { nwf_cancel_waiting(h, 1); }
+
+/* As `nwf_cancel`, but a listener's cancellation is not waited for: its cancelled state comes as an event. */
+void nwf_cancel_async(nwf_handle_t *h) { nwf_cancel_waiting(h, 0); }
 
 #endif /* __APPLE__ */

@@ -45,13 +45,16 @@ private[nwframework] object NWFrameworkIo {
   def nwf_handle_next(handle: Handle, out: Ptr[Event]): CInt = extern
   def nwf_event_done(event: Ptr[Event]): Unit = extern
   def nwf_cancel(handle: Handle): Unit = extern
+  def nwf_cancel_async(handle: Handle): Unit = extern
 
   def nwf_connect(host: CString, port: CInt): Handle = extern
   def nwf_receive(handle: Handle, max: CUnsignedInt): Unit = extern
   def nwf_receive_message(handle: Handle): Unit = extern
+  def nwf_receive_into(handle: Handle, into: Ptr[Byte], cap: CUnsignedInt): Unit = extern
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
 
   def nwf_listen(host: CString, port: CInt, reuse: CInt, error: Ptr[CInt]): Handle = extern
+  def nwf_listen_async(host: CString, port: CInt, reuse: CInt): Handle = extern
 
   def nwf_datagram_connect(host: CString, port: CInt, localHost: CString, localPort: CInt): Handle = extern
   def nwf_datagram_bind(host: CString, port: CInt, error: Ptr[CInt]): Handle = extern
@@ -90,6 +93,8 @@ private[nwframework] object NWFrameworkEvent {
     inline def isFinal: Boolean = e._5 != 0
     inline def len: Int = e._6.toInt
     inline def bytes: Ptr[Byte] = e._9
+    /** Non-null for bytes received straight into a buffer the caller gave (`nwf_receive_into`). */
+    inline def intoBuffer: Ptr[Byte] = e._8
     inline def flow: NWFrameworkIo.Handle = e._10
     inline def accepted: NWFrameworkIo.Handle = e._11
     inline def fromLength: socket.socklen_t = e._12
