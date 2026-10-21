@@ -2,9 +2,6 @@ package asyncio.darwin
 
 import java.io.IOException
 import java.nio.ByteBuffer
-import scala.scalanative.posix.sys.socket
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.*
 
 import asyncio.BlockingOps
 import asyncio.Completion
@@ -19,7 +16,6 @@ import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
 import asyncio.unsafe.PosixResolver
 import asyncio.unsafe.TimerHeap
-import DarwinCodes.*
 
 /** Everything `DarwinReactor` can run: its `Op` member type. */
 sealed trait DarwinOp {
@@ -54,15 +50,15 @@ object DarwinOps extends Ops[DarwinOp] with BlockingOps[DarwinOp] {
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): DarwinOp = new DarwinResolve(host, into)
 }
 
-/** An op on a handle. `attempt` tries to finish it on the reactor's thread: true once done, with its results in the
-  * caller's buffers and slots; false when it has to wait, a waiter for it registered on the handle's C side with the
-  * reactor and the submission's token, which notifies the reactor to attempt again; a failure is thrown. Commands are
-  * `Repeatable`: attempting again is always meaningful.
+/** An op on a handle. `attempt` tries to finish it on the reactor's thread, after the handle has taken in what the
+  * framework delivered: true once done, with its results in the caller's buffers and slots; false when it has to
+  * wait, registered on the handle with the reactor and the submission's token, so that the handle tells the reactor
+  * to attempt again; a failure is thrown. Commands are `Repeatable`: attempting again is always meaningful.
   */
 sealed abstract class DarwinCommand extends DarwinOp with Repeatable {
   def handle: Int
 
-  /** What the command waits for, as the C side's kinds of wait. */
+  /** What the command waits for (`DarwinHandle.Read`, `Write` or `Connect`). */
   def kind: Int
 
   /** The current submission's token, and the handle it resolved to when submitted, kept for its attempts since the
@@ -71,154 +67,113 @@ sealed abstract class DarwinCommand extends DarwinOp with Repeatable {
   private[darwin] var token = 0L
   private[darwin] var target: DarwinHandle | Null = null
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean
-
-  /** Turns a C code into the outcome of an attempt: false for waiting, and a throw otherwise. */
-  protected final def waitOrFail(code: Int, what: String): Boolean = code match {
-    case Waiting => false
-    case Closed  => throw new IOException(s"Handle $handle was closed")
-    case Busy    => throw new IllegalStateException(s"A $what is already pending on handle $handle")
-    case Error   => throw new IOException(s"$what failed on handle $handle: ${DarwinHandles.errorText(DarwinIo.dn_handle_error(target.nn.ptr))}")
-    case other   => throw new IOException(s"$what failed on handle $handle with code $other")
+  private[darwin] def attempt(reactor: DarwinReactor, drainFirst: Boolean): Boolean = {
+    val h = target.nn
+    if drainFirst && !h.isFile then h.drain(reactor.event)
+    attemptOn(h, reactor)
   }
+
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean
 }
 
 /** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
 final class DarwinRead(val handle: Int, buf: ByteBuffer) extends DarwinCommand {
-  def kind: Int = Read
+  def kind: Int = DarwinHandle.Read
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val h = target.nn
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean =
     if h.isFile || h.isDescriptor then {
       val read = NonBlocking.read(h.fd, buf) // -1 at EOF, which leaves the buffer as it was
       if read != 0 || h.isFile then true
-      else waitOrFail(DarwinIo.dn_fd_wait(h.ptr, 1, reactor.ptr, token), "read")
+      else h.armed(read = true, reactor, token)
     } else {
-      val code = DarwinIo.dn_read(h.ptr, NativeBuffer.atPosition(buf), buf.remaining(), reactor.ptr, token)
-      if code > 0 then {
-        NativeBuffer.advance(buf, code)
-        true
-      } else if code == Eof then true
-      else waitOrFail(code, "read")
+      val n = h.read(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
+      if n > 0 then NativeBuffer.advance(buf, n)
+      n >= 0
     }
-  }
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what
   * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window,
-  * and otherwise once a send has been processed by the stack (see `dn_send_on`).
+  * and otherwise once a send has been processed by the stack (see `DarwinHandle.send`).
   */
 final class DarwinWrite(val handle: Int, buf: ByteBuffer) extends DarwinCommand {
-  def kind: Int = Write
-  private var sent = false // the bytes were handed to the C side, which notifies once they are processed
+  def kind: Int = DarwinHandle.Write
+  private var sent = false // the bytes were handed over, and the handle tells once a send is processed
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val h = target.nn
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean =
     if h.isFile || h.isDescriptor then {
       if NonBlocking.write(h.fd, buf) >= 0 || !buf.hasRemaining() || h.isFile then true
-      else waitOrFail(DarwinIo.dn_fd_wait(h.ptr, 0, reactor.ptr, token), "write")
+      else h.armed(read = false, reactor, token)
     } else if sent then {
       sent = false
-      val code = DarwinIo.dn_write_outcome(h.ptr)
-      if code > 0 then true else waitOrFail(code, "write")
+      h.sent()
     } else if !buf.hasRemaining() then true
     else {
-      // The bytes are copied and sent either way; the write is done at once while the handle's sends are within its
-      // window, and otherwise waits for a send to be processed.
       val remaining = buf.remaining()
-      val code = DarwinIo.dn_write(h.ptr, NativeBuffer.atPosition(buf), remaining, reactor.ptr, token)
-      if code > 0 then {
-        NativeBuffer.advance(buf, code)
-        true
-      } else if code == Waiting then {
-        NativeBuffer.advance(buf, remaining)
-        sent = true
-        false
-      } else waitOrFail(code, "write")
+      val done = h.send(NativeBuffer.atPosition(buf), remaining, reactor, token)
+      NativeBuffer.advance(buf, remaining)
+      sent = !done
+      done
     }
-  }
 
   private[darwin] def reset(): Unit = sent = false
 }
 
 /** Accepts one connection on a listener, writing its handle into `into`. */
 final class DarwinAccept(val handle: Int, into: HandleSlot) extends DarwinCommand {
-  def kind: Int = Read
+  def kind: Int = DarwinHandle.Read
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val code = stackalloc[CInt]()
-    val accepted = DarwinIo.dn_accept(target.nn.ptr, reactor.ptr, token, code)
-    if accepted != null then {
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean = {
+    val accepted = h.accept(reactor, token)
+    if accepted == null then false
+    else {
       into.set(DarwinHandles.accepted(accepted))
       true
-    } else waitOrFail(!code, "accept")
+    }
   }
 }
 
 /** Waits for a connection to be ready; fails with the connection's error if it failed. */
 final class DarwinConnect(val handle: Int) extends DarwinCommand {
-  def kind: Int = Connect
+  def kind: Int = DarwinHandle.Connect
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val code = DarwinIo.dn_wait_connected(target.nn.ptr, reactor.ptr, token)
-    if code > 0 then true else waitOrFail(code, "connect")
-  }
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean = h.connected(reactor, token)
 }
 
 /** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender into `from`. */
 final class DarwinReceive(val handle: Int, buf: ByteBuffer, from: Slot[IpAddress]) extends DarwinCommand {
-  def kind: Int = Read
+  def kind: Int = DarwinHandle.Read
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val h = target.nn
-    val storage = stackalloc[socket.sockaddr_storage]()
-    val length = stackalloc[socket.socklen_t]()
-    !length = 0.toUInt
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean = {
     buf.clear()
-    val code =
-      DarwinIo.dn_receive_from(h.ptr, NativeBuffer.atPosition(buf), buf.remaining(), storage, length, reactor.ptr, token)
-    if code >= 0 then {
-      NativeBuffer.advance(buf, code)
+    val packet = h.receivePacket(reactor, token)
+    if packet == null then false
+    else {
+      val n = math.min(packet.bytes.length, buf.remaining()) // truncated beyond the buffer, as a datagram is
+      buf.put(packet.bytes, 0, n)
       buf.flip()
-      val sender: IpAddress =
-        if (!length).toInt > 0 then DarwinHandles.decode(storage, !length)
-        else if h.remote != null then h.remote.nn
-        else throw new IOException("Received a datagram from an unknown sender")
-      from.set(sender)
+      from.set(packet.from)
       true
-    } else waitOrFail(code, "receive")
+    }
   }
 }
 
 /** Sends `buf` as one datagram, to `to` or to the connected peer when `to` is null, consuming `buf`. */
 final class DarwinSend(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends DarwinCommand {
-  def kind: Int = Write
+  def kind: Int = DarwinHandle.Write
   private var sent = false
 
-  private[darwin] def attempt(reactor: DarwinReactor): Boolean = {
-    val h = target.nn
+  protected def attemptOn(h: DarwinHandle, reactor: DarwinReactor): Boolean =
     if sent then {
       sent = false
-      val code = DarwinIo.dn_write_outcome(h.ptr)
-      if code > 0 then true else waitOrFail(code, "send")
+      h.sent()
     } else {
       val size = buf.remaining()
-      val code = to match {
-        case null => DarwinIo.dn_write(h.ptr, NativeBuffer.atPosition(buf), size, reactor.ptr, token)
-        case IpAddress.IPv4(host, port) => sendTo(h, host, port, size, reactor)
-        case IpAddress.IPv6(host, port) => sendTo(h, host, port, size, reactor)
-      }
-      if code >= 0 || code == Waiting then {
-        buf.position(buf.limit()) // a datagram goes whole or not at all
-        sent = code == Waiting
-        code != Waiting
-      } else waitOrFail(code, "send")
-    }
-  }
-
-  private def sendTo(h: DarwinHandle, host: String, port: Int, size: Int, reactor: DarwinReactor): Int =
-    Zone.acquire { implicit z =>
-      DarwinIo.dn_send_to(h.ptr, NativeBuffer.atPosition(buf), size, toCString(host), port, reactor.ptr, token)
+      val bytes = NativeBuffer.atPosition(buf)
+      val done = if to == null then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
+      buf.position(buf.limit()) // a datagram goes whole or not at all
+      sent = !done
+      done
     }
 
   private[darwin] def reset(): Unit = sent = false

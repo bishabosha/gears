@@ -13,13 +13,23 @@ same scenarios.
   peer, are received from and replied to (`dn_datagram_bind`, `dn_send_to`).
 - **Pipes and FIFOs are Dispatch sources** (`DISPATCH_SOURCE_TYPE_READ`/`WRITE`) over non-blocking descriptors, since
   Network.framework has nothing for descriptors; regular files are read and written at submission, as they never wait.
-- **Nothing calls back into Scala.** Network.framework delivers everything as blocks on Dispatch's threads, which
-  Scala Native cannot run managed code on. The C side (`src/main/resources/scala-native/darwin_io.c`) keeps what the
-  blocks deliver on the handle, bytes in a stash, datagrams as packets, accepted connections as a queue, the
-  connection's state and errors, and posts a notification to the reactor whose op waits for it; the reactor's thread
-  drains its queue each turn and parks on a condition variable between turns, bounded by its earliest timer. So every
+- **Nothing calls back into Scala, and C does only what Scala cannot.** Network.framework delivers everything as
+  blocks, which Scala Native cannot build, on Dispatch's threads, which it cannot run managed code on. The C side
+  (`src/main/resources/scala-native/darwin_io.c`) is therefore trampolines: each block copies its arguments into an
+  event, queues it on the handle, and wakes the reactor watching the handle; the reactor's thread drains the handles
+  with events each turn and parks on a condition variable between turns, bounded by its earliest timer. Everything
+  else is Scala, on `DarwinHandle`: the received bytes in a stash, datagrams, accepted connections, the connection's
+  state and errors, the ops waiting and which reactor to wake for them (`dn_handle_watch`), the send window. So every
   completion runs on the loop thread, as `Reactor` promises, and an op is a waiter registered on the handle, attempted
-  again when notified.
+  again when the handle tells its reactor. A first cut kept all that state in C, with a waiter per op registered
+  there; moving it out halved the C and put the semantics next to the kqueue backend's, where they are compared. The
+  one piece of state C keeps is the count of sends outstanding, so that a closed connection is cancelled once they
+  have gone (below) whichever reactor, if any, is still watching it.
+- **One wake-up, consumed only by the wait.** The reactor's wake-up flag on the C side is set by `wakeup` and by a
+  blocker thread or another reactor queueing something on the Scala side; `dn_reactor_wait` consumes it. Draining
+  the handles with events used to consume it too, which lost a wake-up that landed between the Scala side emptying
+  its queues and that drain: the reactor parked, with no timer to bound the park, on a blocking op's result already
+  queued. It showed once in thirty runs of the demo suite, in `blocking`.
 - **The rest is `KqueueReactor`'s**: timers in a user-space heap (`asyncio.unsafe.TimerHeap`, now shared), blocking
   ops and `resolve` on the shared blocker pool (`asyncio.unsafe.Blockers`, now shared), completions of ops finished at
   submission queued for the next turn, `trySubmit` finishing them on the caller.
@@ -75,6 +85,24 @@ same scenarios.
   with a receive outstanding, so packets are taken in as they arrive, per peer, rather than from one socket buffer;
   sending to a peer that has not sent first opens an outbound flow from the bound address. Flows Network.framework
   ends on its own (a failed state) are not reclaimed.
+
+## The slim C side, measured
+
+Moving the state out of C cost latency at first: ping-pong 65 µs against 55 with the state in C, `concurrent` 26
+against 19, `fairness-tick` 4.8 against 2.2, on the same release build method. Three things explained it, each
+measured on one worker over TCP, 3 runs:
+
+- **Every send's completion woke the reactor**, where the C side had posted only when a write waited for one; with the
+  send window nothing does, so that was a spurious wake-up per message per side. The reactor now tells the C side
+  which kinds of event to wake it for (`dn_handle_watch`'s mask, from what is waiting); the rest only queue.
+  `concurrent` went back from 26.5 to 19.4 µs, ping-pong from 64.9 to 63.5.
+- **The reactor's thread mapped and released the framework's `dispatch_data`**; the callback now copies the bytes
+  into the event on Dispatch's thread, so nothing of Dispatch's crosses over. Within noise on its own.
+- **Allocation per op on the Scala side**: a waiter object per registration, a list per notification, a boxed token
+  per wake-up, where the C side had allocated one record per op. The collector stops every thread for each
+  collection, which showed in the tails (`starvation-p50` 247 against 86 µs). Waiters are now fields of the handle,
+  notifications go straight to the reactor under the handle's lock, and tokens queue in a ring of longs. Its
+  measurement was running when this was written: the `native-darwin-tcp-slim*.json` results are its, once saved.
 
 ## Measured: against kqueue over TCP
 
