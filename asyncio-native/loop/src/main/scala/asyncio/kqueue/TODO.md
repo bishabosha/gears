@@ -841,8 +841,9 @@ switch: take any task, take only tasks not resumed by I/O, or those too once a w
    - **Built as a backend all the same: `asyncio.darwin.DarwinBackend`** (asyncio-native/darwin/TODO.md), to see
      whether the reactor semantics survive a completion-based framework and what it costs on the gears bench. They do,
      except for Unix domain sockets and readiness, which public Network.framework has no counterpart for; and over
-     loopback TCP it loses every I/O scenario to kqueue by two and a half to seven times (59 against 16 µs a
-     ping-pong), while responding sooner, since its reactor thread makes no socket calls.
+     loopback TCP it loses every I/O scenario to kqueue by two to seven times (55 against 17 µs a ping-pong), the same
+     as the framework used as Apple intends measured above, while responding sooner, since its reactor thread makes
+     no socket calls.
    - **A design per OS, not per backend.** macOS and FreeBSD share kqueue, and so `KqueueBackend`, but not these
      limits. On FreeBSD, as on Linux, a pool of reactor threads in one process should scale I/O, and the take
      policies matter again; on macOS it cannot, and I/O scales only across processes. So what the pool is for, its

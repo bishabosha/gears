@@ -36,6 +36,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
 
   /** The C side's queue of notifications for this reactor, and the condition its thread parks on. */
   private[darwin] val ptr: DarwinIo.Reactor = DarwinIo.dn_reactor_create()
+  DarwinIo.dn_reactor_thread_qos() // the opening thread drives the reactor, unless `run` is called elsewhere
 
   // The notifications a turn drains, allocated once and freed by `close`.
   private val drained: Ptr[DarwinIo.Done] = stdlib.malloc((sizeOf[DarwinIo.Done] * maxDrained).toCSize).asInstanceOf[Ptr[DarwinIo.Done]]
@@ -300,6 +301,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
 
   def run(): Unit = {
     loopThread = Thread.currentThread()
+    DarwinIo.dn_reactor_thread_qos()
     running = true
     while running do runOnce(block = true)
   }

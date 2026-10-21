@@ -21,6 +21,7 @@ private[darwin] object DarwinIo {
   def dn_reactor_ready(reactor: Reactor): CInt = extern
   @blocking def dn_reactor_wait(reactor: Reactor, timeoutNanos: CLongLong): Unit = extern
   def dn_reactor_drain(reactor: Reactor, out: Ptr[Done], max: CInt): CInt = extern
+  def dn_reactor_thread_qos(): Unit = extern
 
   def dn_handle_error(handle: Handle): CInt = extern
   def dn_cancel_wait(handle: Handle, kind: CInt, token: CLongLong): CInt = extern

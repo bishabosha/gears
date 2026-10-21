@@ -104,8 +104,9 @@ final class DarwinRead(val handle: Int, buf: ByteBuffer) extends DarwinCommand {
   }
 }
 
-/** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once the
-  * send of what remained, copied, has been processed by the stack.
+/** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what
+  * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window,
+  * and otherwise once a send has been processed by the stack (see `dn_send_on`).
   */
 final class DarwinWrite(val handle: Int, buf: ByteBuffer) extends DarwinCommand {
   def kind: Int = Write
@@ -122,9 +123,15 @@ final class DarwinWrite(val handle: Int, buf: ByteBuffer) extends DarwinCommand 
       if code > 0 then true else waitOrFail(code, "write")
     } else if !buf.hasRemaining() then true
     else {
-      val code = DarwinIo.dn_write(h.ptr, NativeBuffer.atPosition(buf), buf.remaining(), reactor.ptr, token)
+      // The bytes are copied and sent either way; the write is done at once while the handle's sends are within its
+      // window, and otherwise waits for a send to be processed.
+      val remaining = buf.remaining()
+      val code = DarwinIo.dn_write(h.ptr, NativeBuffer.atPosition(buf), remaining, reactor.ptr, token)
       if code > 0 then {
         NativeBuffer.advance(buf, code)
+        true
+      } else if code == Waiting then {
+        NativeBuffer.advance(buf, remaining)
         sent = true
         false
       } else waitOrFail(code, "write")
@@ -201,10 +208,10 @@ final class DarwinSend(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) e
         case IpAddress.IPv4(host, port) => sendTo(h, host, port, size, reactor)
         case IpAddress.IPv6(host, port) => sendTo(h, host, port, size, reactor)
       }
-      if code >= 0 then {
+      if code >= 0 || code == Waiting then {
         buf.position(buf.limit()) // a datagram goes whole or not at all
-        sent = true
-        false
+        sent = code == Waiting
+        code != Waiting
       } else waitOrFail(code, "send")
     }
   }

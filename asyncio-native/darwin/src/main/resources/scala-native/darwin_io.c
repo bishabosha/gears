@@ -196,7 +196,9 @@ struct dn_handle {
   size_t stash_len, stash_cap;
   int receiving; /* a receive is outstanding */
   int read_eof;
-  int sends; /* sends outstanding */
+  int sends;          /* sends outstanding */
+  size_t sent_bytes;  /* bytes of those sends */
+  int cancel_pending; /* closed with sends outstanding: the last send's completion cancels the connection */
 
   /* A listener's accepted connections, and a bound datagram socket's flows; a flow's parent and the sender it stands
    * for; received datagrams. */
@@ -217,8 +219,29 @@ struct dn_handle {
   int read_suspended, write_suspended;
 };
 
-static dispatch_queue_t dn_queue(void) {
-  return dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+/* The queue Network.framework and the sources deliver on: the global queue of the QoS class `ASYNCIO_DARWIN_QOS`
+ * names (interactive, initiated, default, utility), user-initiated by default. */
+static qos_class_t dn_qos(void) {
+  static qos_class_t cached = QOS_CLASS_UNSPECIFIED;
+  if (cached == QOS_CLASS_UNSPECIFIED) {
+    const char *value = getenv("ASYNCIO_DARWIN_QOS");
+    cached = value == NULL ? QOS_CLASS_USER_INITIATED
+             : strcmp(value, "interactive") == 0 ? QOS_CLASS_USER_INTERACTIVE
+             : strcmp(value, "default") == 0 ? QOS_CLASS_DEFAULT
+             : strcmp(value, "utility") == 0 ? QOS_CLASS_UTILITY
+             : QOS_CLASS_USER_INITIATED;
+  }
+  return cached;
+}
+
+static dispatch_queue_t dn_queue(void) { return dispatch_get_global_queue(dn_qos(), 0); }
+
+/* Gives the calling thread, a reactor's, the same QoS class as the queue, so that wake-ups between them are not
+ * demoted; `ASYNCIO_DARWIN_THREAD_QOS=0` leaves it as it is, for measuring. */
+void dn_reactor_thread_qos(void) {
+  const char *value = getenv("ASYNCIO_DARWIN_THREAD_QOS");
+  if (value && strcmp(value, "0") == 0) return;
+  pthread_set_qos_class_self_np(dn_qos(), 0);
 }
 
 static dn_handle_t *dn_handle_new(int kind) {
@@ -476,29 +499,51 @@ int dn_read(dn_handle_t *h, uint8_t *buf, int cap, dn_reactor_t *reactor, long t
   return result;
 }
 
+/* How many bytes of sends a handle may have outstanding before a write waits for a completion: the pacing Network
+ * framework asks for, as a kernel socket's send buffer paces writes. `ASYNCIO_DARWIN_SEND_WINDOW` in the environment
+ * overrides it, in bytes; 0 makes every write wait for its send, for measuring. */
+static size_t dn_send_window(void) {
+  static long cached = -1;
+  if (cached < 0) {
+    const char *value = getenv("ASYNCIO_DARWIN_SEND_WINDOW");
+    cached = value ? atol(value) : 256 * 1024;
+  }
+  return (size_t)cached;
+}
+
 /* Sends `len` bytes, copied, as one message: on a stream, bytes of the stream; on a datagram socket, one datagram.
- * Returns `len` with a waiter registered, which is notified when the send has been processed; DN_BUSY, DN_CLOSED, or
- * DN_ERROR for a failed connection. */
+ * While the handle's outstanding sends are within the window, the write is done: returns `len` at once, and the
+ * send's completion is only accounted for. Otherwise returns DN_WAITING with a waiter registered, notified when a
+ * send has been processed; DN_BUSY, DN_CLOSED, or DN_ERROR for a failed connection. */
 static int dn_send_on(dn_handle_t *h, nw_connection_t connection, const uint8_t *bytes, int len, dn_reactor_t *reactor,
                       long token) {
   if (h->closed) return DN_CLOSED;
   if (h->write_error) return DN_ERROR;
-  int registered = dn_register(&h->write_wait, reactor, token, DN_WRITE);
-  if (registered != DN_WAITING) return registered;
+  if (h->write_wait) return DN_BUSY;
+  int fits = h->sent_bytes < dn_send_window();
+  if (!fits) {
+    int registered = dn_register(&h->write_wait, reactor, token, DN_WRITE);
+    if (registered != DN_WAITING) return registered;
+  }
   dispatch_data_t data = dispatch_data_create(bytes, len, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
   h->sends++;
+  h->sent_bytes += len;
   dn_handle_retain(h);
   nw_connection_send(connection, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t error) {
     pthread_mutex_lock(&h->lock);
     h->sends--;
+    h->sent_bytes -= len;
     if (error && !h->closed) h->write_error = dn_errno(error);
     dn_wait_t *w = dn_take(&h->write_wait);
+    int cancel = h->cancel_pending && h->sends == 0;
+    if (cancel) h->cancel_pending = 0;
     pthread_mutex_unlock(&h->lock);
     dn_post_if(w);
+    if (cancel) nw_connection_cancel(h->connection); /* the close that waited for this send */
     dn_handle_release(h);
   });
   nw_release(data);
-  return len;
+  return fits ? len : DN_WAITING;
 }
 
 int dn_write(dn_handle_t *h, const uint8_t *bytes, int len, dn_reactor_t *reactor, long token) {
@@ -951,6 +996,10 @@ void dn_close(dn_handle_t *h) {
   h->read_suspended = h->write_suspended = 0;
   if (h->listener && h->state != 3) h->cancelled = dispatch_semaphore_create(0);
   dispatch_semaphore_t cancelled = h->cancelled;
+  /* A connection with sends outstanding is cancelled once they have gone, as a kernel socket's close sends what its
+   * buffer holds: cancelling at once would drop them. Cancellation then fails the receives outstanding. */
+  int cancel_now = h->connection == NULL || h->sends == 0;
+  if (!cancel_now) h->cancel_pending = 1;
   pthread_mutex_unlock(&h->lock);
   dn_post_closed(c);
   dn_post_closed(r);
@@ -965,7 +1014,7 @@ void dn_close(dn_handle_t *h) {
     dn_close(flows);
     flows = next;
   }
-  if (h->connection) nw_connection_cancel(h->connection);
+  if (h->connection && cancel_now) nw_connection_cancel(h->connection);
   if (h->listener) {
     /* A listener's close waits for its cancelled state, so that its port can be listened on again at once. */
     nw_listener_cancel(h->listener);
