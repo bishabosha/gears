@@ -1,0 +1,284 @@
+{
+  "started": "2026-10-21T12:13:02+02:00",
+  "finished": "2026-10-21T12:14:48+02:00",
+  "load_average": {
+    "before": [
+      41.8056640625,
+      30.0048828125,
+      16.7998046875
+    ],
+    "after": [
+      29.55859375,
+      28.4306640625,
+      17.6845703125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--workers",
+    "4",
+    "--scenarios",
+    "pingpong,pingpong-fresh-ops,pingpong-deadline,concurrent,concurrent-compute,concurrent-offload,pipelined,blocking,blocking-io,timers,fairness,starvation,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.darwin8",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "23e112c6403b7d60091c42033986178198dfbf4d",
+        "subject": "gears bench: --host and --no-server, and bench-serve, for a bench against an echo server on another machine",
+        "worktree_changes": true,
+        "worktree_changes_hash": "f65f9efac32f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T12:09:48+02:00"
+      },
+      "median": {
+        "pingpong": 14.66,
+        "pingpong-fresh-ops": 15.22,
+        "pingpong-deadline": 16.32,
+        "concurrent": 4.85,
+        "concurrent-compute": 4.87,
+        "concurrent-offload": 5.12,
+        "pipelined": 0.77,
+        "blocking": 7.46,
+        "blocking-io": 29.23,
+        "timers": 0.21,
+        "fairness-tick": 3.29,
+        "fairness": 1.65,
+        "starvation-p50": 18.17,
+        "starvation-p99": 110.79,
+        "starvation-max": 328.67,
+        "starvation": 6.06,
+        "mixed-compute": 34.79,
+        "mixed": 17.41
+      },
+      "samples": {
+        "pingpong": [
+          14.66,
+          14.16,
+          17.15
+        ],
+        "pingpong-fresh-ops": [
+          15.22,
+          14.78,
+          17.52
+        ],
+        "pingpong-deadline": [
+          17.75,
+          15.27,
+          16.32
+        ],
+        "concurrent": [
+          4.54,
+          4.85,
+          5.69
+        ],
+        "concurrent-compute": [
+          4.87,
+          4.8,
+          5.44
+        ],
+        "concurrent-offload": [
+          5.12,
+          4.87,
+          5.15
+        ],
+        "pipelined": [
+          0.77,
+          0.77,
+          0.77
+        ],
+        "blocking": [
+          7.3,
+          7.46,
+          7.5
+        ],
+        "blocking-io": [
+          29.23,
+          28.69,
+          29.28
+        ],
+        "timers": [
+          0.21,
+          0.21,
+          0.21
+        ],
+        "fairness-tick": [
+          3.24,
+          3.29,
+          3.33
+        ],
+        "fairness": [
+          1.62,
+          1.65,
+          1.66
+        ],
+        "starvation-p50": [
+          18.17,
+          18.0,
+          29.33
+        ],
+        "starvation-p99": [
+          110.79,
+          162.29,
+          80.88
+        ],
+        "starvation-max": [
+          305.04,
+          328.67,
+          368.75
+        ],
+        "starvation": [
+          6.0,
+          6.06,
+          7.66
+        ],
+        "mixed-compute": [
+          34.98,
+          34.79,
+          34.4
+        ],
+        "mixed": [
+          17.71,
+          17.41,
+          17.25
+        ]
+      }
+    },
+    {
+      "label": "darwin",
+      "executable": "/tmp/kqueuedemo.darwin8@darwin",
+      "benchmark": "darwin",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "23e112c6403b7d60091c42033986178198dfbf4d",
+        "subject": "gears bench: --host and --no-server, and bench-serve, for a bench against an echo server on another machine",
+        "worktree_changes": true,
+        "worktree_changes_hash": "f65f9efac32f",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T12:09:48+02:00"
+      },
+      "median": {
+        "pingpong": 67.29,
+        "pingpong-fresh-ops": 66.24,
+        "pingpong-deadline": 67.65,
+        "concurrent": 19.6,
+        "concurrent-compute": 20.35,
+        "concurrent-offload": 22.29,
+        "pipelined": 2.34,
+        "blocking": 7.38,
+        "blocking-io": 75.62,
+        "timers": 0.22,
+        "fairness-tick": 4.32,
+        "fairness": 2.21,
+        "starvation-p50": 29.25,
+        "starvation-p99": 348.08,
+        "starvation-max": 618.33,
+        "starvation": 20.76,
+        "mixed-compute": 21.0,
+        "mixed": 68.91
+      },
+      "samples": {
+        "pingpong": [
+          67.29,
+          64.1,
+          67.64
+        ],
+        "pingpong-fresh-ops": [
+          67.56,
+          61.93,
+          66.24
+        ],
+        "pingpong-deadline": [
+          67.65,
+          65.54,
+          67.75
+        ],
+        "concurrent": [
+          19.64,
+          18.66,
+          19.6
+        ],
+        "concurrent-compute": [
+          20.35,
+          20.35,
+          19.7
+        ],
+        "concurrent-offload": [
+          22.29,
+          22.95,
+          21.87
+        ],
+        "pipelined": [
+          2.19,
+          2.34,
+          2.36
+        ],
+        "blocking": [
+          7.56,
+          7.38,
+          6.86
+        ],
+        "blocking-io": [
+          75.26,
+          75.62,
+          75.76
+        ],
+        "timers": [
+          0.22,
+          0.21,
+          0.22
+        ],
+        "fairness-tick": [
+          4.71,
+          4.32,
+          4.29
+        ],
+        "fairness": [
+          2.46,
+          2.17,
+          2.21
+        ],
+        "starvation-p50": [
+          10.63,
+          29.25,
+          32.04
+        ],
+        "starvation-p99": [
+          348.08,
+          354.25,
+          306.63
+        ],
+        "starvation-max": [
+          12075.38,
+          618.33,
+          494.5
+        ],
+        "starvation": [
+          22.64,
+          20.76,
+          18.9
+        ],
+        "mixed-compute": [
+          20.79,
+          21.19,
+          21.0
+        ],
+        "mixed": [
+          68.91,
+          67.7,
+          68.96
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

@@ -101,8 +101,14 @@ measured on one worker over TCP, 3 runs:
 - **Allocation per op on the Scala side**: a waiter object per registration, a list per notification, a boxed token
   per wake-up, where the C side had allocated one record per op. The collector stops every thread for each
   collection, which showed in the tails (`starvation-p50` 247 against 86 µs). Waiters are now fields of the handle,
-  notifications go straight to the reactor under the handle's lock, and tokens queue in a ring of longs. Its
-  measurement was running when this was written: the `native-darwin-tcp-slim*.json` results are its, once saved.
+  notifications go straight to the reactor under the handle's lock, and tokens queue in a ring of longs. Measured
+  (`native-darwin-tcp-slim*.json`, the previous build beside it in the same runs): ping-pong 65.6 against 69.0 µs,
+  `fairness-tick` 3.7 against 4.2, `starvation-p50` 207 against 220, `starvation-p99` 556 against 589, on one
+  worker; on four, `concurrent` 19.6, `pipelined` 2.34. So the slim backend stands at about 10 µs a round trip over
+  the version with its state in C (55 µs on the same machine, 17 for kqueue), with `concurrent`, `pipelined` and
+  `fairness` level. What remains between them: the handle's Scala monitor, taken twice per event and once per
+  attempt, and two more C calls per op (`dn_handle_watch` on each registration and each take). Worth a profile
+  before deciding whether that is the price of the cleaner split.
 
 ## Measured: against kqueue over TCP
 
