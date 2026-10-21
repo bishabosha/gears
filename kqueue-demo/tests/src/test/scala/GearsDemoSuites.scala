@@ -57,6 +57,7 @@ trait OnJvm extends DemoSuite {
     Seq(
       Paths.get(sys.props("java.home"), "bin", "java").toString,
       "--add-opens=java.base/java.lang=ALL-UNNAMED",
+      "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED",
       s"-Dasyncio.gears.carriers=$carriers",
       "-cp",
       classpath,

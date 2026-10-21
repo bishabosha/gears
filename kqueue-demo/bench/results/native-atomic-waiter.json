@@ -1,0 +1,125 @@
+{
+  "started": "2026-10-21T17:50:47+02:00",
+  "finished": "2026-10-21T17:50:53+02:00",
+  "load_average": {
+    "before": [
+      19.0400390625,
+      11.380859375,
+      7.00732421875
+    ],
+    "after": [
+      16.720703125,
+      11.13720703125,
+      6.9716796875
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,concurrent,pipelined,fairness"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/tmp/kq-before",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:03+02:00"
+      },
+      "median": {
+        "pingpong": 8.12,
+        "concurrent": 1.71,
+        "pipelined": 0.58,
+        "fairness-tick": 2.51,
+        "fairness": 1.26
+      },
+      "samples": {
+        "pingpong": [
+          7.97,
+          8.44,
+          8.12
+        ],
+        "concurrent": [
+          1.72,
+          1.68,
+          1.71
+        ],
+        "pipelined": [
+          0.58,
+          0.59,
+          0.58
+        ],
+        "fairness-tick": [
+          2.55,
+          2.5,
+          2.51
+        ],
+        "fairness": [
+          1.27,
+          1.25,
+          1.26
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/tmp/kq-after",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": true,
+        "worktree_changes_hash": "08258c1edf7e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:30+02:00"
+      },
+      "median": {
+        "pingpong": 8.42,
+        "concurrent": 1.7,
+        "pipelined": 0.6,
+        "fairness-tick": 2.58,
+        "fairness": 1.29
+      },
+      "samples": {
+        "pingpong": [
+          8.5,
+          8.36,
+          8.42
+        ],
+        "concurrent": [
+          1.72,
+          1.7,
+          1.68
+        ],
+        "pipelined": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "fairness-tick": [
+          2.56,
+          2.58,
+          2.65
+        ],
+        "fairness": [
+          1.28,
+          1.29,
+          1.32
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

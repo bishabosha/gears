@@ -124,8 +124,12 @@ lazy val jvmAsyncioGears =
       libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
       testFrameworks += MUnitFramework,
       Test / fork := true,
-      // `Carriers.Reactors` gives virtual threads the pool as their scheduler, which the JDK keeps to itself.
-      Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+      // `Carriers.Reactors` gives virtual threads the pool as their scheduler, which the JDK keeps to itself, and pins
+      // them to their worker while an op is submitted (see `VirtualCarriers`).
+      Test / javaOptions ++= Seq(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
+      )
     )
     .dependsOn(asyncio.jvm % "compile->compile;test->test", jvmAsyncioNio % Test, asyncioTestkit.jvm % Test)
 
@@ -170,8 +174,11 @@ lazy val gearsDemo =
       Compile / mainClass := Some("gearsexample.Main"),
       libraryDependencies += "com.lihaoyi" %% "mainargs" % "0.7.8",
       run / fork := true,
-      // So that `-Dasyncio.gears.carriers=reactors` can carry the futures on the reactor pool.
-      run / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+      // So that `-Dasyncio.gears.carriers=reactors` can carry the futures on the reactor pool (see `VirtualCarriers`).
+      run / javaOptions ++= Seq(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
+      )
     )
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
     .dependsOn(asyncioTestkit)
