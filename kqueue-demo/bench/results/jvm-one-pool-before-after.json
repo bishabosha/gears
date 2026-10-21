@@ -1,0 +1,117 @@
+{
+  "started": "2026-10-21T17:38:40+02:00",
+  "finished": "2026-10-21T17:38:54+02:00",
+  "load_average": {
+    "before": [
+      3.5263671875,
+      3.9140625,
+      4.55029296875
+    ],
+    "after": [
+      5.21728515625,
+      4.2880859375,
+      4.67333984375
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pipelined,pingpong,concurrent,fairness"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/tmp/jvmbench-before/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "3131184907559e4649b206d4f67c18d4532dfa98",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 1.6,
+        "pipelined": 1.39,
+        "pingpong": 5.64,
+        "concurrent": 5.56,
+        "fairness": 1.86
+      },
+      "samples": {
+        "fairness-tick": [
+          1.54,
+          1.6,
+          1.6
+        ],
+        "pipelined": [
+          1.39,
+          1.21,
+          1.5
+        ],
+        "pingpong": [
+          5.8,
+          5.58,
+          5.64
+        ],
+        "concurrent": [
+          5.47,
+          5.65,
+          5.56
+        ],
+        "fairness": [
+          1.92,
+          1.86,
+          1.73
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/tmp/jvmbench/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "d7ce3dbef7eeca02de4c83980265137ea2078e66",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 1.57,
+        "pipelined": 1.22,
+        "pingpong": 5.54,
+        "concurrent": 5.52,
+        "fairness": 1.69
+      },
+      "samples": {
+        "fairness-tick": [
+          1.57,
+          1.59,
+          1.53
+        ],
+        "pipelined": [
+          1.17,
+          1.22,
+          1.23
+        ],
+        "pingpong": [
+          5.64,
+          5.5,
+          5.54
+        ],
+        "concurrent": [
+          5.52,
+          5.41,
+          5.54
+        ],
+        "fairness": [
+          1.8,
+          1.69,
+          1.69
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
