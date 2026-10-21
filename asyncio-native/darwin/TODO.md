@@ -136,6 +136,14 @@ tenth of its scale and 2 runs, since 20,000 connections exhaust the ephemeral po
   are bound by the hand-offs; kqueue's `concurrent` costs more on four workers (5.0 against 3.7 µs), the descriptor
   lock again.
 
+- **The machine's own LAN address is loopback too**: `--host 192.168.0.186` (en0's address; macOS routes it through
+  `lo0`) measured the same as `127.0.0.1` on both backends, within noise (debug build: kqueue 22 against 25 µs a
+  ping-pong, Darwin 65 against 63). A real interface needs a second machine: on it, `kqueuedemo gears bench-serve
+  --host 0.0.0.0 --port 19876 --backend kqueue` (or `darwin`), and here `kqueuedemo gears bench --tcp --host <its
+  address> --no-server --backend darwin` against the same with `kqueue`, both as `compare.py ... -- --tcp --host ...
+  --no-server`. On a LAN nothing rate-limits the traffic; on the internet a round trip's time is the network's, so the
+  backends would differ only in CPU and in throughput at concurrency (`concurrent`, `pipelined`), not in latency.
+
 So, as the earlier measurement had it, Network.framework over loopback is the kernel's sockets with more threads in
 the way, and as a backend it loses every I/O scenario to kqueue by two to seven times, pipelined writes by three; what
 it is for, Apple's user-space stack on a real interface, needs a second machine to measure. The semantics survive,

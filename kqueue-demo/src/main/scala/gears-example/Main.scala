@@ -139,25 +139,44 @@ object Main {
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,
       @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
-      @arg(doc = "use TCP on 127.0.0.1 at --port instead of a Unix socket") tcp: mainargs.Flag,
+      @arg(doc = "use TCP on --host at --port instead of a Unix socket") tcp: mainargs.Flag,
+      @arg(doc = "the TCP address: 127.0.0.1, or this machine's, or with --no-server another machine's") host: String =
+        "127.0.0.1",
       @arg port: Int = 19876,
+      @arg(doc = "connect to an echo server already listening (`bench-serve`), instead of starting one") noServer: mainargs.Flag,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
       @arg(doc = "kqueue, or darwin: Network.framework, which needs --tcp") backend: String = "kqueue"
   ): Unit = {
     val address =
-      if tcp.value then IpAddress.IPv4("127.0.0.1", port)
+      if tcp.value then IpAddress.IPv4(host, port)
       else UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")
-    val takePolicy = TakePolicy.values
-      .find(_.toString.equalsIgnoreCase(policy))
-      .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
-    backend match {
-      case "kqueue" => GearsBench.run(names, scale, connections, address, workers, takePolicy)
-      case "darwin" =>
-        GearsBench.run(names, scale, connections, address, workers, takePolicy)(using asyncio.darwin.DarwinBackend)
-      case other => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or darwin")
+    withBackend(backend) { b =>
+      GearsBench.run(names, scale, connections, address, workers, takePolicy(policy), server = !noServer.value)(using b)
     }
+  }
+  @main(name = "bench-serve", doc = "The bench's echo server alone, for a bench on another machine with --no-server")
+  def benchServe(
+      @arg(doc = "the address to listen on: this machine's, or 0.0.0.0") host: String = "0.0.0.0",
+      @arg port: Int = 19876,
+      @arg(doc = "worker threads for the server") workers: Int = 1,
+      @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
+      @arg(doc = "kqueue, or darwin: Network.framework") backend: String = "kqueue"
+  ): Unit =
+    withBackend(backend) { b =>
+      GearsBench.serveForever(IpAddress.IPv4(host, port), workers, takePolicy(policy))(using b)
+    }
+
+  private def takePolicy(policy: String): TakePolicy = TakePolicy.values
+    .find(_.toString.equalsIgnoreCase(policy))
+    .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
+
+  /** Runs `body` with the backend named: kqueue, or darwin, Network.framework. */
+  private def withBackend(backend: String)(body: asyncio.Backend => Unit): Unit = backend match {
+    case "kqueue" => body(KqueueBackend)
+    case "darwin" => body(asyncio.darwin.DarwinBackend)
+    case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or darwin")
   }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)

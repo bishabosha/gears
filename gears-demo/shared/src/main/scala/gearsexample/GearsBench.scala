@@ -520,9 +520,21 @@ object GearsBench {
         listening.countDown()
     }
 
+  /** Runs the echo server alone, on a pool of `workers` workers, until the process ends: for a bench on another
+    * machine, which connects to it over the network (`run` with `server = false`).
+    */
+  def serveForever(address: StreamAddress, workers: Int = 1, policy: TakePolicy = TakePolicy.Affine)(using Backend): Unit = {
+    val listening = new CountDownLatch(1)
+    val failure = new AtomicReference[Throwable | Null](null)
+    serve(address, listening, failure, workers, policy)
+    val failed = failure.get()
+    if failed != null then throw failed
+  }
+
   /** Runs the named scenarios, or all of them, each with its base count times `scale`, the clients on a pool of
     * `workers` workers, and the echo server on another of the same size, both taking tasks by `policy`; with `warmup`,
-    * each runs first at a fifth of its count, for the JVM's JIT.
+    * each runs first at a fifth of its count, for the JVM's JIT. Without `server`, the echo server is expected to be
+    * listening at `address` already, such as `serveForever` on another machine.
     */
   def run(
       names: Seq[String],
@@ -531,7 +543,8 @@ object GearsBench {
       address: StreamAddress,
       workers: Int = 1,
       policy: TakePolicy = TakePolicy.Affine,
-      warmup: Boolean = false
+      warmup: Boolean = false,
+      server: Boolean = true
   )(using Backend): Unit = {
     val selected =
       if names.isEmpty then scenarios
@@ -554,7 +567,7 @@ object GearsBench {
       case _                  => ()
     }
     try {
-      startServer(address, workers, policy)
+      if server then startServer(address, workers, policy)
       ReactorFutures.run(workers, policy) { r =>
         // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
         // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
