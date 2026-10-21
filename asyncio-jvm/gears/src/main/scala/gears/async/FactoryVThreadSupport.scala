@@ -90,6 +90,7 @@ final class FactoryVThreadSupport[S <: Scheduler](factory: ThreadFactory) extend
     start: () =>
       val label = FactoryLabel[Unit]()
       body(using label)
+      label.setResult(()) // releases a `resume` waiting for the body's next result, which there is none of
 
   override def suspend[T, R](body: Suspension[T, R] => R)(using l: Label[R]): T =
     val sus = new FactorySuspension[T, R]()

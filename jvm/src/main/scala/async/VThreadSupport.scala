@@ -122,6 +122,7 @@ object VThreadSupport extends AsyncSupport:
     VThreadScheduler.execute: () =>
       val label = VThreadLabel[Unit]()
       body(using label)
+      label.setResult(()) // releases a `resume` waiting for the body's next result, which there is none of
 
   override def suspend[T, R](body: Suspension[T, R] => R)(using l: Label[R]): T =
     val sus = new VThreadSuspension[T, R]()
