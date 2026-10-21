@@ -52,7 +52,10 @@ trait Reactor extends AutoCloseable {
   /** Submits an op with the completion to run when it finishes. An op marked `Repeatable` may be submitted again once
     * its previous submission has completed, failed, or been cancelled; any other op may be submitted only once. No op
     * may be pending twice at the same time. An op may finish during `submit`, such as a read of data already waiting,
-    * but its completion never runs inside `submit`: it runs from a later turn of the loop.
+    * but its completion never runs inside `submit`: it runs from a later turn of the loop. Nor need the op be issued
+    * to the I/O facility inside `submit`: a reactor may hold the ops submitted in a turn and issue them together at
+    * the turn's end, as io_uring's submission queue or Network.framework's batches invite, so long as `trySubmit`
+    * issues at once and a turn issues everything before it blocks.
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
@@ -266,6 +269,84 @@ trait UnixDatagramBackend extends Backend {
 /** A backend that waits on FIFOs as it does on pipes (see `FifoHandles`). */
 trait FifoBackend extends Backend {
   def handles: FifoHandles
+}
+
+/** A backend that reads into buffers of its own (see `PooledReadOps.read`): a completion-based one, such as
+  * Network.framework's or io_uring's, receives continuously into buffers it owns and hands each one over, where a
+  * read into the caller's buffer costs it a copy; a readiness-based one reads into a pool buffer as it would into the
+  * caller's.
+  */
+trait PooledReadBackend extends Backend {
+  def ops: PooledReadOps[Op]
+
+  /** Opens a pool of `buffers` buffers of `bufferSize` bytes each, for `ops.read`. Close it once nothing of it is held. */
+  def pool(bufferSize: Int, buffers: Int): BufferPool
+}
+
+/** Buffers a backend fills for pooled reads, opened by `PooledReadBackend.pool`. A pool may be used from any thread.
+  * `close` frees its buffers, and must come once no read is pending on it and every `Received` from it has been
+  * released.
+  */
+trait BufferPool extends AutoCloseable {
+  def bufferSize: Int
+  def buffers: Int
+
+  /** Buffers neither held by a pending read nor by an unreleased `Received`. */
+  def available: Int
+
+  def close(): Unit
+}
+
+/** Bytes a pooled read received: `buffer` is one of the pool's, positioned at 0 with its limit at the bytes received,
+  * 0 at the end of the stream. It is the caller's until `release` gives it back to the pool, which must happen exactly
+  * once, from any thread; the `Received` is not to be used after.
+  */
+trait Received {
+  def buffer: ByteBuffer
+  def release(): Unit
+}
+
+/** Reads into a backend's own buffers (see `PooledReadBackend`). */
+trait PooledReadOps[Op] extends Ops[Op] {
+
+  /** Fills a buffer of `pool`'s, as `read` fills the caller's: completes once at least one byte has been read, or at
+    * the end of the stream, writing what it read into `into`, which must be empty, as a `Received` to release. Fails
+    * if `pool` has no buffer free when the read needs one.
+    */
+  def read(handle: Int, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+}
+
+/** A backend whose handles listen and close as ops (see `LifecycleOps`): one whose I/O facility opens and closes
+  * asynchronously, such as Network.framework or io_uring, reports a port in use, or a close done, through a
+  * completion rather than by blocking the caller; a readiness-based one does both at once, in the op.
+  */
+trait LifecycleBackend extends Backend {
+  def ops: LifecycleOps[Op]
+  def handles: LifecycleHandles
+}
+
+/** Handles that listen through an op (see `LifecycleOps.listening`). */
+trait LifecycleHandles extends Handles {
+
+  /** A stream socket that will listen on `address` once `ops.listening` is performed on it: binding and listening
+    * happen there, so an address in use fails that op, not this. `reuseAddr` as for `listen`.
+    */
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Int
+}
+
+/** A handle's listening and closing as ops (see `LifecycleBackend`). */
+trait LifecycleOps[Op] extends Ops[Op] {
+
+  /** Completes once `handle`, from `LifecycleHandles.listener`, is listening, or fails, as `connect` does for a socket
+    * to connect: with an `IOException` if the address is in use or cannot be bound.
+    */
+  def listening(handle: Int): Op
+
+  /** Closes `handle`, completing once it is closed: the ops pending on it, on whichever reactor, have failed as
+    * `Handles.close` says, and its number is free for reuse. A Unix socket path it bound is removed with it. Fails
+    * if `handle` is not open.
+    */
+  def close(handle: Int): Op
 }
 
 /** The readiness a custom op waits for before it runs. */

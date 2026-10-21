@@ -4,6 +4,10 @@ import java.io.IOException
 import java.nio.ByteBuffer
 
 import asyncio.BlockingOps
+import asyncio.BufferPool
+import asyncio.LifecycleOps
+import asyncio.PooledReadOps
+import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.IpAddress
@@ -12,6 +16,7 @@ import asyncio.Repeatable
 import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.unsafe.BlockingRun
+import asyncio.unsafe.NativePool
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
 import asyncio.unsafe.PosixResolver
@@ -36,7 +41,7 @@ sealed trait NWFrameworkOp {
 }
 
 /** Builds the ops `NWFrameworkReactor` understands. */
-object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] {
+object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] with PooledReadOps[NWFrameworkOp] with LifecycleOps[NWFrameworkOp] {
   def read(handle: Int, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
   def write(handle: Int, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
   def accept(handle: Int, into: HandleSlot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
@@ -48,6 +53,15 @@ object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp]
   def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking = new NWFrameworkBlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): NWFrameworkOp = new NWFrameworkResolve(host, into)
+  def read(handle: Int, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
+    new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
+  def listening(handle: Int): NWFrameworkOp = new NWFrameworkListening(handle)
+  def close(handle: Int): NWFrameworkOp = new NWFrameworkClose(handle)
+
+  private def native(pool: BufferPool): NativePool = pool match {
+    case native: NativePool => native
+    case other              => throw new IllegalArgumentException(s"$other is not a pool of this backend's")
+  }
 }
 
 /** An op on a handle. `attempt` tries to finish it on the reactor's thread, after the handle has taken in what the
@@ -90,6 +104,63 @@ final class NWFrameworkRead(val handle: Int, buf: ByteBuffer) extends NWFramewor
       if n > 0 then NativeBuffer.advance(buf, n)
       n >= 0
     }
+}
+
+/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): a descriptor is read into one as
+  * into the caller's buffer; a connection receives straight into one.
+  */
+final class NWFrameworkPooledRead(val handle: Int, pool: NativePool, into: Slot[Received]) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Read
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
+    if h.isFile || h.isDescriptor then {
+      val slot = pool.take()
+      if slot == null then throw new IOException("The pool has no buffer free")
+      val buffer = slot.nn.buffer
+      val read = NonBlocking.read(h.fd, buffer) // -1 at EOF, which leaves the buffer as it was
+      if read != 0 || h.isFile then {
+        buffer.flip()
+        into.set(slot.nn)
+        true
+      } else {
+        slot.nn.release()
+        h.armed(read = true, reactor, token)
+      }
+    } else {
+      val received = h.readPooled(pool, reactor, token)
+      if received == null then false
+      else {
+        into.set(received.nn)
+        true
+      }
+    }
+}
+
+/** Completes once a listener from `handles.listener` is listening, or fails (see `LifecycleOps.listening`). */
+final class NWFrameworkListening(val handle: Int) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Connect
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
+}
+
+/** Closes a handle, completing once it is closed (see `LifecycleOps.close`): a connection's cancellation is waited
+  * for, and the number is taken back once the op is done, so that the reactor still finds the handle for the
+  * cancelled state meanwhile; ops submitted on it meanwhile fail as closed.
+  */
+final class NWFrameworkClose(val handle: Int) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Close
+  private var begun = false
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+    val done =
+      if begun then h.closeDone
+      else {
+        begun = true
+        h.closeAsync(reactor, token) // throws if already closed, so the op fails
+      }
+    if done then NWFrameworkHandles.remove(handle)
+    done
+  }
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what

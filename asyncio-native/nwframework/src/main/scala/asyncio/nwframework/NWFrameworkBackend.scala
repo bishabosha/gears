@@ -1,7 +1,10 @@
 package asyncio.nwframework
 
 import asyncio.BlockingBackend
+import asyncio.BufferPool
 import asyncio.FifoBackend
+import asyncio.LifecycleBackend
+import asyncio.PooledReadBackend
 import asyncio.Reactor
 import asyncio.ReactorBackend
 
@@ -11,7 +14,12 @@ import asyncio.ReactorBackend
   * completions and nothing can be tried on a connection without waiting, and no Unix domain sockets, which
   * Network.framework's public interface has no endpoint for.
   */
-object NWFrameworkBackend extends ReactorBackend with BlockingBackend with FifoBackend {
+object NWFrameworkBackend
+    extends ReactorBackend
+    with BlockingBackend
+    with FifoBackend
+    with PooledReadBackend
+    with LifecycleBackend {
 
   type Op = NWFrameworkOp
 
@@ -24,4 +32,6 @@ object NWFrameworkBackend extends ReactorBackend with BlockingBackend with FifoB
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
+
+  def pool(bufferSize: Int, buffers: Int): BufferPool = new asyncio.unsafe.NativePool(bufferSize, buffers)
 }
