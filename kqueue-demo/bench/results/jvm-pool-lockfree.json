@@ -1,0 +1,65 @@
+{
+  "started": "2026-10-21T16:24:31+02:00",
+  "finished": "2026-10-21T16:24:37+02:00",
+  "load_average": {
+    "before": [
+      3.443359375,
+      2.6953125,
+      3.1357421875
+    ],
+    "after": [
+      3.72802734375,
+      2.7666015625,
+      3.158203125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,pingpong-pooled,large,large-pooled"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "nio-jdk",
+      "executable": "/tmp/jvmbench/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "6abb9c9ca5f4ded08eab910e47fa10a6c2adfe89",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "pingpong": 6.0,
+        "pingpong-pooled": 5.9,
+        "large": 93.92,
+        "large-pooled": 97.57
+      },
+      "samples": {
+        "pingpong": [
+          5.69,
+          6.0,
+          6.04
+        ],
+        "pingpong-pooled": [
+          6.15,
+          5.68,
+          5.9
+        ],
+        "large": [
+          107.28,
+          93.92,
+          91.4
+        ],
+        "large-pooled": [
+          100.99,
+          89.94,
+          97.57
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
