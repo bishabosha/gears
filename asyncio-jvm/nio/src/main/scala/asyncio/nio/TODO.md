@@ -110,6 +110,19 @@ what differs is what carries the futures, `Carriers`:
   8.74 before, 8.67 atomic, 8.75 field), so the field stays shared. Pinned, `Carriers.Reactors`
   costs about the same as before on ping-pong (9.81 to 9.94 µs) and 10% on `concurrent` (2.12 to 2.36); the JVM gears
   suites, which hung in 4 runs of 10, passed 21 of 21.
+- **A virtual thread leaked per future on the JVM, fixed 2026-10-21:** gears' `UnlinkedAwaitListener`, which
+  `perform` awaits through, resumed its suspension as a task it scheduled, a fresh virtual thread on both
+  `VThreadSupport` and `FactoryVThreadSupport`, whose `resume` then waited for the body's next result; a scheduled
+  boundary never set a final one, so the last resumer of every future parked forever (`reactor-virtual-N` threads in
+  `waitResult`, dozens per test). Now `scheduleBoundary` sets a result when the body ends, and the listener resumes
+  through `resumeAsync`, which on those supports hands the input to the suspended thread directly, with no task and
+  no thread. One subtlety: `ReactorAsync.yieldNow` awaits a source that completes its listener as it is added, and
+  relied on that task to put the caller at the back of the queue; a direct hand-off before the caller had parked made
+  a computation yielding between slices never yield, and the bench's `starvation` scenario spun. A completion that
+  comes while the listener is being added is therefore still scheduled as a task. `Carriers.Reactors` gains most
+  (ping-pong 10.03 to 9.40 µs, `concurrent` 2.38 to 1.98, `fairness` 1.58 to 1.20), `Carriers.Jdk` a little
+  (`pipelined` 1.67 to 1.43, `starvation` 9.53 to 8.22); kqueue, where the default `resumeAsync` is the same task as
+  before, is within noise (ping-pong 8.56 against 8.64 over five runs).
 
 `perform` finds its reactors through `OpRouter` in both cases (`ReactorAsync`): on a worker, that worker's reactor,
 with the fast path; anywhere else, a hand-off to a driver's thread, with a waiter whose state is locked, since the caller

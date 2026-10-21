@@ -1,0 +1,125 @@
+{
+  "started": "2026-10-21T18:30:11+02:00",
+  "finished": "2026-10-21T18:30:18+02:00",
+  "load_average": {
+    "before": [
+      7.3603515625,
+      5.109375,
+      6.21435546875
+    ],
+    "after": [
+      7.0107421875,
+      5.07421875,
+      6.1953125
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,concurrent,pipelined,fairness"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/tmp/kq-after",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": true,
+        "worktree_changes_hash": "08258c1edf7e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:30+02:00"
+      },
+      "median": {
+        "pingpong": 8.21,
+        "concurrent": 1.78,
+        "pipelined": 0.59,
+        "fairness-tick": 2.84,
+        "fairness": 1.42
+      },
+      "samples": {
+        "pingpong": [
+          8.21,
+          8.46,
+          8.14
+        ],
+        "concurrent": [
+          2.03,
+          1.76,
+          1.78
+        ],
+        "pipelined": [
+          0.6,
+          0.59,
+          0.59
+        ],
+        "fairness-tick": [
+          2.85,
+          2.66,
+          2.84
+        ],
+        "fairness": [
+          1.43,
+          1.33,
+          1.42
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/tmp/kq-leak",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "b6868198809b1ae84ce76a4c5db2336b34eb0303",
+        "subject": "Carriers.Reactors pins a future to its worker while its op is submitted, against JEP 491's migrations",
+        "worktree_changes": true,
+        "worktree_changes_hash": "9f14fa4a26fb",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T18:29:32+02:00"
+      },
+      "median": {
+        "pingpong": 8.77,
+        "concurrent": 1.77,
+        "pipelined": 0.6,
+        "fairness-tick": 2.62,
+        "fairness": 1.31
+      },
+      "samples": {
+        "pingpong": [
+          8.88,
+          8.77,
+          8.47
+        ],
+        "concurrent": [
+          1.72,
+          1.99,
+          1.77
+        ],
+        "pipelined": [
+          0.57,
+          0.6,
+          0.61
+        ],
+        "fairness-tick": [
+          2.61,
+          2.76,
+          2.62
+        ],
+        "fairness": [
+          1.31,
+          1.38,
+          1.31
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

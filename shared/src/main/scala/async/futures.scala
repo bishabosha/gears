@@ -195,25 +195,29 @@ object Future:
       end AwaitListener
 
       /** Awaits `src` where nothing can cancel the wait, in the `Unlinked` group: with no lock, since no cancellation
-        * can race the completion, and no group to link to. It resumes the suspension itself, as the task it schedules.
+        * can race the completion, and no group to link to. A completion resumes the suspension through the
+        * scheduler, as `AwaitListener` does: on a support that hands the input to the suspended thread directly, no
+        * task is scheduled. One that comes while the listener is being added, from a source that completes it at
+        * once, such as a yield's, is scheduled as a task instead, so the caller suspends first and resumes from the
+        * back of the scheduler's queue.
         */
       private class UnlinkedAwaitListener[T](src: Async.Source[T])
           extends Function[ac.support.Suspension[T, Unit], Unit],
-            Listener[T],
-            Runnable:
+            Listener[T]:
         private var sus: ac.support.Suspension[T, Unit] | Null = null
-        private var result: T = uninitialized
+        private var adding = false
 
         def apply(sus: ac.support.Suspension[T, Unit]): Unit =
           this.sus = sus
-          src.onComplete(this)
+          adding = true
+          try src.onComplete(this)
+          finally adding = false
 
         val lock: Listener.ListenerLock | Null = null
         def complete(data: T, source: Async.Source[T]): Unit =
-          result = data
-          ac.scheduler.execute(this)
-
-        def run(): Unit = sus.nn.resume(result)
+          val suspension = sus.nn
+          if adding then ac.scheduler.execute(() => ac.support.resumeAsync(suspension)(data)(using ac.scheduler))
+          else ac.support.resumeAsync(suspension)(data)(using ac.scheduler)
       end UnlinkedAwaitListener
       object AwaitListener:
         type State = stateUnused.type | stateLocked.type | stateDone.type | stateCancelled.type

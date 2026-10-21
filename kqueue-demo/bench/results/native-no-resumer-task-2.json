@@ -1,0 +1,129 @@
+{
+  "started": "2026-10-21T18:31:40+02:00",
+  "finished": "2026-10-21T18:31:51+02:00",
+  "load_average": {
+    "before": [
+      4.32470703125,
+      4.6357421875,
+      5.92236328125
+    ],
+    "after": [
+      3.94482421875,
+      4.5380859375,
+      5.86474609375
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,fairness,pingpong-fresh-ops"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before",
+      "executable": "/tmp/kq-after",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "f6888370a50be306640dd7a562473c1cf3d74980",
+        "subject": "JVM bench, the commit before the pool clean-up against after, side by side: within noise (pipelined 1.39 against 1.22 \u00b5s, pingpong 5.64 against 5.54)",
+        "worktree_changes": true,
+        "worktree_changes_hash": "08258c1edf7e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T17:49:30+02:00"
+      },
+      "median": {
+        "pingpong": 8.56,
+        "fairness-tick": 2.69,
+        "fairness": 1.34,
+        "pingpong-fresh-ops": 8.6
+      },
+      "samples": {
+        "pingpong": [
+          8.75,
+          8.46,
+          8.63,
+          8.28,
+          8.56
+        ],
+        "fairness-tick": [
+          2.69,
+          2.66,
+          2.71,
+          2.66,
+          2.76
+        ],
+        "fairness": [
+          1.34,
+          1.33,
+          1.36,
+          1.33,
+          1.38
+        ],
+        "pingpong-fresh-ops": [
+          8.25,
+          8.7,
+          8.6,
+          8.5,
+          8.79
+        ]
+      }
+    },
+    {
+      "label": "after",
+      "executable": "/tmp/kq-leak",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "b6868198809b1ae84ce76a4c5db2336b34eb0303",
+        "subject": "Carriers.Reactors pins a future to its worker while its op is submitted, against JEP 491's migrations",
+        "worktree_changes": true,
+        "worktree_changes_hash": "9f14fa4a26fb",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T18:29:32+02:00"
+      },
+      "median": {
+        "pingpong": 8.64,
+        "fairness-tick": 2.66,
+        "fairness": 1.33,
+        "pingpong-fresh-ops": 8.65
+      },
+      "samples": {
+        "pingpong": [
+          8.45,
+          8.62,
+          8.66,
+          8.64,
+          8.68
+        ],
+        "fairness-tick": [
+          2.73,
+          2.63,
+          2.72,
+          2.62,
+          2.66
+        ],
+        "fairness": [
+          1.36,
+          1.31,
+          1.36,
+          1.31,
+          1.33
+        ],
+        "pingpong-fresh-ops": [
+          8.5,
+          8.69,
+          8.36,
+          8.69,
+          8.65
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
