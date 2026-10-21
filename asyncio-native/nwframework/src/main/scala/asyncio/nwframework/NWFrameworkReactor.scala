@@ -1,4 +1,4 @@
-package asyncio.darwin
+package asyncio.nwframework
 
 import java.io.IOException
 import scala.scalanative.libc.stdlib
@@ -11,11 +11,11 @@ import asyncio.Repeatable
 import asyncio.unsafe.Blockers
 import asyncio.unsafe.TimerHeap
 
-/** A `Reactor` over Apple's Network.framework, for ops built by `DarwinOps`. Network.framework is completion-based:
+/** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is completion-based:
   * a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback. The C side
-  * (`darwin_io.c`) queues what the callbacks deliver as events on the handle, and wakes the reactor watching the
+  * (`nwframework_io.c`) queues what the callbacks deliver as events on the handle, and wakes the reactor watching the
   * handle; this reactor's thread drains the handles with events each turn, and parks between turns, so that every
-  * completion runs here, as `Reactor` promises. The handle (`DarwinHandle`) applies the events and tells the op
+  * completion runs here, as `Reactor` promises. The handle (`NWFrameworkHandle`) applies the events and tells the op
   * waiting for them, which is attempted again; an op is attempted when submitted, so a read of bytes already
   * received, an accept of a connection already accepted, or a connect of a connection already ready finishes at
   * once.
@@ -26,58 +26,58 @@ import asyncio.unsafe.TimerHeap
   * thread parks. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a handle, from any
   * thread, tells the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
   */
-final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
+final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
 
-  /** Every Darwin reactor runs the same kinds of op, so an op may go to any of them in turn (see `DarwinBackend`). */
-  type Op = DarwinOp
+  /** Every NWFramework reactor runs the same kinds of op, so an op may go to any of them in turn (see `NWFrameworkBackend`). */
+  type Op = NWFrameworkOp
 
-  def ops: DarwinOps.type = DarwinOps
+  def ops: NWFrameworkOps.type = NWFrameworkOps
 
-  def handles: DarwinHandles.type = DarwinHandles
+  def handles: NWFrameworkHandles.type = NWFrameworkHandles
 
   /** The C side's list of handles with events for this reactor, and the condition its thread parks on. */
-  private[darwin] val ptr: DarwinIo.Reactor = DarwinIo.dn_reactor_create()
+  private[nwframework] val ptr: NWFrameworkIo.Reactor = NWFrameworkIo.nwf_reactor_create()
 
   // The handles a turn drains, and the event a handle copies out, allocated once and freed by `close`.
-  private val drained: Ptr[DarwinIo.Handle] =
-    stdlib.malloc((sizeOf[Ptr[Byte]] * maxDrained).toCSize).asInstanceOf[Ptr[DarwinIo.Handle]]
-  private[darwin] val event: Ptr[DarwinIo.Event] =
-    stdlib.malloc(sizeOf[DarwinIo.Event].toCSize).asInstanceOf[Ptr[DarwinIo.Event]]
+  private val drained: Ptr[NWFrameworkIo.Handle] =
+    stdlib.malloc((sizeOf[Ptr[Byte]] * maxDrained).toCSize).asInstanceOf[Ptr[NWFrameworkIo.Handle]]
+  private[nwframework] val event: Ptr[NWFrameworkIo.Event] =
+    stdlib.malloc(sizeOf[NWFrameworkIo.Event].toCSize).asInstanceOf[Ptr[NWFrameworkIo.Event]]
 
-  private def take(op: DarwinOp): Completion[DarwinOp] = {
+  private def take(op: NWFrameworkOp): Completion[NWFrameworkOp] = {
     val completion = op.completion.nn
     op.completion = null
     completion
   }
 
-  private def complete(op: DarwinOp): Unit = take(op).onComplete(op)
-  private def fail(op: DarwinOp, failure: Throwable): Unit = take(op).onFailure(op, failure)
+  private def complete(op: NWFrameworkOp): Unit = take(op).onComplete(op)
+  private def fail(op: NWFrameworkOp, failure: Throwable): Unit = take(op).onFailure(op, failure)
 
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   // Commands waiting on a handle, by the token of their submission, which a handle's notification carries. Loop
   // thread only.
-  private val waiting = scala.collection.mutable.LongMap.empty[DarwinCommand]
+  private val waiting = scala.collection.mutable.LongMap.empty[NWFrameworkCommand]
   private var nextToken = 1L
 
   // Tokens of commands a handle told are worth attempting again: from this thread, in a turn, unboxed; and from any
   // other thread, boxed, which is rare: another reactor draining a handle an op here waits on.
-  private val notifiedHere = new DarwinReactor.Tokens
+  private val notifiedHere = new NWFrameworkReactor.Tokens
   private val notifiedElsewhere = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   // Ops that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
-  private val ready = new java.util.ArrayDeque[DarwinOp]()
+  private val ready = new java.util.ArrayDeque[NWFrameworkOp]()
 
   // Blocking ops settle on the blocker pool's threads; they queue here and wake the loop.
-  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[DarwinBlocking]()
-  private val pendingBlockers = scala.collection.mutable.HashSet.empty[DarwinBlocking]
-  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[DarwinBlocking]
+  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[NWFrameworkBlocking]()
+  private val pendingBlockers = scala.collection.mutable.HashSet.empty[NWFrameworkBlocking]
+  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[NWFrameworkBlocking]
 
   // Set by the first `wakeup` since the loop last drained, so later ones skip the C call.
   private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
 
-  private val timers = new TimerHeap[DarwinTimer]
+  private val timers = new TimerHeap[NWFrameworkTimer]
   private var nextTimerOrder = 0L
   private var running = false
 
@@ -92,20 +92,20 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     var finished = false
     op match {
       case _: Repeatable => ()
-      case one: DarwinOp =>
+      case one: NWFrameworkOp =>
         if one.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
     }
     require(op.completion == null, s"$op is already pending")
-    val pending = completion.asInstanceOf[Completion[DarwinOp]] // only ever called with `op`, which is a C
+    val pending = completion.asInstanceOf[Completion[NWFrameworkOp]] // only ever called with `op`, which is a C
     op match {
-      case command: DarwinCommand =>
+      case command: NWFrameworkCommand =>
         command.token = nextToken
         nextToken += 1
         command.completion = pending
         // A command on a handle that is not open fails, as one on a closed descriptor does, through its completion.
         val open =
           try {
-            command.target = DarwinHandles.get(command.handle)
+            command.target = NWFrameworkHandles.get(command.handle)
             true
           } catch {
             case e: IOException =>
@@ -115,14 +115,14 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
         if !open || attempted(command) then {
           if finishNow then finished = true else ready.add(command)
         } else waiting.put(command.token, command)
-      case timer: DarwinTimer =>
+      case timer: NWFrameworkTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
         timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
         timer.order = nextTimerOrder
         nextTimerOrder += 1
         timer.completion = pending
         timers.add(timer)
-      case blocking: DarwinBlocking =>
+      case blocking: NWFrameworkBlocking =>
         if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
         blocking.reactor = this
         blocking.completion = pending
@@ -145,7 +145,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     * handle takes in its events first, so that an op finishes at once when it can; attempted again after a
     * notification, the events were taken in by the drain that led to it.
     */
-  private def attempted(command: DarwinCommand, drainFirst: Boolean = true): Boolean =
+  private def attempted(command: NWFrameworkCommand, drainFirst: Boolean = true): Boolean =
     try command.attempt(this, drainFirst)
     catch {
       case t: Throwable =>
@@ -169,7 +169,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   }
 
   /** A handle tells the reactor that the command of `token`, waiting there, is worth attempting again. Any thread. */
-  private[darwin] def notified(token: Long): Unit =
+  private[nwframework] def notified(token: Long): Unit =
     if Thread.currentThread() eq loopThread then notifiedHere.add(token)
     else {
       notifiedElsewhere.add(token)
@@ -182,16 +182,16 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     */
   private def deliverNotified(): Boolean = {
     var any = false
-    var n = DarwinIo.dn_reactor_drain(ptr, drained, maxDrained)
+    var n = NWFrameworkIo.nwf_reactor_drain(ptr, drained, maxDrained)
     while n > 0 do {
       any = true
       var i = 0
       while i < n do {
-        val handle = DarwinHandles.at(drained(i))
+        val handle = NWFrameworkHandles.at(drained(i))
         if handle != null then handle.drain(event)
         i += 1
       }
-      n = if n == maxDrained then DarwinIo.dn_reactor_drain(ptr, drained, maxDrained) else 0
+      n = if n == maxDrained then NWFrameworkIo.nwf_reactor_drain(ptr, drained, maxDrained) else 0
     }
     var token = notifiedElsewhere.poll()
     while token != null do {
@@ -217,14 +217,14 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   }
 
   /** Called from a blocker thread when a blocking op has settled: queue it and wake the loop. */
-  private[darwin] def resolved(blocking: DarwinBlocking): Unit =
+  private[nwframework] def resolved(blocking: NWFrameworkBlocking): Unit =
     if !closed then {
       resolvedQueue.add(blocking)
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
   def wakeup(): Unit =
-    if wakePending.compareAndSet(false, true) then if !closed then DarwinIo.dn_reactor_wake(ptr)
+    if wakePending.compareAndSet(false, true) then if !closed then NWFrameworkIo.nwf_reactor_wake(ptr)
 
   private def deliverResolved(): Boolean = {
     var remaining = resolvedQueue.size()
@@ -250,36 +250,36 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     any
   }
 
-  private def withdraw(command: DarwinCommand): Unit = {
+  private def withdraw(command: NWFrameworkCommand): Unit = {
     command.target.nn.unwait(command.kind, command.token)
     command match {
-      case write: DarwinWrite => write.reset()
-      case send: DarwinSend   => send.reset()
+      case write: NWFrameworkWrite => write.reset()
+      case send: NWFrameworkSend   => send.reset()
       case _                  => ()
     }
   }
 
   def cancel(op: Op): Boolean = {
-    val completion: Completion[DarwinOp] | Null = op match {
-      case command: DarwinCommand =>
+    val completion: Completion[NWFrameworkOp] | Null = op match {
+      case command: NWFrameworkCommand =>
         if command.completion == null || waiting.getOrNull(command.token) == null then null // finished, or never here
         else {
           waiting -= command.token
           withdraw(command) // a notification already queued for it is dropped when drained
           take(command)
         }
-      case timer: DarwinTimer =>
+      case timer: NWFrameworkTimer =>
         if timer.heapIndex < 0 then null
         else {
           timers.remove(timer)
           take(timer)
         }
-      case blocking: DarwinBlocking => detach(blocking)
+      case blocking: NWFrameworkBlocking => detach(blocking)
     }
     if completion == null then false
     else {
       op match {
-        case blocking: DarwinBlocking if blocking.interrupt() =>
+        case blocking: NWFrameworkBlocking if blocking.interrupt() =>
           blocking.cancelling = completion
           cancellingBlockers += blocking
         case _ => completion.onCancel(op)
@@ -288,7 +288,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     }
   }
 
-  private def detach(blocking: DarwinBlocking): Completion[DarwinOp] | Null = {
+  private def detach(blocking: NWFrameworkBlocking): Completion[NWFrameworkOp] | Null = {
     val completion = blocking.completion
     blocking.completion = null
     pendingBlockers -= blocking
@@ -313,14 +313,14 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   private def parkUntilNotified(): Unit = {
     var spins = 0
     while spins < spinChecks do {
-      if DarwinIo.dn_reactor_ready(ptr) != 0 || !resolvedQueue.isEmpty || !notifiedElsewhere.isEmpty then return
+      if NWFrameworkIo.nwf_reactor_ready(ptr) != 0 || !resolvedQueue.isEmpty || !notifiedElsewhere.isEmpty then return
       Thread.onSpinWait()
       spins += 1
     }
-    if timers.isEmpty then DarwinIo.dn_reactor_wait(ptr, -1L)
+    if timers.isEmpty then NWFrameworkIo.nwf_reactor_wait(ptr, -1L)
     else {
       val wait = timers.peek.deadline - System.nanoTime()
-      if wait > 0 then DarwinIo.dn_reactor_wait(ptr, wait)
+      if wait > 0 then NWFrameworkIo.nwf_reactor_wait(ptr, wait)
     }
   }
 
@@ -343,8 +343,8 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   /** Cancels every pending op, waits for running blockers, and frees the C side. Handles stay open. */
   def close(): Unit =
     if !closed then {
-      val dropped = scala.collection.mutable.ArrayBuffer.empty[(DarwinOp, Completion[DarwinOp])]
-      def drop(op: DarwinOp): Unit = dropped += ((op, take(op)))
+      val dropped = scala.collection.mutable.ArrayBuffer.empty[(NWFrameworkOp, Completion[NWFrameworkOp])]
+      def drop(op: NWFrameworkOp): Unit = dropped += ((op, take(op)))
       for (_, command) <- waiting.toList do {
         withdraw(command)
         drop(command)
@@ -353,7 +353,7 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
       notifiedHere.clear()
       while !timers.isEmpty do drop(timers.poll())
       while !ready.isEmpty do drop(ready.poll().nn)
-      val running = scala.collection.mutable.ArrayBuffer.empty[DarwinBlocking]
+      val running = scala.collection.mutable.ArrayBuffer.empty[NWFrameworkBlocking]
       for blocking <- pendingBlockers.toList do {
         val completion = detach(blocking)
         if completion != null then {
@@ -371,30 +371,30 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
       resolvedQueue.clear()
       notifiedElsewhere.clear()
       running.foreach(_.awaitEnd())
-      DarwinIo.dn_reactor_destroy(ptr)
+      NWFrameworkIo.nwf_reactor_destroy(ptr)
       stdlib.free(drained.asInstanceOf[Ptr[Byte]])
       stdlib.free(event.asInstanceOf[Ptr[Byte]])
       dropped.foreach((op, completion) => completion.onCancel(op))
     }
 }
 
-object DarwinReactor {
+object NWFrameworkReactor {
 
   /** Opens a reactor. Before parking for events it checks for them `spinChecks` times; each turn drains up to
     * `maxDrained` handles with events at a time. Close it when done.
     */
-  def open(spinChecks: Int = DefaultSpinChecks, maxDrained: Int = 256): DarwinReactor = {
+  def open(spinChecks: Int = DefaultSpinChecks, maxDrained: Int = 256): NWFrameworkReactor = {
     require(spinChecks >= 0 && maxDrained > 0)
-    new DarwinReactor(spinChecks, maxDrained)
+    new NWFrameworkReactor(spinChecks, maxDrained)
   }
 
-  /** How many times a reactor checks for events before parking, by default: `ASYNCIO_DARWIN_SPIN` in the
+  /** How many times a reactor checks for events before parking, by default: `ASYNCIO_NWFRAMEWORK_SPIN` in the
     * environment, for measuring, else none.
     */
-  val DefaultSpinChecks: Int = sys.env.get("ASYNCIO_DARWIN_SPIN").map(_.toInt).getOrElse(0)
+  val DefaultSpinChecks: Int = sys.env.get("ASYNCIO_NWFRAMEWORK_SPIN").map(_.toInt).getOrElse(0)
 
   /** A queue of tokens that allocates nothing per token: a ring of longs, grown when full. */
-  private[darwin] final class Tokens {
+  private[nwframework] final class Tokens {
     private var ring = new Array[Long](64)
     private var head = 0
     private var size = 0
