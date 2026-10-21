@@ -98,11 +98,61 @@ struct dn_handle {
   int read_suspended, write_suspended;
   /* A listener's close waits on it for the cancelled state. */
   dispatch_semaphore_t cancelled;
+  uint64_t trace_queued_at; /* tracing: when the last event was queued */
   /* Sends outstanding, and whether a cancel waits for them: cancelling drops sends still queued, where a kernel
    * socket's close sends what its buffer holds, so a closed connection is cancelled once its sends have gone. */
   int sends;
   int cancel_pending;
 };
+
+
+/* ---- Tracing, for measuring: ASYNCIO_DARWIN_TRACE=1 prints at exit how long events waited to be taken ---- */
+#include <mach/mach_time.h>
+static int dn_trace_on = -1;
+static double dn_trace_ns_per_tick = 1.0;
+static _Atomic uint64_t dn_trace_q_count, dn_trace_q_sum, dn_trace_q_max, dn_trace_cb_sum, dn_trace_cb_count;
+static _Atomic uint64_t dn_trace_d_count, dn_trace_d_sum; /* queued -> drained by the reactor, before the Scala side */
+static _Atomic uint64_t dn_trace_buckets[7]; /* <=2, <=5, <=10, <=20, <=50, <=100, >100 us */
+static void dn_trace_report(void) {
+  if (dn_trace_q_count == 0) return;
+  fprintf(stderr, "dn trace: queued->drained: n=%llu mean=%.2fus\n", (unsigned long long)dn_trace_d_count,
+          dn_trace_d_count ? dn_trace_d_sum * dn_trace_ns_per_tick / 1000.0 / dn_trace_d_count : 0.0);
+  fprintf(stderr, "dn trace: queued->taken: n=%llu mean=%.2fus max=%.1fus; callback: mean=%.2fus; buckets us <=2:%llu <=5:%llu <=10:%llu <=20:%llu <=50:%llu <=100:%llu >100:%llu\n",
+          (unsigned long long)dn_trace_q_count, dn_trace_q_sum * dn_trace_ns_per_tick / 1000.0 / dn_trace_q_count,
+          dn_trace_q_max * dn_trace_ns_per_tick / 1000.0,
+          dn_trace_cb_count ? dn_trace_cb_sum * dn_trace_ns_per_tick / 1000.0 / dn_trace_cb_count : 0.0,
+          (unsigned long long)dn_trace_buckets[0], (unsigned long long)dn_trace_buckets[1], (unsigned long long)dn_trace_buckets[2],
+          (unsigned long long)dn_trace_buckets[3], (unsigned long long)dn_trace_buckets[4], (unsigned long long)dn_trace_buckets[5],
+          (unsigned long long)dn_trace_buckets[6]);
+}
+static int dn_tracing(void) {
+  if (dn_trace_on < 0) {
+    const char *v = getenv("ASYNCIO_DARWIN_TRACE");
+    dn_trace_on = v != NULL && strcmp(v, "0") != 0;
+    if (dn_trace_on) {
+      mach_timebase_info_data_t tb;
+      mach_timebase_info(&tb);
+      dn_trace_ns_per_tick = (double)tb.numer / tb.denom;
+      atexit(dn_trace_report);
+    }
+  }
+  return dn_trace_on;
+}
+static void dn_trace_taken(uint64_t queued_at) {
+  if (!queued_at) return;
+  uint64_t d = mach_absolute_time() - queued_at;
+  atomic_fetch_add(&dn_trace_q_count, 1);
+  atomic_fetch_add(&dn_trace_q_sum, d);
+  uint64_t m = dn_trace_q_max;
+  while (d > m && !atomic_compare_exchange_weak(&dn_trace_q_max, &m, d)) {}
+  double us = d * dn_trace_ns_per_tick / 1000.0;
+  int b = us <= 2 ? 0 : us <= 5 ? 1 : us <= 10 ? 2 : us <= 20 ? 3 : us <= 50 ? 4 : us <= 100 ? 5 : 6;
+  atomic_fetch_add(&dn_trace_buckets[b], 1);
+}
+static void dn_trace_callback(uint64_t entered_at) {
+  atomic_fetch_add(&dn_trace_cb_count, 1);
+  atomic_fetch_add(&dn_trace_cb_sum, mach_absolute_time() - entered_at);
+}
 
 /* ---- Reactors ---- */
 
@@ -172,6 +222,10 @@ int dn_reactor_drain(dn_reactor_t *r, dn_handle_t **out, int max) {
     h->next_ready = NULL;
     h->queued_on = NULL;
     out[n++] = h;
+    if (dn_trace_on > 0 && h->trace_queued_at) {
+      atomic_fetch_add(&dn_trace_d_count, 1);
+      atomic_fetch_add(&dn_trace_d_sum, mach_absolute_time() - h->trace_queued_at);
+    }
   }
   atomic_store(&r->ready, r->head != NULL || r->woken);
   pthread_mutex_unlock(&r->lock);
@@ -276,6 +330,7 @@ static void dn_enqueue(dn_handle_t *h, dn_event_t *e) {
   else target->head = e;
   target->tail = e;
   dn_reactor_t *watcher = (target->watch_mask & (1 << e->kind)) ? target->watcher : NULL;
+  if (dn_tracing() && e->kind == DN_EV_RECEIVED) target->trace_queued_at = mach_absolute_time();
   pthread_mutex_unlock(&target->lock);
   if (watcher) dn_reactor_offer(watcher, target);
 }
@@ -305,6 +360,10 @@ int dn_handle_next(dn_handle_t *h, dn_event_t *out) {
   if (e) {
     h->head = e->next;
     if (!h->head) h->tail = NULL;
+    if (e->kind == DN_EV_RECEIVED && dn_tracing()) {
+      dn_trace_taken(h->trace_queued_at);
+      h->trace_queued_at = 0;
+    }
   }
   pthread_mutex_unlock(&h->lock);
   if (!e) return 0;
@@ -389,12 +448,14 @@ void dn_receive(dn_handle_t *h, uint32_t max) {
   dn_handle_retain(h);
   nw_connection_receive(h->connection, 1, max,
                         ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
+                          uint64_t entered = dn_tracing() ? mach_absolute_time() : 0;
                           dn_event_t *e = dn_event(DN_EV_RECEIVED);
                           if (content) dn_event_copy(e, content);
                           e->complete = is_complete;
                           e->final = context != NULL && nw_content_context_get_is_final(context);
                           e->error = dn_errno(error);
                           dn_enqueue(h, e);
+                          if (entered) dn_trace_callback(entered);
                           dn_handle_release(h);
                         });
 }

@@ -201,16 +201,16 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
     while !notifiedHere.isEmpty do {
       any = true
       val t = notifiedHere.poll()
-      waiting.remove(t) match {
-        case Some(command) =>
-          if attempted(command, drainFirst = false) then {
-            val failure = command.atOnceFailure
-            if failure != null then {
-              command.atOnceFailure = null
-              fail(command, failure)
-            } else complete(command)
-          } else waiting.put(t, command)
-        case None => ()
+      val command = waiting.getOrNull(t) // no `Option` for each: a token no longer waiting is simply not found
+      if command != null then {
+        waiting -= t
+        if attempted(command, drainFirst = false) then {
+          val failure = command.atOnceFailure
+          if failure != null then {
+            command.atOnceFailure = null
+            fail(command, failure)
+          } else complete(command)
+        } else waiting.put(t, command)
       }
     }
     any
@@ -262,8 +262,9 @@ final class DarwinReactor private (spinChecks: Int, maxDrained: Int) extends Rea
   def cancel(op: Op): Boolean = {
     val completion: Completion[DarwinOp] | Null = op match {
       case command: DarwinCommand =>
-        if command.completion == null || !waiting.remove(command.token).isDefined then null // finished, or never here
+        if command.completion == null || waiting.getOrNull(command.token) == null then null // finished, or never here
         else {
+          waiting -= command.token
           withdraw(command) // a notification already queued for it is dropped when drained
           take(command)
         }

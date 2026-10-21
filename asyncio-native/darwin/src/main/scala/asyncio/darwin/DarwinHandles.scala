@@ -247,7 +247,8 @@ private[darwin] final class DarwinHandle(
   private var watchMask = 0
 
   /** The reactor the C side wakes for events, and for which kinds: that of an op waiting here, for what it waits for,
-    * so that a send's completion, say, wakes nobody while no write waits; or none. Under the lock.
+    * so that a send's completion, say, wakes nobody while no write waits; or none. Under the lock. (Keeping the
+    * reactor that last read as the watcher, so that a read registers no change, measured no gain: see the TODO.)
     */
   private def updateWatcher(): Unit = {
     val wanted: DarwinReactor | Null =
