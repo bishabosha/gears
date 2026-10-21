@@ -12,6 +12,10 @@ import java.nio.channels.SocketChannel
 
 import asyncio.AddressFamily
 import asyncio.BlockingOps
+import asyncio.BufferPool
+import asyncio.LifecycleOps
+import asyncio.PooledReadOps
+import asyncio.Received
 import asyncio.Completion
 import asyncio.HandleSlot
 import asyncio.Interest
@@ -42,7 +46,7 @@ sealed trait NioOp {
 }
 
 /** Builds the ops `NioReactor` understands. */
-object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
+object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] with PooledReadOps[NioOp] with LifecycleOps[NioOp] {
   def read(handle: Int, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Int, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Int, into: HandleSlot): Accept = new Accept(handle, into)
@@ -56,6 +60,31 @@ object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
+  def read(handle: Int, pool: BufferPool, into: Slot[Received]): PooledRead = new PooledRead(handle, NioOps.direct(pool), into)
+  def listening(handle: Int): NioOp = new Listening(handle)
+  def close(handle: Int): NioOp = new Close(handle)
+
+  private def direct(pool: BufferPool): DirectPool = pool match {
+    case direct: DirectPool => direct
+    case other              => throw new IllegalArgumentException(s"$other is not a pool of this backend's")
+  }
+}
+
+/** An op the reactor performs as soon as it is submitted, with no handle to wait for: its completion runs on the
+  * next turn, with the failure `perform` threw, if any. One-shot.
+  */
+sealed abstract class NioAtOnce extends NioOp {
+  def perform(): Unit
+}
+
+/** Binds a listener from `NioHandles.listener` (see `LifecycleOps.listening`). */
+final class Listening(val handle: Int) extends NioAtOnce {
+  def perform(): Unit = NioHandles.bind(handle)
+}
+
+/** Closes a handle (see `LifecycleOps.close`): at once, as `NioHandles.close` does. */
+final class Close(val handle: Int) extends NioAtOnce {
+  def perform(): Unit = NioHandles.close(handle)
 }
 
 /** What to do with a handle once it is ready. `perform` runs a non-blocking operation on the reactor thread, on the
@@ -95,6 +124,25 @@ abstract class Command extends NioOp with Repeatable {
 final class Read(val handle: Int, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = entry.nn.read(buf) != 0
+}
+
+/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`), as `Read` fills the caller's. */
+final class PooledRead(val handle: Int, pool: DirectPool, into: Slot[Received]) extends Command {
+  def interest: Interest = Interest.Read
+  def perform(): Boolean = {
+    val slot = pool.take()
+    if slot == null then throw new IOException("The pool has no buffer free")
+    val buffer = slot.nn.buffer
+    val read = entry.nn.read(buffer)
+    if read == 0 then {
+      slot.nn.release()
+      false
+    } else {
+      buffer.flip()
+      into.set(slot.nn)
+      true
+    }
+  }
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written. */

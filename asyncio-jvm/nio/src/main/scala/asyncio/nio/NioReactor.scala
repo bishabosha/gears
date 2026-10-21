@@ -193,6 +193,11 @@ final class NioReactor private (selector: Selector) extends Reactor {
         blocking.completion = pending
         pendingPromises += blocking
         blocking.start()
+      case atOnce: NioAtOnce =>
+        atOnce.completion = pending
+        try atOnce.perform()
+        catch case t: Throwable => atOnce.atOnceFailure = t
+        if finishNow then finished = true else ready.add(atOnce)
     }
     op.submitted = true
     if finished then {
@@ -458,6 +463,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
           take(timer)
         }
       case promise: NioPromise => detach(promise)
+      case _: NioAtOnce        => null // performed when submitted, so finished
     }
     if completion == null then false
     else {
