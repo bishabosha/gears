@@ -1,0 +1,114 @@
+{
+  "started": "2026-10-21T16:01:47+02:00",
+  "finished": "2026-10-21T16:02:16+02:00",
+  "load_average": {
+    "before": [
+      16.13525390625,
+      8.06640625,
+      5.2705078125
+    ],
+    "after": [
+      11.0126953125,
+      7.609375,
+      5.201171875
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--scenarios",
+    "pingpong,pingpong-pooled,large,large-pooled"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/tmp/kqueuedemo.lockfree",
+      "benchmark": "gears",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "62e48063eb6534a7f3ebb4dfaacb7f523f0c1b36",
+        "subject": "gears bench: large and large-pooled, 128 KB messages pipelined, reading into the caller's buffer or the pool's",
+        "worktree_changes": true,
+        "worktree_changes_hash": "a0c07ce67a77",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T16:01:39+02:00"
+      },
+      "median": {
+        "pingpong": 16.04,
+        "pingpong-pooled": 16.3,
+        "large": 40.69,
+        "large-pooled": 40.36
+      },
+      "samples": {
+        "pingpong": [
+          14.67,
+          16.04,
+          17.17
+        ],
+        "pingpong-pooled": [
+          16.94,
+          16.3,
+          15.85
+        ],
+        "large": [
+          40.69,
+          46.13,
+          40.48
+        ],
+        "large-pooled": [
+          40.36,
+          40.54,
+          40.29
+        ]
+      }
+    },
+    {
+      "label": "nwframework",
+      "executable": "/tmp/kqueuedemo.lockfree@nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "kqueueDemo",
+        "commit": "62e48063eb6534a7f3ebb4dfaacb7f523f0c1b36",
+        "subject": "gears bench: large and large-pooled, 128 KB messages pipelined, reading into the caller's buffer or the pool's",
+        "worktree_changes": true,
+        "worktree_changes_hash": "a0c07ce67a77",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-21T16:01:39+02:00"
+      },
+      "median": {
+        "pingpong": 64.69,
+        "pingpong-pooled": 63.02,
+        "large": 388.51,
+        "large-pooled": 372.1
+      },
+      "samples": {
+        "pingpong": [
+          63.31,
+          64.89,
+          64.69
+        ],
+        "pingpong-pooled": [
+          65.57,
+          63.02,
+          61.73
+        ],
+        "large": [
+          403.86,
+          388.51,
+          383.52
+        ],
+        "large-pooled": [
+          372.1,
+          372.53,
+          372.0
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
