@@ -1,0 +1,209 @@
+{
+  "started": "2026-10-22T16:27:19+02:00",
+  "finished": "2026-10-22T16:27:46+02:00",
+  "load_average": {
+    "before": [
+      5.56689453125,
+      4.705078125,
+      4.45556640625
+    ],
+    "after": [
+      6.26171875,
+      4.91650390625,
+      4.53759765625
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "pipelined,pingpong,concurrent,fairness"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "before-jdk",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/fca7b323-aadb-45d6-be06-4696795a26cc/scratchpad/bench/jvm.before/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "1cbc41ebb43cb67e75b68173c7b33f0c00da8885",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 1.61,
+        "pipelined": 1.3,
+        "pingpong": 5.81,
+        "concurrent": 5.59,
+        "fairness": 1.73
+      },
+      "samples": {
+        "fairness-tick": [
+          1.61,
+          1.57,
+          1.64
+        ],
+        "pipelined": [
+          1.2,
+          1.3,
+          1.99
+        ],
+        "pingpong": [
+          5.77,
+          5.95,
+          5.81
+        ],
+        "concurrent": [
+          5.59,
+          5.44,
+          5.71
+        ],
+        "fairness": [
+          1.67,
+          1.73,
+          1.88
+        ]
+      }
+    },
+    {
+      "label": "after-jdk",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/fca7b323-aadb-45d6-be06-4696795a26cc/scratchpad/bench/jvm.after/nio-jdk",
+      "benchmark": "gears",
+      "build": {
+        "commit": "35ebb808baaac63751b8ab1ecd24e9e71edd1afa",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.gears.carriers=jdk"
+      },
+      "median": {
+        "fairness-tick": 1.6,
+        "pipelined": 1.55,
+        "pingpong": 5.57,
+        "concurrent": 5.59,
+        "fairness": 1.69
+      },
+      "samples": {
+        "fairness-tick": [
+          1.6,
+          1.56,
+          1.63
+        ],
+        "pipelined": [
+          1.71,
+          1.38,
+          1.55
+        ],
+        "pingpong": [
+          5.39,
+          5.57,
+          5.64
+        ],
+        "concurrent": [
+          5.51,
+          5.64,
+          5.59
+        ],
+        "fairness": [
+          1.67,
+          1.91,
+          1.69
+        ]
+      }
+    },
+    {
+      "label": "before-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/fca7b323-aadb-45d6-be06-4696795a26cc/scratchpad/bench/jvm.before/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "1cbc41ebb43cb67e75b68173c7b33f0c00da8885",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.gears.carriers=reactors"
+      },
+      "median": {
+        "fairness-tick": 2.27,
+        "pipelined": 0.48,
+        "pingpong": 9.32,
+        "concurrent": 2.05,
+        "fairness": 1.14
+      },
+      "samples": {
+        "fairness-tick": [
+          2.27,
+          2.27,
+          2.88
+        ],
+        "pipelined": [
+          0.47,
+          0.48,
+          0.48
+        ],
+        "pingpong": [
+          9.46,
+          9.32,
+          9.22
+        ],
+        "concurrent": [
+          2.05,
+          2.03,
+          2.66
+        ],
+        "fairness": [
+          1.14,
+          1.14,
+          1.44
+        ]
+      }
+    },
+    {
+      "label": "after-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-workspace-gears/fca7b323-aadb-45d6-be06-4696795a26cc/scratchpad/bench/jvm.after/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "35ebb808baaac63751b8ab1ecd24e9e71edd1afa",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.gears.carriers=reactors"
+      },
+      "median": {
+        "fairness-tick": 2.41,
+        "pipelined": 0.47,
+        "pingpong": 9.45,
+        "concurrent": 2.09,
+        "fairness": 1.21
+      },
+      "samples": {
+        "fairness-tick": [
+          2.41,
+          2.51,
+          2.3
+        ],
+        "pipelined": [
+          0.47,
+          0.48,
+          0.47
+        ],
+        "pingpong": [
+          9.45,
+          9.3,
+          9.66
+        ],
+        "concurrent": [
+          2.1,
+          2.01,
+          2.09
+        ],
+        "fairness": [
+          1.21,
+          1.26,
+          1.15
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
