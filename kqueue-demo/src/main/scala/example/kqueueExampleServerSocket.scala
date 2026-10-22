@@ -7,15 +7,16 @@ import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Interest
 import asyncio.kqueue.Accept
 import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueHandles
+import asyncio.kqueue.KqueueOps
 import asyncio.kqueue.KqueueReactor
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
-import asyncio.kqueue.KqueueHandles
 import KQueueExampleIO.*
 
 object KQueueExampleServerSocket {
@@ -29,7 +30,7 @@ object KQueueExampleServerSocket {
     * KiB buffer; a body larger than that is read in chunks and gathered until complete. The zone closes with the
     * connection.
     */
-  private final class Connection(r: KqueueReactor, val fd: Int, server: Server)
+  private final class Connection(r: KqueueReactor, val fd: Handle, server: Server)
       extends AutoCloseable
       with Completion[Command] {
     private var state = State.ReadHeader
@@ -48,7 +49,7 @@ object KQueueExampleServerSocket {
       * reading, when the request is complete and it is time to reply; otherwise the reactor keeps waiting.
       */
     private final class Step(val interest: Interest, step: () => Boolean) extends Command {
-      def fd: Int = Connection.this.fd
+      def fd: Int = KqueueHandles.descriptor(Connection.this.fd) // a kqueue command names its descriptor
       def perform(): Boolean = {
         val keepOpen =
           try step()
@@ -75,7 +76,7 @@ object KQueueExampleServerSocket {
     /** Handles readability. Returns false when the connection should be closed. */
     def readEvent(): Boolean = {
       if state == State.SendResponse then return KeepOpen // Ignore stray read events while replying.
-      val read = nioReadBytes(fd, buf)
+      val read = nioReadBytes(KqueueHandles.descriptor(fd), buf)
       if read < 0 then
         println(s"Unexpected EOF from client socket $fd.")
         Close
@@ -110,7 +111,7 @@ object KQueueExampleServerSocket {
     /** Handles writability. Returns false once the whole response has been sent. */
     def writeEvent(): Boolean = {
       if state != State.SendResponse then return KeepOpen // ignore stray write events while not sending a response.
-      nioWriteBytes(fd, buf)
+      nioWriteBytes(KqueueHandles.descriptor(fd), buf)
       if buf.hasRemaining() then KeepOpen else Close
     }
 
@@ -133,9 +134,9 @@ object KQueueExampleServerSocket {
 
   /** Accepts one connection per readiness event and starts reading from it. */
   private class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
-    private var connections: Map[Int, Connection] = Map.empty
+    private var connections: Map[Handle, Connection] = Map.empty
 
-    private val accepted = HandleSlot() // each accept writes its connection here
+    private val accepted = Handle.Slot() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 

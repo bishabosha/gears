@@ -119,7 +119,7 @@ object KQueueExampleCancel {
               // Closing a descriptor fails the ops pending on it, from the loop on a later turn (`Handles.close`), so
               // the read's completion hears of it, and a cancel has nothing left to do.
               val (orphanRead, orphanWrite) = KqueueHandles.pipe()
-              val orphan = ReadIntoBuffer(orphanRead, NativeBuffer.allocate(16))
+              val orphan = KqueueOps.read(orphanRead, NativeBuffer.allocate(16))
               r.submit(
                 orphan,
                 new Completion[KqueueOp] {

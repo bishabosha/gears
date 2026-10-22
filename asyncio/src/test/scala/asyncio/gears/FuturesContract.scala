@@ -11,7 +11,7 @@ import java.nio.file.Files
 import java.util.concurrent.CancellationException
 import munit.FunSuite
 
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.Backend
@@ -36,7 +36,7 @@ trait FuturesContract extends FunSuite {
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.
     */
-  protected def listenAndConnect(dir: java.nio.file.Path)(using Async): (Int, () => Int) = backend match {
+  protected def listenAndConnect(dir: java.nio.file.Path)(using Async): (Handle, () => Handle) = backend match {
     case unix: UnixStreamBackend =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = unix.handles.listener(address)
@@ -46,7 +46,7 @@ trait FuturesContract extends FunSuite {
       // A port nothing listens on: the first the listening op does not fail on.
       val random = new java.util.Random()
       var attempts = 0
-      var found: (Int, () => Int) | Null = null
+      var found: (Handle, () => Handle) | Null = null
       while found == null do {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
         val listener = backend.handles.listener(address)
@@ -164,7 +164,7 @@ trait FuturesContract extends FunSuite {
       val (listener, connect) = listenAndConnect(dir)
       try {
         val server = Future {
-          val accepted = HandleSlot()
+          val accepted = Handle.Slot()
           val accept = r.ops.accept(listener, accepted)
           val connections = (1 to clients).map { _ =>
             perform(r, accept)
@@ -260,7 +260,7 @@ trait FuturesContract extends FunSuite {
         val client = connect()
         try {
           perform(r, r.ops.connect(client))
-          val accepted = HandleSlot()
+          val accepted = Handle.Slot()
           perform(r, r.ops.accept(listener, accepted))
           val server = accepted.clear()
           try {

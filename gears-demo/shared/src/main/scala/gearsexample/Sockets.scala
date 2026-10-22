@@ -6,6 +6,7 @@ import java.nio.file.Paths
 import gears.async.Async
 
 import asyncio.Backend
+import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
@@ -16,13 +17,13 @@ type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
-  def connect(b: UnixStreamBackend, address: StreamAddress): Int = address match {
+  def connect(b: UnixStreamBackend, address: StreamAddress): Handle = address match {
     case unix: UnixAddress => b.handles.connect(unix)
     case ip: IpAddress     => b.handles.connect(ip)
   }
 
   /** A listener on `address`, listening: the handle, and its `listening` op performed. */
-  def listen(b: UnixStreamBackend, address: StreamAddress)(using Async): Int = {
+  def listen(b: UnixStreamBackend, address: StreamAddress)(using Async): Handle = {
     val listener = address match {
       case unix: UnixAddress => b.handles.listener(unix)
       case ip: IpAddress     => b.handles.listener(ip)
@@ -34,12 +35,12 @@ object Sockets {
   /** For code whose address is chosen when it runs, such as the bench's: on any backend for an IP address, and on one
     * with Unix stream sockets for a Unix one, refused otherwise.
     */
-  def connect(b: Backend, address: StreamAddress): Int = address match {
-    case ip: IpAddress => b.handles.connect(ip)
+  def connect(b: Backend, address: StreamAddress): Handle = address match {
+    case ip: IpAddress     => b.handles.connect(ip)
     case unix: UnixAddress => connect(unixSockets(b, unix), unix)
   }
 
-  def listen(b: Backend, address: StreamAddress)(using Async): Int = address match {
+  def listen(b: Backend, address: StreamAddress)(using Async): Handle = address match {
     case ip: IpAddress =>
       val listener = b.handles.listener(ip)
       ReactorAsync.perform(b, b.ops.listening(listener))

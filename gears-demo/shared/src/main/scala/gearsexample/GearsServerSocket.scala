@@ -8,9 +8,9 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 
 import asyncio.Backend
+import asyncio.Handle
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
-import asyncio.HandleSlot
 import asyncio.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
@@ -23,7 +23,7 @@ object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
-  private def serve(r: UnixStreamBackend, client: Int)(using Async): Unit = {
+  private def serve(r: UnixStreamBackend, client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -87,7 +87,7 @@ object GearsServerSocket {
       val server = Sockets.listen(r, address)
       try {
         println("Socket is now listening for connections.")
-        val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
+        val accepted = Handle.Slot() // each accept writes its connection here, like a read fills a buffer
         val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
           perform(r, accept) // completes once a connection has been accepted

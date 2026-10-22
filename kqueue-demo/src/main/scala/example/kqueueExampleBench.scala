@@ -35,18 +35,26 @@ import gearsexample.GearsBench
 object KQueueExampleBench {
 
   private def connectTo(address: IpAddress | UnixAddress): Int = address match {
-    case unix: UnixAddress => KqueueHandles.connect(unix)
-    case ip: IpAddress     => KqueueHandles.connect(ip)
+    case unix: UnixAddress => KqueueHandles.descriptor(KqueueHandles.connect(unix))
+    case ip: IpAddress     => KqueueHandles.descriptor(KqueueHandles.connect(ip))
   }
 
   private def listenOn(address: IpAddress | UnixAddress): Int = address match {
-    case unix: UnixAddress => KqueueHandles.listen(unix)
-    case ip: IpAddress     => KqueueHandles.listen(ip)
+    case unix: UnixAddress => KqueueHandles.descriptor(KqueueHandles.listen(unix))
+    case ip: IpAddress     => KqueueHandles.descriptor(KqueueHandles.listen(ip))
   }
 
   private inline val MessageSize = GearsBench.MessageSize
   private inline val MaxEvents = 256
   private val DeadlineTimer = 1.toUSize
+
+  // This bench drives descriptors itself; `KqueueHandles` hands out and takes `Handle`s, so convert at its edge.
+  private def closeFd(fd: Int): Unit = KqueueHandles.close(KqueueHandles.handle(fd))
+
+  private def pipeFds(): (Int, Int) = {
+    val (readEnd, writeEnd) = KqueueHandles.pipe()
+    (KqueueHandles.descriptor(readEnd), KqueueHandles.descriptor(writeEnd))
+  }
 
   private def register(kq: Int, fd: Int, read: Boolean, oneShot: Boolean): Unit =
     KqueueLoop.createAndRegisterEvents(kq, 1)(events =>
@@ -111,7 +119,7 @@ object KQueueExampleBench {
       }
     } finally {
       zone.close()
-      KqueueHandles.close(fd)
+      closeFd(fd)
     }
   }
 
@@ -140,7 +148,7 @@ object KQueueExampleBench {
                 remaining(0) -= 1
                 if remaining(0) == 0 then {
                   open.remove(fd)
-                  KqueueHandles.close(fd)
+                  closeFd(fd)
                 } else {
                   buf.clear()
                   writeAll(kq, events, fd, buf)
@@ -153,7 +161,7 @@ object KQueueExampleBench {
         }
       }
     } finally {
-      open.keys.foreach(KqueueHandles.close)
+      open.keys.foreach(closeFd)
       zone.close()
     }
   }
@@ -174,7 +182,7 @@ object KQueueExampleBench {
             KqueueLoop.pollEventsForever(kq, events, MaxEvents) // only this socket is registered for reads
             if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
           }
-        } finally KqueueHandles.close(fd) // which also removes its filters from the kqueue
+        } finally closeFd(fd) // which also removes its filters from the kqueue
         i += 1
       }
     } finally zone.close()
@@ -218,7 +226,7 @@ object KQueueExampleBench {
       }
     } finally {
       zone.close()
-      KqueueHandles.close(fd)
+      closeFd(fd)
     }
   }
 
@@ -295,7 +303,7 @@ object KQueueExampleBench {
   }
 
   private def blocking(count: Int): Unit = withLoop { (kq, events) =>
-    val (readEnd, writeEnd) = KqueueHandles.pipe()
+    val (readEnd, writeEnd) = pipeFds()
     val tasks = blockingWorker(writeEnd)
     register(kq, readEnd, read = true, oneShot = false)
     val zone = Zone.open()
@@ -308,15 +316,15 @@ object KQueueExampleBench {
       }
     } finally {
       zone.close()
-      KqueueHandles.close(readEnd)
-      KqueueHandles.close(writeEnd)
+      closeFd(readEnd)
+      closeFd(writeEnd)
     }
   }
 
   /** A trivial blocking task on the worker thread and a round trip in turn, on one kqueue. */
   private def blockingIo(address: IpAddress | UnixAddress, count: Int): Unit = withLoop { (kq, events) =>
     val fd = connect(kq, events, address)
-    val (readEnd, writeEnd) = KqueueHandles.pipe()
+    val (readEnd, writeEnd) = pipeFds()
     val tasks = blockingWorker(writeEnd)
     register(kq, readEnd, read = true, oneShot = false)
     val zone = Zone.open()
@@ -337,9 +345,9 @@ object KQueueExampleBench {
       }
     } finally {
       zone.close()
-      KqueueHandles.close(fd)
-      KqueueHandles.close(readEnd)
-      KqueueHandles.close(writeEnd)
+      closeFd(fd)
+      closeFd(readEnd)
+      closeFd(writeEnd)
     }
   }
 
@@ -359,7 +367,7 @@ object KQueueExampleBench {
 
       def close(fd: Int): Unit = {
         pending.remove(fd).foreach(spare.push)
-        KqueueHandles.close(fd)
+        closeFd(fd)
       }
 
       /** Writes what is left of `fd`'s echo; if that would block, waits for writability instead of reading. */

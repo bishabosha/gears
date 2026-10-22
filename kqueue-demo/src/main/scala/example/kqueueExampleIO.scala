@@ -48,8 +48,8 @@ object KQueueExampleIO {
       PosixSockets.setNonBlocking(writeFd)
       use(readFd, writeFd)
     } finally {
-      KqueueHandles.close(readFd)
-      KqueueHandles.close(writeFd)
+      KqueueHandles.close(KqueueHandles.handle(readFd))
+      KqueueHandles.close(KqueueHandles.handle(writeFd))
     }
   }
 
@@ -64,7 +64,8 @@ object KQueueExampleIO {
     Bracket.fileResource(fd)(closeFile)(use)
   }
 
-  private def closeFile(fd: Int): Unit = KqueueHandles.close(fd) // which tells the reactor the descriptor is gone
+  private def closeFile(fd: Int): Unit =
+    KqueueHandles.close(KqueueHandles.handle(fd)) // which tells the reactor the descriptor is gone
 
   // Datagrams
 

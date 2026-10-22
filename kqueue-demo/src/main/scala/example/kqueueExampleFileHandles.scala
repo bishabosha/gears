@@ -42,7 +42,7 @@ object KQueueExampleFileHandles {
     var closed = 0
     i = 1
     while i < count do {
-      KqueueHandles.close(opened(i))
+      KqueueHandles.close(KqueueHandles.handle(opened(i)))
       closed += 1
       i += 2
     }
