@@ -11,9 +11,9 @@ import java.nio.ByteBuffer
 import scala.collection.mutable
 
 import asyncio.Backend
+import asyncio.Handle
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
-import asyncio.HandleSlot
 import asyncio.testkit.BufferArena
 import DemoIO.{FrameParser, StreamProtocol}
 import asyncio.gears.ReactorFutures
@@ -59,7 +59,7 @@ object GearsKeyValue {
     */
   private def readCommands(
       r: UnixStreamBackend,
-      fd: Int,
+      fd: Handle,
       inbox: ByteBuffer,
       store: Store,
       replies: BufferedChannel[Array[Byte]]
@@ -89,8 +89,8 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: UnixStreamBackend, fd: Int, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(using
-      Async
+  private def writeReplies(r: UnixStreamBackend, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
+      using Async
   ): Unit = {
     val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
     var done = false
@@ -112,7 +112,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: UnixStreamBackend, fd: Int, store: Store)(using Async): Unit = {
+  private def session(r: UnixStreamBackend, fd: Handle, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)
@@ -139,7 +139,7 @@ object GearsKeyValue {
       val server = Sockets.listen(r, address)
       try {
         println("Key-value server is now listening for connections.")
-        val accepted = HandleSlot() // each accept writes its connection here, like a read fills a buffer
+        val accepted = Handle.Slot() // each accept writes its connection here, like a read fills a buffer
         val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
           perform(r, accept) // completes once a connection has been accepted

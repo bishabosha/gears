@@ -76,7 +76,7 @@ class ReactorSuite extends FunSuite {
 
   test("only ops marked Repeatable promise they can be resubmitted") {
     assertEquals(
-      compileErrors("def repeat(a: Reactor)(h: Int): Repeatable = a.ops.accept(h, HandleSlot())"),
+      compileErrors("def repeat(a: Reactor)(h: Handle): Repeatable = a.ops.accept(h, Handle.Slot())"),
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
@@ -84,14 +84,14 @@ class ReactorSuite extends FunSuite {
   }
 
   test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {
-    assert(compileErrors("def ready(b: Backend)(h: Int) = b.ops.whenReady(h, Interest.Read)(() => true)").nonEmpty)
-    assert(compileErrors("def now(b: Backend)(h: Int) = b.handles.readNow(h, null)").nonEmpty)
+    assert(compileErrors("def ready(b: Backend)(h: Handle) = b.ops.whenReady(h, Interest.Read)(() => true)").nonEmpty)
+    assert(compileErrors("def now(b: Backend)(h: Handle) = b.handles.readNow(h, null)").nonEmpty)
     assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
     assertEquals(
-      compileErrors("def ready(b: ReadinessBackend)(h: Int) = b.ops.whenReady(h, Interest.Read)(() => true)"),
+      compileErrors("def ready(b: ReadinessBackend)(h: Handle) = b.ops.whenReady(h, Interest.Read)(() => true)"),
       ""
     )
-    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: Int) = b.handles.readNow(h, null)"), "")
+    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: Handle) = b.handles.readNow(h, null)"), "")
     assertEquals(compileErrors("def block(b: BlockingBackend) = b.ops.blocking(() => ())"), "")
   }
 

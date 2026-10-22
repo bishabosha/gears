@@ -17,7 +17,7 @@ import asyncio.BlockingRun
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.ReadinessOps
@@ -47,22 +47,23 @@ sealed trait NioOp {
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
-  def read(handle: Int, buf: ByteBuffer): Read = new Read(handle, buf)
-  def write(handle: Int, buf: ByteBuffer): Write = new Write(handle, buf)
-  def accept(handle: Int, into: HandleSlot): Accept = new Accept(handle, into)
-  def connect(handle: Int): NioOp = new Connect(handle)
-  def receive(handle: Int, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
-  def send(handle: Int, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
-  def send(handle: Int, buf: ByteBuffer): Send = new Send(handle, buf, null)
+  def read(handle: Handle, buf: ByteBuffer): Read = new Read(handle, buf)
+  def write(handle: Handle, buf: ByteBuffer): Write = new Write(handle, buf)
+  def accept(handle: Handle, into: Handle.Slot): Accept = new Accept(handle, into)
+  def connect(handle: Handle): NioOp = new Connect(handle)
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
+  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
+  def send(handle: Handle, buf: ByteBuffer): Send = new Send(handle, buf, null)
   def timer(milliseconds: Int): NioTimer = new NioTimer(milliseconds)
-  def whenReady(handle: Int, interest: Interest)(perform: () => Boolean): WhenReady =
+  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): WhenReady =
     new WhenReady(handle, interest, perform)
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
-  def read(handle: Int, pool: BufferPool, into: Slot[Received]): PooledRead = new PooledRead(handle, NioOps.direct(pool), into)
-  def listening(handle: Int): NioOp = new Listening(handle)
-  def close(handle: Int): NioOp = new Close(handle)
+  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
+    new PooledRead(handle, NioOps.direct(pool), into)
+  def listening(handle: Handle): NioOp = new Listening(handle)
+  def close(handle: Handle): NioOp = new Close(handle)
 
   private def direct(pool: BufferPool): DirectPool = pool match {
     case direct: DirectPool => direct
@@ -78,12 +79,12 @@ sealed abstract class NioAtOnce extends NioOp {
 }
 
 /** Binds a listener from `NioHandles.listener` (see `LifecycleOps.listening`). */
-final class Listening(val handle: Int) extends NioAtOnce {
+final class Listening(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.bind(handle)
 }
 
 /** Closes a handle (see `LifecycleOps.close`): at once, as `NioHandles.close` does. */
-final class Close(val handle: Int) extends NioAtOnce {
+final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
 }
 
@@ -92,7 +93,7 @@ final class Close(val handle: Int) extends NioAtOnce {
   * exception it throws is the op's failure. Commands are `Repeatable`.
   */
 abstract class Command extends NioOp with Repeatable {
-  def handle: Int
+  def handle: Handle
   def interest: Interest
   def perform(): Boolean
 
@@ -121,13 +122,13 @@ abstract class Command extends NioOp with Repeatable {
 }
 
 /** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
-final class Read(val handle: Int, buf: ByteBuffer) extends Command {
+final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = entry.nn.read(buf) != 0
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`), as `Read` fills the caller's. */
-final class PooledRead(val handle: Int, pool: DirectPool, into: Slot[Received]) extends Command {
+final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val slot = pool.take()
@@ -146,13 +147,13 @@ final class PooledRead(val handle: Int, pool: DirectPool, into: Slot[Received]) 
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written. */
-final class Write(val handle: Int, buf: ByteBuffer) extends Command {
+final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Write
   def perform(): Boolean = entry.nn.write(buf) >= 0 || !buf.hasRemaining()
 }
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
-final class Accept(val handle: Int, into: HandleSlot) extends Command {
+final class Accept(val handle: Handle, into: Handle.Slot) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = selectable(classOf[ServerSocketChannel], "Accepting").accept()
@@ -172,7 +173,7 @@ final class Accept(val handle: Int, into: HandleSlot) extends Command {
 /** Waits for a non-blocking connect to finish. Done once connected; throws if it failed. A connection that finished at
   * once, as a Unix socket's usually does, is done as soon as it is submitted.
   */
-final class Connect(val handle: Int) extends Command {
+final class Connect(val handle: Handle) extends Command {
   def interest: Interest = Interest.Write
   override def selectOps(channel: SelectableChannel): Int = SelectionKey.OP_CONNECT
   def perform(): Boolean = {
@@ -183,7 +184,7 @@ final class Connect(val handle: Int) extends Command {
 }
 
 /** Receives one packet into `buf`, left flipped for reading, and writes its sender into `from`. */
-final class Receive(val handle: Int, buf: ByteBuffer, from: Slot[IpAddress]) extends Command {
+final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     buf.clear()
@@ -197,7 +198,7 @@ final class Receive(val handle: Int, buf: ByteBuffer, from: Slot[IpAddress]) ext
 }
 
 /** Sends `buf` as one packet, to `to` or to the connected peer when `to` is null, consuming it. */
-final class Send(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends Command {
+final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends Command {
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)
   def perform(): Boolean = {
@@ -213,7 +214,7 @@ final class Send(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends
 }
 
 /** A command built from a function, for `ReadinessOps.whenReady`: it runs only once the handle is ready. */
-final class WhenReady(val handle: Int, val interest: Interest, body: () => Boolean) extends Command {
+final class WhenReady(val handle: Handle, val interest: Interest, body: () => Boolean) extends Command {
   def perform(): Boolean = body()
   override def tryFirst: Boolean = false
 }

@@ -8,7 +8,7 @@ trait UnixStreamContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & UnixStreamBackend
 
   /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
-  protected def listen(r: R, address: UnixAddress)(using munit.Location): Int = {
+  protected def listen(r: R, address: UnixAddress)(using munit.Location): Handle = {
     val handle = backend.handles.listener(address)
     val failure = run(r, backend.ops.listening(handle))
     if failure != null then {
@@ -25,7 +25,7 @@ trait UnixStreamContract extends ReactorContract {
       val listener = listen(r, address)
       try {
         val client = backend.handles.connect(address)
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         turnUntil(r)(acceptDone.finished)
@@ -51,7 +51,7 @@ trait UnixStreamContract extends ReactorContract {
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = listen(r, address)
       try {
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val client = backend.handles.connect(address)

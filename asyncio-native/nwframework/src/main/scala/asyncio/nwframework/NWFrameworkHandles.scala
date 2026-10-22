@@ -1,7 +1,6 @@
 package asyncio.nwframework
 
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicReferenceArray
 import scala.collection.mutable
 import scala.scalanative.libc.stdlib
 import scala.scalanative.libc.string
@@ -15,6 +14,7 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import asyncio.FifoHandles
+import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.Received
 import asyncio.unsafe.Descriptors
@@ -626,63 +626,44 @@ private[nwframework] object NWFrameworkHandle {
   */
 object NWFrameworkHandles extends FifoHandles {
 
-  // The table: a handle number is an index, reused once closed. Grown under the lock, and published through the
-  // volatile field so that any thread reads the current table.
-  @volatile private var table = new AtomicReferenceArray[NWFrameworkHandle | Null](256)
-  private val free = new java.util.ArrayDeque[Integer]()
-  private var next = 0
+  // The table: a handle number is an index, reused once closed.
+  private val table = new Handle.Table[NWFrameworkHandle](256)
 
-  private def add(handle: NWFrameworkHandle): Int = synchronized {
-    val index =
-      if !free.isEmpty then free.poll().intValue
-      else {
-        if next == table.length then {
-          val grown = new AtomicReferenceArray[NWFrameworkHandle | Null](table.length * 2)
-          for i <- 0 until table.length do grown.set(i, table.get(i))
-          table = grown
-        }
-        next += 1
-        next - 1
-      }
-    table.set(index, handle)
+  private def add(handle: NWFrameworkHandle): Handle = {
+    val added = table.add(handle)
     // The C side's first field is the tag: the number, so that a reactor draining the handle finds it without a
     // lookup or a lock (`at`).
-    if handle.ptr != null then !handle.ptr.asInstanceOf[Ptr[Long]] = index.toLong
-    index
+    if handle.ptr != null then !handle.ptr.asInstanceOf[Ptr[Long]] = Handle.unwrap(added).toLong
+    added
   }
 
   /** The handle's object, or an `IOException` if it is not open. */
-  private[nwframework] def get(handle: Int): NWFrameworkHandle = {
-    val current = table
-    val found = if handle >= 0 && handle < current.length then current.get(handle) else null
-    if found == null then throw new IOException(s"Handle $handle is not open")
-    found
-  }
+  private[nwframework] def get(handle: Handle): NWFrameworkHandle = table(handle)
 
   /** The handle whose C side is `ptr`, if still open: found by the number the C side carries, and checked against
     * it, since the number may have been reused since the handle closed.
     */
   private[nwframework] def at(ptr: NWFrameworkIo.Handle): NWFrameworkHandle | Null = {
-    val index = (!ptr.asInstanceOf[Ptr[Long]]).toInt
-    val current = table
-    val found = if index >= 0 && index < current.length then current.get(index) else null
+    val found = table.find(Handle.wrap((!ptr.asInstanceOf[Ptr[Long]]).toInt))
     if found != null && found.ptr == ptr then found else null
   }
 
   /** Registers an accepted connection, as its own handle. */
-  private[nwframework] def accepted(ptr: NWFrameworkIo.Handle): Int = add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, null))
+  private[nwframework] def accepted(ptr: NWFrameworkIo.Handle): Handle = add(
+    new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, null)
+  )
 
-  def openFile(path: String, write: Boolean): Int =
+  def openFile(path: String, write: Boolean): Handle =
     add(new NWFrameworkHandle(NWFrameworkHandle.File, null, Descriptors.openFile(path, write), null))
 
-  def openFifo(path: String, write: Boolean): Int = descriptor(Descriptors.openFifo(path, write))
+  def openFifo(path: String, write: Boolean): Handle = descriptor(Descriptors.openFifo(path, write))
 
-  def pipe(): (Int, Int) = {
+  def pipe(): (Handle, Handle) = {
     val (in, out) = Descriptors.pipe()
     (descriptor(in), descriptor(out))
   }
 
-  private def descriptor(fd: Int): Int =
+  private def descriptor(fd: Int): Handle =
     add(new NWFrameworkHandle(NWFrameworkHandle.Descriptor, NWFrameworkIo.nwf_fd_open(fd), fd, null))
 
   private[nwframework] def hostAndPort(address: IpAddress): (String, Int) = address match {
@@ -690,20 +671,20 @@ object NWFrameworkHandles extends FifoHandles {
     case IpAddress.IPv6(host, port) => (host, port)
   }
 
-  def connect(address: IpAddress): Int = {
+  def connect(address: IpAddress): Handle = {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_connect(toCString(host), port) }
     add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, address))
   }
 
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0) }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }
 
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Int = {
+  def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val (host, port) = hostAndPort(address)
     val error = stackalloc[CInt]()
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen(toCString(host), port, if reuseAddr then 1 else 0, error) }
@@ -711,7 +692,7 @@ object NWFrameworkHandles extends FifoHandles {
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Int = {
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
     require(
       local == null || remote == null || local.getClass == remote.getClass,
       "Local and remote addresses must be of the same family"
@@ -738,22 +719,10 @@ object NWFrameworkHandles extends FifoHandles {
   /** Closes a handle, from any thread: the ops pending on it, on whichever reactor, fail there (see `Handles.close`
     * and `NWFrameworkHandle.close`). The number is free for reuse at once.
     */
-  def close(handle: Int): Unit = remove(handle).close()
+  def close(handle: Handle): Unit = remove(handle).close()
 
   /** Takes `handle` out of the table, its number free for reuse at once, for closing; throws if it is not open. */
-  private[nwframework] def remove(handle: Int): NWFrameworkHandle = {
-    val found = synchronized {
-      val current = table
-      val found = if handle >= 0 && handle < current.length then current.get(handle) else null
-      if found != null then {
-        current.set(handle, null)
-        free.add(handle)
-      }
-      found
-    }
-    if found == null then throw new IOException(s"Handle $handle is not open")
-    found
-  }
+  private[nwframework] def remove(handle: Handle): NWFrameworkHandle = table.remove(handle)
 
   private[nwframework] def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))
 

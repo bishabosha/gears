@@ -3,6 +3,7 @@ package example
 import java.io.IOException
 import scala.scalanative.unsafe.Zone
 
+import asyncio.Handle
 import asyncio.kqueue.KqueueHandles
 import asyncio.unsafe.NativeBuffer
 
@@ -12,7 +13,7 @@ import asyncio.unsafe.NativeBuffer
 object KQueueExampleBrokenPipe {
 
   /** What writing to `fd` did: written, or why it failed. */
-  private def attempt(fd: Int): String =
+  private def attempt(fd: Handle): String =
     Zone.acquire { implicit z =>
       try {
         KqueueHandles.writeNow(fd, NativeBuffer.of("hello".getBytes))

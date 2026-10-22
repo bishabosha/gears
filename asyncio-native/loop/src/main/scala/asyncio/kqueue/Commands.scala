@@ -5,9 +5,9 @@ import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.HandleSlot
-import asyncio.Received
+import asyncio.Handle
 import asyncio.Interest
+import asyncio.Received
 import asyncio.Slot
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NativePool
@@ -69,12 +69,12 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
 /** Accepts one connection on a listening socket, writing its descriptor into `into`. Done once a connection has been
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
-final case class Accept(fd: Int, into: HandleSlot) extends Command {
+final case class Accept(fd: Int, into: Handle.Slot) extends Command {
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
     val client = NonBlocking.accept(fd)
-    if client >= 0 then into.set(client)
+    if client >= 0 then into.set(Handle.wrap(client))
     client >= 0
   }
   override def transferred: Int =

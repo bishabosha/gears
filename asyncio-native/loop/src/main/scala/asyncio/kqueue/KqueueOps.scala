@@ -6,7 +6,7 @@ import asyncio.BlockingOps
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.ReadinessOps
@@ -39,28 +39,31 @@ sealed trait KqueueOp {
 }
 
 /** Builds the ops `KqueueReactor` understands. */
-object KqueueOps
-    extends UnixDatagramOps[KqueueOp]
-    with ReadinessOps[KqueueOp]
-    with BlockingOps[KqueueOp] {
-  def read(fd: Int, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd, buf)
-  def write(fd: Int, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd, buf)
-  def accept(fd: Int, into: HandleSlot): Accept = Accept(fd, into)
-  def connect(fd: Int): KqueueOp = Connect(fd)
-  def receive(fd: Int, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom = new ReceiveFrom(fd, buf, from, unix = false)
-  def send(fd: Int, buf: ByteBuffer, to: IpAddress): SendTo = new SendTo(fd, buf, to)
-  def send(fd: Int, buf: ByteBuffer): SendTo = new SendTo(fd, buf, null)
+object KqueueOps extends UnixDatagramOps[KqueueOp] with ReadinessOps[KqueueOp] with BlockingOps[KqueueOp] {
+  def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd(handle), buf)
+  def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd(handle), buf)
+  def accept(handle: Handle, into: Handle.Slot): Accept = Accept(fd(handle), into)
+  def connect(handle: Handle): KqueueOp = Connect(fd(handle))
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
+    new ReceiveFrom(fd(handle), buf, from, unix = false)
+  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): SendTo = new SendTo(fd(handle), buf, to)
+  def send(handle: Handle, buf: ByteBuffer): SendTo = new SendTo(fd(handle), buf, null)
   @annotation.targetName("receiveUnix")
-  def receive(fd: Int, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom = new ReceiveFrom(fd, buf, from, unix = true)
-  def send(fd: Int, buf: ByteBuffer, to: UnixAddress): SendTo = new SendTo(fd, buf, to)
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
+    new ReceiveFrom(fd(handle), buf, from, unix = true)
+  def send(handle: Handle, buf: ByteBuffer, to: UnixAddress): SendTo = new SendTo(fd(handle), buf, to)
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
-  def whenReady(fd: Int, interest: Interest)(perform: () => Boolean): WhenReady = new WhenReady(fd, interest, perform)
+  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): WhenReady =
+    new WhenReady(fd(handle), interest, perform)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
-  def read(fd: Int, pool: BufferPool, into: Slot[Received]): PooledRead = PooledRead(fd, KqueueOps.native(pool), into)
-  def listening(fd: Int): KqueueOp = new Listening(fd)
-  def close(fd: Int): KqueueOp = new Close(fd)
+  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
+    PooledRead(fd(handle), KqueueOps.native(pool), into)
+  def listening(handle: Handle): KqueueOp = new Listening(fd(handle))
+  def close(handle: Handle): KqueueOp = new Close(fd(handle))
+
+  private def fd(handle: Handle): Int = KqueueHandles.fd(handle)
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -82,7 +85,7 @@ final class Listening(val fd: Int) extends KqueueAtOnce {
 
 /** Closes a descriptor (see `LifecycleOps.close`): at once, as `KqueueHandles.close` does. */
 final class Close(val fd: Int) extends KqueueAtOnce {
-  def perform(): Unit = KqueueHandles.close(fd)
+  def perform(): Unit = KqueueHandles.closeDescriptor(fd)
 }
 
 /** What to do with a descriptor once kqueue reports it ready. `perform` runs a non-blocking operation on the reactor

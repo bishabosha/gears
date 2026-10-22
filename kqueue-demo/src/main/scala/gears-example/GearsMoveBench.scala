@@ -7,8 +7,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
-import asyncio.UnixAddress
 import asyncio.Completion
+import asyncio.Handle
+import asyncio.UnixAddress
 import asyncio.kqueue.KqueueHandles
 import asyncio.kqueue.KqueueOp
 import asyncio.kqueue.KqueueOps
@@ -73,14 +74,14 @@ object GearsMoveBench {
   }
 
   /** A connection's client end, with its buffer and ops, which any client reactor may submit in turn. */
-  final class Conn(val fd: Int, zone: Zone) {
+  final class Conn(val fd: Handle, zone: Zone) {
     val buf = NativeBuffer.allocate(MessageSize)(using zone)
     val write = KqueueOps.write(fd, buf)
     val read = KqueueOps.read(fd, buf)
   }
 
   /** Echoes everything `fd` sends, on `server`'s thread, until it closes. */
-  private def echo(server: Driven, fd: Int, zone: Zone): Unit = server.onThread {
+  private def echo(server: Driven, fd: Handle, zone: Zone): Unit = server.onThread {
     val buf = NativeBuffer.allocate(8192)(using zone)
     val read = KqueueOps.read(fd, buf)
     val write = KqueueOps.write(fd, buf)
@@ -154,12 +155,12 @@ object GearsMoveBench {
       val listener = KqueueHandles.listen(address)
       def connection(): Conn = {
         val client = KqueueHandles.connect(address) // a Unix socket connects at once
-        var accepted = NonBlocking.accept(listener)
+        var accepted = NonBlocking.accept(KqueueHandles.descriptor(listener))
         while accepted < 0 do {
           Thread.`yield`()
-          accepted = NonBlocking.accept(listener)
+          accepted = NonBlocking.accept(KqueueHandles.descriptor(listener))
         }
-        echo(server, accepted, zone)
+        echo(server, KqueueHandles.handle(accepted), zone)
         new Conn(client, zone)
       }
       val first = connection()

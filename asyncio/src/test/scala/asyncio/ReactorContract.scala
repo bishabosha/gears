@@ -56,18 +56,18 @@ trait ReactorContract extends FunSuite {
   }
 
   /** Closes `handle` through `r`, as the interface has it, and throws the close's failure. */
-  protected def close(r: R, handle: Int)(using munit.Location): Unit = {
+  protected def close(r: R, handle: Handle)(using munit.Location): Unit = {
     val failure = run(r, backend.ops.close(handle))
     if failure != null then throw failure
   }
 
   /** Closes `handle` from a thread with no reactor, on a reactor opened for it. */
-  protected def closeAlone(handle: Int)(using munit.Location): Unit = withReactor(r => close(r, handle))
+  protected def closeAlone(handle: Handle)(using munit.Location): Unit = withReactor(r => close(r, handle))
 
   /** A listener on `address`, listening: `handles.listener` and the `listening` op, whose failure is thrown, with
     * the handle closed.
     */
-  protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Int = {
+  protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Handle = {
     val handle = backend.handles.listener(address, reuseAddr)
     val failure = run(r, backend.ops.listening(handle))
     if failure != null then {
@@ -326,10 +326,10 @@ trait ReactorContract extends FunSuite {
   }
 
   /** Opens something on a free port: no interface tells which port was bound, so it tries a few. */
-  protected def onFreePort(open: Int => Int): (Int, Int) = {
+  protected def onFreePort(open: Int => Handle): (Handle, Int) = {
     val random = new java.util.Random()
     var attempts = 0
-    var result: (Int, Int) | Null = null
+    var result: (Handle, Int) | Null = null
     while result == null do {
       val port = 20000 + random.nextInt(30000)
       try result = (open(port), port)
@@ -346,7 +346,7 @@ trait ReactorContract extends FunSuite {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
@@ -662,7 +662,7 @@ trait ReactorContract extends FunSuite {
     try withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         r.submit(backend.ops.accept(listener, accepted), Outcome())
         val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
         try {
@@ -671,9 +671,9 @@ trait ReactorContract extends FunSuite {
           turnUntil(r)(connected.finished && { accepted.toString; true })
           turnUntil(r)(connected.finished)
           val server = {
-            var h = -1
-            turnUntil(r) { try { h = accepted.clear(); true } catch case _: IllegalStateException => false }
-            h
+            var h = Handle.Opt.empty
+            turnUntil(r) { try { h = Handle.Opt(accepted.clear()); true } catch case _: IllegalStateException => false }
+            h.get
           }
           try {
             r.submit(backend.ops.write(client, bytes("first")), Outcome())
@@ -714,7 +714,7 @@ trait ReactorContract extends FunSuite {
         h
       }
       try {
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
@@ -787,7 +787,7 @@ trait ReactorContract extends FunSuite {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val client = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))

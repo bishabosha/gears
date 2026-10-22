@@ -23,6 +23,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
+import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
@@ -41,6 +42,9 @@ private[nio] trait Entry {
   * A Unix path it bound is removed when it is closed.
   */
 private[nio] final class Selectable(val channel: SelectableChannel, boundPath: Path | Null) extends Entry {
+  // For a listener from `listener`: where it is to listen, until its `listening` op binds it.
+  @volatile var toListen: (SocketAddress, Boolean) | Null = null
+
   def read(buf: ByteBuffer): Int = channel match {
     case readable: ReadableByteChannel => readable.read(buf)
     case _                             => throw new IOException(s"$channel cannot be read")
@@ -197,25 +201,25 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
 
-  private val table = new HandleTable[Entry]
+  private val table = new Handle.Table[Entry]
 
   /** Gives `entry` a handle. */
-  private[nio] def add(entry: Entry): Int = table.add(entry)
+  private[nio] def add(entry: Entry): Handle = table.add(entry)
 
   /** What `handle` names; throws if it is not open. */
-  private[nio] def entry(handle: Int): Entry = table(handle)
+  private[nio] def entry(handle: Handle): Entry = table(handle)
 
-  def openFile(path: String, write: Boolean): Int = {
+  def openFile(path: String, write: Boolean): Handle = {
     val file = Path.of(path)
     if !Files.exists(file) then throw new NoSuchFileException(path)
     if !Files.isRegularFile(file) then throw new IOException(s"Not a regular file: $path")
     add(RegularFile(FileChannel.open(file, if write then StandardOpenOption.WRITE else StandardOpenOption.READ)))
   }
 
-  def connect(address: IpAddress): Int = connectStream(address)
-  def connect(address: UnixAddress): Int = connectStream(address)
+  def connect(address: IpAddress): Handle = connectStream(address)
+  def connect(address: UnixAddress): Handle = connectStream(address)
 
-  private def connectStream(address: SocketAddress): Int = {
+  private def connectStream(address: SocketAddress): Handle = {
     val channel = SocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
@@ -225,30 +229,28 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     }
   }
 
-  // Listeners from `listener`, with where they are to listen, until their `listening` op binds them.
-  private val toListen = new java.util.concurrent.ConcurrentHashMap[Integer, (SocketAddress, Boolean)]()
-
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Int = {
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val channel = ServerSocketChannel.open(familyOf(address))
     val handle = selectable(channel, null)(channel.configureBlocking(false))
-    toListen.put(handle, (address, reuseAddr))
+    entry(handle).asInstanceOf[Selectable].toListen = (address, reuseAddr)
     handle
   }
 
-  def listener(address: UnixAddress): Int = {
+  def listener(address: UnixAddress): Handle = {
     val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
     val handle = selectable(channel, Path.of(address.path))(channel.configureBlocking(false))
-    toListen.put(handle, (address, false))
+    entry(handle).asInstanceOf[Selectable].toListen = (address, false)
     handle
   }
 
   /** Binds a listener from `listener`, for its `listening` op; throws if it is not one, or the bind fails. */
-  private[nio] def bind(handle: Int): Unit = {
-    val pending = toListen.remove(handle)
-    if pending == null then throw new IOException(s"Handle $handle is not a listener waiting to listen")
-    val (address, reuseAddr) = pending
+  private[nio] def bind(handle: Handle): Unit = {
     entry(handle) match {
       case s: Selectable =>
+        val pending = s.toListen
+        if pending == null then throw new IOException(s"Handle $handle is not a listener waiting to listen")
+        s.toListen = null
+        val (address, reuseAddr) = pending
         val channel = s.as(classOf[ServerSocketChannel], "Listening")
         if reuseAddr then channel.setOption(StandardSocketOptions.SO_REUSEADDR, true)
         address match {
@@ -263,7 +265,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   /** A listening socket, bound and listening at once: for code with no reactor to perform `listening` on; the
     * interface's way is `listener` and that op.
     */
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Int = {
+  def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
@@ -272,7 +274,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     }
   }
 
-  def listen(address: UnixAddress): Int = {
+  def listen(address: UnixAddress): Handle = {
     val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
     val path = Path.of(address.path)
     selectable(channel, path) {
@@ -282,7 +284,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     }
   }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Int = {
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
     require(
@@ -297,7 +299,7 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     }
   }
 
-  def pipe(): (Int, Int) = {
+  def pipe(): (Handle, Handle) = {
     val pipe = Pipe.open()
     val source = selectable(pipe.source(), null)(pipe.source().configureBlocking(false))
     val sink =
@@ -310,16 +312,13 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     (source, sink)
   }
 
-  def readNow(handle: Int, buf: ByteBuffer): Int = entry(handle).read(buf)
-  def writeNow(handle: Int, buf: ByteBuffer): Int = entry(handle).write(buf)
+  def readNow(handle: Handle, buf: ByteBuffer): Int = entry(handle).read(buf)
+  def writeNow(handle: Handle, buf: ByteBuffer): Int = entry(handle).write(buf)
 
-  def close(handle: Int): Unit = {
-    toListen.remove(handle)
-    table.remove(handle).close()
-  }
+  def close(handle: Handle): Unit = table.remove(handle).close()
 
   /** Runs `setup` on `channel` and gives it a handle, closing it again if `setup` fails. */
-  private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Int =
+  private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Handle =
     try {
       setup
       add(Selectable(channel, boundPath))

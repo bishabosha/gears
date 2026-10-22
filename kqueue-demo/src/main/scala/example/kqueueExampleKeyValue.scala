@@ -8,17 +8,18 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Interest
 import asyncio.kqueue.Accept
 import asyncio.kqueue.Command
+import asyncio.kqueue.KqueueHandles
+import asyncio.kqueue.KqueueOps
 import asyncio.kqueue.KqueueReactor
 import asyncio.kqueue.ReadIntoBuffer
 import asyncio.kqueue.WriteFromBuffer
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.PosixSockets
 import asyncio.unsafe.Sockets.Transport
-import asyncio.kqueue.KqueueHandles
 import KQueueExampleIO.*
 
 /** A pipelined key-value service over the length-framed stream protocol, in the style of a Redis client and server. A
@@ -55,7 +56,7 @@ object KQueueExampleKeyValue {
   /** One client connection: parses commands out of whatever arrives, queues the replies, and writes them back while
     * reading continues. Owns a zone holding its two buffers, closed with the connection.
     */
-  private final class Session(r: KqueueReactor, val fd: Int, store: Store, server: Server)
+  private final class Session(r: KqueueReactor, val fd: Handle, store: Store, server: Server)
       extends AutoCloseable
       with Completion[Command] {
     private val zone: Zone = Zone.open()
@@ -68,8 +69,8 @@ object KQueueExampleKeyValue {
     private var clientClosed = false
 
     // One repeatable op per direction for the whole session.
-    private val readCommands = ReadIntoBuffer(fd, inbox)
-    private val writeReplies = WriteFromBuffer(fd, outbox)
+    private val readCommands = KqueueOps.read(fd, inbox)
+    private val writeReplies = KqueueOps.write(fd, outbox)
 
     def onComplete(command: Command): Unit =
       if command eq readCommands then {
@@ -136,9 +137,9 @@ object KQueueExampleKeyValue {
 
   private final class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
     private val store = new Store
-    private var sessions: Map[Int, Session] = Map.empty
+    private var sessions: Map[Handle, Session] = Map.empty
 
-    private val accepted = HandleSlot() // each accept writes its connection here
+    private val accepted = Handle.Slot() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 

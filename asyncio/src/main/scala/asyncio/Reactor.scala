@@ -319,55 +319,53 @@ final case class UnixAddress(path: String)
 /** Opening a backend's handles; `Ops.close` closes them. Every operation is synchronous and never blocks; failures
   * throw `java.io.IOException`.
   *
-  * A handle is an `Int` that names an open file, socket, or other I/O object. Its meaning belongs to the backend: it is
-  * the I/O object itself where that is an integer, such as a POSIX descriptor, and otherwise an index into a table the
-  * backend keeps of references to its I/O objects, such as JVM channels. Handles belong to the caller, who closes them
-  * with `Ops.close`; the backend never closes them.
+  * A `Handle` names an open file, socket, or other I/O object; what its number means belongs to the backend (see
+  * `Handle`). Handles belong to the caller, who closes them with `Ops.close`; the backend never closes them.
   */
 trait Handles {
 
   /** Opens a regular file for reading or writing; anything else is refused. A regular file is always ready, so ops on it
     * never wait.
     */
-  def openFile(path: String, write: Boolean): Int
+  def openFile(path: String, write: Boolean): Handle
 
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
-  def connect(address: IpAddress): Int
+  def connect(address: IpAddress): Handle
 
   /** A stream socket that will listen on `address` once `ops.listening` is performed on it: binding and listening
     * happen there, so an address in use fails that op, not this. With `reuseAddr`, the address can be bound while
     * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
     * them to expire.
     */
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Int
+  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle
 
   /** A datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family. */
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Int
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle
 
   /** A pipe, as its read end and its write end. */
-  def pipe(): (Int, Int)
+  def pipe(): (Handle, Handle)
 }
 
 /** Using handles without waiting, for a backend whose handles are non-blocking (see `ReadinessBackend`). */
 trait ReadinessHandles extends Handles {
 
   /** Reads what is available now into `buf`: the bytes read, 0 if nothing is, or -1 at end of stream. */
-  def readNow(handle: Int, buf: ByteBuffer): Int
+  def readNow(handle: Handle, buf: ByteBuffer): Int
 
   /** Writes what fits now from `buf`: the bytes written, or -1 if nothing fits. */
-  def writeNow(handle: Int, buf: ByteBuffer): Int
+  def writeNow(handle: Handle, buf: ByteBuffer): Int
 }
 
 /** Unix domain stream sockets, which the ops for IP stream sockets (`accept`, `connect`, `read`, `write`) also run on. */
 trait UnixStreamHandles extends Handles {
 
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
-  def connect(address: UnixAddress): Int
+  def connect(address: UnixAddress): Handle
 
   /** A stream socket that will listen on `address` once `ops.listening` is performed on it, replacing a socket file
     * already there then.
     */
-  def listener(address: UnixAddress): Int
+  def listener(address: UnixAddress): Handle
 }
 
 /** Unix domain datagram sockets, whose packets `UnixDatagramOps` sends and receives. */
@@ -376,14 +374,14 @@ trait UnixDatagramHandles extends Handles {
   /** A datagram socket, bound to `local` and connected to `remote` where given. A client needs a `local` path so that
     * replies can reach it.
     */
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): Int
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): Handle
 }
 
 /** FIFOs, waited on as pipes are. */
 trait FifoHandles extends Handles {
 
   /** Opens a FIFO for reading or writing without blocking. Opening one for writing fails while it has no reader. */
-  def openFifo(path: String, write: Boolean): Int
+  def openFifo(path: String, write: Boolean): Handle
 }
 
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
@@ -407,30 +405,6 @@ final class Slot[A <: AnyRef] {
   }
 }
 
-/** A `Slot` for a handle, which holds it unboxed. Handles are never negative, so -1 marks it empty; otherwise it has
-  * the same contract as `Slot`.
-  */
-final class HandleSlot {
-  private var handle = HandleSlot.Empty
-
-  def clear(): Int = {
-    val h = handle
-    if h == HandleSlot.Empty then throw new IllegalStateException("Nothing has been written to this slot yet")
-    handle = HandleSlot.Empty
-    h
-  }
-
-  private[asyncio] def set(handle: Int): Unit = {
-    require(handle >= 0, s"Not a handle: $handle")
-    if this.handle != HandleSlot.Empty then throw new IllegalStateException("Slot was already set")
-    this.handle = handle
-  }
-}
-
-object HandleSlot {
-  private inline val Empty = -1
-}
-
 /** Marks an op that may be submitted again after its previous submission finished, instead of building a new one each
   * time: an accept loop can resubmit one accept op, and a connection can resubmit one read on its buffer. Anything an
   * op reports, such as `Accepted.accepted`, reflects its latest submission, so read it in that submission's completion.
@@ -452,31 +426,31 @@ trait Ops[Op] {
   /** Fills `buf`, which must have room. Completes once at least one byte has been read, or at end of stream, when
     * nothing was added: compare the buffer's position before and after.
     */
-  def read(handle: Int, buf: ByteBuffer): Op & Repeatable
+  def read(handle: Handle, buf: ByteBuffer): Op & Repeatable
 
   /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. */
-  def write(handle: Int, buf: ByteBuffer): Op & Repeatable
+  def write(handle: Handle, buf: ByteBuffer): Op & Repeatable
 
   /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
     * be empty.
     */
-  def accept(handle: Int, into: HandleSlot): Op & Repeatable
+  def accept(handle: Handle, into: Handle.Slot): Op & Repeatable
 
   /** Connects `handle`, a socket from `handles.connect`. Completes once connected, or fails. */
-  def connect(handle: Int): Op
+  def connect(handle: Handle): Op
 
   /** Receives one packet on an IP datagram socket into `buf`, which is left flipped for reading, and writes its sender
     * into `from`, which must be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
     */
-  def receive(handle: Int, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
   /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
     * consuming `buf`.
     */
-  def send(handle: Int, buf: ByteBuffer, to: IpAddress): Op & Repeatable
+  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): Op & Repeatable
 
   /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. */
-  def send(handle: Int, buf: ByteBuffer): Op & Repeatable
+  def send(handle: Handle, buf: ByteBuffer): Op & Repeatable
 
   /** Completes once `milliseconds` have passed. */
   def timer(milliseconds: Int): Op & Repeatable
@@ -493,12 +467,12 @@ trait Ops[Op] {
     * such as Network.framework's or io_uring's, receives straight into the pool's buffer and hands it over, where a
     * read into the caller's buffer costs it a copy.
     */
-  def read(handle: Int, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): Op & Repeatable
 
   /** Completes once `handle`, from `Handles.listener`, is listening, or fails, as `connect` does for a socket to
     * connect: with an `IOException` if the address is in use or cannot be bound.
     */
-  def listening(handle: Int): Op
+  def listening(handle: Handle): Op
 
   /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever reactor they are, have failed
     * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from
@@ -506,7 +480,7 @@ trait Ops[Op] {
     * that is closed; its number is then free for reuse. A Unix socket path that a listener or datagram socket bound is
     * removed with it. Fails if `handle` is not open.
     */
-  def close(handle: Int): Op
+  def close(handle: Handle): Op
 }
 
 /** Readiness, for a backend that has it (see `ReadinessBackend`). */
@@ -516,7 +490,7 @@ trait ReadinessOps[Op] extends Ops[Op] {
     * `perform` returns true; false means it was not ready after all, and the reactor waits again. For operations the
     * other ops do not cover, such as draining a FIFO.
     */
-  def whenReady(handle: Int, interest: Interest)(perform: () => Boolean): Op & Repeatable
+  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): Op & Repeatable
 }
 
 /** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
@@ -540,8 +514,8 @@ trait UnixDatagramOps[Op] extends Ops[Op] {
     * path.
     */
   @annotation.targetName("receiveUnix")
-  def receive(handle: Int, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
 
   /** Sends one packet on a Unix datagram socket, to `to`, as `send` does on an IP one. */
-  def send(handle: Int, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+  def send(handle: Handle, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
 }

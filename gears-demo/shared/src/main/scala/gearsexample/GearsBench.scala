@@ -15,7 +15,7 @@ import asyncio.BlockingBackend
 import asyncio.ReactorBackend
 import asyncio.UnixAddress
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.Received
 import asyncio.Slot
 import asyncio.testkit.BufferArena
@@ -366,7 +366,7 @@ object GearsBench {
   }
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */
-  private def withConnection(r: Backend, address: StreamAddress)(body: Int => Unit)(using Async): Unit = {
+  private def withConnection(r: Backend, address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
     val fd = Sockets.connect(r, address)
     try {
       perform(r, r.ops.connect(fd))
@@ -533,7 +533,7 @@ object GearsBench {
   }
 
   /** Echoes everything a connection sends until it closes. */
-  private def echo(r: Backend, client: Int)(using Async): Unit = {
+  private def echo(r: Backend, client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -583,7 +583,7 @@ object GearsBench {
         val server =
           try Sockets.listen(r, address)
           finally listening.countDown()
-        val accepted = HandleSlot()
+        val accepted = Handle.Slot()
         val accept = r.ops.accept(server, accepted)
         while true do {
           perform(r, accept)

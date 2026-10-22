@@ -7,7 +7,7 @@ import asyncio.BlockingOps
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
-import asyncio.HandleSlot
+import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.Ops
 import asyncio.Repeatable
@@ -40,21 +40,22 @@ sealed trait NWFrameworkOp {
 
 /** Builds the ops `NWFrameworkReactor` understands. */
 object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] {
-  def read(handle: Int, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
-  def write(handle: Int, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
-  def accept(handle: Int, into: HandleSlot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
-  def connect(handle: Int): NWFrameworkOp = new NWFrameworkConnect(handle)
-  def receive(handle: Int, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive = new NWFrameworkReceive(handle, buf, from)
-  def send(handle: Int, buf: ByteBuffer, to: IpAddress): NWFrameworkSend = new NWFrameworkSend(handle, buf, to)
-  def send(handle: Int, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
+  def read(handle: Handle, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
+  def write(handle: Handle, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
+  def accept(handle: Handle, into: Handle.Slot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
+  def connect(handle: Handle): NWFrameworkOp = new NWFrameworkConnect(handle)
+  def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive =
+    new NWFrameworkReceive(handle, buf, from)
+  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): NWFrameworkSend = new NWFrameworkSend(handle, buf, to)
+  def send(handle: Handle, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
   def timer(milliseconds: Int): NWFrameworkTimer = new NWFrameworkTimer(milliseconds)
   def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking = new NWFrameworkBlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): NWFrameworkOp = new NWFrameworkResolve(host, into)
-  def read(handle: Int, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
+  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
     new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
-  def listening(handle: Int): NWFrameworkOp = new NWFrameworkListening(handle)
-  def close(handle: Int): NWFrameworkOp = new NWFrameworkClose(handle)
+  def listening(handle: Handle): NWFrameworkOp = new NWFrameworkListening(handle)
+  def close(handle: Handle): NWFrameworkOp = new NWFrameworkClose(handle)
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -68,7 +69,7 @@ object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp]
   * to attempt again; a failure is thrown. Commands are `Repeatable`: attempting again is always meaningful.
   */
 sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
-  def handle: Int
+  def handle: Handle
 
   /** What the command waits for (`NWFrameworkHandle.Read`, `Write` or `Connect`). */
   def kind: Int
@@ -89,7 +90,7 @@ sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
 }
 
 /** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
-final class NWFrameworkRead(val handle: Int, buf: ByteBuffer) extends NWFrameworkCommand {
+final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
@@ -107,7 +108,8 @@ final class NWFrameworkRead(val handle: Int, buf: ByteBuffer) extends NWFramewor
 /** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): a descriptor is read into one as
   * into the caller's buffer; a connection receives straight into one.
   */
-final class NWFrameworkPooledRead(val handle: Int, pool: NativePool, into: Slot[Received]) extends NWFrameworkCommand {
+final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
+    extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
@@ -135,7 +137,7 @@ final class NWFrameworkPooledRead(val handle: Int, pool: NativePool, into: Slot[
 }
 
 /** Completes once a listener from `handles.listener` is listening, or fails (see `LifecycleOps.listening`). */
-final class NWFrameworkListening(val handle: Int) extends NWFrameworkCommand {
+final class NWFrameworkListening(val handle: Handle) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Connect
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
@@ -145,7 +147,7 @@ final class NWFrameworkListening(val handle: Int) extends NWFrameworkCommand {
   * for, and the number is taken back once the op is done, so that the reactor still finds the handle for the
   * cancelled state meanwhile; ops submitted on it meanwhile fail as closed.
   */
-final class NWFrameworkClose(val handle: Int) extends NWFrameworkCommand {
+final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Close
   private var begun = false
 
@@ -165,7 +167,7 @@ final class NWFrameworkClose(val handle: Int) extends NWFrameworkCommand {
   * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window,
   * and otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`).
   */
-final class NWFrameworkWrite(val handle: Int, buf: ByteBuffer) extends NWFrameworkCommand {
+final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false // the bytes were handed over, and the handle tells once a send is processed
 
@@ -189,7 +191,7 @@ final class NWFrameworkWrite(val handle: Int, buf: ByteBuffer) extends NWFramewo
 }
 
 /** Accepts one connection on a listener, writing its handle into `into`. */
-final class NWFrameworkAccept(val handle: Int, into: HandleSlot) extends NWFrameworkCommand {
+final class NWFrameworkAccept(val handle: Handle, into: Handle.Slot) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
@@ -203,14 +205,14 @@ final class NWFrameworkAccept(val handle: Int, into: HandleSlot) extends NWFrame
 }
 
 /** Waits for a connection to be ready; fails with the connection's error if it failed. */
-final class NWFrameworkConnect(val handle: Int) extends NWFrameworkCommand {
+final class NWFrameworkConnect(val handle: Handle) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Connect
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
 /** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender into `from`. */
-final class NWFrameworkReceive(val handle: Int, buf: ByteBuffer, from: Slot[IpAddress]) extends NWFrameworkCommand {
+final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
@@ -228,7 +230,7 @@ final class NWFrameworkReceive(val handle: Int, buf: ByteBuffer, from: Slot[IpAd
 }
 
 /** Sends `buf` as one datagram, to `to` or to the connected peer when `to` is null, consuming `buf`. */
-final class NWFrameworkSend(val handle: Int, buf: ByteBuffer, to: IpAddress | Null) extends NWFrameworkCommand {
+final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 

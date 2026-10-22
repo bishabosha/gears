@@ -48,6 +48,27 @@ object DescriptorTable {
     }
   }
 
+  // A note per descriptor, a reference, for what the backend keeps about a descriptor while it is open
+  // (`KqueueHandles`): kept here rather than in a map keyed by number, which would box the number on every access.
+  private val notePages = new AtomicReferenceArray[AtomicReferenceArray[AnyRef | Null]](Pages)
+
+  private def notePage(fd: Int): AtomicReferenceArray[AnyRef | Null] = {
+    val index = fd >>> PageBits
+    require(index < Pages, s"Descriptor $fd is beyond the descriptor table")
+    val existing = notePages.get(index)
+    if existing != null then existing
+    else {
+      val fresh = new AtomicReferenceArray[AnyRef | Null](PageSize)
+      if notePages.compareAndSet(index, null, fresh) then fresh else notePages.get(index).nn
+    }
+  }
+
+  /** `fd`'s note, or null if none has been set since it was opened. */
+  def note(fd: Int): AnyRef | Null = notePage(fd).get(fd & (PageSize - 1))
+
+  /** Sets `fd`'s note; `closing` does not clear it, so the closer must. */
+  def setNote(fd: Int, value: AnyRef | Null): Unit = notePage(fd).set(fd & (PageSize - 1), value)
+
   /** `fd`'s entry: see `generation` and `readOwner`. */
   def get(fd: Int): Long = page(fd).get(fd & (PageSize - 1))
 

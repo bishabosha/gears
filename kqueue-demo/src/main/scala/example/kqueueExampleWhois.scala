@@ -65,7 +65,7 @@ object KQueueExampleWhois {
       case read: ReadIntoBuffer =>
         if buf.position() == 0 then { // nothing added: the server closed the connection
           println(s"--- server closed the connection after $received bytes")
-          KqueueHandles.close(fd)
+          KqueueHandles.close(KqueueHandles.handle(fd))
           r.stop()
         } else {
           received += buf.position()

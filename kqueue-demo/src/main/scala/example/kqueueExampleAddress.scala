@@ -57,7 +57,7 @@ enum KQueueExampleAddress {
   }
 
   private def close(fd: Int, unlinkOnClose: Boolean): Unit = {
-    KqueueHandles.close(fd)
+    KqueueHandles.close(KqueueHandles.handle(fd))
     this match
       case Unix(sock) if unlinkOnClose =>
         Zone.acquire { implicit z =>
