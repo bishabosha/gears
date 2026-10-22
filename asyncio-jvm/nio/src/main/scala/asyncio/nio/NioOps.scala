@@ -31,7 +31,8 @@ import asyncio.SocketOps
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
   * code that only knows the `Reactor` interface builds them through `reactor.ops`.
   */
-sealed trait NioOp {
+sealed trait NioOp extends asyncio.unsafe.TimerHeap.Entry {
+  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
   /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
   @volatile private[nio] var submitted = false
@@ -233,15 +234,12 @@ final class WhenReady(val handle: Handle, val interest: Interest, body: () => Bo
   override def tryFirst: Boolean = false
 }
 
-/** A one-shot timer, kept in its reactor's heap while pending. */
+/** A one-shot timer, kept in its reactor's heap while pending (`TimerHeap.Entry`). */
 final class NioTimer(val milliseconds: Int) extends NioOp with Repeatable {
   require(milliseconds >= 0, "Timer duration must not be negative")
 
-  // The reactor's bookkeeping for a pending submission, on the loop thread: when it is due (`System.nanoTime`), its
-  // place in submission order, and its index in the reactor's timer heap (-1 when not pending).
-  private[nio] var deadline = 0L
-  private[nio] var order = 0L
-  private[nio] var heapIndex = -1
+  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
+  private[nio] var expires = false
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
@@ -291,8 +289,11 @@ object NioPromise {
   */
 abstract class NioBlocking extends NioPromise with BlockingRun {
 
-  /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
+  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
+    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
+    */
   private[nio] var cancelling: Completion[NioOp] | Null = null
+  private[nio] var cancelledBy: Throwable | Null = null
 
   /** Runs `block` on the blocker pool and completes the promise with the outcome, unless it is cancelled first. */
   private[nio] def start(): Unit = Blockers.run(this)

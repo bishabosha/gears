@@ -103,13 +103,12 @@ object GearsBench {
     ),
     Scenario(
       "pingpong-deadline",
-      "as pingpong, also arming and cancelling a reactor timer per round trip, like a timeout",
+      "as pingpong, with a time limit on every op of the round trip, as a request with a timeout has",
       50_000,
       new Client {
         def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = true)
-      },
-      _.isInstanceOf[ReactorBackend]
+      }
     ),
     Scenario(
       "concurrent",
@@ -381,9 +380,9 @@ object GearsBench {
   /** Steps of `computeSlice` done after each round trip by the compute variants of `concurrent`: a few microseconds. */
   inline val WorkSteps = 2_000
 
-  /** Sends `count` messages one at a time, waiting for each echo before sending the next. With `deadline`, each round
-    * trip also arms a reactor timer that is cancelled once the echo is back; with `blockingFirst`, a trivial blocking
-    * task runs before each round trip; `work` says whether a slice of computation follows each, and where.
+  /** Sends `count` messages one at a time, waiting for each echo before sending the next. With `deadline`, every op
+    * of a round trip has a time limit, as a request with a timeout has; with `blockingFirst`, a trivial blocking task
+    * runs before each round trip; `work` says whether a slice of computation follows each, and where.
     */
   private def pingPong(
       r: SocketBackend,
@@ -407,19 +406,19 @@ object GearsBench {
         val read = r.ops.read(fd, buf)
         val into = Slot[Received]()
         val pooledRead = if pooled then r.ops.read(fd, pool.nn, into) else null
-        val timeout = if deadline then new Deadline(reactors(r)) else null
+        // The time limit, where the scenario has one: long enough never to be reached, so it costs only its arming.
+        val limit = if deadline then 60_000 else Backend.NoTimeout
         val blocker = if blockingFirst then blocking(r) else null
         var worked = 0L
         var i = 0
         while i < count do {
           if blocker != null then perform(blocker, blocker.ops.blocking(() => ()))
-          if timeout != null then timeout.arm()
           buf.clear()
-          while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write)
+          while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write, limit)
           if pooled then {
             var got = 0
             while got < messageSize do {
-              perform(r, pooledRead.nn)
+              perform(r, pooledRead.nn, limit)
               val received = into.clear()
               val n = received.buffer.remaining()
               received.release()
@@ -430,11 +429,10 @@ object GearsBench {
             buf.clear()
             while buf.hasRemaining() do {
               val before = buf.position()
-              perform(r, if freshOps then r.ops.read(fd, buf) else read)
+              perform(r, if freshOps then r.ops.read(fd, buf) else read, limit)
               if buf.position() == before then throw new IOException("The server closed the connection")
             }
           }
-          if timeout != null then timeout.disarm()
           work match {
             case Work.NoWork  => ()
             case Work.Inline  => worked += computeSlice(i, WorkSteps)
@@ -445,19 +443,6 @@ object GearsBench {
         if worked == 1L then computeSink = worked // only so that the work cannot be optimised away
       } finally arena.close()
     } finally if pool != null then pool.close()
-  }
-
-  /** A reactor timer armed before each round trip and cancelled once the echo is back, like a timeout. */
-  private final class Deadline(r: ReactorBackend)(using Async) {
-    private var timer = r.ops.timer(60_000)
-    private var pending: Submission | Null = null
-
-    def arm(): Unit = pending = submit(r, timer, _ => throw new IOException("A round trip timed out"))
-
-    /** Cancelled at once if this task is still on the worker the timer went to; otherwise the cancel runs there soon,
-      * and the timer cannot be submitted again before it has, so the next round trip gets a new one.
-      */
-    def disarm(): Unit = if !pending.nn.cancel() then timer = r.ops.timer(60_000)
   }
 
   /** Writes `count` messages of `messageSize` bytes, each as its own write, from one future while reading the echoes

@@ -1,6 +1,7 @@
 package asyncio.nwframework
 
 import java.io.IOException
+import java.util.concurrent.TimeoutException
 import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
@@ -22,9 +23,10 @@ import asyncio.unsafe.TimerHeap
   *
   * A receive once issued cannot be withdrawn, so cancelling a read leaves its receive outstanding, and what it brings
   * waits on the handle for the next read; a write copies its bytes when submitted, so cancelling it leaves the
-  * caller's buffer alone, the bytes already with the stack. Timers are kept in a heap here, and bound how long the
-  * thread parks. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a handle, from any
-  * thread, tells the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
+  * caller's buffer alone, the bytes already with the stack. Timers, and the ops with a time limit, are kept in a heap
+  * here, and bound how long the thread parks; an op that times out is withdrawn as a cancelled one is, with
+  * `onFailure` instead of `onCancel`. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a
+  * handle, from any thread, tells the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
   */
 final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
 
@@ -44,9 +46,11 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
   private[nwframework] val event: Ptr[NWFrameworkIo.Event] =
     stdlib.malloc(sizeOf[NWFrameworkIo.Event].toCSize).asInstanceOf[Ptr[NWFrameworkIo.Event]]
 
+  /** Takes a pending op's completion off it, ending the submission, and its time limit with it. */
   private def take(op: NWFrameworkOp): Completion[NWFrameworkOp] = {
     val completion = op.completion.nn
     op.completion = null
+    if op.heapIndex >= 0 then timers.remove(op)
     completion
   }
 
@@ -77,19 +81,24 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
   // Set by the first `wakeup` since the loop last drained, so later ones skip the C call.
   private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
 
-  private val timers = new TimerHeap[NWFrameworkTimer]
+  // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
+  private val timers = new TimerHeap[NWFrameworkOp]
   private var nextTimerOrder = 0L
   private var running = false
 
   @volatile private var loopThread: Thread = Thread.currentThread()
   @volatile private var closed = false
 
-  def submit[C <: Op](op: C, completion: Completion[C]): Unit = submitOrFinish(op, completion, finishNow = false): Unit
+  def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
+    submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
 
-  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean = submitOrFinish(op, completion, finishNow = true)
+  def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
+    submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean): Boolean = {
+  /** Submits `op`; an op left waiting, with a time limit, goes into the timer heap to time out when it is due. */
+  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
     var finished = false
+    var waits = false
     op match {
       case _: Repeatable => ()
       case one: NWFrameworkOp =>
@@ -114,14 +123,16 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
           }
         if !open || attempted(command) then {
           if finishNow then finished = true else ready.add(command)
-        } else waiting.put(command.token, command)
+        } else {
+          waiting.put(command.token, command)
+          waits = true
+        }
       case timer: NWFrameworkTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
-        timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
-        timer.order = nextTimerOrder
-        nextTimerOrder += 1
+        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
         timer.completion = pending
-        timers.add(timer)
+        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
       case blocking: NWFrameworkBlocking =>
         if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
         blocking.reactor = this
@@ -129,8 +140,10 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         pendingBlockers += blocking
         blocking.restart()
         Blockers.run(blocking)
+        waits = true
     }
     op.submitted = true
+    if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called
       val failure = op.atOnceFailure
@@ -140,6 +153,16 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       }
     }
     finished
+  }
+
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
+    * time out then (see `fireDueTimers`).
+    */
+  private def schedule(op: NWFrameworkOp, milliseconds: Int): Unit = {
+    op.deadline = System.nanoTime() + milliseconds * 1_000_000L
+    op.order = nextTimerOrder
+    nextTimerOrder += 1
+    timers.add(op)
   }
 
   /** Attempts `command`: true if it finished, or failed, with the failure kept for its completion. On submission the
@@ -238,9 +261,11 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       if blocking.cancelling != null then {
         assert(completion == null, "a blocker awaiting its cancel was resubmitted")
         val cancelled = blocking.cancelling.nn
+        val failure = blocking.cancelledBy
         blocking.cancelling = null
+        blocking.cancelledBy = null
         cancellingBlockers -= blocking
-        cancelled.onCancel(blocking)
+        if failure == null then cancelled.onCancel(blocking) else cancelled.onFailure(blocking, failure)
       } else if completion != null then {
         val failure = blocking.failure
         if failure != null then completion.onFailure(blocking, failure.nn) else completion.onComplete(blocking)
@@ -261,7 +286,25 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
   }
 
   def cancel(op: Op): Boolean = {
-    val completion: Completion[NWFrameworkOp] | Null = op match {
+    val completion = withdrawOp(op)
+    if completion == null then false
+    else {
+      settleWithdrawn(op, completion, null)
+      true
+    }
+  }
+
+  /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
+    * where that would be `onCancel`. Nothing if it is no longer pending.
+    */
+  private def timedOut(op: NWFrameworkOp): Unit = {
+    val completion = withdrawOp(op)
+    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
+  }
+
+  /** Takes a pending op out of the reactor and returns its completion: null if it is not pending here. */
+  private def withdrawOp(op: NWFrameworkOp): Completion[NWFrameworkOp] | Null =
+    op match {
       case command: NWFrameworkCommand =>
         if command.completion == null || waiting.getOrNull(command.token) == null then null // finished, or never here
         else {
@@ -269,25 +312,21 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
           withdraw(command) // a notification already queued for it is dropped when drained
           take(command)
         }
-      case timer: NWFrameworkTimer =>
-        if timer.heapIndex < 0 then null
-        else {
-          timers.remove(timer)
-          take(timer)
-        }
+      case timer: NWFrameworkTimer       => if timer.heapIndex < 0 then null else take(timer)
       case blocking: NWFrameworkBlocking => detach(blocking)
     }
-    if completion == null then false
-    else {
-      op match {
-        case blocking: NWFrameworkBlocking if blocking.interrupt() =>
-          blocking.cancelling = completion
-          cancellingBlockers += blocking
-        case _ => completion.onCancel(op)
-      }
-      true
+
+  /** Runs the completion of an op `withdrawOp` took out: `onCancel`, or `onFailure` with `failure` for one that timed
+    * out; for a blocking task that was running, from the loop once `block` has returned.
+    */
+  private def settleWithdrawn(op: NWFrameworkOp, completion: Completion[NWFrameworkOp], failure: Throwable | Null): Unit =
+    op match {
+      case blocking: NWFrameworkBlocking if blocking.interrupt() =>
+        blocking.cancelling = completion
+        blocking.cancelledBy = failure
+        cancellingBlockers += blocking
+      case _ => if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
     }
-  }
 
   private def detach(blocking: NWFrameworkBlocking): Completion[NWFrameworkOp] | Null = {
     val completion = blocking.completion
@@ -325,12 +364,18 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     }
   }
 
+  /** Completes the timers that are due, earliest first, and times out the ops whose time limit is; only entries
+    * scheduled before it started.
+    */
   private def fireDueTimers(): Unit =
     if !timers.isEmpty then {
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
-        complete(timers.poll())
+        timers.poll() match {
+          case timer: NWFrameworkTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op                      => timedOut(op)
+        }
     }
 
   def run(): Unit = {
@@ -365,6 +410,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       for blocking <- cancellingBlockers do {
         dropped += ((blocking, blocking.cancelling.nn))
         blocking.cancelling = null
+        blocking.cancelledBy = null
         running += blocking
       }
       cancellingBlockers.clear()
