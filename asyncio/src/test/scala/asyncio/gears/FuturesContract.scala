@@ -9,6 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
 import munit.FunSuite
 
 import asyncio.Handle
@@ -237,6 +238,46 @@ trait FuturesContract extends FunSuite {
       }
     }
     assertEquals(outcome, "true again")
+  }
+
+  test("performing a read with a time limit throws TimeoutException, and the read may then be performed again") {
+    var outcome = ""
+    running { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val buf = arena.allocate(16)
+        val read = r.ops.read(in, buf)
+        val started = System.nanoTime()
+        val timedOut =
+          try {
+            perform(r, read, timeoutMillis = 20)
+            false
+          } catch case _: TimeoutException => true
+        val waited = System.nanoTime() - started
+        perform(r, r.ops.write(out, arena.of("in time".getBytes(StandardCharsets.UTF_8))))
+        perform(r, read, timeoutMillis = 5_000)
+        outcome = s"$timedOut ${waited >= 20_000_000L} ${buf.position()} ${text(buf)}"
+      } finally {
+        perform(r, r.ops.close(in))
+        perform(r, r.ops.close(out))
+      }
+    }
+    assertEquals(outcome, "true true 7 in time")
+  }
+
+  test("a timer with a shorter time limit throws TimeoutException from perform") {
+    var outcome = ""
+    running { r =>
+      val started = System.nanoTime()
+      val timedOut =
+        try {
+          perform(r, r.ops.timer(60_000), timeoutMillis = 20)
+          false
+        } catch case _: TimeoutException => true
+      val waited = System.nanoTime() - started
+      outcome = s"$timedOut ${waited >= 20_000_000L && waited < 30_000_000_000L}"
+    }
+    assertEquals(outcome, "true true")
   }
 
   test("a cancelled timer stops waiting, and may be performed again") {

@@ -1,6 +1,7 @@
 package asyncio.kqueue
 
 import java.io.IOException
+import java.util.concurrent.TimeoutException
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -18,11 +19,11 @@ import asyncio.unsafe.KqueueLoop.Event
   * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
   * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
   * be closed through `KqueueHandles.close`, from any thread, which tells every reactor (`closed`): the commands
-  * pending on the descriptor fail, and its slot is forgotten before the number is reused; timers are kept in a heap on
-  * the loop thread, by deadline,
-  * and bound how long a poll blocks, so setting or cancelling one costs no syscall; `wakeup`, and blocking tasks
-  * finishing on other threads, wake the loop with a user event. Each submission is its own kevent call, and each poll
-  * returns up to `maxEvents` events.
+  * pending on the descriptor fail, and its slot is forgotten before the number is reused; timers, and the ops with a
+  * time limit, are kept in a heap on the loop thread, by deadline, and bound how long a poll blocks, so setting or
+  * cancelling one costs no syscall, and an op that times out is withdrawn as a cancelled one is, with `onFailure`
+  * instead of `onCancel`; `wakeup`, and blocking tasks finishing on other threads, wake the loop with a user event.
+  * Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) extends Reactor {
 
@@ -36,10 +37,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Kqueue watches POSIX file descriptors, so a handle is the descriptor itself. */
   def handles: KqueueHandles.type = KqueueHandles
 
-  /** Takes a pending op's completion off it, ending the submission: the completion may then submit the op again. */
+  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may
+    * then submit the op again.
+    */
   private def take(op: KqueueOp): Completion[KqueueOp] = {
     val completion = op.completion.nn
     op.completion = null
+    if op.heapIndex >= 0 then timers.remove(op)
     completion
   }
 
@@ -123,7 +127,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
-  private val timers = new asyncio.unsafe.TimerHeap[KqueueTimer]
+  // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
+  private val timers = new asyncio.unsafe.TimerHeap[KqueueOp]
   private var nextTimerOrder = 0L
   private var running = false
 
@@ -142,15 +147,19 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   @volatile private var loopThread: Thread = Thread.currentThread()
   @volatile private var closed = false
 
-  def submit[C <: Op](op: C, completion: Completion[C]): Unit = submitOrFinish(op, completion, finishNow = false): Unit
+  def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
+    submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
 
-  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean = submitOrFinish(op, completion, finishNow = true)
+  def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
+    submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
   /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
-    * takes the completion back off it uncalled, throws a failure, and returns true.
+    * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
+    * limit, goes into the timer heap to time out when it is due.
     */
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean): Boolean = {
+  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
     var finished = false
+    var waits = false
     op match {
       case _: Repeatable => ()
       case one: KqueueOp =>
@@ -174,20 +183,21 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           else {
             slot.read = command
             waitToRead(command, slot)
+            waits = true
           }
         } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
         else {
           slot.write = command
           if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
           else arm(command.fd, read = false)
+          waits = true
         }
       case timer: KqueueTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
-        timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
-        timer.order = nextTimerOrder
-        nextTimerOrder += 1
+        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
         timer.completion = pending
-        timers.add(timer)
+        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
       case promise: KqueuePromise =>
         promise match {
           case blocking: KqueueBlocking if blocking.cancelling != null =>
@@ -203,6 +213,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             blocking.restart()
             asyncio.Blockers.run(blocking)
         }
+        waits = true
       case atOnce: KqueueAtOnce =>
         atOnce.completion = pending
         try atOnce.perform()
@@ -210,6 +221,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         if finishNow then finished = true else ready.add(atOnce)
     }
     op.submitted = true
+    if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called
       val failure = op.atOnceFailure
@@ -219,6 +231,16 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       }
     }
     finished
+  }
+
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
+    * time out then (see `fireDueTimers`).
+    */
+  private def schedule(op: KqueueOp, milliseconds: Int): Unit = {
+    op.deadline = System.nanoTime() + milliseconds * 1_000_000L
+    op.order = nextTimerOrder
+    nextTimerOrder += 1
+    timers.add(op)
   }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
@@ -380,9 +402,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
           assert(completion == null, "a blocker awaiting its cancel was resubmitted")
           val cancelled = blocking.cancelling.nn
+          val failure = blocking.cancelledBy
           blocking.cancelling = null
+          blocking.cancelledBy = null
           cancellingBlockers -= blocking
-          cancelled.onCancel(blocking)
+          if failure == null then cancelled.onCancel(blocking) else cancelled.onFailure(blocking, failure)
         case _ =>
           if completion != null then {
             val failure = promise.failure
@@ -424,6 +448,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       for blocking <- cancellingBlockers do {
         dropped += ((blocking, blocking.cancelling.nn))
         blocking.cancelling = null
+        blocking.cancelledBy = null
         running += blocking
       }
       cancellingBlockers.clear()
@@ -453,7 +478,27 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * the loop once `block` has returned.
     */
   def cancel(op: Op): Boolean = {
-    val completion: Completion[KqueueOp] | Null = op match {
+    val completion = withdraw(op)
+    if completion == null then false
+    else {
+      settleWithdrawn(op, completion, null)
+      true
+    }
+  }
+
+  /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
+    * where that would be `onCancel`. Nothing if it is no longer pending.
+    */
+  private def timedOut(op: KqueueOp): Unit = {
+    val completion = withdraw(op)
+    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
+  }
+
+  /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
+    * pending here.
+    */
+  private def withdraw(op: KqueueOp): Completion[KqueueOp] | Null =
+    op match {
       case command: Command =>
         val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
         if slot == null then null
@@ -471,26 +516,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             take(command)
           }
         }
-      case timer: KqueueTimer =>
-        if timer.heapIndex < 0 then null
-        else {
-          timers.remove(timer)
-          take(timer)
-        }
+      case timer: KqueueTimer     => if timer.heapIndex < 0 then null else take(timer)
       case promise: KqueuePromise => detach(promise)
       case _: KqueueAtOnce        => null // performed when submitted, so finished
     }
-    if completion == null then false
-    else {
-      op match {
-        case blocking: KqueueBlocking if blocking.interrupt() =>
-          blocking.cancelling = completion
-          cancellingBlockers += blocking
-        case _ => completion.onCancel(op)
-      }
-      true
+
+  /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
+    * out; for a blocking task that was running, from the loop once `block` has returned.
+    */
+  private def settleWithdrawn(op: KqueueOp, completion: Completion[KqueueOp], failure: Throwable | Null): Unit =
+    op match {
+      case blocking: KqueueBlocking if blocking.interrupt() =>
+        blocking.cancelling = completion
+        blocking.cancelledBy = failure
+        cancellingBlockers += blocking
+      case _ => if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
     }
-  }
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed
     * the descriptor, kqueue removed the filter with it and reports `ENOENT` or `EBADF`; the op is cancelled all the
@@ -691,16 +732,18 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
   }
 
-  /** Completes the timers that are due, earliest first. Only timers submitted before it started fire, so a completion
-    * that submits a zero-length timer leaves it for the next turn.
+  /** Completes the timers that are due, earliest first, and times out the ops whose time limit is. Only entries
+    * scheduled before it started fire, so a completion that submits a zero-length timer leaves it for the next turn.
     */
   private def fireDueTimers(): Unit =
     if !timers.isEmpty then {
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
-      while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do {
-        complete(timers.poll())
-      }
+      while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
+        timers.poll() match {
+          case timer: KqueueTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op                 => timedOut(op)
+        }
     }
 
   def run(): Unit = {

@@ -50,15 +50,28 @@ trait Submitter {
     */
   def handles: Handles
 
-  /** Submits an op with the completion to run when it finishes. An op marked `Repeatable` may be submitted again once
-    * its previous submission has completed, failed, or been cancelled; any other op may be submitted only once. No op
-    * may be pending twice at the same time. An op may finish during `submit`, such as a read of data already waiting,
-    * but its completion never runs inside `submit`: it runs from a later turn of the loop. Nor need the op be issued to
-    * the I/O facility inside `submit`: a submitter may hold the ops submitted in a turn and issue them together at the
-    * turn's end, as io_uring's submission queue or Network.framework's batches invite, so long as `trySubmit` issues at
-    * once and a turn issues everything before it blocks.
+  /** Submits an op with the completion to run when it finishes, and no time limit (see the other `submit`). */
+  final def submit[C <: Op](op: C, completion: Completion[C]): Unit = submit(op, completion, Backend.NoTimeout)
+
+  /** Submits an op with the completion to run when it finishes, and how long it may take. An op marked `Repeatable`
+    * may be submitted again once its previous submission has completed, failed, or been cancelled; any other op may be
+    * submitted only once. No op may be pending twice at the same time. An op may finish during `submit`, such as a read
+    * of data already waiting, but its completion never runs inside `submit`: it runs from a later turn of the loop.
+    * Nor need the op be issued to the I/O facility inside `submit`: a submitter may hold the ops submitted in a turn
+    * and issue them together at the turn's end, as io_uring's submission queue or Network.framework's batches invite,
+    * so long as `trySubmit` issues at once and a turn issues everything before it blocks.
+    *
+    * Unless `timeoutMillis` is negative (`Backend.NoTimeout`), an op not finished that many milliseconds after its
+    * submission is stopped, as `cancel` stops it, and fails with `java.util.concurrent.TimeoutException`: its
+    * completion gets `onFailure` with that, from the loop, once the submitter has stopped using its buffers and slots,
+    * which for an op running elsewhere, such as a blocking op that has to be interrupted, is later. An op that waits
+    * for its handle to be ready before it touches anything, as the reads and writes of a readiness-based submitter
+    * do, has then done nothing: its buffer is as it was and its handle as usable as before, so a read that timed out
+    * is a wait that gave up, not a connection lost. This is how a read is given a timeout: no timer to race it
+    * against, and no cancel to confirm. A timer whose own time is longer times out the same way. Zero gives the op
+    * until the turn after its submission, as a timer of no time has.
     */
-  def submit[C <: Op](op: C, completion: Completion[C]): Unit
+  def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit
 
   /** `op`'s attachment, as its backend's `attachment` returns it. */
   def attachment(op: Op): AnyRef | Null
@@ -66,13 +79,18 @@ trait Submitter {
   /** Sets `op`'s attachment, as its backend's `attach` does. */
   def attach(op: Op, value: AnyRef | Null): Unit
 
+  /** `trySubmit` with no time limit. */
+  final def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean =
+    trySubmit(op, completion, Backend.NoTimeout)
+
   /** Like `submit`, but an op the submitter can finish at once, as it may for an operation that only reports
     * would-block when not ready, it finishes here: it returns true without ever calling `completion`, and the op's
     * results are already in the caller's buffers and slots; a failure is thrown. Otherwise the op is submitted as by
-    * `submit`, `completion` runs when it finishes, and this returns false. A caller can then continue at once instead
-    * of waiting for a later turn, but must take care to let other work run if its ops keep finishing at once.
+    * `submit`, with the same time limit, `completion` runs when it finishes, and this returns false. A caller can then
+    * continue at once instead of waiting for a later turn, but must take care to let other work run if its ops keep
+    * finishing at once.
     */
-  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean
+  def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean
 
   /** Cancels a submitted op that has not finished, and returns true: its completion's `onComplete` and `onFailure` will
     * never run, and its `onCancel` runs once the submitter has stopped using the op's buffers and slots. That is before
@@ -166,17 +184,29 @@ trait Backend {
   /** Opens, uses, and closes the handles this backend's ops name. */
   def handles: Handles
 
+  /** Performs `op` with no time limit (see the other `perform`). */
+  final def perform(op: Op)(using Async): Unit = perform(op, Backend.NoTimeout)
+
   /** Performs `op` and suspends the caller until it is done: it returns when the op finishes, throws its failure, or
-    * throws `CancellationException` when the caller is cancelled first. Once it returns or throws, the op's buffers and
-    * slots are the caller's again. An op marked `Repeatable` may be performed again once it has returned; any other op
-    * only once. Where the caller must be, and what cancelling it does to the op, is the backend's to say.
+    * throws `CancellationException` when the caller is cancelled first; and, unless `timeoutMillis` is negative
+    * (`Backend.NoTimeout`), throws `java.util.concurrent.TimeoutException` if the op is not done that many
+    * milliseconds after it was started, the op stopped as `Submitter.submit` says, so that a read with a timeout is
+    * one call, with no timer raced against it. Once it returns or throws, the op's buffers and slots are the caller's
+    * again. An op marked `Repeatable` may be performed again once it has returned; any other op only once. Where the
+    * caller must be, and what cancelling it does to the op, is the backend's to say.
     */
-  def perform(op: Op)(using Async): Unit
+  def perform(op: Op, timeoutMillis: Int)(using Async): Unit
 
   /** Opens a pool of `buffers` buffers of up to `bufferSize` bytes each, for the reads into buffers of the backend's
     * (`Ops.read` with a pool). Close it once nothing of it is held.
     */
   def pool(bufferSize: Int, buffers: Int): BufferPool
+}
+
+object Backend {
+
+  /** No time limit, for `perform` and `Submitter.submit`: any negative value means the same. */
+  inline val NoTimeout = -1
 }
 
 /** A backend whose ops are submitted with completions, to a `Submitter` (see `Submitter.submit`): one whose ops run on
@@ -208,10 +238,12 @@ trait ReactorBackend extends CompletionBackend with Reactor.Factory[Reactor] {
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
 
-  /** Submits `op` to a reactor of the caller's program, and suspends the caller until it finishes (see
-    * `ReactorAsync.performOnReactor`). Cancelling the caller asks the reactor to cancel the op, and waits until it has.
+  /** Submits `op` to a reactor of the caller's program, with its time limit, and suspends the caller until it
+    * finishes (see `ReactorAsync.performOnReactor`). Cancelling the caller asks the reactor to cancel the op, and waits
+    * until it has.
     */
-  final def perform(op: Op)(using Async): Unit = asyncio.gears.ReactorAsync.performOnReactor(this, op)
+  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
+    asyncio.gears.ReactorAsync.performOnReactor(this, op, timeoutMillis)
 
   /** Performs `op` now, on the calling thread and on no reactor, if this backend can and the op finishes at once, as a
     * read of data already waiting or a write that fits does: then it returns true, the op's results are in the caller's
@@ -247,11 +279,12 @@ trait ReactorBackend extends CompletionBackend with Reactor.Factory[Reactor] {
   */
 trait WaitHere extends Cancellable {
 
-  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, and returns: true
-    * if the wait finished the op, as a timer's does once its time has passed, so there is nothing to try; false if the
-    * caller should try the op again. Throws if the op's handle has been closed.
+  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, or, unless
+    * `timeoutNanos` is negative, that many nanoseconds have passed, and returns: true if the wait finished the op, as a
+    * timer's does once its time has passed, so there is nothing to try; false if the caller should try the op again,
+    * or its time ran out, which the caller keeps track of. Throws if the op's handle has been closed.
     */
-  def await(): Boolean
+  def await(timeoutNanos: Long): Boolean
 
   /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
   def cancel(): Unit

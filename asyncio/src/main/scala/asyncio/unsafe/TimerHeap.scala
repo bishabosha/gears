@@ -1,7 +1,9 @@
 package asyncio.unsafe
 
-/** Pending timers in a binary min-heap ordered by deadline, then submission order, for a reactor that keeps its timers
-  * in user space. Each timer knows its index, so it can be removed when cancelled. On the reactor's thread only.
+/** What a reactor must do at a time, in a binary min-heap ordered by deadline, then submission order: its timers, and
+  * the ops with a time limit (see `Submitter.submit`), which time out when their deadline comes. Each entry knows its
+  * index, so it can be removed when it is cancelled, or when an op finishes before its time. On the reactor's thread
+  * only.
   */
 final class TimerHeap[T <: TimerHeap.Entry] {
   private var heap = new Array[TimerHeap.Entry | Null](16)
@@ -80,8 +82,8 @@ final class TimerHeap[T <: TimerHeap.Entry] {
 
 object TimerHeap {
 
-  /** A timer's place in the heap: when it is due (`System.nanoTime`), its place in submission order, and its index in
-    * the heap, -1 when not pending.
+  /** An entry's place in the heap: when it is due (`System.nanoTime`), its place in submission order, and its index in
+    * the heap, -1 when not in it.
     */
   trait Entry {
     var deadline = 0L

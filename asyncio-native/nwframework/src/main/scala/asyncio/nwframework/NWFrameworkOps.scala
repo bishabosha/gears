@@ -27,7 +27,8 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 /** Everything `NWFrameworkReactor` can run: its `Op` member type. */
-sealed trait NWFrameworkOp {
+sealed trait NWFrameworkOp extends TimerHeap.Entry {
+  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
   /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
   @volatile private[nwframework] var submitted = false
@@ -269,9 +270,12 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress |
   private[nwframework] def reset(): Unit = sent = false
 }
 
-/** A one-shot timer, kept in the reactor's heap while pending. */
-final class NWFrameworkTimer(val milliseconds: Int) extends NWFrameworkOp with Repeatable with TimerHeap.Entry {
+/** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */
+final class NWFrameworkTimer(val milliseconds: Int) extends NWFrameworkOp with Repeatable {
   require(milliseconds >= 0, "Timer duration must not be negative")
+
+  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
+  private[nwframework] var expires = false
 }
 
 /** A blocking task run on the blocker pool (see `BlockingRun`); once it has returned, the reactor it was submitted to
@@ -281,8 +285,11 @@ sealed abstract class NWFrameworkBlocking extends NWFrameworkOp with BlockingRun
   @volatile private[nwframework] var reactor: NWFrameworkReactor | Null = null
   @volatile private[nwframework] var failure: Throwable | Null = null
 
-  /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
+  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
+    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
+    */
   private[nwframework] var cancelling: Completion[NWFrameworkOp] | Null = null
+  private[nwframework] var cancelledBy: Throwable | Null = null
 
   protected def settled(failure: Throwable | Null): Unit = {
     this.failure = failure

@@ -24,14 +24,20 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
   @volatile private var cancelled = false
   @volatile private var waitingOn: Selector | Null = null
 
-  /** Never finishes the op itself: the caller tries it once the selector reports the handle ready. */
-  def await(): Boolean = {
+  /** Never finishes the op itself: the caller tries it once the selector reports the handle ready, or its time is
+    * up.
+    */
+  def await(timeoutNanos: Long): Boolean = {
     val selector = entry.enterWait(write)
     try {
       val key = entry.channel.keyFor(selector)
       if key != null && key.interestOps() != ops then key.interestOps(ops): Unit
       waitingOn = selector
-      if !cancelled then selector.select(WaitsHere.Ignore): Unit
+      if !cancelled then {
+        if timeoutNanos < 0 then selector.select(WaitsHere.Ignore)
+        else if timeoutNanos == 0 then selector.selectNow(WaitsHere.Ignore)
+        else selector.select(WaitsHere.Ignore, (timeoutNanos + 999_999L) / 1_000_000L) // rounded up: due when it returns
+      }: Unit
     } catch {
       case _: ClosedSelectorException | _: java.nio.channels.CancelledKeyException => ()
     } finally {
@@ -56,16 +62,19 @@ private[nio] final class TimerWait(milliseconds: Int) extends asyncio.WaitHere {
   @volatile private var cancelled = false
   @volatile private var parked: Thread | Null = null
 
-  /** Parks until the deadline, or a cancel; true once the time has passed. */
-  def await(): Boolean = {
+  /** Parks until the deadline, a cancel, or the end of `timeoutNanos` if not negative; true once the timer's time has
+    * passed.
+    */
+  def await(timeoutNanos: Long): Boolean = {
     parked = Thread.currentThread()
     try {
-      var remaining = deadline - System.nanoTime()
+      val until = if timeoutNanos < 0 then deadline else math.min(deadline, System.nanoTime() + timeoutNanos)
+      var remaining = until - System.nanoTime()
       while remaining > 0 && !cancelled do {
         LockSupport.parkNanos(this, remaining)
-        remaining = deadline - System.nanoTime()
+        remaining = until - System.nanoTime()
       }
-      remaining <= 0
+      deadline - System.nanoTime() <= 0
     } finally parked = null
   }
 

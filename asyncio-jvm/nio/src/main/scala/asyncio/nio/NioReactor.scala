@@ -3,6 +3,7 @@ package asyncio.nio
 import java.nio.channels.CancelledKeyException
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
+import java.util.concurrent.TimeoutException
 
 import asyncio.Completion
 import asyncio.Handles
@@ -10,14 +11,16 @@ import asyncio.Interest
 import asyncio.Ops
 import asyncio.Reactor
 import asyncio.Repeatable
+import asyncio.unsafe.TimerHeap
 
 /** The NIO implementation of `Reactor`, for ops built by `NioOps`, over a `Selector`. A command is performed as soon as
   * it is submitted when it allows that; otherwise, or when it would block, it waits for readiness and is performed on
   * the loop thread. A selectable channel waits on its key in this reactor's selector, whose interest ops follow the
   * commands pending on it, brought up to date once per turn, before the select, so a read finishing and the next one
   * submitted from its completion change nothing. A regular file is always ready, so a command on it that is not done
-  * is performed again next turn. Timers are kept in a heap on the loop thread and bound how long a select blocks;
-  * `wakeup`, and blocking tasks finishing, wake the selector.
+  * is performed again next turn. Timers, and the ops with a time limit, are kept in a heap on the loop thread and
+  * bound how long a select blocks; an op that times out is withdrawn as a cancelled one is, with `onFailure` instead
+  * of `onCancel`. `wakeup`, and blocking tasks finishing, wake the selector.
   *
   * The selector's keys belong to the channels: closing a handle cancels its keys, so a command pending on it never
   * finishes, and is only cancelled, as with the kqueue backend.
@@ -42,10 +45,13 @@ final class NioReactor private (selector: Selector) extends Reactor {
     var dirty = false // queued in `changed`
   }
 
-  /** Takes a pending op's completion off it, ending the submission: the completion may then submit the op again. */
+  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may
+    * then submit the op again.
+    */
   private def take(op: NioOp): Completion[NioOp] = {
     val completion = op.completion.nn
     op.completion = null
+    if op.heapIndex >= 0 then timers.remove(op)
     completion
   }
 
@@ -94,7 +100,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
   @volatile private var parked = false
   @volatile private var wakeRequested = false
 
-  private val timers = new TimerHeap
+  // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
+  private val timers = new TimerHeap[NioOp]
   private var nextTimerOrder = 0L
   private var running = false
 
@@ -109,15 +116,19 @@ final class NioReactor private (selector: Selector) extends Reactor {
   @volatile private var loopThread: Thread = Thread.currentThread()
   @volatile private var closed = false
 
-  def submit[C <: Op](op: C, completion: Completion[C]): Unit = submitOrFinish(op, completion, finishNow = false): Unit
+  def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
+    submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
 
-  def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean = submitOrFinish(op, completion, finishNow = true)
+  def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
+    submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
   /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
-    * takes the completion back off it uncalled, throws a failure, and returns true.
+    * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
+    * limit, goes into the timer heap to time out when it is due.
     */
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean): Boolean = {
+  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
     var finished = false
+    var waits = false
     op match {
       case _: Repeatable => ()
       case one           =>
@@ -173,20 +184,23 @@ final class NioReactor private (selector: Selector) extends Reactor {
                 waiting.writeOps = ops
               }
               markChanged(key, waiting)
+              waits = true
             }
           case (_: RegularFile, _) =>
             command.completion = pending
             if performedAtOnce(command, queue = !finishNow) then finished = finishNow // always ready
-            else again.add(command)
+            else {
+              again.add(command)
+              waits = true
+            }
           case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
         }
       case timer: NioTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
-        timer.deadline = System.nanoTime() + timer.milliseconds * 1_000_000L
-        timer.order = nextTimerOrder
-        nextTimerOrder += 1
+        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
         timer.completion = pending
-        timers.add(timer)
+        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
       case blocking: NioBlocking =>
         if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
         blocking.reset() // a `Repeatable` promise's previous outcome
@@ -195,6 +209,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
         pendingPromises += blocking
         blocking.restart()
         blocking.start()
+        waits = true
       case atOnce: NioAtOnce =>
         atOnce.completion = pending
         try atOnce.perform()
@@ -202,6 +217,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
         if finishNow then finished = true else ready.add(atOnce)
     }
     op.submitted = true
+    if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called
       val failure = op.atOnceFailure
@@ -211,6 +227,16 @@ final class NioReactor private (selector: Selector) extends Reactor {
       }
     }
     finished
+  }
+
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
+    * time out then (see `fireDueTimers`).
+    */
+  private def schedule(op: NioOp, milliseconds: Int): Unit = {
+    op.deadline = System.nanoTime() + milliseconds * 1_000_000L
+    op.order = nextTimerOrder
+    nextTimerOrder += 1
+    timers.add(op)
   }
 
   /** `command`'s key in this selector for `s`'s channel, registering the channel with no interest ops the first time. */
@@ -372,9 +398,11 @@ final class NioReactor private (selector: Selector) extends Reactor {
         case blocking: NioBlocking if blocking.cancelling != null =>
           assert(completion == null, "a blocker awaiting its cancel was resubmitted")
           val cancelled = blocking.cancelling.nn
+          val failure = blocking.cancelledBy
           blocking.cancelling = null
+          blocking.cancelledBy = null
           cancellingBlockers -= blocking
-          cancelled.onCancel(blocking)
+          if failure == null then cancelled.onCancel(blocking) else cancelled.onFailure(blocking, failure)
         case _ =>
           if completion != null then {
             val failure = promise.failure
@@ -418,6 +446,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
       for blocking <- cancellingBlockers do {
         dropped += ((blocking, blocking.cancelling.nn))
         blocking.cancelling = null
+        blocking.cancelledBy = null
         running += blocking
       }
       cancellingBlockers.clear()
@@ -437,7 +466,27 @@ final class NioReactor private (selector: Selector) extends Reactor {
     * `onCancel` runs from the loop once `block` has returned.
     */
   def cancel(op: Op): Boolean = {
-    val completion: Completion[NioOp] | Null = op match {
+    val completion = withdraw(op)
+    if completion == null then false
+    else {
+      settleWithdrawn(op, completion, null)
+      true
+    }
+  }
+
+  /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
+    * where that would be `onCancel`. Nothing if it is no longer pending.
+    */
+  private def timedOut(op: NioOp): Unit = {
+    val completion = withdraw(op)
+    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
+  }
+
+  /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
+    * pending here.
+    */
+  private def withdraw(op: NioOp): Completion[NioOp] | Null =
+    op match {
       case command: Command =>
         if command.completion == null then null
         else
@@ -458,26 +507,22 @@ final class NioReactor private (selector: Selector) extends Reactor {
             case _: RegularFile => if again.remove(command) then take(command) else null
             case _              => null // never submitted
           }
-      case timer: NioTimer =>
-        if timer.heapIndex < 0 then null
-        else {
-          timers.remove(timer)
-          take(timer)
-        }
+      case timer: NioTimer     => if timer.heapIndex < 0 then null else take(timer)
       case promise: NioPromise => detach(promise)
       case _: NioAtOnce        => null // performed when submitted, so finished
     }
-    if completion == null then false
-    else {
-      op match {
-        case blocking: NioBlocking if blocking.interrupt() =>
-          blocking.cancelling = completion
-          cancellingBlockers += blocking
-        case _ => completion.onCancel(op)
-      }
-      true
+
+  /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
+    * out; for a blocking task that was running, from the loop once `block` has returned.
+    */
+  private def settleWithdrawn(op: NioOp, completion: Completion[NioOp], failure: Throwable | Null): Unit =
+    op match {
+      case blocking: NioBlocking if blocking.interrupt() =>
+        blocking.cancelling = completion
+        blocking.cancelledBy = failure
+        cancellingBlockers += blocking
+      case _ => if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
     }
-  }
 
   private def detach(promise: NioPromise): Completion[NioOp] | Null = {
     val completion = promise.completion
@@ -559,90 +604,19 @@ final class NioReactor private (selector: Selector) extends Reactor {
     deliverResolved()
   }
 
-  /** Completes the timers that are due, earliest first; only those submitted before it started. */
+  /** Completes the timers that are due, earliest first, and times out the ops whose time limit is; only entries
+    * scheduled before it started.
+    */
   private def fireDueTimers(): Unit =
     if !timers.isEmpty then {
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
-        complete(timers.poll())
-    }
-
-  /** Pending timers in a binary min-heap ordered by deadline, then submission order (as `KqueueReactor`'s). */
-  private final class TimerHeap {
-    private var heap = new Array[NioTimer | Null](16)
-    private var size = 0
-
-    def isEmpty: Boolean = size == 0
-    def peek: NioTimer = heap(0).nn
-
-    def add(timer: NioTimer): Unit = {
-      if size == heap.length then heap = java.util.Arrays.copyOf(heap, size * 2)
-      place(timer, size)
-      size += 1
-      siftUp(size - 1)
-    }
-
-    def poll(): NioTimer = {
-      val timer = peek
-      remove(timer)
-      timer
-    }
-
-    def remove(timer: NioTimer): Unit = {
-      val index = timer.heapIndex
-      size -= 1
-      val last = heap(size).nn
-      heap(size) = null
-      timer.heapIndex = -1
-      if index != size then {
-        place(last, index)
-        siftDown(index)
-        siftUp(index)
-      }
-    }
-
-    private def before(a: NioTimer, b: NioTimer): Boolean =
-      a.deadline < b.deadline || (a.deadline == b.deadline && a.order < b.order)
-
-    private def place(timer: NioTimer, index: Int): Unit = {
-      heap(index) = timer
-      timer.heapIndex = index
-    }
-
-    private def siftUp(start: Int): Unit = {
-      var index = start
-      val timer = heap(index).nn
-      var moving = true
-      while moving && index > 0 do {
-        val parent = (index - 1) / 2
-        if before(timer, heap(parent).nn) then {
-          place(heap(parent).nn, index)
-          index = parent
-        } else moving = false
-      }
-      place(timer, index)
-    }
-
-    private def siftDown(start: Int): Unit = {
-      var index = start
-      val timer = heap(index).nn
-      var moving = true
-      while moving do {
-        val left = 2 * index + 1
-        if left >= size then moving = false
-        else {
-          val right = left + 1
-          val child = if right < size && before(heap(right).nn, heap(left).nn) then right else left
-          if before(heap(child).nn, timer) then {
-            place(heap(child).nn, index)
-            index = child
-          } else moving = false
+        timers.poll() match {
+          case timer: NioTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op              => timedOut(op)
         }
-      }
-      place(timer, index)
     }
-  }
 
   def run(): Unit = {
     loopThread = Thread.currentThread()

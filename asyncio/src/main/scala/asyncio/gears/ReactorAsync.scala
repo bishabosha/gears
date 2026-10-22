@@ -7,6 +7,7 @@ import gears.async.Listener
 import gears.async.cancellationScope
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import scala.util.Failure
@@ -31,17 +32,24 @@ object ReactorAsync {
     */
   def perform(b: Backend, op: b.Op)(using Async): Unit = b.perform(op)
 
+  /** Performs `op` with a time limit, as `b.perform` says: `TimeoutException` if it is not done `timeoutMillis`
+    * milliseconds after it was started, the op stopped and its buffers and slots the caller's again. A read with a
+    * timeout is this, not a race against a timer.
+    */
+  def perform(b: Backend, op: b.Op, timeoutMillis: Int)(using Async): Unit = b.perform(op, timeoutMillis)
+
   /** Submits `op`, which must have been built by `b.ops`, to a reactor of the caller's program, and suspends the
-    * caller until the reactor finishes with it: it returns when the op completes, throws its failure, or throws
-    * `CancellationException` when it is cancelled. It must be called from a program that `ReactorFutures.run` started
-    * with `b`. `b` only says what the op is; which reactor runs it depends on where the caller runs: on a pool's worker,
-    * that worker's, and otherwise one picked by the caller's thread. A repeatable op may go to a different reactor each
-    * time. This is `ReactorBackend.perform`.
+    * caller until the reactor finishes with it: it returns when the op completes, throws its failure, throws
+    * `CancellationException` when it is cancelled, or throws `TimeoutException` when its time limit, `timeoutMillis`
+    * unless negative, ran out first (see `Submitter.submit`). It must be called from a program that
+    * `ReactorFutures.run` started with `b`. `b` only says what the op is; which reactor runs it depends on where the
+    * caller runs: on a pool's worker, that worker's, and otherwise one picked by the caller's thread. A repeatable op
+    * may go to a different reactor each time. This is `ReactorBackend.perform`.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def performOnReactor(b: ReactorBackend, op: b.Op)(using ac: Async): Unit = {
+  def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int)(using ac: Async): Unit = {
     val router = ac.scheduler match {
       // A pool's own scheduler, as on Scala Native: matched on the class, the common case, ahead of the general one.
       case pool: ReactorPool if pool.backend eq b => pool
@@ -51,17 +59,23 @@ object ReactorAsync {
     // once the op is submitted, before it waits.
     router.pin()
     val worker = router.currentWorker
-    if worker != null then performHere(b, op, worker, router)
+    if worker != null then performHere(b, op, worker, router, timeoutMillis)
     else {
       router.unpin()
-      performElsewhere(b, op, router.driverFor(Thread.currentThread()))
+      performElsewhere(b, op, router.driverFor(Thread.currentThread()), timeoutMillis)
     }
   }
 
   /** `perform` on the worker running the caller, which `pinned` keeps there until the op is submitted: an op the
-    * reactor finishes at once returns without suspending.
+    * reactor finishes at once returns without suspending. The reactor keeps the time limit.
     */
-  private def performHere(b: ReactorBackend, op: b.Op, worker: ReactorWorker, pinned: OpRouter)(using ac: Async): Unit = {
+  private def performHere(
+      b: ReactorBackend,
+      op: b.Op,
+      worker: ReactorWorker,
+      pinned: OpRouter,
+      timeoutMillis: Int
+  )(using ac: Async): Unit = {
     val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
     // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
     // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
@@ -93,15 +107,15 @@ object ReactorAsync {
       val finished =
         try
           if worker.turnFastPathsLeft > 0 then {
-            val now = r.trySubmit(op, waiter.completion)
+            val now = r.trySubmit(op, waiter.completion, timeoutMillis)
             if now then worker.turnFastPathsLeft -= 1
             now
           } else if worker.fastPathsLeft > 0 && worker.isIdle then {
-            val now = r.trySubmit(op, waiter.completion)
+            val now = r.trySubmit(op, waiter.completion, timeoutMillis)
             if now then worker.fastPathsLeft -= 1
             now
           } else {
-            r.submit(op, waiter.completion)
+            r.submit(op, waiter.completion, timeoutMillis)
             false
           }
         finally pinned.unpin() // before the await parks, which pinned would park the worker's thread
@@ -115,10 +129,15 @@ object ReactorAsync {
   }
 
   /** `perform` from a caller on no worker: the op is handed to `driver`'s thread, which submits it, and the caller
-    * suspends until its completion, which runs there, resumes it.
+    * suspends until its completion, which runs there, resumes it. An op's time limit runs from here: what the op
+    * spends being tried and waited for on the caller counts, and an op whose time runs out there, having done nothing
+    * yet, throws `TimeoutException` without reaching a reactor.
     */
-  private def performElsewhere(b: ReactorBackend, op: b.Op, driver: ReactorDriver)(using ac: Async): Unit = {
+  private def performElsewhere(b: ReactorBackend, op: b.Op, driver: ReactorDriver, timeoutMillis: Int)(using
+      ac: Async
+  ): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
+    val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     val waiter = b.attachment(op) match {
       case reused: RemoteWaiter if !reused.inUse => reused
       case _                                     =>
@@ -127,8 +146,9 @@ object ReactorAsync {
         fresh
     }
     // A blocking op runs here: the caller may block anyway, and is on no reactor's thread. Cancelling the caller
-    // interrupts it, as cancelling the op on a reactor would.
-    val here = b.blockingHere(op)
+    // interrupts it, as cancelling the op on a reactor would. One with a time limit goes to a reactor, whose loop
+    // interrupts it when its time is up, as nothing here could.
+    val here = if deadline < 0 then b.blockingHere(op) else null
     if here != null then {
       cancellationScope(new Cancellable { def cancel(): Unit = here.cancel() })(here.run())
       return
@@ -159,6 +179,7 @@ object ReactorAsync {
         waiter.finishedHere += 1
         return
       }
+      if deadline >= 0 && System.nanoTime() >= deadline then throw new TimeoutException(s"$op timed out")
     }
     waiter.finishedHere = 0
     // Wait here, parked in the caller's own thread, rather than on a reactor: no thread is woken to register the
@@ -172,9 +193,11 @@ object ReactorAsync {
         try
           cancellationScope(here) {
             while true do {
-              val done = here.await()
+              val remaining = if deadline < 0 then -1L else math.max(deadline - System.nanoTime(), 0L)
+              val done = here.await(remaining)
               if ac.group.isCancelled then throw new CancellationException()
               if done || b.tryNow(op) then return
+              if deadline >= 0 && System.nanoTime() >= deadline then throw new TimeoutException(s"$op timed out")
             }
           }
         finally RemoteWaiter.waiting.decrementAndGet()
@@ -185,8 +208,10 @@ object ReactorAsync {
     try {
       // Linked first: a cancel is handed to the same thread after the submission, so it finds the op pending.
       waiter.link()
+      // The reactor takes over the time limit: what is left of it, since the op was started here.
+      val left = if deadline < 0 then timeoutMillis else (math.max(deadline - System.nanoTime(), 0L) / 1_000_000L).toInt
       driver.sync(
-        try submitOn(driver, op, waiter.completion)
+        try submitOn(driver, op, waiter.completion, left)
         catch case t: Throwable => waiter.refuse(t) // a refused op, such as a one-shot op submitted twice
       )
       RemoteWaiter.waiting.incrementAndGet()
@@ -202,7 +227,13 @@ object ReactorAsync {
     * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
     * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
     */
-  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission = {
+  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission =
+    submit(b, op, completion, Backend.NoTimeout)
+
+  /** `submit` with a time limit, which the reactor keeps (see `Submitter.submit`). */
+  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using
+      ac: Async
+  ): Submission = {
     val router = ac.scheduler match {
       case pool: ReactorPool if pool.backend eq b => pool // the common case, matched on the class
       case _                                      => routerFor(b)
@@ -210,13 +241,15 @@ object ReactorAsync {
     router.pin() // as `performOnReactor` does, until the op is submitted on the worker found
     val worker = router.currentWorker
     if worker != null then {
-      try worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion) // its reactor is one of `b`'s
+      // Its reactor is one of `b`'s.
+      try worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion, timeoutMillis)
       finally router.unpin()
       new Submission(worker, op)
     } else {
       router.unpin()
       val driver = router.driverFor(Thread.currentThread())
-      driver.sync(submitOn(driver, op, completion.asInstanceOf[Completion[Any]])) // its ops are `b`'s, as is the reactor
+      // Its ops are `b`'s, as is the reactor.
+      driver.sync(submitOn(driver, op, completion.asInstanceOf[Completion[Any]], timeoutMillis))
       new Submission(driver, op)
     }
   }
@@ -239,9 +272,9 @@ object ReactorAsync {
   }
 
   /** Submits `op` to `driver`'s reactor, on its thread; the op was built by the backend whose reactor it is. */
-  private def submitOn(driver: ReactorDriver, op: Any, completion: Completion[Any]): Unit = {
+  private def submitOn(driver: ReactorDriver, op: Any, completion: Completion[Any], timeoutMillis: Int): Unit = {
     val r = driver.reactor
-    r.submit(op.asInstanceOf[r.Op], completion)
+    r.submit(op.asInstanceOf[r.Op], completion, timeoutMillis)
   }
 
   /** Cancels `op` on `driver`'s reactor, on its thread (see `submitOn`). */

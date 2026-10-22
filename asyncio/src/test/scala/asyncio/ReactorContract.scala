@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import munit.FunSuite
 
@@ -247,6 +248,73 @@ trait ReactorContract extends FunSuite {
         close(r, in)
         close(r, out)
       }
+    }
+  }
+
+  test("a read with a time limit fails with TimeoutException when nothing comes, and may then be submitted again") {
+    withReactor { r =>
+      val (in, out) = backend.handles.pipe()
+      try {
+        val buf = allocate(16)
+        val read = backend.ops.read(in, buf)
+        val first = Outcome()
+        val started = System.nanoTime()
+        r.submit(read, first, timeoutMillis = 20)
+        turnUntil(r)(first.finished)
+        assert(first.failure.isInstanceOf[TimeoutException], String.valueOf(first.failure))
+        assert(System.nanoTime() - started >= 20_000_000L, "the read timed out early")
+        assertEquals(buf.position(), 0) // nothing was read
+        assert(!r.cancel(read), "a timed-out op is no longer pending")
+        val second = Outcome()
+        r.submit(read, second, timeoutMillis = 5_000)
+        r.submit(backend.ops.write(out, bytes("in time")), Outcome())
+        turnUntil(r)(second.finished)
+        assertEquals(second.completed, 1)
+        assertEquals(text(buf), "in time")
+        // Its time limit went with it: nothing more comes of the read once it is done.
+        val later = Outcome()
+        r.submit(backend.ops.timer(30), later)
+        turnUntil(r)(later.finished)
+        assertEquals(second.completed, 1)
+        assertEquals(second.failure, null)
+        assertEquals(first.completed, 0)
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    }
+  }
+
+  test("a timer with a shorter time limit fails with TimeoutException when the limit is up") {
+    withReactor { r =>
+      val outcome = Outcome()
+      val started = System.nanoTime()
+      r.submit(backend.ops.timer(60_000), outcome, timeoutMillis = 20)
+      turnUntil(r)(outcome.finished)
+      assert(outcome.failure.isInstanceOf[TimeoutException], String.valueOf(outcome.failure))
+      assert(System.nanoTime() - started < 30_000_000_000L)
+      val again = Outcome()
+      r.submit(backend.ops.timer(1), again, timeoutMillis = 5_000) // the op again, within its limit
+      turnUntil(r)(again.finished)
+      assertEquals(again.completed, 1)
+    }
+  }
+
+  test("a blocking op past its time limit is interrupted, and fails once it has returned") {
+    withReactor { r =>
+      val returned = new AtomicBoolean
+      val op = backend.ops.blocking { () =>
+        try Thread.sleep(10_000)
+        catch case _: InterruptedException => ()
+        returned.set(true)
+      }
+      val outcome = Outcome()
+      r.submit(op, outcome, timeoutMillis = 20)
+      turnUntil(r)(outcome.finished)
+      assert(outcome.failure.isInstanceOf[TimeoutException], String.valueOf(outcome.failure))
+      assert(returned.get(), "onFailure ran before the body returned")
+      assertEquals(outcome.completed, 0)
+      assertEquals(outcome.cancelled, 0)
     }
   }
 

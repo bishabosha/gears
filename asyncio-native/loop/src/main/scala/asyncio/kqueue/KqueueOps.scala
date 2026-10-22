@@ -23,7 +23,8 @@ import asyncio.unsafe.NativePool
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below
   * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`.
   */
-sealed trait KqueueOp {
+sealed trait KqueueOp extends asyncio.unsafe.TimerHeap.Entry {
+  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
   /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
   @volatile private[kqueue] var submitted = false
@@ -144,8 +145,11 @@ final class WhenReady(val fd: Int, val interest: Interest, body: () => Boolean) 
 }
 
 /** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */
-final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable with asyncio.unsafe.TimerHeap.Entry {
+final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable {
   require(milliseconds >= 0, "Timer duration must not be negative")
+
+  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
+  private[kqueue] var expires = false
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
@@ -194,8 +198,11 @@ object KqueuePromise {
   */
 abstract class KqueueBlocking extends KqueuePromise with BlockingRun {
 
-  /** The cancelled submission whose `onCancel` waits for `block` to return. Loop thread only. */
+  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
+    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
+    */
   private[kqueue] var cancelling: Completion[KqueueOp] | Null = null
+  private[kqueue] var cancelledBy: Throwable | Null = null
 
   protected def settled(failure: Throwable | Null): Unit =
     if failure != null then fail(failure) else signal()

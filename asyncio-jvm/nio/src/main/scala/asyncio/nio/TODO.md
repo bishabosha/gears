@@ -687,3 +687,34 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     check finds its free port by listening with the backend and letting go, since `java.net.ServerSocket` is the
     JDK's; `jvmAsyncioGears` and `nativeAsyncioGears` now depend on the tests below them (`test->test`).
 
+
+18. [x] **A time limit on the submission, instead of a timer raced against the op.** A read with a timeout was
+    `withTimeout`'s race: a future for the op, a future for a timer, and the loser cancelled, which on `Carriers.Jdk`
+    is a timer handed to a reactor thread and a cancel handed after it (the bench's `pingpong-deadline` armed and
+    cancelled one per round trip). Now `Submitter.submit`, `trySubmit` and `Backend.perform` take `timeoutMillis`
+    (`Backend.NoTimeout`, negative, for none): the reactor puts the op in its timer heap beside the timers
+    (`TimerHeap`, moved to the shared module, its `Entry` now the base of every op), `take` removes the entry when the
+    op finishes first, and `fireDueTimers` withdraws an op that is due exactly as `cancel` withdraws it, then
+    `onFailure` with `TimeoutException` where that would be `onCancel`; a blocking task past its limit is interrupted
+    and fails once `block` has returned (`cancelledBy` beside `cancelling`), and a timer with a shorter limit fails
+    when the limit is up (`expires`). On the readiness backends a read that timed out did nothing: the buffer is as it
+    was and the handle as usable as before, which is what no JDK API gives (an interrupted or cancelled read there
+    closes the socket, or kills its direction). In gears, `perform(b, op, timeoutMillis)` is the whole timeout: on the
+    Jdk ladder the limit bounds the yields and the wait on the handle's own selector (`WaitHere.await(timeoutNanos)`,
+    a timed `select`), so an op whose time runs out on the caller throws without a reactor ever hearing of it, and
+    what is left of the limit goes with the op when it is handed over; a blocking op with a limit goes to a reactor,
+    whose loop can interrupt it. Checks: three in `ReactorContract` (a read, a timer, a blocking op) and two in
+    `FuturesContract`, on every backend and carrier mode.
+
+    `pingpong` against `pingpong-deadline`, NIO over Unix sockets, JDK 27, one worker, median of 5, µs/op, the commit
+    before against the working tree (`kqueue-demo/bench/results/time-limit-nio.json`):
+
+    | scenario | Jdk before | Jdk after | Reactors before | Reactors after |
+    | --- | --- | --- | --- | --- |
+    | pingpong | 6.70 | 7.16 | 9.63 | 9.68 |
+    | pingpong-deadline | 10.24 | 6.02 | 9.64 | 9.37 |
+
+    On `Carriers.Jdk` the timeout cost 3.5 µs a round trip, the two hand-offs, and now costs nothing: the limit is a
+    heap entry on whichever side waits. On `Carriers.Reactors` the timer was already armed on the worker's own
+    reactor, so the gap was small before and is gone now. kqueue not measured; it is the same heap. Not done: gears'
+    own `withTimeout` still races, for code that is not an op.
