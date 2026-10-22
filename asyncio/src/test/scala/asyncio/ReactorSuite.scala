@@ -76,11 +76,37 @@ class ReactorSuite extends FunSuite {
 
   test("only ops marked Repeatable promise they can be resubmitted") {
     assertEquals(
-      compileErrors("def repeat(a: Reactor)(h: Handle): Repeatable = a.ops.accept(h, Handle.Slot())"),
+      compileErrors("def repeat(b: SocketBackend)(h: Handle): Repeatable = b.ops.accept(h, Handle.Slot())"),
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
     assert(compileErrors("def repeat(b: BlockingBackend): Repeatable = b.ops.blocking(() => ())").nonEmpty)
+  }
+
+  test("sockets, files, pipes and name resolution are capabilities a backend has, not every backend") {
+    assert(compileErrors("def c(b: Backend) = b.handles.connect(IpAddress.IPv4(\"h\", 1))").nonEmpty)
+    assert(compileErrors("def l(b: Backend)(h: Handle) = b.ops.listening(h)").nonEmpty)
+    assert(compileErrors("def p(b: Backend) = b.handles.pipe()").nonEmpty)
+    assert(compileErrors("def r(b: Backend) = b.ops.resolve(\"h\", Slot())").nonEmpty)
+    assert(compileErrors("def f(b: Backend) = b.ops.open(\"p\", false, Handle.Slot())").nonEmpty)
+    assertEquals(compileErrors("def c(b: SocketBackend) = b.handles.connect(IpAddress.IPv4(\"h\", 1))"), "")
+    assertEquals(compileErrors("def l(b: SocketBackend)(h: Handle) = b.ops.listening(h)"), "")
+    assertEquals(compileErrors("def u(b: UnixStreamBackend)(h: Handle) = b.ops.accept(h, Handle.Slot())"), "")
+    assertEquals(compileErrors("def p(b: PipeBackend) = b.handles.pipe()"), "")
+    assertEquals(compileErrors("def r(b: ResolveBackend) = b.ops.resolve(\"h\", Slot())"), "")
+    assertEquals(compileErrors("def f(b: FileBackend) = b.ops.open(\"p\", false, Handle.Slot())"), "")
+    assertEquals(compileErrors("def s(b: FileBackend)(h: Handle): Repeatable = b.ops.read(h, null, 0L)"), "")
+    assertEquals(compileErrors("def t(b: Backend)(h: Handle): Repeatable = b.ops.read(h, null)"), "")
+  }
+
+  test("a reactor is a submitter with a loop; a completion backend's ops carry attachments") {
+    assertEquals(compileErrors("def s(r: Reactor): Submitter = r"), "")
+    assertEquals(compileErrors("def sub(s: Submitter): Unit = s.submit(s.ops.timer(1), _ => ())"), "")
+    assert(compileErrors("def turn(s: Submitter): Unit = s.runOnce(false)").nonEmpty)
+    assertEquals(compileErrors("def c(b: ReactorBackend): CompletionBackend = b"), "")
+    assertEquals(compileErrors("def a(b: CompletionBackend)(op: b.Op) = b.attachment(op)"), "")
+    assert(compileErrors("def a(b: Backend)(op: b.Op) = b.attachment(op)").nonEmpty)
+    assert(compileErrors("def o(b: CompletionBackend) = b.open()").nonEmpty)
   }
 
   test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {

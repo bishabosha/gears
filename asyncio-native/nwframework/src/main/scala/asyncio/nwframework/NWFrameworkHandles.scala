@@ -16,7 +16,9 @@ import scala.scalanative.unsigned.*
 import asyncio.FifoHandles
 import asyncio.Handle
 import asyncio.IpAddress
+import asyncio.PipeHandles
 import asyncio.Received
+import asyncio.SocketHandles
 import asyncio.unsafe.Descriptors
 import asyncio.unsafe.NativePool
 import NWFrameworkEvent.*
@@ -624,7 +626,7 @@ private[nwframework] object NWFrameworkHandle {
   * descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are descriptors, which
   * Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there are none.
   */
-object NWFrameworkHandles extends FifoHandles {
+object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandles {
 
   // The table: a handle number is an index, reused once closed.
   private val table = new Handle.Table[NWFrameworkHandle](256)
@@ -653,6 +655,9 @@ object NWFrameworkHandles extends FifoHandles {
     new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, null)
   )
 
+  /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
+    * reactor.
+    */
   def openFile(path: String, write: Boolean): Handle =
     add(new NWFrameworkHandle(NWFrameworkHandle.File, null, Descriptors.openFile(path, write), null))
 

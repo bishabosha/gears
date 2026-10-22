@@ -34,13 +34,28 @@ trait BlockingRun {
   /** What `block` threw, if anything: written by the thread that ran it, before `end`, and read there. */
   private var thrown: Throwable | Null = null
 
-  /** Called by the thread about to run `block`; false if the task was cancelled before it started. */
+  /** Called by the thread about to run `block`; false if the task was cancelled before it started, which ends it: the
+    * pool has let go of it, as it has of one whose `block` returned.
+    */
   private def begin(): Boolean = synchronized {
-    if cancelled then false
-    else {
+    if cancelled then {
+      ended = true
+      notifyAll()
+      false
+    } else {
       runner = Thread.currentThread()
       true
     }
+  }
+
+  /** Makes the task ready to run again, for a `Repeatable` op submitted again: called by the reactor on each
+    * submission, before the task goes to the pool, once its previous run has ended or its cancel has been delivered.
+    */
+  private[asyncio] def restart(): Unit = synchronized {
+    require(runner == null, "A blocking task cannot be restarted while it is running")
+    cancelled = false
+    ended = false
+    thrown = null
   }
 
   /** Called by the thread that ran `block`, after it. Once this returns no cancel can interrupt the thread, so any
@@ -67,8 +82,13 @@ trait BlockingRun {
       true
     }
 
-  /** Runs the task on a blocker thread: `block`, then `settled` with its outcome, unless it was cancelled first. */
-  private[asyncio] def runAndSettle(): Unit = if runBlock() then settled(thrown)
+  /** Runs the task on a blocker thread: `block`, then `settled` with its outcome. A task cancelled before it started is
+    * skipped, and settled all the same, so that the reactor learns the pool has let go of it (see `interrupt`).
+    */
+  private[asyncio] def runAndSettle(): Unit = {
+    val ran = runBlock()
+    settled(if ran then thrown else null)
+  }
 
   /** Runs `block` on the calling thread, as a blocker thread would, without settling the task: skipped, with
     * `CancellationException`, if the task was cancelled before it started, and the same thrown once it returns if it
@@ -80,22 +100,36 @@ trait BlockingRun {
     if failure != null then throw failure
   }
 
-  /** Marks the task cancelled and interrupts its thread if it is running. Returns true if it was running, so `block`
-    * may still touch the op's buffers and slots until it returns: the blocker thread reports that through `settled`,
-    * and `awaitEnd` waits for it.
+  /** Marks the task cancelled and interrupts its thread if it is running. Returns true if the pool still holds it,
+    * running `block`, which may touch the op's buffers and slots until it returns, or queued to run it, which it will
+    * skip: either way the blocker thread reports through `settled` when it has let go, and `awaitEnd` waits for that.
+    * False once it has ended. For a task given to the pool, or run with `runHere`: one never submitted has not ended
+    * either, and a reactor only cancels what it holds pending.
     */
   def interrupt(): Boolean = synchronized {
     cancelled = true
     val running = runner
     if running != null then running.interrupt()
-    running != null
+    !ended
   }
 
   /** Writes `value` into `into` unless the task has been cancelled. It holds the lock `interrupt` takes, so the write
     * either happens entirely before the cancel or not at all.
     */
-  protected final def publish[A <: AnyRef](into: Slot[A], value: A): Unit = synchronized {
-    if !cancelled then into.set(value)
+  protected final def publish[A <: AnyRef](into: Slot[A], value: A): Unit = unlessCancelled(into.set(value))
+
+  /** Writes `handle` into `into`, as the other `publish` writes a value. */
+  protected final def publish(into: Handle.Slot, handle: Handle): Unit = unlessCancelled(into.set(handle))
+
+  /** Runs `write`, a write to the op's buffers or slots, unless the task has been cancelled, under the lock `interrupt`
+    * takes: the write either happens entirely before the cancel or not at all. Returns whether it ran.
+    */
+  protected final def unlessCancelled(write: => Unit): Boolean = synchronized {
+    if cancelled then false
+    else {
+      write
+      true
+    }
   }
 
   /** Waits until a running `block` has returned. An interrupt of the waiting thread is kept for later. */

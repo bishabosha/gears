@@ -49,33 +49,37 @@ user-space threads and replaces them with fewer threads nobody controls, plus tw
 overlaps IO at the device that the blocker pool does not, and macOS has no io_uring equivalent. The JDK's
 `AsynchronousFileChannel` is the same design on Unix: a thread pool running positional reads.
 
-## The ops
+## The ops, as built on 2026-10-22
 
-File ops should be positional, as `pread` and `pwrite` are, so that one handle serves concurrent reads at different
-offsets and no op depends on a shared file position:
+`FileOps`, the ops of a `FileBackend`, which kqueue, NIO and Network.framework all are:
 
-- `read(handle, buf, offset)` and `write(handle, buf, offset)`, completing with at least one byte transferred or the
-  end of the file, as the stream `read` and `write` do, so a caller resubmits with the offset advanced. Both
-  `Repeatable`.
-- `sync(handle)`, for `fsync`, which is the slow operation a writer actually waits on.
-- The pooled `read(handle, pool, into, offset)`, for a backend that can read straight into a pool buffer.
+- `open(path, write, into)`: opens the regular file and writes its handle into a `Handle.Slot`, as `accept` does a
+  connection's; anything but a regular file fails the op. Opening is an op, not a `Handles` method, because opening
+  does disk I/O for the path lookup as reads do, and some environments can only open asynchronously (Node's `fs.open`
+  on its threadpool, a browser's OPFS). The handle number is not allocated before the open: kqueue's handles are the
+  descriptors themselves, so there is no number until `open(2)` returns.
+- `read(handle, buf, offset)` and `write(handle, buf, offset)`: positional, as `pread` and `pwrite` are, completing
+  with at least one byte transferred or the end of the file, as the stream `read` and `write` do. Both `Repeatable`:
+  the op's offset advances by the bytes each completion transferred, so submitting it again goes on from there, and
+  `while buf.hasRemaining do perform(read)` fills a buffer from a file.
+- `sync(handle)`, for `fsync`. `Repeatable`.
 
-The current stream `read` and `write` on a file handle keep their meaning, implemented over the positional ops with
-a position the handle carries, so that code treating a file as a stream keeps working. `Handles.openFile` loses
-"always ready" from its contract: ops on a file complete later, from the loop, like any other.
-
-Cancellation follows `blocking`: a positional op not yet started is skipped, one running finishes on its thread and
-its result is discarded, and `onCancel` runs once the thread has stopped touching the buffer. The op's buffer must
-not be reused until then, which `Completion.onCancel` already promises.
+The stream `read` and `write` on a file handle keep their meaning, reading and writing at the position the handle
+carries, on the reactor thread as before; moving them onto the positional ops is still to do. Cancellation follows
+`blocking`: an op not yet started is skipped, one running finishes on its thread and its result is discarded, and
+`onCancel` runs once the thread has stopped touching the buffer. The positional ops are the first `Repeatable`
+blocking ops, so `BlockingRun` is restarted on each submission, and a task cancelled before it started is now settled
+by the pool when it skips it, rather than being cancelled at once, so that a resubmission cannot find it still queued.
 
 ## Implementations
 
-- **kqueue, Network.framework, NIO**: each positional op is a `BlockingRun` on `Blockers`, doing `pread`, `pwrite`
-  or `fsync` (`FileChannel.read(buf, position)` and `force` on the JVM) and publishing into the op through the
-  existing `settled` path, as `resolve` does. No new threads, no aio.
-- **Linux, later**: io_uring's `IORING_OP_READ` and `IORING_OP_WRITE` with an offset are asynchronous at the device,
-  with the op's buffer registered or not; the same ops, no thread hop. This is the reason the ops are positional:
-  io_uring has no file position to share.
+- **kqueue, Network.framework, NIO**: each file op is a `BlockingRun` on `Blockers`, doing `open`, `pread`, `pwrite`
+  or `fsync` (`FileChannel.open`, `read(buf, position)`, `write(buf, position)` and `force` on the JVM) and publishing
+  into the op through the existing `settled` path, as `resolve` does. No new threads, no aio. On Scala Native the
+  calls go through posixlib's `@blocking` bindings, so a collection need not wait for the disk.
+- **Linux, later**: io_uring's `IORING_OP_OPENAT`, `IORING_OP_READ` and `IORING_OP_WRITE` with an offset are
+  asynchronous at the device, with the op's buffer registered or not; the same ops, no thread hop. This is the reason
+  the ops are positional: io_uring has no file position to share.
 
 ## Two refinements worth more than aio
 

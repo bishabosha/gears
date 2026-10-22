@@ -7,18 +7,24 @@ import asyncio.BlockingOps
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
+import asyncio.FileOps
 import asyncio.Handle
 import asyncio.IpAddress
-import asyncio.Ops
 import asyncio.Repeatable
+import asyncio.ResolveOps
 import asyncio.ResolvedAddress
+import asyncio.SocketOps
 import asyncio.Slot
 import asyncio.BlockingRun
 import asyncio.unsafe.NativePool
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
+import asyncio.unsafe.PosixErr.cError
 import asyncio.unsafe.PosixResolver
 import asyncio.unsafe.TimerHeap
+import scala.scalanative.posix.unistd
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
 
 /** Everything `NWFrameworkReactor` can run: its `Op` member type. */
 sealed trait NWFrameworkOp {
@@ -39,7 +45,11 @@ sealed trait NWFrameworkOp {
 }
 
 /** Builds the ops `NWFrameworkReactor` understands. */
-object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp] {
+object NWFrameworkOps
+    extends SocketOps[NWFrameworkOp]
+    with BlockingOps[NWFrameworkOp]
+    with FileOps[NWFrameworkOp]
+    with ResolveOps[NWFrameworkOp] {
   def read(handle: Handle, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
   def accept(handle: Handle, into: Handle.Slot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
@@ -56,6 +66,12 @@ object NWFrameworkOps extends Ops[NWFrameworkOp] with BlockingOps[NWFrameworkOp]
     new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
   def listening(handle: Handle): NWFrameworkOp = new NWFrameworkListening(handle)
   def close(handle: Handle): NWFrameworkOp = new NWFrameworkClose(handle)
+  def open(path: String, write: Boolean, into: Handle.Slot): NWFrameworkOp = new NWFrameworkOpenFile(path, write, into)
+  def read(handle: Handle, buf: ByteBuffer, offset: Long): NWFrameworkPositionalRead =
+    new NWFrameworkPositionalRead(handle, buf, offset)
+  def write(handle: Handle, buf: ByteBuffer, offset: Long): NWFrameworkPositionalWrite =
+    new NWFrameworkPositionalWrite(handle, buf, offset)
+  def sync(handle: Handle): NWFrameworkFileSync = new NWFrameworkFileSync(handle)
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -136,14 +152,17 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
     }
 }
 
-/** Completes once a listener from `handles.listener` is listening, or fails (see `LifecycleOps.listening`). */
+/** Completes once a listener from `handles.listener` is listening, or fails (see `SocketOps.listening`); a bound
+  * datagram socket was bound when it was made, and a connected one is ready with its connection.
+  */
 final class NWFrameworkListening(val handle: Handle) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Connect
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
+    h.kind == NWFrameworkHandle.BoundDatagram || h.connected(reactor, token)
 }
 
-/** Closes a handle, completing once it is closed (see `LifecycleOps.close`): a connection's cancellation is waited
+/** Closes a handle, completing once it is closed (see `Ops.close`): a connection's cancellation is waited
   * for, and the number is taken back once the op is done, so that the reactor still finds the handle for the
   * cancelled state meanwhile; ops submitted on it meanwhile fail as closed.
   */
@@ -256,7 +275,7 @@ final class NWFrameworkTimer(val milliseconds: Int) extends NWFrameworkOp with R
 }
 
 /** A blocking task run on the blocker pool (see `BlockingRun`); once it has returned, the reactor it was submitted to
-  * runs its completion on the loop thread.
+  * runs its completion on the loop thread. One marked `Repeatable`, such as a file op, is restarted on each submission.
   */
 sealed abstract class NWFrameworkBlocking extends NWFrameworkOp with BlockingRun {
   @volatile private[nwframework] var reactor: NWFrameworkReactor | Null = null
@@ -286,5 +305,66 @@ final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) 
   def block(): Unit = PosixResolver.lookup(host) match {
     case Right(addresses) => publish(into, addresses)
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
+  }
+}
+
+/** Opens a regular file on the blocker pool and publishes its handle (see `FileOps.open`). A cancel that arrives
+  * once the file is open closes it again, since the handle never reaches the caller.
+  */
+final class NWFrameworkOpenFile(path: String, write: Boolean, into: Handle.Slot) extends NWFrameworkBlocking {
+  def block(): Unit = {
+    val handle = NWFrameworkHandles.openFile(path, write)
+    if !unlessCancelled(into.set(handle)) then NWFrameworkHandles.close(handle)
+  }
+}
+
+/** A file op on the blocker pool, on the descriptor of a regular file: the handle is resolved when the task runs, so
+  * that one closed meanwhile fails the op.
+  */
+sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFrameworkBlocking with Repeatable {
+  protected def fd: Int = {
+    val h = NWFrameworkHandles.get(handle)
+    if !h.isFile then throw new IOException(s"Handle $handle is not a regular file")
+    h.fd
+  }
+}
+
+/** A read at an offset (see `FileOps.read`): `pread` through posixlib's `@blocking` binding, at the op's offset,
+  * which each completion advances by the bytes read.
+  */
+final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
+    extends NWFrameworkFileTask(handle) {
+  def block(): Unit = {
+    val descriptor = fd
+    val read = unistd.pread(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
+    if read < 0 then throw new IOException(s"Failed to read descriptor $descriptor at $offset: ${cError()}")
+    val n = read.toInt
+    unlessCancelled {
+      NativeBuffer.advance(buf, n)
+      offset += n
+    }
+  }
+}
+
+/** A write at an offset (see `FileOps.write`): `pwrite` at the op's offset, which each completion advances. */
+final class NWFrameworkPositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
+    extends NWFrameworkFileTask(handle) {
+  def block(): Unit = {
+    val descriptor = fd
+    val written = unistd.pwrite(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
+    if written < 0 then throw new IOException(s"Failed to write descriptor $descriptor at $offset: ${cError()}")
+    val n = written.toInt
+    unlessCancelled {
+      NativeBuffer.advance(buf, n)
+      offset += n
+    }
+  }
+}
+
+/** `fsync` (see `FileOps.sync`). */
+final class NWFrameworkFileSync(handle: Handle) extends NWFrameworkFileTask(handle) {
+  def block(): Unit = {
+    val descriptor = fd
+    if unistd.fsync(descriptor) < 0 then throw new IOException(s"Failed to sync descriptor $descriptor: ${cError()}")
   }
 }

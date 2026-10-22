@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference
 import asyncio.Backend
 import asyncio.BlockingBackend
 import asyncio.ReactorBackend
+import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.Completion
 import asyncio.Handle
@@ -49,7 +50,7 @@ object GearsBench {
   )
 
   trait Client {
-    def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit
+    def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit
   }
 
   val scenarios: Seq[Scenario] = Seq(
@@ -58,7 +59,7 @@ object GearsBench {
       "one message in flight: a resume and a readiness wait per message on each side",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false)
       }
     ),
@@ -67,7 +68,7 @@ object GearsBench {
       "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, freshOps = true)
       }
     ),
@@ -77,7 +78,7 @@ object GearsBench {
         + "over without a copy",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, pooled = true)
       }
     ),
@@ -87,7 +88,7 @@ object GearsBench {
         + "at a size where they count",
       2_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count, messageSize = LargeMessage)
       }
     ),
@@ -96,7 +97,7 @@ object GearsBench {
       "as large, reading into the backend's pool, whose buffers fit one message too",
       2_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count, messageSize = LargeMessage, pooled = true)
       }
     ),
@@ -105,7 +106,7 @@ object GearsBench {
       "as pingpong, also arming and cancelling a reactor timer per round trip, like a timeout",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = true)
       },
       _.isInstanceOf[ReactorBackend]
@@ -115,7 +116,7 @@ object GearsBench {
       "many connections ping-ponging at once: many events and registrations per turn",
       100_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false))).awaitAll
         }
@@ -126,7 +127,7 @@ object GearsBench {
       "as concurrent, with a slice of computation after each round trip, in the connection's own future",
       100_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Inline))).awaitAll
         }
@@ -137,7 +138,7 @@ object GearsBench {
       "as concurrent-compute, with each slice in a future of its own, awaited before the next round trip",
       100_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Offload))).awaitAll
         }
@@ -148,7 +149,7 @@ object GearsBench {
       "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
       20_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           var i = 0
           while i < count do {
             pingPong(r, address, 1, deadline = false)
@@ -162,7 +163,7 @@ object GearsBench {
       "one connection, each message its own write while replies are read at the same time",
       200_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count)
       }
     ),
@@ -171,7 +172,7 @@ object GearsBench {
       "trivial blocking tasks one after another: a wake-up from a worker thread for each",
       100_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val b = blocking(r)
           var i = 0
           while i < count do {
@@ -187,7 +188,7 @@ object GearsBench {
       "a trivial blocking task and a round trip in turn on one connection: moving between blocking work and I/O",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, blockingFirst = true)
       },
       _.isInstanceOf[BlockingBackend]
@@ -197,7 +198,7 @@ object GearsBench {
       s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
       200_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           timerStress(reactors(r), count)
       },
       _.isInstanceOf[ReactorBackend]
@@ -208,7 +209,7 @@ object GearsBench {
         + "the time between ticks, which rises if busy futures stop yielding",
       200_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           fairness(r, address, count)
       }
     ),
@@ -219,7 +220,7 @@ object GearsBench {
         + "and -max: how late, in µs, the checker woke",
       100_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           starvation(r, address, count, connections)
       }
     ),
@@ -229,7 +230,7 @@ object GearsBench {
         + "mixed-compute, the time per slice meanwhile",
       50_000,
       new Client {
-        def apply(r: Backend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           mixed(r, address, count)
       }
     )
@@ -297,7 +298,7 @@ object GearsBench {
     * done. Between slices it yields to the scheduler with `yieldNow`, so that the ping-pong continuations run in
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
-  private def mixed(r: Backend, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
+  private def mixed(r: SocketBackend, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
     val pingPongDone = new java.util.concurrent.atomic.AtomicBoolean // read by the other future, maybe on another worker
     var slices = 0L
     val start = System.nanoTime()
@@ -326,7 +327,7 @@ object GearsBench {
     * lateness is how long the program takes to respond, whatever else it is doing. Reports the median, 99th
     * percentile and worst lateness, in µs, as `starvation-p50`, `-p99` and `-max`.
     */
-  private def starvation(r: Backend, address: StreamAddress, count: Int, connections: Int)(using
+  private def starvation(r: SocketBackend, address: StreamAddress, count: Int, connections: Int)(using
       Async.Spawn
   ): Unit = {
     val done = new java.util.concurrent.atomic.AtomicBoolean // read by the other futures, maybe on other threads
@@ -366,7 +367,7 @@ object GearsBench {
   }
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */
-  private def withConnection(r: Backend, address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
+  private def withConnection(r: SocketBackend, address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
     val fd = Sockets.connect(r, address)
     try {
       perform(r, r.ops.connect(fd))
@@ -385,7 +386,7 @@ object GearsBench {
     * task runs before each round trip; `work` says whether a slice of computation follows each, and where.
     */
   private def pingPong(
-      r: Backend,
+      r: SocketBackend,
       address: StreamAddress,
       count: Int,
       deadline: Boolean,
@@ -463,7 +464,7 @@ object GearsBench {
     * in another, into a buffer of 8 KB, or, with `pooled`, into the backend's pool of buffers the size of a message.
     */
   private def pipelined(
-      r: Backend,
+      r: SocketBackend,
       address: StreamAddress,
       count: Int,
       messageSize: Int = MessageSize,
@@ -515,7 +516,7 @@ object GearsBench {
     * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations
     * rarely wait must still let it run.
     */
-  private def fairness(r: Backend, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
+  private def fairness(r: SocketBackend, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
     val trafficDone = new java.util.concurrent.atomic.AtomicBoolean // read by the ticker, maybe on another worker
     var ticks = 0L
     val start = System.nanoTime()
@@ -533,7 +534,7 @@ object GearsBench {
   }
 
   /** Echoes everything a connection sends until it closes. */
-  private def echo(r: Backend, client: Handle)(using Async): Unit = {
+  private def echo(r: SocketBackend, client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -557,7 +558,7 @@ object GearsBench {
   }
 
   /** Starts the echo server on a pool of `workers` reactor threads of its own and returns once it is listening. */
-  private def startServer(address: StreamAddress, workers: Int, policy: TakePolicy)(using Backend): Unit = {
+  private def startServer(address: StreamAddress, workers: Int, policy: TakePolicy)(using SocketBackend): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
     val thread = new Thread(() => serve(address, listening, failure, workers, policy), "bench-server")
@@ -577,7 +578,7 @@ object GearsBench {
       failure: AtomicReference[Throwable | Null],
       workers: Int,
       policy: TakePolicy
-  )(using Backend): Unit =
+  )(using SocketBackend): Unit =
     try
       ReactorFutures.run(workers, policy) { r =>
         val server =
@@ -600,7 +601,7 @@ object GearsBench {
   /** Runs the echo server alone, on a pool of `workers` workers, until the process ends: for a bench on another
     * machine, which connects to it over the network (`run` with `server = false`).
     */
-  def serveForever(address: StreamAddress, workers: Int = 1, policy: TakePolicy = TakePolicy.Affine)(using Backend): Unit = {
+  def serveForever(address: StreamAddress, workers: Int = 1, policy: TakePolicy = TakePolicy.Affine)(using SocketBackend): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
     serve(address, listening, failure, workers, policy)
@@ -622,7 +623,7 @@ object GearsBench {
       policy: TakePolicy = TakePolicy.Affine,
       warmup: Boolean = false,
       server: Boolean = true
-  )(using Backend): Unit = {
+  )(using SocketBackend): Unit = {
     val selected =
       if names.isEmpty then scenarios
       else
@@ -635,7 +636,7 @@ object GearsBench {
               )
             )
         )
-    val backend = summon[Backend]
+    val backend = summon[SocketBackend]
     for scenario <- selected if !scenario.runsOn(backend) do
       System.err.println(s"skipping ${scenario.name}: $backend does not have what it needs")
     val runnable = selected.filter(_.runsOn(backend))

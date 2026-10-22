@@ -6,12 +6,15 @@ import java.nio.charset.StandardCharsets
 
 import asyncio.Backend
 import asyncio.Interest
+import asyncio.PipeBackend
 import asyncio.ReadinessBackend
+import asyncio.ResolveBackend
+import asyncio.SocketBackend
 import ReactorAsync.*
 
 /** `FuturesContract`'s checks of readiness, for a backend that has it. */
 trait ReadinessFuturesChecks extends FuturesContract {
-  val backend: Backend & ReadinessBackend
+  val backend: Backend & SocketBackend & PipeBackend & ResolveBackend & ReadinessBackend
 
   test("whenReady runs its body once the handle is ready") {
     var outcome = ""

@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 /** What a backend with Unix datagram sockets must do (see `ReactorContract`). */
-trait UnixDatagramContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & UnixDatagramBackend
+trait UnixDatagramContract extends SocketContract {
+  val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixDatagramBackend
 
   test("a Unix datagram goes to a bound socket, which learns its sender's path") {
     val dir = tempDir()

@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 
 import asyncio.Backend
 import asyncio.IpAddress
+import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.UnixDatagramBackend
 import asyncio.Slot
@@ -39,7 +40,7 @@ object GearsDatagram {
   }
 
   /** Exchanges a packet with an IP datagram server; connecting the socket also assigns it an ephemeral local port. */
-  def run(address: IpAddress, message: String)(using Backend): Unit = {
+  def run(address: IpAddress, message: String)(using SocketBackend): Unit = {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
@@ -88,7 +89,7 @@ object GearsDatagram {
     }
 
   /** Echoes each packet on an IP datagram socket to its sender. */
-  def serve(address: IpAddress)(using Backend): Unit =
+  def serve(address: IpAddress)(using SocketBackend): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { r =>

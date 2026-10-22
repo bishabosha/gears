@@ -17,13 +17,16 @@ import asyncio.BlockingRun
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
+import asyncio.FileOps
 import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.ReadinessOps
 import asyncio.Repeatable
+import asyncio.ResolveOps
 import asyncio.ResolvedAddress
 import asyncio.Slot
+import asyncio.SocketOps
 
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
   * code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -46,7 +49,12 @@ sealed trait NioOp {
 }
 
 /** Builds the ops `NioReactor` understands. */
-object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
+object NioOps
+    extends SocketOps[NioOp]
+    with ReadinessOps[NioOp]
+    with BlockingOps[NioOp]
+    with FileOps[NioOp]
+    with ResolveOps[NioOp] {
   def read(handle: Handle, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Handle, into: Handle.Slot): Accept = new Accept(handle, into)
@@ -64,6 +72,10 @@ object NioOps extends ReadinessOps[NioOp] with BlockingOps[NioOp] {
     new PooledRead(handle, NioOps.direct(pool), into)
   def listening(handle: Handle): NioOp = new Listening(handle)
   def close(handle: Handle): NioOp = new Close(handle)
+  def open(path: String, write: Boolean, into: Handle.Slot): NioOp = new OpenFile(path, write, into)
+  def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
+  def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
+  def sync(handle: Handle): FileSync = new FileSync(handle)
 
   private def direct(pool: BufferPool): DirectPool = pool match {
     case direct: DirectPool => direct
@@ -78,12 +90,14 @@ sealed abstract class NioAtOnce extends NioOp {
   def perform(): Unit
 }
 
-/** Binds a listener from `NioHandles.listener` (see `LifecycleOps.listening`). */
+/** Binds a listener from `NioHandles.listener`, or finds a datagram socket bound, as it was when made (see
+  * `SocketOps.listening`).
+  */
 final class Listening(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.bind(handle)
 }
 
-/** Closes a handle (see `LifecycleOps.close`): at once, as `NioHandles.close` does. */
+/** Closes a handle (see `Ops.close`): at once, as `NioHandles.close` does. */
 final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
 }
@@ -246,6 +260,11 @@ sealed abstract class NioPromise extends NioOp {
   /** Completes the promise with a failure instead. */
   def fail(failure: Throwable): Unit = settle(NioPromise.Failed(failure))
 
+  /** Forgets the previous submission's outcome, for a `Repeatable` promise submitted again. Loop thread only, before
+    * the submission can complete.
+    */
+  private[nio] def reset(): Unit = outcome.set(NioPromise.Unsettled)
+
   /** Tells the reactor this promise has finished, without a value. */
   private[nio] def signal(): Unit = settle(())
 
@@ -267,7 +286,8 @@ object NioPromise {
 /** A promise the reactor completes by running `block` on the blocker pool (`Blockers`), with `BlockingRun`'s
   * cancellation: skipped if not started, interrupted if running, and `onCancel` waits for `block` to return. An
   * exception thrown by `block` is the op's failure. As with the kqueue backend's blocking ops, a subclass writes its
-  * result into its slot through `publish`, which skips the write once cancelled.
+  * result into its slot through `publish`, which skips the write once cancelled. One marked `Repeatable`, such as a
+  * file op, is restarted on each submission.
   */
 abstract class NioBlocking extends NioPromise with BlockingRun {
 
@@ -282,8 +302,14 @@ abstract class NioBlocking extends NioPromise with BlockingRun {
 
   /** Runs this op on the calling thread instead of the blocker pool (see `ReactorBackend.blockingHere`). */
   private[nio] def here(): asyncio.BlockingHere = {
-    if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
+    this match {
+      case _: Repeatable => ()
+      case _             =>
+        if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
+    }
     submitted = true
+    reset()
+    restart()
     new asyncio.BlockingHere {
       def run(): Unit = runHere()
       def cancel(): Unit = interrupt(): Unit
