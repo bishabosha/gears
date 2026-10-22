@@ -25,6 +25,7 @@ import java.nio.file.StandardOpenOption
 
 import asyncio.Handle
 import asyncio.IpAddress
+import asyncio.PipeHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixStreamHandles
@@ -196,7 +197,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles with ReadinessHandles {
+object NioHandles extends UnixStreamHandles with ReadinessHandles with PipeHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
@@ -209,6 +210,9 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
   /** What `handle` names; throws if it is not open. */
   private[nio] def entry(handle: Handle): Entry = table(handle)
 
+  /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
+    * reactor.
+    */
   def openFile(path: String, write: Boolean): Handle = {
     val file = Path.of(path)
     if !Files.exists(file) then throw new NoSuchFileException(path)
@@ -243,9 +247,12 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles {
     handle
   }
 
-  /** Binds a listener from `listener`, for its `listening` op; throws if it is not one, or the bind fails. */
+  /** Binds a listener from `listener`, for its `listening` op, or does nothing for a datagram socket, bound when it was
+    * made; throws if it is neither, or the bind fails.
+    */
   private[nio] def bind(handle: Handle): Unit = {
     entry(handle) match {
+      case s: Selectable if s.channel.isInstanceOf[DatagramChannel] => ()
       case s: Selectable =>
         val pending = s.toListen
         if pending == null then throw new IOException(s"Handle $handle is not a listener waiting to listen")

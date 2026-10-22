@@ -173,7 +173,7 @@ object Main {
     .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
 
   /** Runs `body` with the backend named: kqueue, or nwframework, Network.framework. */
-  private def withBackend(backend: String)(body: asyncio.Backend => Unit): Unit = backend match {
+  private def withBackend(backend: String)(body: asyncio.SocketBackend => Unit): Unit = backend match {
     case "kqueue" => body(KqueueBackend)
     case "nwframework" => body(asyncio.nwframework.NWFrameworkBackend)
     case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")

@@ -1,0 +1,67 @@
+package asyncio.kqueue
+
+import java.io.IOException
+import java.nio.ByteBuffer
+import scala.scalanative.posix.unistd
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
+
+import asyncio.Handle
+import asyncio.Repeatable
+import asyncio.unsafe.NativeBuffer
+import asyncio.unsafe.PosixErr.cError
+
+/** The file ops (see `FileOps`), each a blocking task on the blocker pool, since the operating system's file I/O blocks
+  * for the disk: `open`, `pread`, `pwrite` and `fsync`, through posixlib's `@blocking` bindings, so that a collection
+  * need not wait for the disk either.
+  */
+
+/** Opens a regular file and publishes its handle (see `FileOps.open`). A cancel that arrives once the file is open
+  * closes it again, since the handle never reaches the caller.
+  */
+final class OpenFile(path: String, write: Boolean, into: Handle.Slot) extends KqueueBlocking {
+  def block(): Unit = {
+    val handle = KqueueHandles.openFile(path, write)
+    if !unlessCancelled(into.set(handle)) then KqueueHandles.close(handle)
+  }
+}
+
+/** A read at an offset (see `FileOps.read`): fills `buf` from the file at the op's offset, which each completion
+  * advances by the bytes read, so that submitting the op again goes on from there.
+  */
+final class PositionalRead(val fd: Int, buf: ByteBuffer, private var offset: Long)
+    extends KqueueBlocking
+    with Repeatable {
+  def block(): Unit = {
+    val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
+    if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
+    val n = read.toInt
+    unlessCancelled {
+      NativeBuffer.advance(buf, n)
+      offset += n
+    }
+  }
+}
+
+/** A write at an offset (see `FileOps.write`): drains `buf` into the file at the op's offset, which each completion
+  * advances by the bytes written.
+  */
+final class PositionalWrite(val fd: Int, buf: ByteBuffer, private var offset: Long)
+    extends KqueueBlocking
+    with Repeatable {
+  def block(): Unit = {
+    val written = unistd.pwrite(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
+    if written < 0 then throw new IOException(s"Failed to write descriptor $fd at $offset: ${cError()}")
+    val n = written.toInt
+    unlessCancelled {
+      NativeBuffer.advance(buf, n)
+      offset += n
+    }
+  }
+}
+
+/** `fsync` (see `FileOps.sync`). */
+final class FileSync(val fd: Int) extends KqueueBlocking with Repeatable {
+  def block(): Unit =
+    if unistd.fsync(fd) < 0 then throw new IOException(s"Failed to sync descriptor $fd: ${cError()}")
+}

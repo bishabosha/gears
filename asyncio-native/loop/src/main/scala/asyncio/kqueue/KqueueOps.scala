@@ -6,11 +6,13 @@ import asyncio.BlockingOps
 import asyncio.BufferPool
 import asyncio.Received
 import asyncio.Completion
+import asyncio.FileOps
 import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.ReadinessOps
 import asyncio.Repeatable
+import asyncio.ResolveOps
 import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.UnixAddress
@@ -39,7 +41,12 @@ sealed trait KqueueOp {
 }
 
 /** Builds the ops `KqueueReactor` understands. */
-object KqueueOps extends UnixDatagramOps[KqueueOp] with ReadinessOps[KqueueOp] with BlockingOps[KqueueOp] {
+object KqueueOps
+    extends UnixDatagramOps[KqueueOp]
+    with ReadinessOps[KqueueOp]
+    with BlockingOps[KqueueOp]
+    with FileOps[KqueueOp]
+    with ResolveOps[KqueueOp] {
   def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd(handle), buf)
   def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd(handle), buf)
   def accept(handle: Handle, into: Handle.Slot): Accept = Accept(fd(handle), into)
@@ -62,6 +69,10 @@ object KqueueOps extends UnixDatagramOps[KqueueOp] with ReadinessOps[KqueueOp] w
     PooledRead(fd(handle), KqueueOps.native(pool), into)
   def listening(handle: Handle): KqueueOp = new Listening(fd(handle))
   def close(handle: Handle): KqueueOp = new Close(fd(handle))
+  def open(path: String, write: Boolean, into: Handle.Slot): KqueueOp = new OpenFile(path, write, into)
+  def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(fd(handle), buf, offset)
+  def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(fd(handle), buf, offset)
+  def sync(handle: Handle): FileSync = new FileSync(fd(handle))
 
   private def fd(handle: Handle): Int = KqueueHandles.fd(handle)
 
@@ -78,12 +89,14 @@ sealed abstract class KqueueAtOnce extends KqueueOp {
   def perform(): Unit
 }
 
-/** Binds and listens a socket from `KqueueHandles.listener` (see `LifecycleOps.listening`). */
+/** Binds and listens a socket from `KqueueHandles.listener`, or finds a datagram socket bound, as it was when made (see
+  * `SocketOps.listening`).
+  */
 final class Listening(val fd: Int) extends KqueueAtOnce {
-  def perform(): Unit = KqueueHandles.bindAndListen(fd)
+  def perform(): Unit = KqueueHandles.listening(fd)
 }
 
-/** Closes a descriptor (see `LifecycleOps.close`): at once, as `KqueueHandles.close` does. */
+/** Closes a descriptor (see `Ops.close`): at once, as `KqueueHandles.close` does. */
 final class Close(val fd: Int) extends KqueueAtOnce {
   def perform(): Unit = KqueueHandles.closeDescriptor(fd)
 }
@@ -151,6 +164,11 @@ sealed abstract class KqueuePromise extends KqueueOp {
   /** Completes the promise with a failure instead. */
   def fail(failure: Throwable): Unit = settle(KqueuePromise.Failed(failure))
 
+  /** Forgets the previous submission's outcome, for a `Repeatable` promise submitted again. Loop thread only, before
+    * the submission can complete.
+    */
+  private[kqueue] def reset(): Unit = outcome.set(KqueuePromise.Unsettled)
+
   /** Tells the reactor this promise has finished, without a value. */
   private[kqueue] def signal(): Unit = settle(())
 
@@ -171,7 +189,8 @@ object KqueuePromise {
 }
 
 /** A promise the reactor completes by running `block` on the blocker pool, with `BlockingRun`'s cancellation: skipped
-  * if not started, interrupted if running, and `onCancel` waits for `block` to return.
+  * if not started, interrupted if running, and `onCancel` waits for `block` to return. One marked `Repeatable`, such
+  * as a file op, is restarted on each submission.
   */
 abstract class KqueueBlocking extends KqueuePromise with BlockingRun {
 

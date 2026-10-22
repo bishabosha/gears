@@ -15,8 +15,11 @@ import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
 import asyncio.Backend
+import asyncio.PipeBackend
+import asyncio.ResolveBackend
 import asyncio.ResolvedAddress
 import asyncio.Slot
+import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
@@ -30,8 +33,8 @@ import ReactorAsync.*
   */
 trait FuturesContract extends FunSuite {
 
-  /** The backend under test. */
-  val backend: Backend
+  /** The backend under test: one with sockets, pipes and name resolution, which the checks use. */
+  val backend: Backend & SocketBackend & PipeBackend & ResolveBackend
 
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.

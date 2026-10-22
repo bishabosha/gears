@@ -6,11 +6,11 @@ import java.util.concurrent.CountDownLatch
   * `whenReady` bodies, and use handles without waiting.
   */
 trait ReadinessContract extends ReactorContract {
-  val backend: ReactorBackend & ReadinessBackend & BlockingBackend
+  val backend: ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend
 
   test("trySubmit finishes a read of data already waiting without calling its completion") {
     withReactor { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = backend.handles.pipe()
       try {
         backend.handles.writeNow(out, bytes("ready"))
         val buf = allocate(16)
@@ -28,7 +28,7 @@ trait ReadinessContract extends ReactorContract {
 
   test("whenReady runs its body only once the handle is ready, and waits again while it returns false") {
     withReactor { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = backend.handles.pipe()
       try {
         val buf = allocate(64)
         var runs = 0

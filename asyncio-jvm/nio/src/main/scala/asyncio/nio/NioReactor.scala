@@ -189,9 +189,11 @@ final class NioReactor private (selector: Selector) extends Reactor {
         timers.add(timer)
       case blocking: NioBlocking =>
         if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
+        blocking.reset() // a `Repeatable` promise's previous outcome
         blocking.reactor = this
         blocking.completion = pending
         pendingPromises += blocking
+        blocking.restart()
         blocking.start()
       case atOnce: NioAtOnce =>
         atOnce.completion = pending

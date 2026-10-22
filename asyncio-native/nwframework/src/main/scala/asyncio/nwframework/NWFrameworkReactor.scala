@@ -127,6 +127,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         blocking.reactor = this
         blocking.completion = pending
         pendingBlockers += blocking
+        blocking.restart()
         Blockers.run(blocking)
     }
     op.submitted = true

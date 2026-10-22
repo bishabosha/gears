@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 /** What a backend with Unix stream sockets must do (see `ReactorContract`). */
-trait UnixStreamContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & UnixStreamBackend
+trait UnixStreamContract extends SocketContract {
+  val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixStreamBackend
 
   /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
   protected def listen(r: R, address: UnixAddress)(using munit.Location): Handle = {

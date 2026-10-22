@@ -17,6 +17,7 @@ import scala.scalanative.unsigned.*
 import asyncio.FifoHandles
 import asyncio.Handle
 import asyncio.IpAddress
+import asyncio.PipeHandles
 import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixDatagramHandles
@@ -38,7 +39,12 @@ import asyncio.unsafe.Sockets.Transport
 /** Either kind of socket address, as the system calls take them. */
 private[kqueue] type SocketAddress = IpAddress | UnixAddress
 
-object KqueueHandles extends UnixStreamHandles with UnixDatagramHandles with FifoHandles with ReadinessHandles {
+object KqueueHandles
+    extends UnixStreamHandles
+    with UnixDatagramHandles
+    with FifoHandles
+    with ReadinessHandles
+    with PipeHandles {
 
   /** What is kept about an open socket, as its descriptor's note in `DescriptorTable`: the Unix path it bound, to
     * remove when it closes, and for a socket from `listener`, where it is to listen until its `listening` op binds it.
@@ -46,6 +52,7 @@ object KqueueHandles extends UnixStreamHandles with UnixDatagramHandles with Fif
   private final class SocketNote {
     @volatile var boundPath: String | Null = null
     @volatile var toListen: (SocketAddress, Boolean) | Null = null
+    @volatile var datagram = false // bound, or connected, when made: its `listening` op has nothing to do
   }
 
   /** `fd`'s note, made if it has none. Only the thread opening or binding a socket sets one. */
@@ -77,22 +84,28 @@ object KqueueHandles extends UnixStreamHandles with UnixDatagramHandles with Fif
     fd
   }
 
-  /** Binds and listens a socket from `listener`, for its `listening` op; throws if it is not one, or the bind fails. */
-  private[kqueue] def bindAndListen(fd: Int): Unit = {
-    val pending = DescriptorTable.note(fd) match {
-      case note: SocketNote => val pending = note.toListen; note.toListen = null; pending
+  /** Binds and listens a socket from `listener`, for its `listening` op, or does nothing for a datagram socket, bound
+    * when it was made; throws if it is neither, or the bind fails.
+    */
+  private[kqueue] def listening(fd: Int): Unit = {
+    val note = DescriptorTable.note(fd) match {
+      case note: SocketNote => note
       case _                => null
     }
-    if pending == null then throw new IOException(s"Descriptor $fd is not a listener waiting to listen")
+    val pending = if note == null then null else { val pending = note.toListen; note.toListen = null; pending }
+    if pending == null then
+      if note != null && note.datagram then return
+      else throw new IOException(s"Descriptor $fd is not a listener waiting to listen")
     val (address, reuseAddr) = pending
     if reuseAddr then PosixSockets.setReuseAddress(fd)
     bindTo(fd, address)
     PosixSockets.listen(fd, PosixSockets.maxConnections)
   }
 
-  /** Opens a regular file. Its descriptor is marked in `DescriptorTable`, so that the reactor never takes a short read
-    * of it to mean it is drained: kqueue reports a regular file readable only while its offset is short of the end, so
-    * a read waiting for that would never see the end.
+  /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
+    * reactor. Its descriptor is marked in `DescriptorTable`, so that the reactor never takes a short read of it to mean
+    * it is drained: kqueue reports a regular file readable only while its offset is short of the end, so a read waiting
+    * for that would never see the end.
     */
   def openFile(path: String, write: Boolean): Handle = {
     val fd = Descriptors.openFile(path, write)
@@ -141,10 +154,12 @@ object KqueueHandles extends UnixStreamHandles with UnixDatagramHandles with Fif
   private def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
-    socketFor(either, Transport.Datagram) { fd =>
+    val fd = socketFor(either, Transport.Datagram) { fd =>
       if local != null then bindTo(fd, local)
       if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
     }
+    noteOf(fd).datagram = true
+    fd
   }
 
   def pipe(): (Handle, Handle) = {

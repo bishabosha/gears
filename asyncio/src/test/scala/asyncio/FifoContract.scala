@@ -3,9 +3,9 @@ package asyncio
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-/** What a backend with FIFOs must do (see `ReactorContract`). */
-trait FifoContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & FifoBackend
+/** What a backend with FIFOs must do (see `ReactorContract`); with regular files too, to tell the two apart. */
+trait FifoContract extends FileContract {
+  val backend: ReactorBackend & BlockingBackend & PipeBackend & FifoBackend & FileBackend
 
   test("a FIFO carries what its writer writes, then ends when the writer closes") {
     val dir = tempDir()
@@ -26,12 +26,12 @@ trait FifoContract extends ReactorContract {
       } finally closeAlone(reader)
     } finally deleteAll(dir)
   }
-  test("openFile refuses a FIFO, and openFifo a regular file") {
+  test("open refuses a FIFO, and openFifo a regular file") {
     val dir = tempDir()
-    try {
+    try withReactor { r =>
       val fifo = dir.resolve("fifo")
       assertEquals(new ProcessBuilder("mkfifo", fifo.toString).start().waitFor(), 0)
-      intercept[java.io.IOException](backend.handles.openFile(fifo.toString, write = false))
+      intercept[java.io.IOException](open(r, fifo, write = false))
       val file = dir.resolve("file")
       Files.write(file, "x".getBytes(StandardCharsets.UTF_8))
       intercept[java.io.IOException](backend.handles.openFifo(file.toString, write = false))

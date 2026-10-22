@@ -194,11 +194,14 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             throw new IllegalStateException(s"$op is still running after being cancelled")
           case _ => ()
         }
+        promise.reset() // a `Repeatable` promise's previous outcome
         promise.reactor = this
         promise.completion = pending
         pendingPromises += promise
         promise match {
-          case blocking: KqueueBlocking => asyncio.Blockers.run(blocking)
+          case blocking: KqueueBlocking =>
+            blocking.restart()
+            asyncio.Blockers.run(blocking)
         }
       case atOnce: KqueueAtOnce =>
         atOnce.completion = pending

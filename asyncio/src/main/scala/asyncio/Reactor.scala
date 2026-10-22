@@ -1,13 +1,13 @@
 package asyncio
 
+import java.nio.ByteBuffer
+
 import _root_.gears.async.Async
 import _root_.gears.async.Cancellable
 
-import java.nio.ByteBuffer
-
 /** What to do when an op finishes. The op comes back with its outcome, so one completion can own many ops. A completion
-  * that submits further ops holds on to its reactor itself, since only a reference to that reactor has the right `Op`
-  * type.
+  * that submits further ops holds on to its submitter itself, since only a reference to that submitter has the right
+  * `Op` type.
   */
 @FunctionalInterface
 trait Completion[-C] {
@@ -20,42 +20,43 @@ trait Completion[-C] {
   /** The op failed with an exception instead of finishing. By default the failure propagates out of `Reactor.run`. */
   def onFailure(op: C, failure: Throwable): Unit = throw failure
 
-  /** The op was cancelled before it finished, by `Reactor.cancel` or because the reactor closed. It runs on the reactor
-    * thread once the reactor has stopped using the op's buffers and slots, which are the caller's again, and afterwards
-    * neither `onComplete` nor `onFailure` runs for this submission. It must not submit ops while the reactor is
-    * closing. By default it does nothing.
+  /** The op was cancelled before it finished, by `Submitter.cancel` or because the reactor closed. It runs on the
+    * submitter's thread once the submitter has stopped using the op's buffers and slots, which are the caller's again,
+    * and afterwards neither `onComplete` nor `onFailure` runs for this submission. It must not submit ops while the
+    * reactor is closing. By default it does nothing.
     */
   def onCancel(op: C): Unit = ()
 }
 
-/** A single-threaded event loop. Every completion runs on the thread that drives the loop with `runOnce` or `run`, and
-  * apart from `wakeup`, a reactor is only used from that thread.
+/** Where ops are submitted with completions, and whose thread runs the completions: a `Reactor`, whose loop the caller
+  * drives, or, for a backend with no loop of its own, such as one over a JavaScript host, the host's loop. Apart from
+  * what says otherwise, a submitter is used from its own thread only.
   */
-trait Reactor extends AutoCloseable {
+trait Submitter {
 
-  /** Something submitted to this reactor that later completes. The reactors one `ReactorBackend` opens share it, so an
-    * op built by the backend may go to any of them (see `ReactorBackend`); otherwise the type belongs to the reactor
-    * value: given `a, b: Reactor`, `a.Op` and `b.Op` are different types.
+  /** Something submitted here that later completes. The submitters of one `CompletionBackend` share it, so an op built
+    * by the backend may go to any of them (see `ReactorBackend`); otherwise the type belongs to the submitter value:
+    * given `a, b: Submitter`, `a.Op` and `b.Op` are different types.
     */
   type Op
 
-  /** Builds this reactor's ops, as its backend's `ops` does. Building an op does not touch the reactor, so `ops` may be
-    * used from any thread.
+  /** Builds this submitter's ops, as its backend's `ops` does. Building an op does not touch the submitter, so `ops`
+    * may be used from any thread.
     */
   def ops: Ops[Op]
 
-  /** Opens, uses without waiting, and closes this reactor's handles, as its backend's `handles` does. It does not touch
-    * the reactor either, so it may be used from any thread.
+  /** Opens, uses without waiting, and closes this submitter's handles, as its backend's `handles` does. It does not
+    * touch the submitter either, so it may be used from any thread.
     */
   def handles: Handles
 
   /** Submits an op with the completion to run when it finishes. An op marked `Repeatable` may be submitted again once
     * its previous submission has completed, failed, or been cancelled; any other op may be submitted only once. No op
     * may be pending twice at the same time. An op may finish during `submit`, such as a read of data already waiting,
-    * but its completion never runs inside `submit`: it runs from a later turn of the loop. Nor need the op be issued
-    * to the I/O facility inside `submit`: a reactor may hold the ops submitted in a turn and issue them together at
-    * the turn's end, as io_uring's submission queue or Network.framework's batches invite, so long as `trySubmit`
-    * issues at once and a turn issues everything before it blocks.
+    * but its completion never runs inside `submit`: it runs from a later turn of the loop. Nor need the op be issued to
+    * the I/O facility inside `submit`: a submitter may hold the ops submitted in a turn and issue them together at the
+    * turn's end, as io_uring's submission queue or Network.framework's batches invite, so long as `trySubmit` issues at
+    * once and a turn issues everything before it blocks.
     */
   def submit[C <: Op](op: C, completion: Completion[C]): Unit
 
@@ -65,20 +66,32 @@ trait Reactor extends AutoCloseable {
   /** Sets `op`'s attachment, as its backend's `attach` does. */
   def attach(op: Op, value: AnyRef | Null): Unit
 
-  /** Like `submit`, but an op the reactor can finish at once, as it may for an operation that only reports would-block
-    * when not ready, it finishes here: it returns true without ever calling `completion`, and the op's results are
-    * already in the caller's buffers and slots; a failure is thrown. Otherwise the op is submitted as by `submit`,
-    * `completion` runs when it finishes, and this returns false. A caller can then continue at once instead of waiting
-    * for a later turn, but must take care to let other work run if its ops keep finishing at once.
+  /** Like `submit`, but an op the submitter can finish at once, as it may for an operation that only reports
+    * would-block when not ready, it finishes here: it returns true without ever calling `completion`, and the op's
+    * results are already in the caller's buffers and slots; a failure is thrown. Otherwise the op is submitted as by
+    * `submit`, `completion` runs when it finishes, and this returns false. A caller can then continue at once instead
+    * of waiting for a later turn, but must take care to let other work run if its ops keep finishing at once.
     */
   def trySubmit[C <: Op](op: C, completion: Completion[C]): Boolean
 
   /** Cancels a submitted op that has not finished, and returns true: its completion's `onComplete` and `onFailure` will
-    * never run, and its `onCancel` runs once the reactor has stopped using the op's buffers and slots. That is before
-    * this returns for most ops, but later, from `run`, for one still running elsewhere, such as a blocking op that has
-    * to be interrupted. Returns false if the op already finished or was never submitted here.
+    * never run, and its `onCancel` runs once the submitter has stopped using the op's buffers and slots. That is before
+    * this returns for most ops, but later, from the loop, for one still running elsewhere, such as a blocking op that
+    * has to be interrupted. Returns false if the op already finished or was never submitted here.
     */
   def cancel(op: Op): Boolean
+}
+
+object Submitter {
+
+  /** A submitter that runs ops of type `O`: one of a backend whose `Op` is `O`. */
+  type Of[O] = Submitter { type Op = O }
+}
+
+/** A single-threaded event loop: a `Submitter` whose loop the caller drives with `runOnce` or `run`. Every completion
+  * runs on the thread that drives the loop, and apart from `wakeup`, a reactor is only used from that thread.
+  */
+trait Reactor extends Submitter with AutoCloseable {
 
   /** One turn of the loop: runs the completions of everything that is ready now, and returns. With `block`, if nothing
     * was ready it first waits until something is, or until `wakeup` is called. A scheduler drives the loop with this,
@@ -99,8 +112,8 @@ trait Reactor extends AutoCloseable {
 
   /** Releases the reactor's own resources. Every pending op is cancelled, so its completion gets `onCancel` and nothing
     * else; ops still running elsewhere, such as blocking ops, are waited for first. Handles named by ops belong to the
-    * caller and stay open (closing one instead fails the ops pending on it: see `Handles.close`). Call it when `run`
-    * is not running; closing twice does nothing.
+    * caller and stay open (closing one instead fails the ops pending on it: see `Ops.close`). Call it when `run` is not
+    * running; closing twice does nothing.
     */
   def close(): Unit
 }
@@ -126,19 +139,21 @@ object Reactor {
   }
 }
 
-/** A way of doing I/O: the ops it can perform, the handles they name, and `perform`, which runs one. A backend may run
-  * its ops on reactors (`ReactorBackend`), or do each one itself on the calling thread, as `asyncio.vthread`'s does
-  * with the JDK's blocking channels on a virtual thread. Ops of another backend are a different type. Building an op or
-  * using a handle performs nothing, so either may be done from any thread.
+/** A way of doing I/O: the ops it can perform, the handles they name, and `perform`, which runs one. A backend may
+  * submit its ops with completions (`CompletionBackend`), on reactors it opens (`ReactorBackend`) or on a loop it does
+  * not own, or do each one itself on the calling thread, as `asyncio.vthread`'s does with the JDK's blocking channels
+  * on a virtual thread. Ops of another backend are a different type. Building an op or using a handle performs nothing,
+  * so either may be done from any thread.
   *
-  * What every backend has is here: IP sockets, pipes and regular files, read, written, accepted, connected, sent and
-  * received, timers, and name resolution; reads into buffers of the backend's (`pool`); handles that listen and close
-  * as ops (`Ops.listening`, `Ops.close`), since a backend whose I/O facility opens and closes asynchronously, such as
-  * Network.framework or io_uring, reports an address in use, or a close done, through a completion rather than by
-  * blocking the caller. What only some have is a capability the backend mixes in, with its own handles and ops: a
-  * reactor (`ReactorBackend`), readiness (`ReadinessBackend`), blocking ops (`BlockingBackend`), `UnixStreamBackend`,
-  * `UnixDatagramBackend` and `FifoBackend`. Code that needs one asks for a backend that has it, so a backend without
-  * it is refused when compiling, not when running.
+  * What every backend has is here: streams, read and written, into the caller's buffers or into buffers of the
+  * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes
+  * asynchronously, such as Network.framework or io_uring, reports a close done through a completion rather than by
+  * blocking the caller. Where the streams come from is a capability the backend mixes in, with its own handles and ops:
+  * IP sockets (`SocketBackend`), regular files (`FileBackend`), pipes (`PipeBackend`), name resolution
+  * (`ResolveBackend`), a reactor (`ReactorBackend`), readiness (`ReadinessBackend`), blocking ops (`BlockingBackend`),
+  * `UnixStreamBackend`, `UnixDatagramBackend` and `FifoBackend`. Code that needs one asks for a backend that has it, so
+  * a backend without it, such as one in a browser, which has no sockets or files of these kinds, is refused when
+  * compiling, not when running.
   */
 trait Backend {
 
@@ -158,10 +173,28 @@ trait Backend {
     */
   def perform(op: Op)(using Async): Unit
 
-  /** Opens a pool of `buffers` buffers of `bufferSize` bytes each, for the reads into buffers of the backend's
+  /** Opens a pool of `buffers` buffers of up to `bufferSize` bytes each, for the reads into buffers of the backend's
     * (`Ops.read` with a pool). Close it once nothing of it is held.
     */
   def pool(bufferSize: Int, buffers: Int): BufferPool
+}
+
+/** A backend whose ops are submitted with completions, to a `Submitter` (see `Submitter.submit`): one whose ops run on
+  * reactors it opens (`ReactorBackend`), or on a loop the backend does not own, such as a JavaScript host's, where the
+  * one submitter is that loop. How a submitter is obtained is the backend's to say; what is here is what every such
+  * backend's ops carry.
+  */
+trait CompletionBackend extends Backend {
+
+  /** The caller's own data for `op`, kept across submissions and never read by a submitter, like kqueue's `udata` or
+    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
+    * again allocates nothing. Null until set. Used by one thread at a time: the one submitting the op, which hands it
+    * over, attachment included, when the op moves to another submitter's thread.
+    */
+  def attachment(op: Op): AnyRef | Null
+
+  /** Sets `op`'s attachment (see `attachment`). */
+  def attach(op: Op, value: AnyRef | Null): Unit
 }
 
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
@@ -170,17 +203,7 @@ trait Backend {
   * routes an op to a reactor of the caller's program (see `asyncio.gears.ReactorAsync`), which must have been started
   * by `ReactorFutures.run` with this backend.
   */
-trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
-
-  /** The caller's own data for `op`, kept across submissions and never read by a reactor, like kqueue's `udata` or
-    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
-    * again allocates nothing. Null until set. Used by one thread at a time: the one submitting the op, which hands it
-    * over, attachment included, when the op moves to another reactor's thread.
-    */
-  def attachment(op: Op): AnyRef | Null
-
-  /** Sets `op`'s attachment (see `attachment`). */
-  def attach(op: Op, value: AnyRef | Null): Unit
+trait ReactorBackend extends CompletionBackend with Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
@@ -191,10 +214,10 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   final def perform(op: Op)(using Async): Unit = asyncio.gears.ReactorAsync.performOnReactor(this, op)
 
   /** Performs `op` now, on the calling thread and on no reactor, if this backend can and the op finishes at once, as a
-    * read of data already waiting or a write that fits does: then it returns true, the op's results are in the
-    * caller's buffers and slots, and a failure is thrown, as from `Reactor.trySubmit`. Otherwise, or if this backend
-    * only tries ops on a reactor's thread, it returns false having done nothing that counts, and the op is submitted
-    * as usual. For a caller on no reactor's thread, which would otherwise hand every op to one. False by default.
+    * read of data already waiting or a write that fits does: then it returns true, the op's results are in the caller's
+    * buffers and slots, and a failure is thrown, as from `Submitter.trySubmit`. Otherwise, or if this backend only
+    * tries ops on a reactor's thread, it returns false having done nothing that counts, and the op is submitted as
+    * usual. For a caller on no reactor's thread, which would otherwise hand every op to one. False by default.
     */
   def tryNow(op: Op): Boolean = false
 
@@ -212,9 +235,9 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   /** A wait for `op` on the calling thread, for a caller that may block and is on no reactor's thread: it parks the
     * caller until `op` is done, or may be worth trying again with `tryNow`, with no reactor involved. Null if this
-    * backend cannot wait for `op` there, or waits only on its reactors. Null by default. A wait whose tries make
-    * system calls on a handle (`triesNow`) is taken only while few ops are waiting; one that contends for nothing,
-    * such as a timer parked until its time, always.
+    * backend cannot wait for `op` there, or waits only on its reactors. Null by default. A wait whose tries make system
+    * calls on a handle (`triesNow`) is taken only while few ops are waiting; one that contends for nothing, such as a
+    * timer parked until its time, always.
     */
   def waitHere(op: Op): WaitHere | Null = null
 }
@@ -224,9 +247,9 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   */
 trait WaitHere extends Cancellable {
 
-  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, and returns:
-    * true if the wait finished the op, as a timer's does once its time has passed, so there is nothing to try; false
-    * if the caller should try the op again. Throws if the op's handle has been closed.
+  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, and returns: true
+    * if the wait finished the op, as a timer's does once its time has passed, so there is nothing to try; false if the
+    * caller should try the op again. Throws if the op's handle has been closed.
     */
   def await(): Boolean
 
@@ -243,8 +266,34 @@ trait BlockingHere {
     */
   def run(): Unit
 
-  /** Cancels the op from any thread, as `Reactor.cancel` would a blocking op: skipped, or interrupted. */
+  /** Cancels the op from any thread, as `Submitter.cancel` would a blocking op: skipped, or interrupted. */
   def cancel(): Unit
+}
+
+/** A backend with IP sockets, stream and datagram (see `SocketHandles` and `SocketOps`): one over an operating system's
+  * sockets, or a host's, such as Node's; a browser has none.
+  */
+trait SocketBackend extends Backend {
+  def ops: SocketOps[Op]
+  def handles: SocketHandles
+}
+
+/** A backend with regular files, opened, read, written and synced as ops (see `FileOps`): on a thread pool where the
+  * operating system's file I/O blocks, as kqueue's, NIO's and Network.framework's do, asynchronously at the device
+  * where it does not, as io_uring's would.
+  */
+trait FileBackend extends Backend {
+  def ops: FileOps[Op]
+}
+
+/** A backend that resolves host names (see `ResolveOps`). */
+trait ResolveBackend extends Backend {
+  def ops: ResolveOps[Op]
+}
+
+/** A backend with pipes (see `PipeHandles`). */
+trait PipeBackend extends Backend {
+  def handles: PipeHandles
 }
 
 /** A backend that can say when a handle is ready, and use it without waiting (see `ReadinessOps` and
@@ -263,13 +312,13 @@ trait BlockingBackend extends Backend {
   def ops: BlockingOps[Op]
 }
 
-/** A backend with Unix domain stream sockets (see `UnixStreamHandles`). */
-trait UnixStreamBackend extends Backend {
+/** A backend with Unix domain stream sockets (see `UnixStreamHandles`), on which the socket ops run. */
+trait UnixStreamBackend extends SocketBackend {
   def handles: UnixStreamHandles
 }
 
 /** A backend with Unix domain datagram sockets (see `UnixDatagramHandles` and `UnixDatagramOps`). */
-trait UnixDatagramBackend extends Backend {
+trait UnixDatagramBackend extends SocketBackend {
   def ops: UnixDatagramOps[Op]
   def handles: UnixDatagramHandles
 }
@@ -279,9 +328,13 @@ trait FifoBackend extends Backend {
   def handles: FifoHandles
 }
 
-/** Buffers a backend fills for the reads into its own buffers, opened by `Backend.pool`. A pool may be used from any thread.
-  * `close` frees its buffers, and must come once no read is pending on it and every `Received` from it has been
-  * released.
+/** Buffers a backend fills for the reads into its own buffers, opened by `Backend.pool`. A pool may be used from any
+  * thread. `bufferSize` is the most a read into it receives at once: a backend that allocates the pool's buffers fills
+  * them, where one whose facility hands it chunks of its own, as Node's streams do, may hand such a chunk over as the
+  * `Received` instead, so long as it is no larger. `buffers` bounds how many may be held at once, by pending reads and
+  * unreleased `Received`s together, which makes the pool a window on the source: a backend that controls the source's
+  * flow may stop taking bytes while none is free, so that a read waits rather than fails. `close` frees its buffers,
+  * and must come once no read is pending on it and every `Received` from it has been released.
   */
 trait BufferPool extends AutoCloseable {
   def bufferSize: Int
@@ -293,8 +346,8 @@ trait BufferPool extends AutoCloseable {
   def close(): Unit
 }
 
-/** Bytes a pooled read received: `buffer` is one of the pool's, positioned at 0 with its limit at the bytes received,
-  * 0 at the end of the stream. It is the caller's until `release` gives it back to the pool, which must happen exactly
+/** Bytes a pooled read received: `buffer` is one of the pool's, positioned at 0 with its limit at the bytes received, 0
+  * at the end of the stream. It is the caller's until `release` gives it back to the pool, which must happen exactly
   * once, from any thread; the `Received` is not to be used after.
   */
 trait Received {
@@ -316,31 +369,41 @@ enum IpAddress {
 /** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket. */
 final case class UnixAddress(path: String)
 
-/** Opening a backend's handles; `Ops.close` closes them. Every operation is synchronous and never blocks; failures
-  * throw `java.io.IOException`.
+/** Opening a backend's handles; `Ops.close` closes them. Every operation is synchronous and never blocks: a handle from
+  * here is a name for an I/O object the backend has created, and whatever touches the network, the disk, or another
+  * thread to make it usable is an op on it, such as `SocketOps.listening`; what no environment can create
+  * synchronously, a regular file, is opened by an op alone (`FileOps.open`). Failures throw `java.io.IOException`.
   *
   * A `Handle` names an open file, socket, or other I/O object; what its number means belongs to the backend (see
-  * `Handle`). Handles belong to the caller, who closes them with `Ops.close`; the backend never closes them.
+  * `Handle`). Handles belong to the caller, who closes them with `Ops.close`; the backend never closes them. What every
+  * backend opens is nothing: each kind of handle comes with the capability that has it (`SocketHandles`, `PipeHandles`,
+  * and the rest).
   */
-trait Handles {
+trait Handles
 
-  /** Opens a regular file for reading or writing; anything else is refused. A regular file is always ready, so ops on it
-    * never wait.
-    */
-  def openFile(path: String, write: Boolean): Handle
+/** IP sockets, for a backend that has them (see `SocketBackend`). */
+trait SocketHandles extends Handles {
 
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: IpAddress): Handle
 
   /** A stream socket that will listen on `address` once `ops.listening` is performed on it: binding and listening
     * happen there, so an address in use fails that op, not this. With `reuseAddr`, the address can be bound while
-    * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for
-    * them to expire.
+    * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for them
+    * to expire.
     */
   def listener(address: IpAddress, reuseAddr: Boolean = true): Handle
 
-  /** A datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family. */
+  /** A datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family. A
+    * backend whose facility binds asynchronously binds it when `ops.listening` is performed on it; one that binds here,
+    * as the backends over POSIX sockets do, completes that op at once, so code that performs it is correct on both, and
+    * an address in use fails whichever of the two the backend binds in.
+    */
   def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle
+}
+
+/** Pipes, for a backend that has them (see `PipeBackend`). */
+trait PipeHandles extends Handles {
 
   /** A pipe, as its read end and its write end. */
   def pipe(): (Handle, Handle)
@@ -356,8 +419,9 @@ trait ReadinessHandles extends Handles {
   def writeNow(handle: Handle, buf: ByteBuffer): Int
 }
 
-/** Unix domain stream sockets, which the ops for IP stream sockets (`accept`, `connect`, `read`, `write`) also run on. */
-trait UnixStreamHandles extends Handles {
+/** Unix domain stream sockets, which the ops for IP stream sockets (`accept`, `connect`, `read`, `write`) also run on.
+  */
+trait UnixStreamHandles extends SocketHandles {
 
   /** A stream socket to connect to `address`; perform `ops.connect` to wait until it is connected. */
   def connect(address: UnixAddress): Handle
@@ -369,7 +433,7 @@ trait UnixStreamHandles extends Handles {
 }
 
 /** Unix domain datagram sockets, whose packets `UnixDatagramOps` sends and receives. */
-trait UnixDatagramHandles extends Handles {
+trait UnixDatagramHandles extends SocketHandles {
 
   /** A datagram socket, bound to `local` and connected to `remote` where given. A client needs a `local` path so that
     * replies can reach it.
@@ -385,7 +449,7 @@ trait FifoHandles extends Handles {
 }
 
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
-  * to the reactor while the op is pending: the caller clears it only after the op's completion has reached them, and
+  * to the backend while the op is pending: the caller clears it only after the op's completion has reached them, and
   * the handoff that delivers the completion is what makes the op's write visible. Setting it again before it is cleared
   * is forbidden.
   */
@@ -417,9 +481,9 @@ enum AddressFamily {
 
 final case class ResolvedAddress(family: AddressFamily, host: String)
 
-/** The ops a backend can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`).
-  * Buffers are used between position and limit, and belong to the backend while the op is being performed: on a
-  * reactor, from submission until the op's completion.
+/** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`):
+  * reads and writes of a stream, timers, and closing. Buffers are used between position and limit, and belong to the
+  * backend while the op is being performed: on a reactor, from submission until the op's completion.
   */
 trait Ops[Op] {
 
@@ -430,6 +494,33 @@ trait Ops[Op] {
 
   /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. */
   def write(handle: Handle, buf: ByteBuffer): Op & Repeatable
+
+  /** Completes once `milliseconds` have passed. */
+  def timer(milliseconds: Int): Op & Repeatable
+
+  /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
+    * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a
+    * `Received` to release. Fails if `pool` has no buffer free when the read needs one; a backend that controls its
+    * source's flow may instead stop taking bytes while none is free, so that the read waits (see `BufferPool`). A
+    * completion-based backend, such as Network.framework's or io_uring's, receives straight into the pool's buffer and
+    * hands it over, where a read into the caller's buffer costs it a copy; one whose facility hands it chunks of its
+    * own, as Node's streams do, hands such a chunk over.
+    */
+  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+
+  /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever submitter they are, have failed
+    * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from that
+    * submitter's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel that
+    * is closed; its number is then free for reuse. A Unix socket path that a listener or datagram socket bound is
+    * removed with it. Fails if `handle` is not open.
+    */
+  def close(handle: Handle): Op
+}
+
+/** The ops of IP sockets, for a backend that has them (see `SocketBackend`); `read` and `write` run on a stream socket
+  * as on any stream.
+  */
+trait SocketOps[Op] extends Ops[Op] {
 
   /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
     * be empty.
@@ -452,35 +543,52 @@ trait Ops[Op] {
   /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. */
   def send(handle: Handle, buf: ByteBuffer): Op & Repeatable
 
-  /** Completes once `milliseconds` have passed. */
-  def timer(milliseconds: Int): Op & Repeatable
+  /** Completes once `handle`, from `Handles.listener`, is listening, or fails, as `connect` does for a socket to
+    * connect: with an `IOException` if the address is in use or cannot be bound. On a datagram socket from
+    * `Handles.datagram`, completes once it is bound, which may be at once (see `SocketHandles.datagram`).
+    */
+  def listening(handle: Handle): Op
+}
+
+/** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
+  * disk I/O, for the path, as reads do, and some environments can only open asynchronously; its reads and writes are
+  * positional, as `pread` and `pwrite` are, so that one handle serves concurrent reads at different offsets and no op
+  * depends on a shared file position, which io_uring has none of either. `Ops.read` and `Ops.write` on a file handle
+  * read and write at the position the handle carries, as a stream, for code that treats a file as one.
+  *
+  * Cancellation follows `BlockingOps.blocking`: an op not yet started is skipped, one running finishes on its thread
+  * with its result discarded, and `onCancel` runs once the thread has stopped touching the buffer.
+  */
+trait FileOps[Op] extends Ops[Op] {
+
+  /** Opens the regular file at `path` for reading, or for writing with `write`, and completes after writing its handle
+    * into `into`, which must be empty; anything but a regular file is refused, failing the op with an `IOException`, as
+    * a path that cannot be opened does. A cancel that arrives before the write leaves `into` empty and the file closed.
+    */
+  def open(path: String, write: Boolean, into: Handle.Slot): Op
+
+  /** Fills `buf` from the file at `offset`, as `Ops.read` fills it from a stream: completes once at least one byte has
+    * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced.
+    */
+  def read(handle: Handle, buf: ByteBuffer, offset: Long): Op & Repeatable
+
+  /** Drains `buf` into the file at `offset`, as `Ops.write` drains it into a stream: completes once at least one byte
+    * has been written; resubmit while `buf` has bytes remaining, with the offset advanced.
+    */
+  def write(handle: Handle, buf: ByteBuffer, offset: Long): Op & Repeatable
+
+  /** Completes once the file's written bytes have reached the device, as `fsync` does. */
+  def sync(handle: Handle): Op & Repeatable
+}
+
+/** Name resolution, for a backend that has it (see `ResolveBackend`). */
+trait ResolveOps[Op] extends Ops[Op] {
 
   /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form,
     * into `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. A cancel that
     * arrives before the write leaves `into` empty.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
-
-  /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
-    * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a
-    * `Received` to release. Fails if `pool` has no buffer free when the read needs one. A completion-based backend,
-    * such as Network.framework's or io_uring's, receives straight into the pool's buffer and hands it over, where a
-    * read into the caller's buffer costs it a copy.
-    */
-  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): Op & Repeatable
-
-  /** Completes once `handle`, from `Handles.listener`, is listening, or fails, as `connect` does for a socket to
-    * connect: with an `IOException` if the address is in use or cannot be bound.
-    */
-  def listening(handle: Handle): Op
-
-  /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever reactor they are, have failed
-    * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from
-    * that reactor's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel
-    * that is closed; its number is then free for reuse. A Unix socket path that a listener or datagram socket bound is
-    * removed with it. Fails if `handle` is not open.
-    */
-  def close(handle: Handle): Op
 }
 
 /** Readiness, for a backend that has it (see `ReadinessBackend`). */
@@ -507,8 +615,8 @@ trait BlockingOps[Op] extends Ops[Op] {
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }
 
-/** The ops of Unix domain datagram sockets, as `Ops.receive` and `Ops.send` are for IP ones. */
-trait UnixDatagramOps[Op] extends Ops[Op] {
+/** The ops of Unix domain datagram sockets, as `SocketOps.receive` and `SocketOps.send` are for IP ones. */
+trait UnixDatagramOps[Op] extends SocketOps[Op] {
 
   /** Receives one packet on a Unix datagram socket, as `receive` does on an IP one; an unnamed sender has the empty
     * path.
