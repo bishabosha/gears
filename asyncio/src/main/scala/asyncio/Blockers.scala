@@ -15,8 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger
   * Writes made before the cancel are allowed, as with a partly filled buffer, but none may follow it: a subclass must
   * write its final result into its slot through `publish`, which skips the write once cancelled.
   *
-  * A backend that lets a caller run a blocking op on its own thread (`ReactorBackend.blockingHere`) runs it with
-  * `runHere`, under the same rules.
+  * A backend that runs a blocking op on the calling thread, as NIO's `NioOnCaller` does, runs it with `runHere`, under
+  * the same rules.
   */
 trait BlockingRun {
   def block(): Unit
@@ -148,7 +148,7 @@ trait BlockingRun {
   * threads, one started whenever a task finds none idle, and each ending once no task has come to it for
   * `IdleTimeoutMillis`, so that a program with no blocking ops keeps none, and one with many at once is not held to a
   * fixed few. Platform threads, not virtual ones: a virtual thread started from another inherits its scheduler, so
-  * from a future carried by a reactor pool (`Carriers.Reactors` on the JVM) a blocking op would take one of the
+  * from a future carried by a reactor pool (`NioBackend` on the JVM) a blocking op would take one of the
   * pool's workers, and a reactor closing on that worker would wait for it forever.
   */
 object Blockers {

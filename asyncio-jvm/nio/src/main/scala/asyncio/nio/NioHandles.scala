@@ -26,7 +26,6 @@ import java.nio.file.StandardOpenOption
 import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.PipeHandles
-import asyncio.ReadinessHandles
 import asyncio.UnixAddress
 import asyncio.UnixStreamHandles
 
@@ -197,7 +196,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles with ReadinessHandles with PipeHandles {
+object NioHandles extends UnixStreamHandles with PipeHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
@@ -318,9 +317,6 @@ object NioHandles extends UnixStreamHandles with ReadinessHandles with PipeHandl
       }
     (source, sink)
   }
-
-  def readNow(handle: Handle, buf: ByteBuffer): Int = entry(handle).read(buf)
-  def writeNow(handle: Handle, buf: ByteBuffer): Int = entry(handle).write(buf)
 
   def close(handle: Handle): Unit = table.remove(handle).close()
 

@@ -46,7 +46,7 @@ class KQueueDemoSuite extends DemoSuite {
     assert(output.contains("resolved localhost to"), output)
   }
 
-  demoTest("cancel pending ops of each kind") {
+  if (hasReadiness) demoTest("cancel pending ops of each kind") {
     val output = run("cancel")
     val expected = Seq(
       "read cancelled: true",
@@ -80,9 +80,8 @@ class KQueueDemoSuite extends DemoSuite {
         "concurrent",
         "connections",
         "pipelined",
-        "blocking",
-        "timers"
-      ) ++ gearsOnly
+        "blocking"
+      ) ++ (if (hasReactors) Seq("timers") else Nil) ++ gearsOnly // `timers` submits to a reactor
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }

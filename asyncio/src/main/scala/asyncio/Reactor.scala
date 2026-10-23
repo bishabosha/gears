@@ -3,7 +3,6 @@ package asyncio
 import java.nio.ByteBuffer
 
 import _root_.gears.async.Async
-import _root_.gears.async.Cancellable
 
 /** What to do when an op finishes. The op comes back with its outcome, so one completion can own many ops. A completion
   * that submits further ops holds on to its submitter itself, since only a reference to that submitter has the right
@@ -159,9 +158,9 @@ object Reactor {
 
 /** A way of doing I/O: the ops it can perform, the handles they name, and `perform`, which runs one. A backend may
   * submit its ops with completions (`CompletionBackend`), on reactors it opens (`ReactorBackend`) or on a loop it does
-  * not own, or do each one itself on the calling thread, as `asyncio.vthread`'s does with the JDK's blocking channels
-  * on a virtual thread. Ops of another backend are a different type. Building an op or using a handle performs nothing,
-  * so either may be done from any thread.
+  * not own, or do each one itself on the calling thread, as NIO's `NioOnCaller` does with non-blocking channels from a
+  * thread that may block. Ops of another backend are a different type. Building an op or using a handle performs
+  * nothing, so either may be done from any thread.
   *
   * What every backend has is here: streams, read and written, into the caller's buffers or into buffers of the
   * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes
@@ -230,77 +229,20 @@ trait CompletionBackend extends Backend {
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
   * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. `perform`
-  * routes an op to a reactor of the caller's program (see `asyncio.gears.ReactorAsync`), which must have been started
-  * by `ReactorFutures.run` with this backend.
+  * submits an op to the reactor of the worker running the caller, so a program over this backend runs on a pool of
+  * them, started by `ReactorFutures.run` (see `asyncio.gears.ReactorAsync`).
   */
 trait ReactorBackend extends CompletionBackend with Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
 
-  /** Submits `op` to a reactor of the caller's program, with its time limit, and suspends the caller until it
-    * finishes (see `ReactorAsync.performOnReactor`). Cancelling the caller asks the reactor to cancel the op, and waits
-    * until it has.
+  /** Submits `op` to the reactor of the worker running the caller, with its time limit, and suspends the caller until
+    * it finishes (see `ReactorAsync.performOnReactor`); a caller on no worker of a pool of this backend is refused
+    * with `IllegalStateException`. Cancelling the caller asks the reactor to cancel the op, and waits until it has.
     */
   final def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
     asyncio.gears.ReactorAsync.performOnReactor(this, op, timeoutMillis)
-
-  /** Performs `op` now, on the calling thread and on no reactor, if this backend can and the op finishes at once, as a
-    * read of data already waiting or a write that fits does: then it returns true, the op's results are in the caller's
-    * buffers and slots, and a failure is thrown, as from `Submitter.trySubmit`. Otherwise, or if this backend only
-    * tries ops on a reactor's thread, it returns false having done nothing that counts, and the op is submitted as
-    * usual. For a caller on no reactor's thread, which would otherwise hand every op to one. False by default.
-    */
-  def tryNow(op: Op): Boolean = false
-
-  /** Whether `tryNow` can finish `op` on the calling thread at all: one it can, which did not finish, may be worth
-    * trying again after a yield, where one it cannot, such as a timer, is handed over at once. False by default.
-    */
-  def triesNow(op: Op): Boolean = false
-
-  /** A blocking op's body, to run on the calling thread rather than on this backend's blocker threads, for a caller
-    * that may block anyway and is on no reactor's thread; null if `op` is not a blocking op, or this backend runs them
-    * only on its blocker threads. As a submission would, it runs the op once: a one-shot op already submitted is
-    * refused with `IllegalStateException`. False by default: null.
-    */
-  def blockingHere(op: Op): BlockingHere | Null = null
-
-  /** A wait for `op` on the calling thread, for a caller that may block and is on no reactor's thread: it parks the
-    * caller until `op` is done, or may be worth trying again with `tryNow`, with no reactor involved. Null if this
-    * backend cannot wait for `op` there, or waits only on its reactors. Null by default. A wait whose tries make system
-    * calls on a handle (`triesNow`) is taken only while few ops are waiting; one that contends for nothing, such as a
-    * timer parked until its time, always.
-    */
-  def waitHere(op: Op): WaitHere | Null = null
-}
-
-/** A wait on the calling thread for an op's handle to be ready (see `ReactorBackend.waitHere`). A `Cancellable`, so
-  * that the caller's group can end it.
-  */
-trait WaitHere extends Cancellable {
-
-  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, or, unless
-    * `timeoutNanos` is negative, that many nanoseconds have passed, and returns: true if the wait finished the op, as a
-    * timer's does once its time has passed, so there is nothing to try; false if the caller should try the op again,
-    * or its time ran out, which the caller keeps track of. Throws if the op's handle has been closed.
-    */
-  def await(timeoutNanos: Long): Boolean
-
-  /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
-  def cancel(): Unit
-}
-
-/** A blocking op run on the calling thread (see `ReactorBackend.blockingHere`). */
-trait BlockingHere {
-
-  /** Runs the body, writing its result into the op's slot, and returns once it has; its failure is thrown. If `cancel`
-    * came first, the body is skipped; if during, the body is interrupted, its result not written, and once it returns
-    * this throws `CancellationException`.
-    */
-  def run(): Unit
-
-  /** Cancels the op from any thread, as `Submitter.cancel` would a blocking op: skipped, or interrupted. */
-  def cancel(): Unit
 }
 
 /** A backend with IP sockets, stream and datagram (see `SocketHandles` and `SocketOps`): one over an operating system's

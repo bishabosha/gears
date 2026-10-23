@@ -265,6 +265,31 @@ trait FuturesContract extends FunSuite {
     assertEquals(outcome, "true true 7 in time")
   }
 
+  test("a blocking op past its time limit is interrupted, and perform throws TimeoutException") {
+    var outcome = ""
+    running { r =>
+      r match {
+        case b: asyncio.BlockingBackend =>
+          val returned = new java.util.concurrent.atomic.AtomicBoolean
+          val op = b.ops.blocking { () =>
+            try Thread.sleep(10_000)
+            catch case _: InterruptedException => ()
+            returned.set(true)
+          }
+          val started = System.nanoTime()
+          val timedOut =
+            try {
+              perform(b, op, timeoutMillis = 20)
+              false
+            } catch case _: TimeoutException => true
+          val waited = System.nanoTime() - started
+          outcome = s"$timedOut ${returned.get()} ${waited >= 20_000_000L && waited < 5_000_000_000L}"
+        case _ => outcome = "true true true" // no blocking ops to check
+      }
+    }
+    assertEquals(outcome, "true true true")
+  }
+
   test("a timer with a shorter time limit throws TimeoutException from perform") {
     var outcome = ""
     running { r =>

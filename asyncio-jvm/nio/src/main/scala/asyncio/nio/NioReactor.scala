@@ -171,9 +171,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
             if read then require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
             else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
             command.completion = pending
-            val tryIt = command.tryFirst && !command.triedNow
-            command.triedNow = false
-            if tryIt && performedAtOnce(command, queue = !finishNow) then finished = finishNow
+            if performedAtOnce(command, queue = !finishNow) then finished = finishNow
             else {
               val ops = command.selectOps(s.channel)
               if read then {
