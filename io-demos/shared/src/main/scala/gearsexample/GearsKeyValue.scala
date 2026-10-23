@@ -141,11 +141,7 @@ object GearsKeyValue {
       val server = Sockets.listen(r, address)
       try {
         println("Key-value server is now listening for connections.")
-        while true do {
-          val client = HigherLevel.accept(r, server) // returns once a connection has been accepted
-          println(s"Accepted new client connection: $client")
-          Future(session(r, client, store))
-        }
+        Sockets.serve(r, server)(client => session(r, client, store))
       } finally r.perform(r.backend.ops.close(server))
     }
   }

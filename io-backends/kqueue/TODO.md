@@ -1211,3 +1211,26 @@ branch has a draft issue (`scala-native-issue-setjmp.md`) covering them.
   noise, after `perform` and `submit` went back to matching a `ReactorPool` scheduler by class before the general
   `ReactorHomes` route; through the interface, with a closure for `sync`, every scenario was 1–5% slower and `timers`
   12.5%.
+
+## A burst of connections from another machine
+
+A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw most of them reset mid-response
+(`SocketException: Connection reset`), where the same burst at a JVM server did better. Reproduced on one machine
+(`bench`-style client, 10,000 concurrent request/response connections, 2026-10-23), with two causes:
+
+- **The server crashed at the open-file limit.** A macOS shell's soft limit is 256; the JVM raises its own to the
+  hard limit at startup (`-XX:+MaxFDLimit`) and Scala Native did not, so around connection 250 `accept` failed with
+  `EMFILE`, the failure left the demo's accept loop, the process ended, and the kernel reset every connection it held:
+  1,500 of 10,000 succeeded. Now the Native runner raises the soft limit (`FileLimit`), `NonBlocking.accept` retries
+  `ECONNABORTED` (a queued connection its client gave up on) as the JDK's accept does, and the demo servers accept
+  through `Sockets.serve`, which outlives a failed accept, waiting 10 ms after one. Under the same 256 limit the server
+  now stays up.
+- **The listen queue overflows.** macOS caps a listener's backlog at `kern.ipc.somaxconn`, 128, and resets connections
+  arriving while it is full, whatever the server: a JDK `ServerSocket` with backlog 16 lost every one of 1,000, with 128
+  it lost 16%. Listeners now ask for 4096 on kqueue and NIO, which the kernel caps, so raising the limit
+  (`sudo sysctl -w kern.ipc.somaxconn=4096`) takes effect. With it at 128, 10,000 at once still lose some: 75-89% got
+  their response on one worker after dropping the server's per-connection printing (48-72% before), against 94-99% for
+  a JDK server with a thread blocked in `accept`. The gap is the accept loop's place in the pool: a perform finishes
+  without suspending once per turn (`TurnFastPathBudget`), so each further accept waits behind every connection future
+  spawned so far; four workers did not help (within the run-to-run spread). An accept that takes every connection
+  pending, or an accept loop with a worker of its own, would close it; not done.

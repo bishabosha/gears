@@ -198,8 +198,10 @@ private[nio] type SocketAddress = IpAddress | UnixAddress
   */
 object NioHandles {
 
-  /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
-  private inline val Backlog = 128
+  /** Connections a listener queues before it accepts them, as `PosixSockets.maxConnections`: the kernel caps it at
+    * its own limit, so a raised limit takes effect.
+    */
+  private inline val Backlog = 4096
 
   private val table = new gears.async.io.internal.HandleTable[Entry]
 
