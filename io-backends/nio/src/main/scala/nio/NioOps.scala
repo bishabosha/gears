@@ -26,7 +26,9 @@ import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
-import gears.async.io.SocketOps
+import gears.async.io.PipeOps
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamOps
 
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
   * code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -51,14 +53,22 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps
-    extends SocketOps[NioOp]
+    extends UnixStreamOps[NioOp]
+    with PipeOps[NioOp]
     with BlockingOps[NioOp]
     with FileOps[NioOp]
     with ResolveOps[NioOp] {
   def read(handle: Handle, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Handle, into: Handle.Slot): Accept = new Accept(handle, into)
-  def connect(handle: Handle): NioOp = new Connect(handle)
+  def connect(address: IpAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
+  def connect(address: UnixAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
+  def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): NioOp =
+    new Listen(address, reuseAddr, into)
+  def listen(address: UnixAddress, into: Handle.Slot): NioOp = new Listen(address, reuseAddr = false, into)
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot): NioOp =
+    new OpenDatagram(local, remote, into)
+  def pipe(read: Handle.Slot, write: Handle.Slot): NioOp = new OpenPipe(read, write)
   def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
   def send(handle: Handle, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
   def send(handle: Handle, buf: ByteBuffer): Send = new Send(handle, buf, null)
@@ -68,7 +78,6 @@ object NioOps
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
     new PooledRead(handle, NioOps.direct(pool), into)
-  def listening(handle: Handle): NioOp = new Listening(handle)
   def close(handle: Handle): NioOp = new Close(handle)
   def open(path: String, write: Boolean, into: Handle.Slot): NioOp = new OpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
@@ -88,11 +97,63 @@ sealed abstract class NioAtOnce extends NioOp {
   def perform(): Unit
 }
 
-/** Binds a listener from `NioHandles.listener`, or finds a datagram socket bound, as it was when made (see
-  * `SocketOps.listening`).
+/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a
+  * time limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its
+  * slot, so that nothing is left open that the caller never got.
   */
-final class Listening(val handle: Handle) extends NioAtOnce {
-  def perform(): Unit = NioHandles.bind(handle)
+sealed trait Opens extends NioOp {
+  def abandon(): Unit
+}
+
+/** An op that opens its handle at once, when submitted (see `NioAtOnce`), as NIO's listeners, datagram sockets and
+  * pipes are.
+  */
+sealed abstract class OpensAtOnce(into: Handle.Slot) extends NioAtOnce with Opens {
+  private var opened: Handle.Opt = Handle.Opt.empty
+  protected def open(): Handle
+  def perform(): Unit = {
+    val handle = open()
+    opened = Handle.Opt(handle)
+    into.set(handle)
+  }
+  def abandon(): Unit = if opened.nonEmpty then {
+    into.clear(): Unit
+    NioHandles.close(opened.get)
+    opened = Handle.Opt.empty
+  }
+}
+
+/** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
+final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Handle.Slot) extends OpensAtOnce(into) {
+  protected def open(): Handle = address match {
+    case ip: IpAddress     => NioHandles.listen(ip, reuseAddr)
+    case unix: UnixAddress => NioHandles.listen(unix)
+  }
+}
+
+/** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */
+final class OpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot)
+    extends OpensAtOnce(into) {
+  protected def open(): Handle = NioHandles.datagram(local, remote)
+}
+
+/** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
+final class OpenPipe(read: Handle.Slot, write: Handle.Slot) extends NioAtOnce with Opens {
+  private var ends: (Handle, Handle) | Null = null
+  def perform(): Unit = {
+    val (in, out) = NioHandles.pipe()
+    ends = (in, out)
+    read.set(in)
+    write.set(out)
+  }
+  def abandon(): Unit = if ends != null then {
+    val (in, out) = ends.nn
+    read.clear(): Unit
+    write.clear(): Unit
+    NioHandles.close(in)
+    NioHandles.close(out)
+    ends = null
+  }
 }
 
 /** Closes a handle (see `Ops.close`): at once, as `NioHandles.close` does. */
@@ -188,16 +249,48 @@ final class Accept(val handle: Handle, into: Handle.Slot) extends Command {
   }
 }
 
-/** Waits for a non-blocking connect to finish. Done once connected; throws if it failed. A connection that finished at
-  * once, as a Unix socket's usually does, is done as soon as it is submitted.
+/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking
+  * connect started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect
+  * to finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as
+  * a Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times
+  * out first, the socket is closed and `into` left empty.
   */
-final class Connect(val handle: Handle) extends Command {
+final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command with Opens {
+  private var socket: Handle.Opt = Handle.Opt.empty
+  private var connected = false
+  def handle: Handle = socket.get
   def interest: Interest = Interest.Write
   override def selectOps(channel: SelectableChannel): Int = SelectionKey.OP_CONNECT
+
+  /** Opens the socket and starts connecting it, as the op is submitted or performed. */
+  private[nio] def open(): Unit = {
+    socket = Handle.Opt(NioHandles.connectStream(address))
+    connected = false
+  }
+
   def perform(): Boolean = {
-    val channel = selectable(classOf[SocketChannel], "Connecting")
-    try channel.isConnected || channel.finishConnect()
-    catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
+    val done =
+      try {
+        val channel = selectable(classOf[SocketChannel], "Connecting")
+        try channel.isConnected || channel.finishConnect()
+        catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
+      } catch {
+        case t: Throwable =>
+          abandon()
+          throw t
+      }
+    if done then {
+      connected = true
+      into.set(socket.get)
+    }
+    done
+  }
+
+  def abandon(): Unit = if socket.nonEmpty then {
+    if connected then into.clear(): Unit
+    NioHandles.close(socket.get)
+    socket = Handle.Opt.empty
+    connected = false
   }
 }
 

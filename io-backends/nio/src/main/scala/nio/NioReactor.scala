@@ -7,7 +7,6 @@ import java.nio.channels.Selector
 import java.util.concurrent.TimeoutException
 
 import gears.async.io.Completion
-import gears.async.io.Handles
 import gears.async.io.Interest
 import gears.async.io.Ops
 import gears.async.io.Reactor
@@ -32,7 +31,6 @@ final class NioReactor private (selector: Selector) extends Reactor {
 
   def ops: Ops[Op] = NioOps
 
-  def handles: Handles = NioHandles
 
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
@@ -123,6 +121,22 @@ final class NioReactor private (selector: Selector) extends Reactor {
   def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
     submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
+  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure
+    * as an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns
+    * false.
+    */
+  private def opened(connect: ConnectTo, pending: Completion[NioOp], finishNow: Boolean): Boolean =
+    try {
+      connect.open()
+      true
+    } catch {
+      case t: Throwable =>
+        connect.completion = pending
+        connect.atOnceFailure = t
+        if !finishNow then ready.add(connect)
+        false
+    }
+
   /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
     * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
     * limit, goes into the timer heap to time out when it is due.
@@ -138,6 +152,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[NioOp]] // only ever called with `op`, which is a C
     op match {
+      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
       case command: Command =>
         // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
         var failure: java.io.IOException | Null = null
@@ -341,7 +356,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     }
 
   /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from
-    * the loop, with `ClosedChannelException`, as `Handles.close` says.
+    * the loop, with `ClosedChannelException`, as `Ops.close` says.
     */
   private[nio] def closed(entry: Selectable): Unit =
     if !closed then {
@@ -457,7 +472,13 @@ final class NioReactor private (selector: Selector) extends Reactor {
         selector.close() // deregisters every channel; the channels stay open
       }
       running.foreach(_.awaitEnd())
-      dropped.foreach((op, completion) => completion.onCancel(op))
+      dropped.foreach { (op, completion) =>
+        op match {
+          case opens: Opens => opens.abandon() // what it opened never reaches the caller
+          case _            => ()
+        }
+        completion.onCancel(op)
+      }
     }
 
   /** As `KqueueReactor.cancel`: a command that finished when submitted counts as finished; anything else pending is
@@ -516,6 +537,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
     */
   private def settleWithdrawn(op: NioOp, completion: Completion[NioOp], failure: Throwable | Null): Unit =
     op match {
+      case opens: Opens =>
+        opens.abandon() // what it opened never reaches the caller
+        if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
       case blocking: NioBlocking if blocking.interrupt() =>
         blocking.cancelling = completion
         blocking.cancelledBy = failure

@@ -384,9 +384,8 @@ object GearsBench {
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */
   private def withConnection(r: Io[IpSockets], address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
-    val fd = Sockets.connect(r.backend, address)
+    val fd = Sockets.connect(r, address)
     try {
-      r.perform(r.backend.ops.connect(fd))
       body(fd)
     } finally r.perform(r.backend.ops.close(fd))
   }

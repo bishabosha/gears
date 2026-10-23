@@ -14,12 +14,9 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.FifoHandles
 import gears.async.io.Handle
 import gears.async.io.IpAddress
-import gears.async.io.PipeHandles
 import gears.async.io.Received
-import gears.async.io.SocketHandles
 import gears.async.io.internal.Descriptors
 import gears.async.io.internal.NativePool
 import NWFrameworkEvent.*
@@ -630,7 +627,7 @@ private[nwframework] object NWFrameworkHandle {
   * descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are descriptors, which
   * Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there are none.
   */
-object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandles {
+object NWFrameworkHandles {
 
   // The table: a handle number is an index, reused once closed.
   private val table = new gears.async.io.internal.HandleTable[NWFrameworkHandle](256)
@@ -686,7 +683,8 @@ object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandle
     add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, -1, address))
   }
 
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
+  /** A listener that will be listening once Network.framework has it ready, which `NWFrameworkListen` waits for. */
+  private[nwframework] def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0) }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
@@ -725,8 +723,8 @@ object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandle
     }
   }
 
-  /** Closes a handle, from any thread: the ops pending on it, on whichever reactor, fail there (see `Handles.close`
-    * and `NWFrameworkHandle.close`). The number is free for reuse at once.
+  /** Closes a handle, from any thread: the ops pending on it, on whichever reactor, fail there (see `Ops.close` and
+    * `NWFrameworkHandle.close`). The number is free for reuse at once.
     */
   def close(handle: Handle): Unit = remove(handle).close()
 

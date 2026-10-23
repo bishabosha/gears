@@ -11,43 +11,46 @@ import gears.async.io.IpAddress
 import gears.async.io.IpSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
+import higherlevel.HigherLevel
 
 /** Where a stream demo's server listens: an IP address, or a Unix path on a backend with Unix stream sockets. */
 type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
-  def connect(b: UnixStreams, address: StreamAddress): Handle = address match {
-    case unix: UnixAddress => b.handles.connect(unix)
-    case ip: IpAddress     => b.handles.connect(ip)
+  /** A stream socket connected to `address`. */
+  @annotation.targetName("connectUnix")
+  def connect(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = address match {
+    case unix: UnixAddress => HigherLevel.connect(r, unix)
+    case ip: IpAddress     => HigherLevel.connect(r, ip)
   }
 
-  /** A listener on `address`, listening: the handle, and its `listening` op performed. */
+  /** A listener on `address`, listening. */
   @annotation.targetName("listenUnix")
-  def listen(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = {
-    val listener = address match {
-      case unix: UnixAddress => r.backend.handles.listener(unix)
-      case ip: IpAddress     => r.backend.handles.listener(ip)
-    }
-    r.perform(r.backend.ops.listening(listener))
-    listener
+  def listen(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = address match {
+    case unix: UnixAddress => HigherLevel.listen(r, unix)
+    case ip: IpAddress     => HigherLevel.listen(r, ip)
   }
 
   /** For code whose address is chosen when it runs, such as the bench's: on any backend for an IP address, and on one
     * with Unix stream sockets for a Unix one, refused otherwise.
     */
-  def connect(b: IpSockets, address: StreamAddress): Handle = address match {
-    case ip: IpAddress     => b.handles.connect(ip)
-    case unix: UnixAddress => connect(unixSockets(b, unix), unix)
+  def connect(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = address match {
+    case ip: IpAddress     => HigherLevel.connect(r, ip)
+    case unix: UnixAddress =>
+      val into = Handle.Slot()
+      val sockets: UnixStreams & r.backend.type = unixSockets(r.backend, unix)
+      r.perform(sockets.ops.connect(unix, into))
+      into.clear()
   }
 
-  def listen(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = {
-    val listener = address match {
-      case ip: IpAddress     => r.backend.handles.listener(ip)
-      case unix: UnixAddress => unixSockets(r.backend, unix).handles.listener(unix)
-    }
-    r.perform(r.backend.ops.listening(listener))
-    listener
+  def listen(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = address match {
+    case ip: IpAddress     => HigherLevel.listen(r, ip)
+    case unix: UnixAddress =>
+      val into = Handle.Slot()
+      val sockets: UnixStreams & r.backend.type = unixSockets(r.backend, unix)
+      r.perform(sockets.ops.listen(unix, into))
+      into.clear()
   }
 
   private def unixSockets(b: IpSockets, address: UnixAddress): UnixStreams & b.type = b match {

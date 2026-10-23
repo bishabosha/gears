@@ -5,7 +5,7 @@ projects of their own:
 
 | where | holds | depends on |
 | --- | --- | --- |
-| `gears.async.io` (core, `shared/`) | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handles`, `Slot`, addresses, `BufferPool`, `TakePolicy` | the rest of gears |
+| `gears.async.io` (core, `shared/`) | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handle`, `Slot`, addresses, `BufferPool`, `TakePolicy` | the rest of gears |
 | `gears.async.io` (core, `jvm/` and `native/`) | the runner, `ReactorFutures`, one per platform | the runtime |
 | `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
 | `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
@@ -27,8 +27,11 @@ Three axes, chosen independently of one another:
 
 - **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpSockets`,
   `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
-  `Backend` narrowed to its own `Ops` and `Handles`; the base `Ops` is read, write, the pooled read, timer and close,
-  and the base `Handles` opens nothing. A program asks for a backend with one as `SocketBackend`, which is
+  `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
+  nothing. Every handle is opened by an op of the capability that has it (`connect`, `listen`, `datagram`, `pipe`,
+  `openFifo`, `open`), which writes it into a slot as it completes and leaves the slot empty, with nothing open, if it
+  fails or is cancelled: opening may wait, for a connection, a bind or the disk, and some environments, such as
+  Network.framework, only open asynchronously. A program asks for a backend with one as `SocketBackend`, which is
   `Backend & IpSockets`, and likewise for the others.
 - **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
@@ -87,13 +90,14 @@ can be written once over every backend.
 
 ## The higher level
 
-The module `higherlevel` is the API the goal says would wrap the lowest level: written over the interface's public
-contract alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
-`HigherLevel` has result-returning `read`, `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one
-repeatable pooled read consumed as a gears channel, with the pool's window and the channel's backlog as
-back-pressure, failure rethrown to the consumer, and chunks read ahead released when the consumer stops early.
-`HigherLevelChecks` runs in every backend's contract suite; the whois demo resolves and reads through it, the socket
-demo takes its response as a stream of chunks, and the key-value and server-socket demos accept through it.
+`higherlevel`, in `ioDemos`, is the API that wraps the lowest level: written over the interface's public contract
+alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
+`HigherLevel` has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifo`), `read`,
+`writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
+with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
+ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the
+demos open their sockets, pipes and FIFOs through it, the whois demo resolves and reads through it, the socket demo
+takes its response as a stream of chunks, and the key-value and server-socket demos accept through it.
 
 What the wrapper shows the interface costs it: a read's byte count is a buffer-position delta, and there are two slot
 types since a `Handle` is an unboxed `Int`, which are the mutability a higher level wraps; and a stream spawns a

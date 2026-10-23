@@ -9,6 +9,7 @@ import gears.async.io.Interest
 import gears.async.io.testkit.BufferArena
 import DemoIO.drainTo
 import gears.async.io.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {
@@ -18,7 +19,7 @@ object GearsFileRead {
       val contents = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
-        val file = r.backend.handles.openFifo(fifo, write = false)
+        val file = HigherLevel.openFifo(r, fifo, write = false)
         try {
           println(s"opened file: $file")
 
@@ -29,7 +30,7 @@ object GearsFileRead {
             var result: Boolean | Null = null
             while result == null do {
               chunk.clear()
-              val read = r.backend.handles.readNow(file, chunk)
+              val read = r.backend.ops.readNow(file, chunk)
               if read < 0 then result = true
               else if read == 0 then {
                 println("No more data available to read (EAGAIN or EWOULDBLOCK).")

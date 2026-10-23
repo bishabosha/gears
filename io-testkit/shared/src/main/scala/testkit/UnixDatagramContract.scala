@@ -8,14 +8,22 @@ import java.nio.file.Files
 trait UnixDatagramContract extends SocketContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixDatagramBackend
 
+  /** A Unix datagram socket from the `datagram` op, whose failure is thrown. */
+  protected def unixDatagram(r: R, local: UnixAddress | Null, remote: UnixAddress | Null)(using
+      munit.Location
+  ): Handle = {
+    val into = Handle.Slot()
+    opened(r, into, backend.ops.datagram(local, remote, into))
+  }
+
   test("a Unix datagram goes to a bound socket, which learns its sender's path") {
     val dir = tempDir()
     try withReactor { r =>
       val serverPath = dir.resolve("server.sock").toString
       val clientPath = dir.resolve("client.sock").toString
-      val server = backend.handles.datagram(UnixAddress(serverPath), null)
+      val server = unixDatagram(r, UnixAddress(serverPath), null)
       try {
-        val client = backend.handles.datagram(UnixAddress(clientPath), UnixAddress(serverPath))
+        val client = unixDatagram(r, UnixAddress(clientPath), UnixAddress(serverPath))
         try {
           val buf = allocate(64)
           val from = Slot[UnixAddress]()

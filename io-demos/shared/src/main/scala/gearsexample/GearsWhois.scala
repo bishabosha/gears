@@ -27,9 +27,8 @@ object GearsWhois {
           case AddressFamily.IPv4 => IpAddress.IPv4(resolved.host, port)
         }
         println(s"resolved $host to $address (${resolvedAll.length} addresses)")
-        val fd = r.backend.handles.connect(address)
+        val fd = HigherLevel.connect(r, address)
         try {
-          r.perform(r.backend.ops.connect(fd))
           println(s"connected; sending query `$query`")
           buf.clear()
           buf.put(s"$query\r\n".getBytes(StandardCharsets.UTF_8))

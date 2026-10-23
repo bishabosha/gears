@@ -10,8 +10,14 @@ import java.util.concurrent.CancellationException
 
 import gears.async.io.Backend
 import gears.async.io.BufferPool
+import gears.async.io.Fifos
 import gears.async.io.Handle
 import gears.async.io.Io
+import gears.async.io.IpAddress
+import gears.async.io.Pipes
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagrams
+import gears.async.io.UnixStreams
 import gears.async.io.Received
 import gears.async.io.Resolving
 import gears.async.io.ResolvedAddress
@@ -27,6 +33,49 @@ import gears.async.io.IpSockets
   * the op.
   */
 object HigherLevel {
+
+  /** Performs the op `open` builds, which opens a handle into the slot it is given, and returns the handle. */
+  private def opened(r: Io[Backend])(open: Handle.Slot => r.Op)(using Async): Handle = {
+    val into = Handle.Slot()
+    r.perform(open(into))
+    into.clear()
+  }
+
+  /** Connects a stream socket to `address` and returns it. */
+  def connect(r: Io[IpSockets], address: IpAddress)(using Async): Handle =
+    opened(r)(r.backend.ops.connect(address, _))
+
+  /** Connects a stream socket to a Unix socket path and returns it. */
+  def connect(r: Io[UnixStreams], address: UnixAddress)(using Async): Handle =
+    opened(r)(r.backend.ops.connect(address, _))
+
+  /** Listens on `address` and returns the listener. */
+  def listen(r: Io[IpSockets], address: IpAddress, reuseAddr: Boolean = true)(using Async): Handle =
+    opened(r)(r.backend.ops.listen(address, _, reuseAddr))
+
+  /** Listens on a Unix socket path and returns the listener. */
+  def listen(r: Io[UnixStreams], address: UnixAddress)(using Async): Handle =
+    opened(r)(r.backend.ops.listen(address, _))
+
+  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, and returns it. */
+  def datagram(r: Io[IpSockets], local: IpAddress | Null, remote: IpAddress | Null)(using Async): Handle =
+    opened(r)(r.backend.ops.datagram(local, remote, _))
+
+  /** Opens a Unix datagram socket, bound to `local` and connected to `remote` where given, and returns it. */
+  def datagram(r: Io[UnixDatagrams], local: UnixAddress | Null, remote: UnixAddress | Null)(using Async): Handle =
+    opened(r)(r.backend.ops.datagram(local, remote, _))
+
+  /** Opens a pipe and returns its read end and its write end. */
+  def pipe(r: Io[Pipes])(using Async): (Handle, Handle) = {
+    val read = Handle.Slot()
+    val write = Handle.Slot()
+    r.perform(r.backend.ops.pipe(read, write))
+    (read.clear(), write.clear())
+  }
+
+  /** Opens the FIFO at `path`, for writing with `write`, and returns it. */
+  def openFifo(r: Io[Fifos], path: String, write: Boolean)(using Async): Handle =
+    opened(r)(r.backend.ops.openFifo(path, write, _))
 
   /** Reads into `buf` once and returns how many bytes arrived, 0 at the end of the stream. */
   def read(r: Io[Backend], handle: Handle, buf: ByteBuffer)(using Async): Int = {

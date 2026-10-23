@@ -11,9 +11,9 @@ trait ReadinessContract extends ReactorContract {
 
   test("trySubmit finishes a read of data already waiting without calling its completion") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
-        backend.handles.writeNow(out, bytes("ready"))
+        backend.ops.writeNow(out, bytes("ready"))
         val buf = allocate(16)
         val outcome = Outcome()
         assert(r.trySubmit(backend.ops.read(in, buf), outcome))
@@ -29,7 +29,7 @@ trait ReadinessContract extends ReactorContract {
 
   test("ready completes once the handle is ready, again at once while it still is, and waits once it is drained") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = allocate(64)
         val ready = backend.ops.ready(in, Interest.Read)
@@ -37,22 +37,22 @@ trait ReadinessContract extends ReactorContract {
         r.submit(ready, first)
         for _ <- 1 to 5 do r.runOnce(block = false)
         assertEquals(first.completed, 0)
-        backend.handles.writeNow(out, bytes("part"))
+        backend.ops.writeNow(out, bytes("part"))
         turnUntil(r)(first.finished)
         assertEquals(first.completed, 1)
         val stillReady = Outcome() // the data has not been taken yet
         r.submit(ready, stillReady)
         turnUntil(r)(stillReady.finished)
         assertEquals(stillReady.completed, 1)
-        assertEquals(backend.handles.readNow(in, buf), 4)
+        assertEquals(backend.ops.readNow(in, buf), 4)
         assertEquals(text(buf), "part")
         val drained = Outcome()
         r.submit(ready, drained)
         for _ <- 1 to 5 do r.runOnce(block = false)
         assertEquals(drained.completed, 0)
-        backend.handles.writeNow(out, bytes("!"))
+        backend.ops.writeNow(out, bytes("!"))
         turnUntil(r)(drained.finished)
-        assertEquals(backend.handles.readNow(in, buf), 1)
+        assertEquals(backend.ops.readNow(in, buf), 1)
         assertEquals(text(buf), "part!")
       } finally {
         close(r, in)
@@ -62,7 +62,7 @@ trait ReadinessContract extends ReactorContract {
   }
 
   test("closing a handle that a reactor blocked on another thread waits to write ends its peer's stream") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     val registered = new CountDownLatch(1)
     @volatile var other: Reactor | Null = null
     val blocked = new Thread(() => {
@@ -96,10 +96,10 @@ trait ReadinessContract extends ReactorContract {
   }
 
   test("readNow reports the end of the stream") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     try {
       closeAlone(out)
-      assertEquals(backend.handles.readNow(in, allocate(16)), -1)
+      assertEquals(backend.ops.readNow(in, allocate(16)), -1)
     } finally closeAlone(in)
   }
 }

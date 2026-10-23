@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import gears.async.io.FifoBackend
 import gears.async.io.testkit.BufferArena
 import gears.async.io.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {
@@ -14,7 +15,7 @@ object GearsFileWrite {
       val buf = arena.allocate(math.max(bytes.length, 1))
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
-        val file = r.backend.handles.openFifo(fifo, write = true)
+        val file = HigherLevel.openFifo(r, fifo, write = true)
         try {
           println(s"opened file: $file")
           println("Event registered for file write.")

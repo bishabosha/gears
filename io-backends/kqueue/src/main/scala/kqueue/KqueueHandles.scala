@@ -15,14 +15,9 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.FifoHandles
 import gears.async.io.Handle
 import gears.async.io.IpAddress
-import gears.async.io.PipeHandles
-import gears.async.io.ReadinessHandles
 import gears.async.io.UnixAddress
-import gears.async.io.UnixDatagramHandles
-import gears.async.io.UnixStreamHandles
 import gears.async.io.internal.DescriptorTable
 import gears.async.io.internal.Descriptors
 import gears.async.io.internal.NonBlocking
@@ -40,20 +35,16 @@ import gears.async.io.internal.Sockets.Transport
 /** Either kind of socket address, as the system calls take them. */
 private[kqueue] type SocketAddress = IpAddress | UnixAddress
 
-object KqueueHandles
-    extends UnixStreamHandles
-    with UnixDatagramHandles
-    with FifoHandles
-    with ReadinessHandles
-    with PipeHandles {
+/** Opening, using and closing kqueue's handles directly, for kqueue-specific code such as its demos, which run with no
+  * reactor; the interface opens them with ops (`KqueueOps`), which call the openers here.
+  */
+object KqueueHandles {
 
   /** What is kept about an open socket, as its descriptor's note in `DescriptorTable`: the Unix path it bound, to
-    * remove when it closes, and for a socket from `listener`, where it is to listen until its `listening` op binds it.
+    * remove when it closes.
     */
   private final class SocketNote {
     @volatile var boundPath: String | Null = null
-    @volatile var toListen: (SocketAddress, Boolean) | Null = null
-    @volatile var datagram = false // bound, or connected, when made: its `listening` op has nothing to do
   }
 
   /** `fd`'s note, made if it has none. Only the thread opening or binding a socket sets one. */
@@ -76,33 +67,6 @@ object KqueueHandles
   private def wrap(fd: Int): Handle = handle(fd)
   private[kqueue] def fd(handle: Handle): Int = descriptor(handle)
 
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = wrap(listenerOn(address, reuseAddr))
-  def listener(address: UnixAddress): Handle = wrap(listenerOn(address, reuseAddr = false))
-
-  private def listenerOn(address: SocketAddress, reuseAddr: Boolean): Int = {
-    val fd = socketFor(address, Transport.Stream)(_ => ())
-    noteOf(fd).toListen = (address, reuseAddr)
-    fd
-  }
-
-  /** Binds and listens a socket from `listener`, for its `listening` op, or does nothing for a datagram socket, bound
-    * when it was made; throws if it is neither, or the bind fails.
-    */
-  private[kqueue] def listening(fd: Int): Unit = {
-    val note = DescriptorTable.note(fd) match {
-      case note: SocketNote => note
-      case _                => null
-    }
-    val pending = if note == null then null else { val pending = note.toListen; note.toListen = null; pending }
-    if pending == null then
-      if note != null && note.datagram then return
-      else throw new IOException(s"Descriptor $fd is not a listener waiting to listen")
-    val (address, reuseAddr) = pending
-    if reuseAddr then PosixSockets.setReuseAddress(fd)
-    bindTo(fd, address)
-    PosixSockets.listen(fd, PosixSockets.maxConnections)
-  }
-
   /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
     * reactor. Its descriptor is marked in `DescriptorTable`, so that the reactor never takes a short read of it to mean
     * it is drained: kqueue reports a regular file readable only while its offset is short of the end, so a read waiting
@@ -117,25 +81,25 @@ object KqueueHandles
   /** Opens a FIFO. Its descriptor is marked as a regular file's is: on macOS, a FIFO whose writer closed before the
     * reactor's read filter was added never reports the end either.
     */
-  def openFifo(path: String, write: Boolean): Handle = {
+  def openFifo(path: String, write: Boolean): Handle = wrap(fifoDescriptor(path, write))
+
+  private[kqueue] def fifoDescriptor(path: String, write: Boolean): Int = {
     val fd = Descriptors.openFifo(path, write)
     DescriptorTable.markAlwaysTry(fd)
-    wrap(fd)
+    fd
   }
 
   def connect(address: IpAddress): Handle = wrap(connectStream(address))
   def connect(address: UnixAddress): Handle = wrap(connectStream(address))
 
-  private def connectStream(address: SocketAddress): Int =
+  private[kqueue] def connectStream(address: SocketAddress): Int =
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
 
-  /** A listening socket, bound and listening at once: for kqueue's own demos, which have no reactor to perform
-    * `listening` on; the interface's way is `listener` and that op.
-    */
+  /** A listening socket, bound and listening at once. */
   def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = wrap(listenStream(address, reuseAddr))
   def listen(address: UnixAddress): Handle = wrap(listenStream(address, reuseAddr = false))
 
-  private def listenStream(address: SocketAddress, reuseAddr: Boolean): Int =
+  private[kqueue] def listenStream(address: SocketAddress, reuseAddr: Boolean): Int =
     socketFor(address, Transport.Stream) { fd =>
       if reuseAddr then PosixSockets.setReuseAddress(fd)
       bindTo(fd, address)
@@ -152,28 +116,28 @@ object KqueueHandles
 
   def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): Handle = wrap(datagramSocket(local, remote))
 
-  private def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
+  private[kqueue] def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
-    val fd = socketFor(either, Transport.Datagram) { fd =>
+    socketFor(either, Transport.Datagram) { fd =>
       if local != null then bindTo(fd, local)
       if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
     }
-    noteOf(fd).datagram = true
-    fd
   }
 
   def pipe(): (Handle, Handle) = {
-    val (in, out) = Descriptors.pipe()
+    val (in, out) = pipeDescriptors()
     (wrap(in), wrap(out))
   }
+
+  private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()
 
   def readNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.read(fd(handle), buf)
   def writeNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.write(fd(handle), buf)
 
   /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
     * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on
-    * it fail and its slots are forgotten before the number is reused (see `Handles.close`). A handle must not be used
+    * it fail and its slots are forgotten before the number is reused (see `Ops.close`). A handle must not be used
     * while it is being closed.
     */
   def close(handle: Handle): Unit = closeDescriptor(fd(handle))

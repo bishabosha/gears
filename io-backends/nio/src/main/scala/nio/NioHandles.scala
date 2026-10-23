@@ -26,9 +26,7 @@ import java.nio.file.StandardOpenOption
 
 import gears.async.io.Handle
 import gears.async.io.IpAddress
-import gears.async.io.PipeHandles
 import gears.async.io.UnixAddress
-import gears.async.io.UnixStreamHandles
 
 /** What a handle names: an I/O object, and how to read and write it without waiting. `read` returns the bytes read, 0
   * if none are available, or -1 at end of stream; `write` returns the bytes written, or -1 if nothing fits.
@@ -43,8 +41,6 @@ private[nio] trait Entry {
   * A Unix path it bound is removed when it is closed.
   */
 private[nio] final class Selectable(val channel: SelectableChannel, boundPath: Path | Null) extends Entry {
-  // For a listener from `listener`: where it is to listen, until its `listening` op binds it.
-  @volatile var toListen: (SocketAddress, Boolean) | Null = null
 
   def read(buf: ByteBuffer): Int = channel match {
     case readable: ReadableByteChannel => readable.read(buf)
@@ -197,7 +193,10 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-object NioHandles extends UnixStreamHandles with PipeHandles {
+/** NIO's handles: entries of one process-wide table of channels (`HandleTable`), opened by the ops (`NioOps`), which
+  * call the openers here.
+  */
+object NioHandles {
 
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
@@ -220,58 +219,16 @@ object NioHandles extends UnixStreamHandles with PipeHandles {
     add(RegularFile(FileChannel.open(file, if write then StandardOpenOption.WRITE else StandardOpenOption.READ)))
   }
 
-  def connect(address: IpAddress): Handle = connectStream(address)
-  def connect(address: UnixAddress): Handle = connectStream(address)
-
-  private def connectStream(address: SocketAddress): Handle = {
+  private[nio] def connectStream(address: SocketAddress): Handle = {
     val channel = SocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
-      // A Unix socket usually connects at once; `ops.connect` checks.
+      // A Unix socket usually connects at once; `ConnectTo` checks.
       try channel.connect(socketAddress(address))
       catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
     }
   }
 
-  def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
-    val channel = ServerSocketChannel.open(familyOf(address))
-    val handle = selectable(channel, null)(channel.configureBlocking(false))
-    entry(handle).asInstanceOf[Selectable].toListen = (address, reuseAddr)
-    handle
-  }
-
-  def listener(address: UnixAddress): Handle = {
-    val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
-    val handle = selectable(channel, Path.of(address.path))(channel.configureBlocking(false))
-    entry(handle).asInstanceOf[Selectable].toListen = (address, false)
-    handle
-  }
-
-  /** Binds a listener from `listener`, for its `listening` op, or does nothing for a datagram socket, bound when it was
-    * made; throws if it is neither, or the bind fails.
-    */
-  private[nio] def bind(handle: Handle): Unit = {
-    entry(handle) match {
-      case s: Selectable if s.channel.isInstanceOf[DatagramChannel] => ()
-      case s: Selectable =>
-        val pending = s.toListen
-        if pending == null then throw new IOException(s"Handle $handle is not a listener waiting to listen")
-        s.toListen = null
-        val (address, reuseAddr) = pending
-        val channel = s.as(classOf[ServerSocketChannel], "Listening")
-        if reuseAddr then channel.setOption(StandardSocketOptions.SO_REUSEADDR, true)
-        address match {
-          case UnixAddress(path) => Files.deleteIfExists(Path.of(path)) // as kqueue, replacing a socket file there
-          case _                 => ()
-        }
-        channel.bind(socketAddress(address), Backlog)
-      case other => throw new IOException(s"Listening needs a socket, not $other")
-    }
-  }
-
-  /** A listening socket, bound and listening at once: for code with no reactor to perform `listening` on; the
-    * interface's way is `listener` and that op.
-    */
   def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {

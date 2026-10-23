@@ -18,6 +18,7 @@ import gears.async.io.Slot
 import gears.async.io.testkit.BufferArena
 import DemoIO.text
 import gears.async.io.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleCancel`. Cancellation is just `Future.cancel()`: the bridge asks the reactor to
   * cancel the op, and the future is rejected when the reactor confirms through the completion's `onCancel`. Cancelling
@@ -66,7 +67,7 @@ object GearsCancel {
       val buf = arena.allocate(64)
       ReactorFutures.run(workers = 1) { r =>
         // Everything below runs on the reactor's thread, so ops go straight to the reactor.
-        val (readFd, writeFd) = r.backend.handles.pipe()
+        val (readFd, writeFd) = HigherLevel.pipe(r)
         try {
           val sleeperInterrupted = new AtomicBoolean()
           val read = r.backend.ops.ready(readFd, Interest.Read)
@@ -111,9 +112,9 @@ object GearsCancel {
             } catch case _: IllegalStateException => true
           println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
 
-          // Closing a handle fails the ops pending on it, on whichever reactor (`Handles.close`), so a future waiting on
+          // Closing a handle fails the ops pending on it, on whichever reactor (`Ops.close`), so a future waiting on
           // one is rejected by that failure, with nothing left for a cancel to do.
-          val (orphanRead, orphanWrite) = r.backend.handles.pipe()
+          val (orphanRead, orphanWrite) = HigherLevel.pipe(r)
           val reading = Promise[Unit]()
           val orphan = Future {
             reading.complete(scala.util.Success(()))
@@ -135,7 +136,7 @@ object GearsCancel {
           println(s"the cancelled task left its slot empty: ${DemoIO.isEmpty(stubbornResult)}")
 
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
-          r.backend.handles.writeNow(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8)))
+          r.backend.ops.writeNow(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8)))
           buf.clear()
           r.perform(r.backend.ops.read(readFd, buf))
           buf.flip()

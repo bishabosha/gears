@@ -27,7 +27,7 @@ import gears.async.io.internal.TimerHeap
   * caller's buffer alone, the bytes already with the stack. Timers, and the ops with a time limit, are kept in a heap
   * here, and bound how long the thread parks; an op that times out is withdrawn as a cancelled one is, with
   * `onFailure` instead of `onCancel`. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a
-  * handle, from any thread, tells the reactors waiting on it, so the ops pending on it fail there (`Handles.close`).
+  * handle, from any thread, tells the reactors waiting on it, so the ops pending on it fail there (`Ops.close`).
   */
 final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
 
@@ -36,7 +36,6 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
 
   def ops: NWFrameworkOps.type = NWFrameworkOps
 
-  def handles: NWFrameworkHandles.type = NWFrameworkHandles
 
   /** The C side's list of handles with events for this reactor, and the condition its thread parks on. */
   private[nwframework] val ptr: NWFrameworkIo.Reactor = NWFrameworkIo.nwf_reactor_create()
@@ -115,6 +114,10 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         // A command on a handle that is not open fails, as one on a closed descriptor does, through its completion.
         val open =
           try {
+            command match {
+              case opening: NWFrameworkOpening => opening.open() // makes the handle it waits on
+              case _                           => ()
+            }
             command.target = NWFrameworkHandles.get(command.handle)
             true
           } catch {
@@ -322,6 +325,9 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     */
   private def settleWithdrawn(op: NWFrameworkOp, completion: Completion[NWFrameworkOp], failure: Throwable | Null): Unit =
     op match {
+      case opening: NWFrameworkOpening =>
+        opening.abandon() // what it opened never reaches the caller
+        if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
       case blocking: NWFrameworkBlocking if blocking.interrupt() =>
         blocking.cancelling = completion
         blocking.cancelledBy = failure
@@ -422,7 +428,13 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       NWFrameworkIo.nwf_reactor_destroy(ptr)
       stdlib.free(drained.asInstanceOf[Ptr[Byte]])
       stdlib.free(event.asInstanceOf[Ptr[Byte]])
-      dropped.foreach((op, completion) => completion.onCancel(op))
+      dropped.foreach { (op, completion) =>
+        op match {
+          case opening: NWFrameworkOpening => opening.abandon() // what it opened never reaches the caller
+          case _                           => ()
+        }
+        completion.onCancel(op)
+      }
     }
 }
 

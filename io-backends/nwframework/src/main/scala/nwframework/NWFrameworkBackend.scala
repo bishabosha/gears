@@ -27,7 +27,6 @@ object NWFrameworkBackend
     with Pipes {
   type Op = NWFrameworkOp
   def ops: NWFrameworkOps.type = NWFrameworkOps
-  def handles: NWFrameworkHandles.type = NWFrameworkHandles
   def pool(bufferSize: Int, buffers: Int): BufferPool = new gears.async.io.internal.NativePool(bufferSize, buffers)
   def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
 }
