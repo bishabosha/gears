@@ -833,3 +833,12 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     implementation backends share) refers to the gears library only, never to `asyncio.gears`: `ReactorScheduler` and
     `ReactorWorker` are the runtime's own again (`private[gears]`), and the per-backend `OnPool` classes hold a
     `Pool`, not a scheduler. The fast path, the waiter and the pool's yield live in `Pools`, where they belong.
+
+26. [x] **The boundary is the build's.** Three modules where there was one: `asyncio` is the interface alone
+    (`Submitter`, `Backend` and its kinds and capabilities, `Io` and `Pool`, `Ops`, `Handles`, `Slot`, addresses,
+    `BufferPool`), depending on the gears library and nothing of its own; `asyncio-unsafe` is the implementation the
+    backends share (`Blockers`, `TimerHeap`), depending on the interface; `asyncio-gears` is the runtime (`ReactorPool`,
+    `ReactorWorker`, `RunQueue`, `TakePolicy`, `ReactorScheduler`, `Pools`), depending on the interface, with the
+    run-queue tests beside it. The backends depend on the interface and `asyncio-unsafe`; the platform runners on the
+    backends and `asyncio-gears`. A reference from the interface to the runtime is now a compile error, not a review
+    finding.
