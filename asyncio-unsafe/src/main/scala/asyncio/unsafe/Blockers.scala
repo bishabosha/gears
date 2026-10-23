@@ -12,8 +12,8 @@ import asyncio.Slot
   * `settled` tells the backend it has returned. Cancelling it skips `block` if it has not started, and interrupts the
   * blocker thread if it is running. Interruption is cooperative: blocking JDK calls such as `Thread.sleep` throw
   * `InterruptedException`, and long computations should check `Thread.interrupted()`. Native calls like `getaddrinfo`
-  * cannot be interrupted and run to the end, with their result discarded. Either way the completion's `onCancel`
-  * waits until `block` has returned, since until then it may still write to the op's buffers and slots.
+  * cannot be interrupted and run to the end, with their result discarded. Either way the completion's `onCancel` waits
+  * until `block` has returned, since until then it may still write to the op's buffers and slots.
   *
   * Writes made before the cancel are allowed, as with a partly filled buffer, but none may follow it: a subclass must
   * write its final result into its slot through `publish`, which skips the write once cancelled.
@@ -127,7 +127,7 @@ trait BlockingRun {
   /** Runs `write`, a write to the op's buffers or slots, unless the task has been cancelled, under the lock `interrupt`
     * takes: the write either happens entirely before the cancel or not at all. Returns whether it ran.
     */
-  protected final def unlessCancelled(write: => Unit): Boolean = synchronized {
+  protected final inline def unlessCancelled(write: => Unit): Boolean = synchronized {
     if cancelled then false
     else {
       write
@@ -150,9 +150,9 @@ trait BlockingRun {
 /** The blocker pool, shared by every backend: daemon platform threads that run blocking tasks off the reactors'
   * threads, one started whenever a task finds none idle, and each ending once no task has come to it for
   * `IdleTimeoutMillis`, so that a program with no blocking ops keeps none, and one with many at once is not held to a
-  * fixed few. Platform threads, not virtual ones: a virtual thread started from another inherits its scheduler, so
-  * from a future carried by a reactor pool (`NioBackend` on the JVM) a blocking op would take one of the
-  * pool's workers, and a reactor closing on that worker would wait for it forever.
+  * fixed few. Platform threads, not virtual ones: a virtual thread started from another inherits its scheduler, so from
+  * a future carried by a reactor pool (`NioBackend` on the JVM) a blocking op would take one of the pool's workers, and
+  * a reactor closing on that worker would wait for it forever.
   */
 object Blockers {
 
@@ -196,8 +196,8 @@ object Blockers {
     }
   }
 
-  /** Waits for the next task, idle: null once none has come for `IdleTimeoutMillis`, unless a task claimed this
-    * thread meanwhile, in which case that task is on its way and the wait goes on.
+  /** Waits for the next task, idle: null once none has come for `IdleTimeoutMillis`, unless a task claimed this thread
+    * meanwhile, in which case that task is on its way and the wait goes on.
     */
   private def next(): BlockingRun | Null = {
     idle.incrementAndGet()
