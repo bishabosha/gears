@@ -9,7 +9,7 @@ import java.util.concurrent.TimeoutException
 
 import asyncio.CallerBackend
 import asyncio.Interest
-import asyncio.gears.OnCaller
+import asyncio.OnCaller
 
 /** NIO with no reactor: the backend for a program whose threads may block, such as gears' own virtual threads, the
   * JVM's default. It has the ops and handles of `NioBackend`, and `perform` does each op on the calling thread. A

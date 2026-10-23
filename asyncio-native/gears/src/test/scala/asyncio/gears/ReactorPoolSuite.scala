@@ -1,12 +1,12 @@
 package asyncio.gears
 
 import munit.FunSuite
-import asyncio.Backend
+import asyncio.ReactorBackend
 import asyncio.kqueue.KqueueBackend
 
 /** Checks of the pool's parts under contention, each across several threads. */
 class ReactorPoolSuite extends FunSuite {
-  given Backend = KqueueBackend
+  given ReactorBackend = KqueueBackend
 
   test("tasks queued for a worker in particular run on its thread, while another worker takes tasks") {
     val rounds = 500

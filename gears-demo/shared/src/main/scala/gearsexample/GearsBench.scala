@@ -1,6 +1,7 @@
 package gearsexample
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.Future.awaitAll
 
@@ -19,9 +20,10 @@ import asyncio.Completion
 import asyncio.Handle
 import asyncio.Received
 import asyncio.Slot
+import asyncio.Submission
 import asyncio.testkit.BufferArena
-import asyncio.gears.Io
-import asyncio.gears.OnPool
+import asyncio.Io
+import asyncio.OnPool
 import asyncio.gears.ReactorFutures
 import asyncio.gears.TakePolicy
 
@@ -236,6 +238,16 @@ object GearsBench {
     )
   )
 
+  /** Runs `program` over the backend with `workers` workers and `policy`, which only a reactor backend has a use for;
+    * a caller backend runs it on gears' own threads.
+    */
+  private def runOn(workers: Int, policy: TakePolicy)(using backend: SocketBackend)(
+      program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit
+  ): Unit = backend match {
+    case reactors: (ReactorBackend & backend.type) => ReactorFutures.run(workers, policy)(using reactors)(program)
+    case _                                         => ReactorFutures.run(using backend)(program)
+  }
+
   /** `r` as the reactor backend a scenario that runs only on one needs: still `r`, so its context serves. */
   private def reactors(r: Io): OnPool & r.type = r match {
     case reactors: (OnPool & r.type) => reactors
@@ -260,7 +272,7 @@ object GearsBench {
       val batch = math.min(TimerBatch, count - done)
       val fired = new java.util.concurrent.atomic.AtomicInteger // counted on the worker the timers went to
       val counter: Completion[r.Op] = _ => fired.incrementAndGet()
-      val toCancel = scala.collection.mutable.ArrayBuffer.empty[OnPool.Submission]
+      val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
       var i = 0
       while i < batch do {
         if i % 2 == 0 then r.submit(r.ops.timer(0), counter)
@@ -566,7 +578,7 @@ object GearsBench {
       policy: TakePolicy
   )(using SocketBackend): Unit =
     try
-      ReactorFutures.run(workers, policy) { r =>
+      runOn(workers, policy) { r =>
         val server =
           try Sockets.listen(r, address)
           finally listening.countDown()
@@ -632,7 +644,7 @@ object GearsBench {
     }
     try {
       if server then startServer(address, workers, policy)
-      ReactorFutures.run(workers, policy) { r =>
+      runOn(workers, policy) { r =>
         // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
         // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
         if warmup then

@@ -5,7 +5,7 @@ import java.nio.file.Paths
 
 import gears.async.Async
 
-import asyncio.gears.Io
+import asyncio.Io
 import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.SocketBackend
@@ -23,7 +23,8 @@ object Sockets {
   }
 
   /** A listener on `address`, listening: the handle, and its `listening` op performed. */
-  def listen(b: Io & UnixStreamBackend, address: StreamAddress)(using Async): Handle = {
+  @annotation.targetName("listenUnix")
+  def listen(b: UnixStreamBackend & Io, address: StreamAddress)(using Async): Handle = {
     val listener = address match {
       case unix: UnixAddress => b.handles.listener(unix)
       case ip: IpAddress     => b.handles.listener(ip)
@@ -40,7 +41,7 @@ object Sockets {
     case unix: UnixAddress => connect(unixSockets(b, unix), unix)
   }
 
-  def listen(b: Io & SocketBackend, address: StreamAddress)(using Async): Handle = address match {
+  def listen(b: SocketBackend & Io, address: StreamAddress)(using Async): Handle = address match {
     case ip: IpAddress =>
       val listener = b.handles.listener(ip)
       b.perform(b.ops.listening(listener))

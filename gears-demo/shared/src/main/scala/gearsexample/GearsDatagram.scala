@@ -7,7 +7,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
-import asyncio.gears.Io
+import asyncio.Io
 import asyncio.Backend
 import asyncio.IpAddress
 import asyncio.SocketBackend

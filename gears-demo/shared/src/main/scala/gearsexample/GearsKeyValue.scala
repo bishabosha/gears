@@ -10,7 +10,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import scala.collection.mutable
 
-import asyncio.gears.Io
+import asyncio.Io
 import asyncio.Backend
 import asyncio.Handle
 import asyncio.UnixAddress

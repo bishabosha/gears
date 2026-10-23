@@ -8,7 +8,7 @@ import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.ResolveBackend
 import asyncio.UnixStreamBackend
-import asyncio.gears.OnPool
+import asyncio.OnPool
 import asyncio.gears.ReactorScheduler
 
 /** What NIO can do, for both its backends and their `Io`s: IP and Unix stream sockets, regular files and name
