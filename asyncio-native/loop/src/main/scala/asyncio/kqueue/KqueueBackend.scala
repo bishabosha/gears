@@ -41,11 +41,11 @@ object KqueueBackend extends ReactorBackend with KqueueCapabilities {
   /** Opens a reactor with `KqueueReactor.open`'s defaults. */
   def open(): Reactor.Of[Op] = KqueueReactor.open()
 
-  private[asyncio] def bind(pool: Pool): KqueueOnPool = new KqueueOnPool(pool)
+  private[asyncio] def bind(pool: Pool.Of[Op]): KqueueOnPool = new KqueueOnPool(pool)
 }
 
 /** A program's `Io` over kqueue: `KqueueBackend` bound to the pool the program runs on. */
-final class KqueueOnPool private[kqueue] (protected val pool: Pool)
+final class KqueueOnPool private[kqueue] (protected val pool: Pool.Of[KqueueOp])
     extends Pooled
     with KqueueCapabilities {
   val backend: KqueueBackend.type = KqueueBackend

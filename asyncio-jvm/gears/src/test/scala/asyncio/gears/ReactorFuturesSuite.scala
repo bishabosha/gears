@@ -16,7 +16,7 @@ import asyncio.testkit.BufferArena
 class NioOnCallerSuite extends FuturesContract {
   val backend: NioOnCaller.type = NioOnCaller
 
-  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
+  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(using backend)(body)
 
   test("a program over NioOnCaller needs no runner: it is its own Io, and performs on the calling thread") {
@@ -49,7 +49,7 @@ class NioOnCallerSuite extends FuturesContract {
 abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NioBackend.type = NioBackend
 
-  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
+  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

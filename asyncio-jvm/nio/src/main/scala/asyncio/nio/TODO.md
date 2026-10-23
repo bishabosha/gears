@@ -851,3 +851,21 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     timer op. `asyncio/README.md` lays out the three modules, the three orthogonal axes (capability, kind, `Io`), a
     program, the semantics the interface fixes and what it leaves to a higher level, and the review against the goals
     of the restructuring.
+
+28. [x] **An independent review, and its fixes.** A reviewer given the code and the goal's wording, and not the
+    README's claims, checked each clause. Found: the Native runner matched `KqueueReactor` to print counters, and the
+    build made it depend on the kqueue backend and the Network.framework backend depend on the runner; `BlockingBackend`
+    was documented as reactor-only while `NioOnCaller` has it; `Pool` took the backend on every call; `Handle.Table`
+    was implementation in the interface; `ReactorFutures.run` returned `Unit`, so every contract test smuggled its
+    result out in a `var`; `Submission` was no `Cancellable`, so a submitted op was outside the group that made it;
+    the cancellation guarantee a wrapper relies on was in the README and not on `Io.perform`; stale docs named
+    `OnPool.performOnReactor` and `ReactorBackend.Context`. Done: `KqueueReactor.toString` carries its counters and
+    the runner prints its reactors, with `nativeAsyncioGears` depending on the loop module in tests only and
+    `nativeAsyncioNWFramework` on the loop module for the shared Native implementation; `BlockingBackend` promises the
+    same on either kind; `Pool.Of[Op]` is bound once (`Pools.bound(backend, scheduler)`); `asyncio.unsafe.HandleTable`;
+    `ReactorFutures.run[T]` returns the program's value on both platforms, as `ReactorPool.run` does, and the
+    contract's `running[T]` with it; `Submission extends Cancellable`, linked to the caller's group by `submit` and
+    unlinked by the completion the runtime wraps around the caller's (`Pools.PoolSubmission`), so the group's end
+    cancels a leftover submission and waits for it, which the cancel demo now shows in place of the reactor's close;
+    the guarantee is on `perform`. Left, and noted in the README: `Io extends Backend`; no `Async.Source` view of a
+    submission; the `Io` passed explicitly; millisecond `Int` time limits; hiding by package.

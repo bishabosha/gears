@@ -163,7 +163,8 @@ lazy val jvmAsyncioGears =
     )
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
-// asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
+// asyncio/kqueue/TODO.md, "A thread-pooled scheduler"). The runner is written against the interface and the runtime
+// alone; its tests run it over the kqueue backend.
 lazy val nativeAsyncioGears =
   (project in file("asyncio-native/gears"))
     .enablePlugins(ScalaNativePlugin)
@@ -173,11 +174,12 @@ lazy val nativeAsyncioGears =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test", asyncioGears.native)
+    .dependsOn(asyncioGears.native, nativeAsyncioLoop % "test->compile;test->test")
 
 // The NWFramework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
 // their C side in its resources (see asyncio-native/nwframework/TODO.md). macOS only; every executable that links it needs
-// Network.framework.
+// Network.framework. It shares the Native implementation kept in the loop module (`asyncio.unsafe`); its tests run it
+// on the runner.
 val networkFramework: Seq[String] =
   if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil
 lazy val nativeAsyncioNWFramework =
@@ -189,7 +191,7 @@ lazy val nativeAsyncioNWFramework =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
     )
-    .dependsOn(nativeAsyncioGears % "compile->compile;test->test")
+    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test", nativeAsyncioGears % "test->compile;test->test")
 
 // The gears demos, written against `asyncio` alone, so the same code runs on kqueue (Scala Native, through
 // kqueueDemo's `kqueuedemo gears ...`) and on NIO (the JVM, `gearsDemoJVM/run ...`). A demo that needs a capability
@@ -212,7 +214,7 @@ lazy val gearsDemo =
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
     .dependsOn(asyncioTestkit)
     .jvmConfigure(_.dependsOn(jvmAsyncioGears, jvmAsyncioNio))
-    .nativeConfigure(_.dependsOn(nativeAsyncioGears))
+    .nativeConfigure(_.dependsOn(nativeAsyncioGears, nativeAsyncioLoop))
 
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val kqueueDemo =

@@ -36,11 +36,11 @@ trait NWFrameworkCapabilities
   */
 object NWFrameworkBackend extends ReactorBackend with NWFrameworkCapabilities {
   def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
-  private[asyncio] def bind(pool: Pool): NWFrameworkOnPool = new NWFrameworkOnPool(pool)
+  private[asyncio] def bind(pool: Pool.Of[Op]): NWFrameworkOnPool = new NWFrameworkOnPool(pool)
 }
 
 /** A program's `Io` over Network.framework: `NWFrameworkBackend` bound to the pool the program runs on. */
-final class NWFrameworkOnPool private[nwframework] (protected val pool: Pool)
+final class NWFrameworkOnPool private[nwframework] (protected val pool: Pool.Of[NWFrameworkOp])
     extends Pooled
     with NWFrameworkCapabilities {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend

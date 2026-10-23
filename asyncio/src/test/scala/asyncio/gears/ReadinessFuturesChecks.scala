@@ -16,8 +16,7 @@ trait ReadinessFuturesChecks extends FuturesContract {
   val backend: Backend & SocketBackend & PipeBackend & ResolveBackend & ReadinessBackend
 
   test("ready completes once the handle is ready, and the handle can then be used without waiting") {
-    var outcome = ""
-    running { r =>
+    val outcome = running { r =>
       val (in, out) = r.handles.pipe()
       try {
         val buf = arena.allocate(16)
@@ -27,7 +26,7 @@ trait ReadinessFuturesChecks extends FuturesContract {
         r.handles.writeNow(out, arena.of("ready".getBytes(StandardCharsets.UTF_8)))
         waiting.await
         val read = r.handles.readNow(in, buf)
-        outcome = s"${text(buf)} ($read bytes)"
+        s"${text(buf)} ($read bytes)"
       } finally {
         r.perform(r.ops.close(in))
         r.perform(r.ops.close(out))

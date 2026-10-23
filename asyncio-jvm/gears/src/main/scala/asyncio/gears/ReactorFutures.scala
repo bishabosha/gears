@@ -7,6 +7,8 @@ import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
 
+import scala.util.Try
+
 import asyncio.Backend
 import asyncio.CallerBackend
 import asyncio.ReactorBackend
@@ -25,10 +27,10 @@ import asyncio.ReactorBackend
   */
 object ReactorFutures {
 
-  /** Runs `program` over `backend`, whichever its kind: on a pool of one worker for a reactor backend (see the other
-    * `run`), on gears' own virtual threads for a caller backend.
+  /** Runs `program` over `backend`, whichever its kind, and returns what it returns: on a pool of one worker for a
+    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend.
     */
-  def run(using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
+  def run[T](using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case caller: (CallerBackend & backend.type)    => onCaller(caller)(program)
@@ -37,35 +39,35 @@ object ReactorFutures {
 
   /** Runs `program` on a pool of `workers` workers driving reactors of `backend`'s, which carry the program's futures,
     * run until it finishes and are closed afterwards; `policy` says which tasks a worker out of work may take from
-    * another. The program is given the backend's `Io`, bound to the pool. A failure of the program is rethrown.
+    * another. The program is given the backend's `Io`, bound to the pool, and what it returns is returned; a failure
+    * of the program is rethrown.
     */
-  def run(workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
+  def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend
-  )(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = {
+  )(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T = {
     VirtualCarriers.check()
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
       val scheduler = new VirtualReactorScheduler(pool, factory)
-      val io = backend.bind(Pools.bound(scheduler))
+      val io = backend.bind(Pools.bound(backend, scheduler))
       given AsyncOperations = io
       given support: FactoryVThreadSupport[VirtualReactorScheduler] = new FactoryVThreadSupport(factory)
       given VirtualReactorScheduler = scheduler
-      @volatile var failure: Throwable | Null = null
+      @volatile var outcome: Try[T] | Null = null
       // Started from this thread, the first worker's, so the program's first continuation is queued there.
       factory
         .newThread { () =>
-          try Async.blocking(program(io))
-          catch case t: Throwable => failure = t
+          try outcome = Try(Async.blocking(program(io)))
           finally pool.stop()
         }
         .start()
       pool.runFirstWorker()
-      if failure != null then throw failure
+      outcome.nn.get
     }
   }
 
   /** Runs `program` on gears' own virtual threads, each op performed on the future's own thread. */
-  private def onCaller(b: CallerBackend)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = {
+  private def onCaller[T](b: CallerBackend)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> T): T = {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     val io = b.bind()

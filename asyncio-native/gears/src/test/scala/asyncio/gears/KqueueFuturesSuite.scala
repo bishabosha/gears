@@ -9,7 +9,7 @@ import asyncio.kqueue.KqueueBackend
 abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
-  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
+  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

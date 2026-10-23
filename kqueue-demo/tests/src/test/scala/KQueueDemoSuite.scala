@@ -59,10 +59,14 @@ class KQueueDemoSuite extends DemoSuite {
       "blocking interrupted: true",
       "a running blocking task had stopped before onCancel: true",
       "the cancelled task left its slot empty: true",
-      "close notified the leftover: true",
       "the leftover had stopped when notified: true",
-      "blocking interrupted by close: true",
       "cancelled completions run: 0"
+    ) ++ (
+      // The plain demo's leftover is stopped by closing the reactor; the gears mirror's by the end of its program,
+      // whose group the submission belongs to.
+      if (gearsMirrors)
+        Seq("the program's end notified the leftover: true", "blocking interrupted by the program's end: true")
+      else Seq("close notified the leftover: true", "blocking interrupted by close: true")
     )
     for (line <- expected) assert(output.contains(line), output)
     assert(!output.contains("unexpected"), output)
