@@ -7,10 +7,12 @@ import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
 
+import scala.util.NotGiven
 import scala.util.Try
 
 import asyncio.Backend
 import asyncio.CallerBackend
+import asyncio.OnPool
 import asyncio.ReactorBackend
 
 /** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program
@@ -28,9 +30,12 @@ import asyncio.ReactorBackend
 object ReactorFutures {
 
   /** Runs `program` over `backend`, whichever its kind, and returns what it returns: on a pool of one worker for a
-    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend.
+    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` on a
+    * pool is an `Io` and so a `Backend`, but not one to start a run over: that is refused when compiling.
     */
-  def run[T](using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
+  def run[T](using backend: Backend)(using NotGiven[backend.type <:< OnPool])(
+      program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T
+  ): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case caller: (CallerBackend & backend.type)    => onCaller(caller)(program)

@@ -867,5 +867,8 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     contract's `running[T]` with it; `Submission extends Cancellable`, linked to the caller's group by `submit` and
     unlinked by the completion the runtime wraps around the caller's (`Pools.PoolSubmission`), so the group's end
     cancels a leftover submission and waits for it, which the cancel demo now shows in place of the reactor's close;
-    the guarantee is on `perform`. Left, and noted in the README: `Io extends Backend`; no `Async.Source` view of a
-    submission; the `Io` passed explicitly; millisecond `Int` time limits; hiding by package.
+    the guarantee is on `perform`. Then each clause of the goal was given a criterion that can be checked without
+    the README, and the README says for each whether it is met or why the gap is accepted against the goal's wording
+    (`Io extends Backend`, with an `Io` on a pool now refused by the runner at compile time, `NotGiven[backend.type
+    <:< OnPool]`; no `Async.Source` view of a submission, the streaming hook of a later higher level; the `Io` passed
+    explicitly, named on every line; `Int` milliseconds; hiding by package, Scala having no module-private).
