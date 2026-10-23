@@ -90,7 +90,6 @@ private[gears] final class VirtualReactorScheduler(val pool: ReactorPool, factor
     extends ReactorScheduler {
   def backend: ReactorBackend = pool.backend
   def currentWorker: ReactorWorker | Null = pool.currentWorker
-  def driverFor(caller: Thread): ReactorDriver = pool.driverFor(caller)
   override def pin(): Unit = VirtualCarriers.pin()
   override def unpin(): Unit = VirtualCarriers.unpin()
 

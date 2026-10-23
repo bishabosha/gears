@@ -718,3 +718,49 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     heap entry on whichever side waits. On `Carriers.Reactors` the timer was already armed on the worker's own
     reactor, so the gap was small before and is gone now. kqueue not measured; it is the same heap. Not done: gears'
     own `withTimeout` still races, for code that is not an op.
+
+19. [x] **No reactor for gears' own threads: `NioOnCaller`, a backend of its own, and the hand-off ladder cut.** The
+    JVM's default is no longer a reactor backend with a side door. `NioOnCaller` is a `Backend` with `NioBackend`'s ops
+    and handles and a `perform` that does each op on the calling thread: try the command, since a non-blocking channel
+    may be used from any thread; yield and try again up to `asyncio.gears.retriesHere` times; then park on the
+    handle's own selector (`SelectorWait`, from `NioHandles`' pool) and try again when the JDK's poller unparks it; a
+    timer parks (`TimerWait`), a blocking op runs on the caller (`BlockingHere`, interrupted from one daemon timer
+    thread when its limit is up), a close or a listen is done at once. It needs no runner: `perform` works from any
+    `Async` context (checked in `NioOnCallerSuite`), and `ReactorFutures.run` only hands the program the backend.
+    `NioBackend` stays the reactor backend, whose program runs on a `ReactorPool` carrying its futures, on the JDK
+    internals; the backend a program is given is the mode, and the `Carriers` enum and `asyncio.gears.carriers`
+    property are gone (`-Dasyncio.nio.backend=caller|reactors` picks one in the demos and the bench).
+    `ReactorAsync.performOnReactor` is one case: a `ReactorScheduler` of the op's backend whose worker runs the caller
+    gets `performHere`; anything else is refused. Gone: `performElsewhere` and its gate (`retryBelow`, `waitHere`, the
+    `waiting` counter), `RemoteWaiter`, `OpRouter` and `ReactorDriver` (now `ReactorScheduler`: the pool and the
+    carried scheduler), `OpRouter.ambient`, `driverFor`, `ReactorPool.start` and `runBesideGears`, the `tryNow`,
+    `triesNow`, `waitHere` and `blockingHere` hooks with `WaitHere` and `BlockingHere` from the shared interface, and
+    `Command.tryFirst`/`triedNow`. With them, NIO's readiness capability, which the user decided NIO need not have:
+    `whenReady`, `readNow`, `writeNow` and `ReadinessBackend` on `NioBackend`, so the cancel demo runs on kqueue only,
+    and the bench's `timers` scenario, which submits to a reactor, on `NioBackend` only. `ReactorAsync.submit` needs a
+    worker (`onWorker` says).
+
+    The commit before the cut against after, NIO, JDK 27, one worker, median of 3, µs/op
+    (`kqueue-demo/bench/results/no-reactor-jdk-unix.json`, `-tcp.json`):
+
+    | scenario | caller before | caller after | pool before | pool after |
+    | --- | --- | --- | --- | --- |
+    | pingpong | 5.64 | 5.46 | 9.42 | 9.37 |
+    | pingpong-deadline | 5.47 | 5.36 | 9.66 | 9.35 |
+    | concurrent | 5.37 | 6.43 | 1.77 | 1.94 |
+    | concurrent-offload | 6.43 | 9.84 | 6.05 | 6.05 |
+    | connections | 78.3 | 90.9 | 44.6 | 44.6 |
+    | pipelined | 1.48 | 1.52 | 0.46 | 0.45 |
+    | fairness (tick) | 1.92 (1.58) | 2.11 (1.69) | 1.17 (2.34) | 1.18 (2.35) |
+    | mixed (compute) | 6.35 (23.5) | 6.39 (24.6) | 17.0 (33.9) | 16.6 (33.2) |
+    | starvation p99 / max, ms | 5.85 / 10.96 | 1.32 / 2.08 | 0.35 / 1.00 | 0.33 / 1.02 |
+    | pingpong over TCP | 24.1 | 24.6 | | |
+    | concurrent over TCP | 7.25 | 10.22 | | |
+
+    Latency, `pipelined`, `mixed` and `blocking` are unchanged, and the worst-case wake-up lateness is cut four to
+    five times, since no completion queues behind a preempted reactor thread. The price is `concurrent` (+20%,
+    +41% over TCP), `connections` (+16%) and `concurrent-offload` (+53%): every waiting future makes its own system
+    calls, on macOS's per-process descriptor lock, where the reactor's one `select` served them all. Linux has no
+    such lock, and is where to measure before anything like the hand-off comes back. `NioBackend` on a pool is untouched,
+    as it should be: it never used the ladder. (Measured with the caller path still a hook on `NioBackend`; the
+    split into its own backend changed no code on the path.)

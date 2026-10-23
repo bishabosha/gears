@@ -3,18 +3,30 @@ package gearsexample
 import mainargs.{ParserForMethods, arg, main}
 import asyncio.IpAddress
 import asyncio.UnixAddress
+import asyncio.BlockingBackend
+import asyncio.FileBackend
+import asyncio.PipeBackend
+import asyncio.ResolveBackend
+import asyncio.UnixStreamBackend
 import asyncio.nio.NioBackend
+import asyncio.nio.NioOnCaller
 import asyncio.gears.TakePolicy
 
 /** The gears demos on the JVM, run as `sbt "gearsDemoJVM/run <command>"`, with the commands and flags of
   * `kqueuedemo gears` that NIO can run: the FIFO and Unix datagram demos need capabilities NIO lacks, so they would not
   * compile here, and `move-bench` is kqueue's own.
   *
-  * This is the edge, the one place that chooses NIO. The futures are gears' own virtual threads, beside the reactors;
-  * `-Dasyncio.gears.carriers=reactors` carries them on the reactor pool instead (see `asyncio.gears.Carriers`).
+  * This is the edge, the one place that chooses NIO: `NioOnCaller`, with no reactor, each op performed on the future's
+  * own virtual thread; or, with `-Dasyncio.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor
+  * pool (see `asyncio.gears.ReactorFutures`).
   */
 object Main {
-  given NioBackend.type = NioBackend
+  given (UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
+    sys.props.get("asyncio.nio.backend") match {
+      case Some("reactors")      => NioBackend
+      case None | Some("caller") => NioOnCaller
+      case Some(other)           => throw new IllegalArgumentException(s"asyncio.nio.backend is caller or reactors, not `$other`")
+    }
 
   @main
   def timer(): Unit = {
@@ -99,10 +111,6 @@ object Main {
       @arg query: String = "example.com"
   ): Unit = {
     GearsWhois.run(host, port, query)
-  }
-  @main
-  def cancel(): Unit = {
-    GearsCancel.run()
   }
   @main
   def resolve(@arg host: String = "localhost"): Unit = {

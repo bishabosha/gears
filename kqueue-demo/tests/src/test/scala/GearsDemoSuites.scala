@@ -10,8 +10,8 @@ trait GearsBenchCheck extends KQueueDemoSuite {
       scenario <- Seq(
         "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
         "connections", "pipelined", "blocking",
-        "blocking-io", "timers", "fairness", "fairness-tick", "mixed", "mixed-compute"
-      )
+        "blocking-io", "fairness", "fairness-tick", "mixed", "mixed-compute"
+      ) ++ (if (hasReactors) Seq("timers") else Nil) // `timers` submits to a reactor, which only a reactor backend has
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
     assert(!output.contains("Exception"), output)
@@ -45,12 +45,13 @@ class GearsSocketDemoSuite extends SocketDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")
 }
 
-/** The same gears demos on the JVM, over NIO, with their futures carried by `carriers` (`asyncio.gears.Carriers`). NIO
-  * has neither FIFOs nor Unix datagram sockets, so neither do its demos, and the JDK cannot send an empty datagram on a
-  * connected socket. Empty packets to the server, from Java's own clients, are still echoed.
+/** The same gears demos on the JVM, over NIO: `NioOnCaller` (`backend` "caller"), or `NioBackend` on a reactor pool
+  * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets nor readiness, so neither do its demos, and the JDK
+  * cannot send an empty datagram on a connected socket. Empty packets to the server, from Java's own clients, are
+  * still echoed.
   */
 trait OnJvm extends DemoSuite {
-  def carriers: String
+  def backend: String
 
   override def launcher: Seq[String] = {
     val classpath = sys.props.getOrElse("gears.demo.jvm.classpath", fail("set -Dgears.demo.jvm.classpath"))
@@ -58,7 +59,7 @@ trait OnJvm extends DemoSuite {
       Paths.get(sys.props("java.home"), "bin", "java").toString,
       "--add-opens=java.base/java.lang=ALL-UNNAMED",
       "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED",
-      s"-Dasyncio.gears.carriers=$carriers",
+      s"-Dasyncio.nio.backend=$backend",
       "-cp",
       classpath,
       "gearsexample.Main"
@@ -68,21 +69,23 @@ trait OnJvm extends DemoSuite {
   override def gearsMirrors: Boolean = true
   override def hasFifos: Boolean = false
   override def hasUnixDatagrams: Boolean = false
+  override def hasReadiness: Boolean = false
+  override def hasReactors: Boolean = backend == "reactors"
   override def sendsEmptyConnectedDatagrams: Boolean = false
 }
 
 class JvmGearsDemoSuite extends KQueueDemoSuite with GearsBenchCheck with OnJvm {
-  def carriers = "jdk"
+  def backend = "caller"
 }
 
 class JvmGearsSocketDemoSuite extends SocketDemoSuite with OnJvm {
-  def carriers = "jdk"
+  def backend = "caller"
 }
 
 class JvmReactorsGearsDemoSuite extends KQueueDemoSuite with GearsBenchCheck with OnJvm {
-  def carriers = "reactors"
+  def backend = "reactors"
 }
 
 class JvmReactorsGearsSocketDemoSuite extends SocketDemoSuite with OnJvm {
-  def carriers = "reactors"
+  def backend = "reactors"
 }

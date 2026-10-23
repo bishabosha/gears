@@ -1,26 +1,54 @@
 package asyncio.nio
 
+import gears.async.Cancellable
+
+import java.nio.channels.CancelledKeyException
 import java.nio.channels.ClosedSelectorException
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.locks.LockSupport
 
-/** NIO's waits on the calling thread (`ReactorBackend.waitHere`), for a caller on no reactor's thread: a command waits
-  * on its handle's own selector, a timer parks until its time. Nothing is interrupted and nothing spins; a cancel
-  * wakes the wait. Written for a backend with no reactor, since retired, whose way of waiting these are (see the NIO
-  * TODO, items 10 to 12 and 14).
+/** NIO's waits on the calling thread, for `NioOnCaller`: a command waits on its handle's
+  * own selector, a timer parks until its time, and a blocking op runs on the caller. Nothing is interrupted and
+  * nothing spins; a cancel wakes the wait. Written for a backend with no reactor, since retired, whose way of waiting
+  * these are (see the NIO TODO, items 10 to 12 and 14).
   */
 private[nio] object WaitsHere {
 
   /** For `select`'s action: the op tries again itself, so the selected keys need nothing done. */
   val Ignore: java.util.function.Consumer[SelectionKey] = _ => ()
+
+  /** One daemon thread that interrupts a blocking op run on a caller when its time limit is up, since nothing on the
+    * caller's own thread could (`NioOnCaller`).
+    */
+  lazy val timeouts: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { body =>
+    val thread = new Thread(body, "asyncio-nio-timeouts")
+    thread.setDaemon(true)
+    thread
+  }
+}
+
+/** A wait on the calling thread. A `Cancellable`, so that the caller's group can end it. */
+private[nio] sealed trait WaitHere extends Cancellable {
+
+  /** Parks the caller until the op is done, or its handle may be ready, or `cancel` has been called, or, unless
+    * `timeoutNanos` is negative, that many nanoseconds have passed, and returns: true if the wait finished the op, as a
+    * timer's does once its time has passed, so there is nothing to try; false if the caller should try the op again,
+    * or its time ran out, which the caller keeps track of. Throws if the op's handle has been closed.
+    */
+  def await(timeoutNanos: Long): Boolean
+
+  /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
+  def cancel(): Unit
 }
 
 /** A wait on the calling thread for a handle to be ready for `ops`, on the handle's own selector for that direction
-  * (see `Selectable.enterWait`): `ReactorBackend.waitHere` for NIO's commands. Cancelled with `Selector.wakeup`, so
-  * the handle stays open.
+  * (see `Selectable.enterWait`), which the JDK's poller parks a virtual thread in. Cancelled with `Selector.wakeup`,
+  * so the handle stays open.
   */
-private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: Int) extends asyncio.WaitHere {
+private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: Int) extends WaitHere {
   @volatile private var cancelled = false
   @volatile private var waitingOn: Selector | Null = null
 
@@ -39,7 +67,7 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
         else selector.select(WaitsHere.Ignore, (timeoutNanos + 999_999L) / 1_000_000L) // rounded up: due when it returns
       }: Unit
     } catch {
-      case _: ClosedSelectorException | _: java.nio.channels.CancelledKeyException => ()
+      case _: ClosedSelectorException | _: CancelledKeyException => ()
     } finally {
       waitingOn = null
       entry.exitWait()
@@ -54,10 +82,10 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
   }
 }
 
-/** A timer waited for on the calling thread, parked until its time has passed: `ReactorBackend.waitHere` for NIO's
-  * timers, which contend for nothing, so a caller waits this way whatever else is waiting. Cancelled with an unpark.
+/** A timer waited for on the calling thread, parked until its time has passed: no reactor thread to fire it and
+  * resume the caller, which the OS may keep from running while the cores are busy. Cancelled with an unpark.
   */
-private[nio] final class TimerWait(milliseconds: Int) extends asyncio.WaitHere {
+private[nio] final class TimerWait(milliseconds: Int) extends WaitHere {
   private val deadline = System.nanoTime() + milliseconds * 1_000_000L
   @volatile private var cancelled = false
   @volatile private var parked: Thread | Null = null
@@ -83,4 +111,14 @@ private[nio] final class TimerWait(milliseconds: Int) extends asyncio.WaitHere {
     val thread = parked
     if thread != null then LockSupport.unpark(thread)
   }
+}
+
+/** A blocking op run on the calling thread, under the blocker pool's rules (see `NioBlocking.here`): `run` runs the
+  * body, writing its result into the op's slot, and returns once it has, with its failure thrown; if `cancel` came
+  * first the body is skipped, if during it is interrupted and its result not written, and either way `run` then
+  * throws `CancellationException`. A `Cancellable`, so that the caller's group can end it.
+  */
+private[nio] final class BlockingHere(task: NioBlocking) extends Cancellable {
+  def run(): Unit = task.runHere()
+  def cancel(): Unit = task.interrupt(): Unit
 }

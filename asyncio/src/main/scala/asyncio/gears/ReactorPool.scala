@@ -35,10 +35,6 @@ private[gears] final class ReactorWorkerThread(
   * runs on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
-  *
-  * A pool started by `ReactorPool.start` instead carries no futures: its workers only drive their reactors, for the
-  * ops that futures on another scheduler hand them (see `OpRouter`), so no task is ever queued on one, and each
-  * blocks in its reactor until an event, an op handed over, or a stop wakes it.
   */
 class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val policy: TakePolicy)
     extends ReactorScheduler {
@@ -76,9 +72,6 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
         val first = workers(0)
         if first != null && (first.owner eq thread) then first else null
     }
-
-  /** Where an op performed from outside the pool goes: a worker picked by the caller's thread. */
-  def driverFor(caller: Thread): ReactorDriver = workers(Math.floorMod(System.identityHashCode(caller), workers.length))
 
   /** Queues `body` on the worker running the caller, or on the shared queue from outside the pool. */
   def execute(body: Runnable): Unit = {
@@ -141,9 +134,8 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   /** Runs the first worker, on the thread that started the pool, until the pool stops. */
   private[gears] def runFirstWorker(): Unit = workers(0).loop()
 
-  /** Starts the workers from `from` on, each on a thread of its own, where it opens its reactor (which hears there of
-    * descriptors closed, see `DescriptorHooks`), and returns once every one of them is in `workers`: the array is
-    * complete, and published to every worker, before any task runs or any op is handed over.
+  /** Starts the workers from `from` on, each on a thread of its own, where it opens its reactor, and returns once every
+    * one of them is in `workers`: the array is complete, and published to every worker, before any task runs.
     */
   private def startThreads(from: Int): Unit = {
     val started = new java.util.concurrent.CountDownLatch(size - from)
@@ -189,17 +181,5 @@ object ReactorPool {
       pool.join()
       stopped(pool)
     }
-  }
-
-  /** Starts a pool of `workers` workers that carry no futures, every one on a thread of its own: an `OpRouter` for a
-    * program whose futures run elsewhere, such as on gears' virtual threads (`Carriers.Jdk`), which hand their ops to
-    * the workers through it. Each reactor is open when this returns. The pool runs until `stop`, and `join` waits for
-    * its reactors to close. The workers' threads are platform threads; virtual ones were tried and dropped, since a
-    * reactor's wake-up then queues behind the futures' too (see the NIO TODO, item 11).
-    */
-  private[gears] def start(backend: ReactorBackend, workers: Int): ReactorPool = {
-    val pool = new ReactorPool(backend, workers, TakePolicy.Affine)
-    pool.startThreads(from = 0)
-    pool
   }
 }

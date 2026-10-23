@@ -21,7 +21,6 @@ import asyncio.FileOps
 import asyncio.Handle
 import asyncio.Interest
 import asyncio.IpAddress
-import asyncio.ReadinessOps
 import asyncio.Repeatable
 import asyncio.ResolveOps
 import asyncio.ResolvedAddress
@@ -52,7 +51,6 @@ sealed trait NioOp extends asyncio.unsafe.TimerHeap.Entry {
 /** Builds the ops `NioReactor` understands. */
 object NioOps
     extends SocketOps[NioOp]
-    with ReadinessOps[NioOp]
     with BlockingOps[NioOp]
     with FileOps[NioOp]
     with ResolveOps[NioOp] {
@@ -64,8 +62,6 @@ object NioOps
   def send(handle: Handle, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
   def send(handle: Handle, buf: ByteBuffer): Send = new Send(handle, buf, null)
   def timer(milliseconds: Int): NioTimer = new NioTimer(milliseconds)
-  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): WhenReady =
-    new WhenReady(handle, interest, perform)
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
@@ -103,17 +99,15 @@ final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
 }
 
-/** What to do with a handle once it is ready. `perform` runs a non-blocking operation on the reactor thread, on the
-  * handle's entry, which the reactor looks up when the command is submitted; it returns whether the op is done, and an
-  * exception it throws is the op's failure. Commands are `Repeatable`.
+/** What to do with a handle once it is ready. `perform` runs a non-blocking operation on the handle's entry, which is
+  * looked up when the command is submitted, or performed on the caller (`NioOnCaller`); it returns whether the op is
+  * done, and an exception it throws is the op's failure. A reactor performs a command as soon as it is submitted,
+  * before waiting for readiness. Commands are `Repeatable`.
   */
 abstract class Command extends NioOp with Repeatable {
   def handle: Handle
   def interest: Interest
   def perform(): Boolean
-
-  /** Whether the reactor may perform this command as soon as it is submitted, before waiting for readiness. */
-  def tryFirst: Boolean = true
 
   /** The interest ops to wait for on `channel`: reading a listener is accepting. */
   def selectOps(channel: SelectableChannel): Int =
@@ -121,11 +115,13 @@ abstract class Command extends NioOp with Repeatable {
     else if channel.isInstanceOf[ServerSocketChannel] then SelectionKey.OP_ACCEPT
     else SelectionKey.OP_READ
 
-  /** The entry of the current submission, looked up by the reactor. */
+  /** The entry of the current submission, looked up by the reactor, or by `NioOnCaller`. */
   private[nio] var entry: Entry | Null = null
 
-  /** Whether `NioBackend.tryNow` just tried this command and it would have blocked: its next submission skips trying. */
-  private[nio] var triedNow = false
+  /** Submissions in a row that `NioOnCaller` finished at once, so that a run of them yields now and then. Caller's
+    * thread only.
+    */
+  private[nio] var finishedHere = 0
 
   /** The key of the selector this command last waited on, kept so that waiting there again needs no lookup. */
   private[nio] var key: SelectionKey | Null = null
@@ -228,12 +224,6 @@ final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) exte
   }
 }
 
-/** A command built from a function, for `ReadinessOps.whenReady`: it runs only once the handle is ready. */
-final class WhenReady(val handle: Handle, val interest: Interest, body: () => Boolean) extends Command {
-  def perform(): Boolean = body()
-  override def tryFirst: Boolean = false
-}
-
 /** A one-shot timer, kept in its reactor's heap while pending (`TimerHeap.Entry`). */
 final class NioTimer(val milliseconds: Int) extends NioOp with Repeatable {
   require(milliseconds >= 0, "Timer duration must not be negative")
@@ -301,8 +291,10 @@ abstract class NioBlocking extends NioPromise with BlockingRun {
   protected def settled(failure: Throwable | Null): Unit =
     if failure != null then fail(failure) else signal()
 
-  /** Runs this op on the calling thread instead of the blocker pool (see `ReactorBackend.blockingHere`). */
-  private[nio] def here(): asyncio.BlockingHere = {
+  /** Readies this op to run on the calling thread instead of the blocker pool (see `NioOnCaller`): as a submission
+    * would, once for a one-shot op.
+    */
+  private[nio] def here(): BlockingHere = {
     this match {
       case _: Repeatable => ()
       case _             =>
@@ -311,10 +303,7 @@ abstract class NioBlocking extends NioPromise with BlockingRun {
     submitted = true
     reset()
     restart()
-    new asyncio.BlockingHere {
-      def run(): Unit = runHere()
-      def cancel(): Unit = interrupt(): Unit
-    }
+    new BlockingHere(this)
   }
 }
 

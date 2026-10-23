@@ -15,8 +15,7 @@ import asyncio.Reactor
   *
   * Its reactor is one of `backend`'s, opened on the worker's own thread, so it runs any op the backend builds.
   */
-private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor)
-    extends ReactorDriver {
+private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor) {
 
   /** The thread it runs on, which created it. */
   private[gears] val owner = Thread.currentThread()
@@ -26,8 +25,8 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
   private[gears] val local = new RunQueue
 
   // Tasks that must run on this worker in particular, queued from other threads, which wake it: cancelling an op
-  // pending on its reactor, or arming a timer there. `drain` runs them first, never through `local`, from which other
-  // workers take tasks.
+  // pending on its reactor, or arming a timer there (`sync`). `drain` runs them first, never through `local`, from
+  // which other workers take tasks.
   private val inbox = new ConcurrentLinkedQueue[Runnable]()
 
   // Under the affine and hybrid policies, tasks resumed by this worker's reactor, which no other worker may take: a
@@ -53,6 +52,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
   // is a resume from the reactor, of an op finished there.
   private var inTurn = false
 
+  /** Whether the caller runs on this worker's thread, so it may use the reactor directly. */
   def isCurrent: Boolean = Thread.currentThread() eq owner
 
   /** Queues `task` here, on this worker's thread only. A resume from this worker's reactor stays here under the affine

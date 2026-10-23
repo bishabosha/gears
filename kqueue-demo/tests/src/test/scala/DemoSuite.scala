@@ -30,6 +30,12 @@ abstract class DemoSuite extends FunSuite {
 
   /** Whether the backend has FIFOs and Unix datagram sockets, which NIO lacks, so its demos have no such commands. */
   def hasFifos: Boolean = true
+
+  /** Whether the backend has readiness, which the cancel demo uses. */
+  def hasReadiness: Boolean = true
+
+  /** Whether the backend has reactors, which the bench's `timers` scenario submits to. */
+  def hasReactors: Boolean = true
   def hasUnixDatagrams: Boolean = true
 
   /** Whether a connected datagram socket can send an empty packet, which the JDK's cannot. */

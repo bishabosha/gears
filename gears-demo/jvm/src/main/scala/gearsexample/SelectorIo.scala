@@ -42,7 +42,7 @@ object BlockingIo extends Io {
 /** The least a `Selector` design can do with virtual threads, to measure the API's own cost: non-blocking channels,
   * each operation tried on the calling virtual thread first; one that would block hands a registration to the
   * selector's own thread and parks, and that thread unparks it once the channel is ready. No futures, completions or
-  * reactor: what any design on `Selector` pays at least, as `NioReactor` under `Carriers.Jdk` does. The selector is
+  * reactor: what any design on `Selector` pays at least, as `NioReactor` on a reactor thread beside the futures would. The selector is
   * woken only when its thread is blocked in it, or about to be.
   */
 final class SelectorIo extends Io {
