@@ -76,8 +76,9 @@ lazy val asyncioTestkit =
     .in(file("asyncio-testkit"))
     .settings(publish / skip := true)
 
-// The platform-independent reactor model: ops, completions, the Reactor trait, and the blocker pool; and the gears
-// scheduler over a pool of reactors, which a platform with suspension support for it starts.
+// The interface, and nothing else: submitters and reactors, ops, handles and slots, backends and their kinds and
+// capabilities, and what a program is given to perform with (`Io`). It knows the gears library and no runtime of
+// its own: the two modules below cannot be referenced from here, by construction.
 lazy val asyncio =
   crossProject(JVMPlatform, NativePlatform)
     .crossType(CrossType.Pure)
@@ -91,6 +92,29 @@ lazy val asyncio =
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
     .dependsOn(root, asyncioTestkit % Test)
 
+// Implementation the backends share, below the interface: the blocker pool and the timer heap.
+lazy val asyncioUnsafe =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Pure)
+    .in(file("asyncio-unsafe"))
+    .settings(publish / skip := true)
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .dependsOn(asyncio)
+
+// The gears runtime over reactor backends: the pool of workers driving reactors, its scheduler, and the `Pool` an
+// `OnPool` performs through. A platform with suspension support starts it (`ReactorFutures`).
+lazy val asyncioGears =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Pure)
+    .in(file("asyncio-gears"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework
+    )
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .dependsOn(asyncio)
+
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val nativeAsyncioLoop =
   (project in file("asyncio-native/loop"))
@@ -102,7 +126,7 @@ lazy val nativeAsyncioLoop =
       // Its tests run reactors on several threads.
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(asyncio.native % "compile->compile;test->test")
+    .dependsOn(asyncio.native % "compile->compile;test->test", asyncioUnsafe.native)
 
 // The JVM's reactor backend: NIO selectors over the JDK's selectable channels, and threads for what the JDK can only
 // block on.
@@ -113,7 +137,7 @@ lazy val jvmAsyncioNio =
       libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
       testFrameworks += MUnitFramework
     )
-    .dependsOn(asyncio.jvm % "compile->compile;test->test")
+    .dependsOn(asyncio.jvm % "compile->compile;test->test", asyncioUnsafe.jvm)
 
 // Gears on the JVM over reactors: `ReactorFutures.run` with gears' virtual threads beside reactor threads, or, opted
 // into, virtual threads carried by the reactor pool (see asyncio-jvm/nio/src/main/scala/asyncio/nio/TODO.md).
@@ -131,7 +155,12 @@ lazy val jvmAsyncioGears =
         "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
       )
     )
-    .dependsOn(asyncio.jvm % "compile->compile;test->test", jvmAsyncioNio % Test, asyncioTestkit.jvm % Test)
+    .dependsOn(
+      asyncio.jvm % "compile->compile;test->test",
+      asyncioGears.jvm,
+      jvmAsyncioNio % Test,
+      asyncioTestkit.jvm % Test
+    )
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
 // asyncio/kqueue/TODO.md, "A thread-pooled scheduler").
@@ -144,7 +173,7 @@ lazy val nativeAsyncioGears =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test")
+    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test", asyncioGears.native)
 
 // The NWFramework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
 // their C side in its resources (see asyncio-native/nwframework/TODO.md). macOS only; every executable that links it needs
