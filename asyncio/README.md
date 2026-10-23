@@ -79,35 +79,62 @@ Left to a higher level, on purpose: ops, `perform` and slots are mutable records
 lowest level there is. A result-returning or streaming API wraps that mutability; the interface only makes sure it
 can be written once over every backend.
 
-## Review against the goals of the restructuring
+## The goal, as criteria, and where each stands
 
-Reviewed independently, against the goal's wording, by a reader given the code and the goal and not this document's
-claims (the findings are recorded in `asyncio-jvm/nio/TODO.md`, item 28). What that review found, and what was done:
+The goal of the restructuring, in its own words: *improve the orthogonality of concepts, separate implementation from
+interface, but traits are ok to share implementation; make it more idiomatic to gears, but bear in mind that ops,
+perform and slots is the lowest level detail, and that a higher level API would eventually wrap this mutability for
+either result returning methods or streaming APIs.* Each clause below is given a criterion that can be checked
+without trusting this document, how to check it, and whether it is met or, where it is not, why the gap is accepted
+against the goal's wording. The criteria were checked by an independent review, a reader given the code and the goal
+and not this document (`asyncio-jvm/nio/TODO.md`, item 28), and what it found was fixed or is accepted below.
 
-- *Orthogonal concepts*: the three axes above, with nothing shared between them but `Op` and the `Io` refinement each
-  capability carries. Found and fixed: the Native runner matched on kqueue's reactor to print its counters and the
-  build let it depend on the kqueue backend, so the runner depended on one backend and the Network.framework backend
-  on the runner (a reactor now prints its own counters, and the runner sees backends in its tests only);
-  `BlockingBackend` was documented as a reactor backend's capability while `NioOnCaller` has it (it now promises the
-  same on either kind: the body runs where it may block, with the time limit and cancellation interrupting it);
-  `Pool` took the backend on every call to line up types (bound once, `Pool.Of[Op]`). Left: `Io extends Backend`, so
-  an `Io` may be passed where a `Backend` is wanted, which the runner refuses when run, not when compiled.
-- *Implementation apart from the interface*: the direction of dependency is enforced by the build. Found and fixed:
-  `Handle.Table`, a table of I/O objects two backends used, was in the interface (now `asyncio.unsafe.HandleTable`).
-  The bodies left in the interface are defaults the contract itself states: `perform(op)` is `perform` with no limit,
-  `sleep` is a timer op, a completion's `onFailure` throws and its `onCancel` does nothing, `Reactor.scoped` opens and
-  closes. Shared implementation is traits and classes in `asyncio-unsafe` (`Pooled`, `HandleTable`) and the runtime's
-  own module. Hiding is by package, as said above.
-- *Idiomatic to gears*: programs are context functions over `Async.Spawn` and `AsyncOperations`; ops are performed
-  as methods on the value gears hands the program; gears' own timing functions run on the backend's timers; the
-  pool's `yield` is the scheduler's. Found and fixed: `ReactorFutures.run` returned `Unit` where gears' entry points
-  return the body's value, so every result left the program through a `var` (it returns the value); a `Submission`
-  was outside structured concurrency, cancelled only by hand or by closing the reactor (it is a `Cancellable` in the
-  caller's group). Left, as the lowest level: a submission is not an `Async.Source`, so selecting an op against a
-  channel takes a `Future` per op; the `Io` is an explicit parameter where gears passes capabilities as `using`; time
-  limits are milliseconds in an `Int`.
-- *The lowest level stays the lowest*: ops, `perform` and slots are untouched in meaning; no op but `blocking` takes a
-  closure, and that one's closure is the op. Found and fixed: the guarantee a wrapper relies on, that a cancelled op
-  is out of use once `perform` returns, was stated here and not on `perform` (it is on `perform`). The hook a
-  streaming API will want next is a source view of an op's completion, which the runtime has (`Pools.OpWaiter`) and
-  the interface does not yet expose.
+### Orthogonality of concepts
+
+*Criterion*: a capability trait mentions no kind or thread; a kind mentions no capability; a runner mentions no
+backend; the runtime reaches a backend through `Pool` alone. *Check*: `grep` `Backend.scala` for `thread`, `worker`,
+`socket` in the wrong traits; `grep` the runners for a backend's package; the build, where a runner depends on a
+backend in `Test` only. *Status*: met. Each capability refines `Backend.Io` to carry itself, which is the one thing
+the capability axis knows of the `Io` axis, and is what lets a program over `SocketBackend & FileBackend` be given an
+`Io` with both. **Accepted**: `Io extends Backend`, since an `Io` must be a `SocketBackend` for a helper over
+`Io & SocketBackend` to take it; what that allowed, an `Io` on a pool passed to the runner as a backend, is refused
+when compiling (`ReactorFutures.run` takes `NotGiven[backend.type <:< OnPool]`, checked by a test), so nothing is
+left to the run.
+
+### Implementation apart from the interface
+
+*Criterion*: the interface module depends on the gears library alone; every body in it is a default the contract
+itself states, or a utility over the contract. *Check*: `build.sbt`, where `asyncio` depends on `root`; `grep -n
+"= \|{$" asyncio/src/main/scala/asyncio/*.scala` for bodies. *Status*: met. The bodies are `perform(op)` (`perform`
+with no limit), `sleep` (a timer op), `Completion.onFailure` (throws) and `onCancel` (nothing), `Submitter.submit` and
+`trySubmit` with no limit, `Reactor.scoped` (open, use, close), `Slot`, `Handle.Opt` and `Handle.Slot` (the records
+ops write), which the goal's *traits are ok to share implementation* covers, and nothing else: `Handle.Table` moved
+out to `asyncio.unsafe.HandleTable`, the pool's machinery is `asyncio.gears.Pools` behind `Pool`, the forwarding to it
+is `asyncio.unsafe.Pooled`. `Io`, `OnPool`, `OnCaller`, `Submission` and `Pool` are in the interface because they are
+interface: contracts a program or the runtime is written against, with no bodies. **Accepted**: hiding is by package,
+not module, as said above, since Scala has no module-private; the build fixes the direction of dependency and the
+package fixes who may call `bind`, `Slot.set` and `Handle.wrap`.
+
+### Idiomatic to gears
+
+*Criterion*: a program is written with gears' own vocabulary and nothing of the backend's beyond `perform`: a
+context function over `Async.Spawn` and `AsyncOperations`, returning its value; `Future`, `Async.group`, `sleep`,
+`withTimeout`, `Timer` and cancellation mean what they mean in gears; anything the program may wait on or cancel is a
+gears `Cancellable`. *Check*: `FuturesContract`, the one suite every backend runs, which uses only those, has `sleep`
+and `withTimeout` run on the backend's timers, has cancelling a future cancel its op, and takes every result from the
+value `running` returns. *Status*: met for `perform`; `ReactorFutures.run` returns the program's value as
+`Async.blocking` does; `Submission` is a `Cancellable` in the caller's group, as a `Future` is. **Accepted**, as the
+lowest level the goal names: an op's completion is not an `Async.Source`, so selecting an op against a channel takes
+a `Future` per op, the hook a streaming API over this will want and the runtime already has (`Pools.OpWaiter`); the
+`Io` is an explicit parameter where gears passes `Async` as `using`, because a program names it on every line
+(`r.ops`, `r.perform`), unlike an `Async`; time limits are an `Int` of milliseconds, the op's own unit.
+
+### The lowest level stays the lowest
+
+*Criterion*: ops, `perform` and slots keep their meaning as mutable records the caller owns and reuses; no op but
+`blocking` takes a closure; the guarantee a wrapper relies on is stated where it reads it. *Check*: `Ops.scala` for
+closures; `Io.perform`'s contract. *Status*: met. `whenReady` with its closure became `ready`, an op that completes;
+`Io.perform` states that once it returns or throws the op is out of use everywhere, its buffers and slots the
+caller's and its handle as open as it was. What a higher level wraps is unchanged: a result-returning method is
+`perform` and a slot's `clear`; a streaming API is a repeatable read performed in a loop, and, later, the source view
+above.
