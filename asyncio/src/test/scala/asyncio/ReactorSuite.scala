@@ -101,14 +101,13 @@ class ReactorSuite extends FunSuite {
     assertEquals(compileErrors("def t(b: Backend)(h: Handle): Repeatable = b.ops.read(h, null)"), "")
   }
 
-  test("a reactor is a submitter with a loop; a completion backend's ops carry attachments") {
+  test("a reactor is a submitter with a loop; a submitter keeps its ops' attachments, a backend does not") {
     assertEquals(compileErrors("def s(r: Reactor): Submitter = r"), "")
     assertEquals(compileErrors("def sub(s: Submitter): Unit = s.submit(s.ops.timer(1), _ => ())"), "")
     assert(compileErrors("def turn(s: Submitter): Unit = s.runOnce(false)").nonEmpty)
-    assertEquals(compileErrors("def c(b: ReactorBackend): CompletionBackend = b"), "")
-    assertEquals(compileErrors("def a(b: CompletionBackend)(op: b.Op) = b.attachment(op)"), "")
-    assert(compileErrors("def a(b: Backend)(op: b.Op) = b.attachment(op)").nonEmpty)
-    assert(compileErrors("def o(b: CompletionBackend) = b.open()").nonEmpty)
+    assertEquals(compileErrors("def a(s: Submitter)(op: s.Op) = s.attachment(op)"), "")
+    assert(compileErrors("def a(b: ReactorBackend)(op: b.Op) = b.attachment(op)").nonEmpty)
+    assert(compileErrors("def o(b: Backend) = b.open()").nonEmpty)
   }
 
   test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {

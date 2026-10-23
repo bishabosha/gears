@@ -38,9 +38,6 @@ trait KqueueCapabilities
   * go to any of them in turn; what kqueue keeps about a descriptor stays with the reactor that registered it.
   */
 object KqueueBackend extends ReactorBackend with KqueueCapabilities {
-  def attachment(op: Op): AnyRef | Null = op.attachment
-  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
-
   /** Opens a reactor with `KqueueReactor.open`'s defaults. */
   def open(): Reactor.Of[Op] = KqueueReactor.open()
 

@@ -35,7 +35,7 @@ object GearsDatagram {
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
         try exchange(r, sock, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[UnixAddress]()), request, response)
-        finally perform(r, r.ops.close(socket))
+        finally r.perform(r.ops.close(socket))
       }
     }
   }
@@ -48,7 +48,7 @@ object GearsDatagram {
       ReactorFutures.run { r =>
         val socket = r.handles.datagram(null, address)
         try exchange(r, address, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[IpAddress]()), request, response)
-        finally perform(r, r.ops.close(socket))
+        finally r.perform(r.ops.close(socket))
       }
     }
   }
@@ -61,13 +61,13 @@ object GearsDatagram {
     // Scoped, so the exchange is cancelled and settled before the socket is closed.
     Async.group {
       val ping = Future {
-        perform(r, send) // completes once the whole packet has gone
+        r.perform(send) // completes once the whole packet has gone
         println(s"Sent datagram of ${request.limit()} bytes.")
-        perform(r, receive) // completes once a packet has arrived
+        r.perform(receive) // completes once a packet has arrived
         println(s"Received datagram of ${response.remaining()} bytes: `${text(response)}`")
       }
       // UDP has no delivery guarantee; make a missing reply visible in the demo.
-      val deadline = Future(perform(r, r.ops.timer(5000)))
+      val deadline = Future(r.perform(r.ops.timer(5000)))
       Async.select(
         ping.handle(_.get),
         deadline.handle(_ => throw new IOException("Timed out waiting for datagram socket readiness or a reply"))
@@ -85,7 +85,7 @@ object GearsDatagram {
         val socket = r.handles.datagram(address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
         try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally perform(r, r.ops.close(socket))
+        finally r.perform(r.ops.close(socket))
       }
     }
 
@@ -97,7 +97,7 @@ object GearsDatagram {
         val socket = r.handles.datagram(address, null)
         val sender = Slot[IpAddress]()
         try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally perform(r, r.ops.close(socket))
+        finally r.perform(r.ops.close(socket))
       }
     }
 
@@ -107,10 +107,10 @@ object GearsDatagram {
   private def echo(r: Io, receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
     println("Datagram socket is now waiting for messages.")
     while true do {
-      perform(r, receive)
+      r.perform(receive)
       val size = packet.remaining()
       println(s"Received datagram of $size bytes: `${text(packet)}`")
-      perform(r, reply())
+      r.perform(reply())
       println(s"Replied with datagram of $size bytes.")
     }
   }

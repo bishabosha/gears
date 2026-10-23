@@ -27,14 +27,14 @@ trait ReadinessFuturesChecks extends FuturesContract {
           runs.incrementAndGet()
           r.handles.readNow(in, buf) != 0
         }
-        val waiting = Future(perform(r, ready))
-        perform(r, r.ops.timer(20))
+        val waiting = Future(r.perform(ready))
+        r.perform(r.ops.timer(20))
         r.handles.writeNow(out, arena.of("ready".getBytes(StandardCharsets.UTF_8)))
         waiting.await
         outcome = s"${text(buf)} after ${runs.get()}"
       } finally {
-        perform(r, r.ops.close(in))
-        perform(r, r.ops.close(out))
+        r.perform(r.ops.close(in))
+        r.perform(r.ops.close(out))
       }
     }
     assertEquals(outcome, "ready after 1")

@@ -23,20 +23,20 @@ object GearsSocket {
         val socket = Sockets.connect(r, address)
         try {
           println(s"connection in progress to: $address")
-          perform(r, r.ops.connect(socket))
+          r.perform(r.ops.connect(socket))
           // One repeatable op per direction, resubmitted until the request is out and the response is in.
           val write = r.ops.write(socket, buf)
           val read = r.ops.read(socket, buf)
           StreamProtocol.frame("Hello from Scala Native KQueue Example!\n", buf)
           while buf.hasRemaining() do {
             val before = buf.position()
-            perform(r, write)
+            r.perform(write)
             println(s"Wrote ${buf.position() - before} bytes to socket.")
           }
           buf.clear() // The request is out; the buffer now collects the response.
           var eof = false
           while !eof do {
-            perform(r, read)
+            r.perform(read)
             if buf.position() == 0 then eof = true // Nothing added: the server closed after its response.
             else {
               println(s"Read ${buf.position()} bytes from socket.")
@@ -46,7 +46,7 @@ object GearsSocket {
             }
           }
           println(s"Received message: `${new String(response.toByteArray, StandardCharsets.UTF_8)}`")
-        } finally perform(r, r.ops.close(socket))
+        } finally r.perform(r.ops.close(socket))
       }
     }
   }

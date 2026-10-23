@@ -34,8 +34,6 @@ trait NioCapabilities
   */
 object NioBackend extends ReactorBackend with NioCapabilities {
   type Io = NioOnPool
-  def attachment(op: Op): AnyRef | Null = op.attachment
-  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
   def open(): Reactor.Of[Op] = NioReactor.open()
   private[asyncio] def bind(scheduler: ReactorScheduler): NioOnPool = new NioOnPool(scheduler)
 }

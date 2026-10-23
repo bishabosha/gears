@@ -25,10 +25,10 @@ object GearsFileWrite {
             buf.clear()
             buf.put(bytes)
             buf.flip()
-            perform(r, write)
+            r.perform(write)
             println(s"actually wrote ${buf.position()} bytes") // the buffer was loaded at position 0
           }
-        } finally perform(r, r.ops.close(file))
+        } finally r.perform(r.ops.close(file))
       }
     }
   }

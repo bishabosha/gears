@@ -177,7 +177,7 @@ object GearsBench {
           val b = blocking(r)
           var i = 0
           while i < count do {
-            perform(b, b.ops.blocking(() => ()))
+            b.perform(b.ops.blocking(() => ()))
             i += 1
           }
         }
@@ -264,12 +264,12 @@ object GearsBench {
       val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
       var i = 0
       while i < batch do {
-        if i % 2 == 0 then submit(r, r.ops.timer(0), counter)
-        else toCancel += submit(r, r.ops.timer(60_000), counter)
+        if i % 2 == 0 then r.submit(r.ops.timer(0), counter)
+        else toCancel += r.submit(r.ops.timer(60_000), counter)
         i += 1
       }
       val firing = (batch + 1) / 2
-      while fired.get() < firing do perform(r, r.ops.timer(0)) // lets the loops turn until the short timers fire
+      while fired.get() < firing do r.perform(r.ops.timer(0)) // lets the loops turn until the short timers fire
       toCancel.foreach(_.cancel())
       done += batch
     }
@@ -338,7 +338,7 @@ object GearsBench {
       val timer = r.ops.timer(StarvationCheckMillis)
       while !done.get() do {
         val started = System.nanoTime()
-        perform(r, timer)
+        r.perform(timer)
         late += math.max(0L, System.nanoTime() - started - interval)
       }
     }
@@ -371,9 +371,9 @@ object GearsBench {
   private def withConnection(r: Io & SocketBackend, address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
     val fd = Sockets.connect(r, address)
     try {
-      perform(r, r.ops.connect(fd))
+      r.perform(r.ops.connect(fd))
       body(fd)
-    } finally perform(r, r.ops.close(fd))
+    } finally r.perform(r.ops.close(fd))
   }
 
   /** Computation done after each round trip by the compute variants of `concurrent`. */
@@ -414,13 +414,13 @@ object GearsBench {
         var worked = 0L
         var i = 0
         while i < count do {
-          if blocker != null then perform(blocker, blocker.ops.blocking(() => ()))
+          if blocker != null then blocker.perform(blocker.ops.blocking(() => ()))
           buf.clear()
-          while buf.hasRemaining() do perform(r, if freshOps then r.ops.write(fd, buf) else write, limit)
+          while buf.hasRemaining() do r.perform(if freshOps then r.ops.write(fd, buf) else write, limit)
           if pooled then {
             var got = 0
             while got < messageSize do {
-              perform(r, pooledRead.nn, limit)
+              r.perform(pooledRead.nn, limit)
               val received = into.clear()
               val n = received.buffer.remaining()
               received.release()
@@ -431,7 +431,7 @@ object GearsBench {
             buf.clear()
             while buf.hasRemaining() do {
               val before = buf.position()
-              perform(r, if freshOps then r.ops.read(fd, buf) else read, limit)
+              r.perform(if freshOps then r.ops.read(fd, buf) else read, limit)
               if buf.position() == before then throw new IOException("The server closed the connection")
             }
           }
@@ -469,7 +469,7 @@ object GearsBench {
           var i = 0
           while i < count do {
             out.clear()
-            while out.hasRemaining() do perform(r, write)
+            while out.hasRemaining() do r.perform(write)
             i += 1
           }
         }
@@ -478,7 +478,7 @@ object GearsBench {
           val into = Slot[Received]()
           val read = r.ops.read(fd, pool.nn, into)
           while received < total do {
-            perform(r, read)
+            r.perform(read)
             val got = into.clear()
             val n = got.buffer.remaining()
             got.release()
@@ -489,7 +489,7 @@ object GearsBench {
           val read = r.ops.read(fd, in)
           while received < total do {
             in.clear()
-            perform(r, read)
+            r.perform(read)
             if in.position() == 0 then throw new IOException("The server closed the connection")
             received += in.position()
           }
@@ -509,7 +509,7 @@ object GearsBench {
     val start = System.nanoTime()
     val ticker = Future {
       while !trafficDone.get() do {
-        perform(r, r.ops.timer(0))
+        r.perform(r.ops.timer(0))
         ticks += 1
       }
     }
@@ -530,17 +530,17 @@ object GearsBench {
       var open = true
       while open do {
         buf.clear()
-        perform(r, read)
+        r.perform(read)
         if buf.position() == 0 then open = false // end of stream
         else {
           buf.flip()
-          while buf.hasRemaining() do perform(r, write)
+          while buf.hasRemaining() do r.perform(write)
         }
       }
     } catch case _: IOException => () // a client that goes away mid-write ends only its own connection
     finally {
       arena.close()
-      perform(r, r.ops.close(client))
+      r.perform(r.ops.close(client))
     }
   }
 
@@ -574,7 +574,7 @@ object GearsBench {
         val accepted = Handle.Slot()
         val accept = r.ops.accept(server, accepted)
         while true do {
-          perform(r, accept)
+          r.perform(accept)
           val client = accepted.clear()
           Future(echo(r, client))
         }

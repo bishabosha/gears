@@ -78,13 +78,12 @@ object GearsCancel {
           }
           val blocking = r.ops.blocking(sleeper(1000, sleeperInterrupted))
           val pending = Seq(
-            "read" -> Future(perform(r, read)), // nothing has been written yet
-            "blocking" -> Future(perform(r, blocking)),
-            "timer" -> Future(perform(r, r.ops.timer(300)))
+            "read" -> Future(r.perform(read)), // nothing has been written yet
+            "blocking" -> Future(r.perform(blocking)),
+            "timer" -> Future(r.perform(r.ops.timer(300)))
           )
           // Submitted straight to the reactor, with no future to cancel it: only closing the reactor can stop it.
-          submit(
-            r,
+          r.submit(
             r.ops.blocking(sleeper(10000, leftoverInterrupted)),
             new Completion[r.Op] {
               def onComplete(op: r.Op): Unit = println("unexpected completion of the leftover task")
@@ -98,10 +97,10 @@ object GearsCancel {
           // the value it produces after the cancel must not reach its slot.
           val stubbornFinished = new AtomicBoolean()
           val stubbornResult = Slot[String]()
-          val stubbornTask = Future(perform(r, r.ops.blocking(stubborn(300, stubbornFinished), stubbornResult)))
+          val stubbornTask = Future(r.perform(r.ops.blocking(stubborn(300, stubbornFinished), stubbornResult)))
           println("submitted a read, a blocking task, and a timer")
 
-          perform(r, r.ops.timer(100))
+          r.perform(r.ops.timer(100))
           stubbornTask.cancel()
           for (name, future) <- pending do {
             future.cancel()
@@ -112,7 +111,7 @@ object GearsCancel {
           // A blocking op is not Repeatable, so the reactor refuses it a second time, which `perform` throws.
           val refused =
             try {
-              perform(r, blocking)
+              r.perform(blocking)
               false
             } catch case _: IllegalStateException => true
           println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
@@ -123,15 +122,15 @@ object GearsCancel {
           val reading = Promise[Unit]()
           val orphan = Future {
             reading.complete(scala.util.Success(()))
-            perform(r, r.ops.read(orphanRead, arena.allocate(16)))
+            r.perform(r.ops.read(orphanRead, arena.allocate(16)))
           }
           // Lets the future start and submit its read before the pipe is closed: on a pool's worker, the read is pending
           // once the future has started; on the JVM's own virtual threads, it is handed to the reactor's thread first,
           // which the timer gives time for.
           reading.await
-          perform(r, r.ops.timer(20))
-          perform(r, r.ops.close(orphanRead))
-          perform(r, r.ops.close(orphanWrite))
+          r.perform(r.ops.timer(20))
+          r.perform(r.ops.close(orphanRead))
+          r.perform(r.ops.close(orphanWrite))
           val closedFailed = orphan.awaitResult.failed.toOption.exists(_.isInstanceOf[java.io.IOException])
           orphan.cancel() // nothing left to cancel
           println(s"closing fails a pending read: $closedFailed")
@@ -143,20 +142,20 @@ object GearsCancel {
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
           r.handles.writeNow(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8)))
           buf.clear()
-          perform(r, r.ops.read(readFd, buf))
+          r.perform(r.ops.read(readFd, buf))
           buf.flip()
           println(s"read after cancel: `${text(buf)}`")
 
           // Past the cancelled timer's deadline, with the interrupted sleeper long stopped.
-          perform(r, r.ops.timer(500))
+          r.perform(r.ops.timer(500))
           val late = readPerforms.get() + pending.count((_, future) => !isCancelled(future))
           println(s"blocking interrupted: ${sleeperInterrupted.get()}")
           println(s"cancelled completions run: $late")
           // Each future can only have been rejected by its completion's onCancel.
           println(s"cancel notifications: ${pending.count((_, future) => isCancelled(future))}")
         } finally {
-          perform(r, r.ops.close(readFd))
-          perform(r, r.ops.close(writeFd))
+          r.perform(r.ops.close(readFd))
+          r.perform(r.ops.close(writeFd))
         }
       }
     }

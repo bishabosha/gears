@@ -28,15 +28,15 @@ class NioOnCallerSuite extends FuturesContract {
       val arena = BufferArena.open()
       try {
         val buf = arena.allocate(16)
-        val reading = Future(ReactorAsync.perform(r, r.ops.read(in, buf))) // on a virtual thread
-        ReactorAsync.perform(r, r.ops.timer(10)) // on this, a platform thread
-        ReactorAsync.perform(r, r.ops.write(out, arena.of("no runner".getBytes(StandardCharsets.UTF_8))))
+        val reading = Future(r.perform(r.ops.read(in, buf))) // on a virtual thread
+        r.perform(r.ops.timer(10)) // on this, a platform thread
+        r.perform(r.ops.write(out, arena.of("no runner".getBytes(StandardCharsets.UTF_8))))
         reading.await
         buf.flip()
         outcome = StandardCharsets.UTF_8.decode(buf).toString
       } finally {
-        ReactorAsync.perform(r, r.ops.close(in))
-        ReactorAsync.perform(r, r.ops.close(out))
+        r.perform(r.ops.close(in))
+        r.perform(r.ops.close(out))
         arena.close()
       }
     }
@@ -62,7 +62,7 @@ class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
   }
 
   test("an op of a reactor backend cannot be performed with the backend itself, only with a program's Io") {
-    val errors = compileErrors("def outside(using Async): Unit = ReactorAsync.perform(NioBackend, NioBackend.ops.timer(1))")
+    val errors = compileErrors("def outside(using Async): Unit = NioBackend.perform(NioBackend.ops.timer(1))")
     assert(errors.nonEmpty, errors)
   }
 }

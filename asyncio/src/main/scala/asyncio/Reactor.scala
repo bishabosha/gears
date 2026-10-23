@@ -33,9 +33,9 @@ trait Completion[-C] {
   */
 trait Submitter {
 
-  /** Something submitted here that later completes. The submitters of one `CompletionBackend` share it, so an op built
-    * by the backend may go to any of them (see `ReactorBackend`); otherwise the type belongs to the submitter value:
-    * given `a, b: Submitter`, `a.Op` and `b.Op` are different types.
+  /** Something submitted here that later completes. The reactors of one `ReactorBackend` share it, so an op built by
+    * the backend may go to any of them; otherwise the type belongs to the submitter value: given `a, b: Submitter`,
+    * `a.Op` and `b.Op` are different types.
     */
   type Op
 
@@ -226,24 +226,6 @@ trait CallerBackend extends Backend {
   ): Unit = runner.onCaller(this)(program)
 }
 
-/** A backend whose ops are submitted with completions, to a `Submitter` (see `Submitter.submit`): one whose ops run on
-  * reactors it opens (`ReactorBackend`), or on a loop the backend does not own, such as a JavaScript host's, where the
-  * one submitter is that loop. How a submitter is obtained is the backend's to say; what is here is what every such
-  * backend's ops carry.
-  */
-trait CompletionBackend extends Backend {
-
-  /** The caller's own data for `op`, kept across submissions and never read by a submitter, like kqueue's `udata` or
-    * io_uring's `user_data`: for instance a completion to reuse each time `op` is submitted, so that submitting it
-    * again allocates nothing. Null until set. Used by one thread at a time: the one submitting the op, which hands it
-    * over, attachment included, when the op moves to another submitter's thread.
-    */
-  def attachment(op: Op): AnyRef | Null
-
-  /** Sets `op`'s attachment (see `attachment`). */
-  def attach(op: Op, value: AnyRef | Null): Unit
-}
-
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
   * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
@@ -251,7 +233,7 @@ trait CompletionBackend extends Backend {
   * ops with the `OnPool` it is given, which submits each to the reactor of the worker running the caller (see
   * `asyncio.gears.ReactorAsync`).
   */
-trait ReactorBackend extends CompletionBackend with Reactor.Factory[Reactor] {
+trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
   def open(): Reactor.Of[Op]
