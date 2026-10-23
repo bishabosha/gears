@@ -1232,5 +1232,7 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   their response on one worker after dropping the server's per-connection printing (48-72% before), against 94-99% for
   a JDK server with a thread blocked in `accept`. The gap is the accept loop's place in the pool: a perform finishes
   without suspending once per turn (`TurnFastPathBudget`), so each further accept waits behind every connection future
-  spawned so far; four workers did not help (within the run-to-run spread). An accept that takes every connection
-  pending, or an accept loop with a worker of its own, would close it; not done.
+  spawned so far; four workers did not help (within the run-to-run spread). A larger budget (64) confirmed it, 87-97%,
+  but changes every program's fairness, so instead `SocketOps.acceptAll` takes every pending connection, at most `max`,
+  in one op, and `Sockets.serve` uses it with 64: in five alternating pairs against one at a time, each pair better,
+  89.9% answered on average against 83.8% (+141 to +885 connections a pair). The rest is the listen queue's 128.

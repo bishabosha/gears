@@ -88,6 +88,35 @@ final case class Accept(fd: Int, into: Handle.Slot) extends Command {
     1 // one connection, against the pending connections a listening socket's event reports
 }
 
+/** Accepts the connections pending on a listening socket, at most `max`, writing their descriptors into `into` (see
+  * `SocketOps.acceptAll`). Done once at least one has been accepted.
+  */
+final class AcceptAll(val fd: Int, into: Slot[Array[Handle]], max: Int) extends Command {
+  def interest: Interest = Interest.Read
+  override def edgeTriggered: Boolean = true
+  private var count = 0
+  def perform(): Boolean = {
+    val clients = new Array[Int](max)
+    count = 0
+    var more = true
+    try
+      while more && count < max do {
+        val client = NonBlocking.accept(fd)
+        if client >= 0 then {
+          clients(count) = client
+          count += 1
+        } else more = false
+      }
+    catch {
+      case failure: Throwable =>
+        if count == 0 then throw failure // with some accepted, they are delivered, and the next accept fails instead
+    }
+    if count > 0 then into.set(Array.tabulate(count)(i => Handle.wrap(clients(i))))
+    count > 0
+  }
+  override def transferred: Int = count // connections, against the pending connections a listening socket's event reports
+}
+
 /** Waits for a non-blocking connect to finish and checks its outcome. Done once connected; throws if it failed. */
 final case class Connect(fd: Int) extends Command {
   def interest: Interest = Interest.Write
