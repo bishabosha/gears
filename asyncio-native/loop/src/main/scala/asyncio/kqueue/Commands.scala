@@ -34,7 +34,7 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): as `ReadIntoBuffer`, into a buffer
-  * taken when the descriptor is ready, and given back if it was not after all.
+  * taken when the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
 final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
   def interest: Interest = Interest.Read
@@ -44,7 +44,13 @@ final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) ext
     val slot = pool.take()
     if slot == null then throw new java.io.IOException("The pool has no buffer free")
     val buffer = slot.nn.buffer
-    read = NonBlocking.read(fd, buffer) // -1 at EOF, which leaves the buffer as it was
+    read =
+      try NonBlocking.read(fd, buffer) // -1 at EOF, which leaves the buffer as it was
+      catch {
+        case failure: Throwable =>
+          slot.nn.release() // a failed read holds nothing
+          throw failure
+      }
     if read == 0 then {
       slot.nn.release()
       false

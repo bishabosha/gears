@@ -134,7 +134,13 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
       val slot = pool.take()
       if slot == null then throw new IOException("The pool has no buffer free")
       val buffer = slot.nn.buffer
-      val read = NonBlocking.read(h.fd, buffer) // -1 at EOF, which leaves the buffer as it was
+      val read =
+        try NonBlocking.read(h.fd, buffer) // -1 at EOF, which leaves the buffer as it was
+        catch {
+          case failure: Throwable =>
+            slot.nn.release() // a failed read holds nothing
+            throw failure
+        }
       if read != 0 || h.isFile then {
         buffer.flip()
         into.set(slot.nn)

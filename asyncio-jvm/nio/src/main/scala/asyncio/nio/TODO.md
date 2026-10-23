@@ -872,3 +872,22 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     (`Io extends Backend`, with an `Io` on a pool now refused by the runner at compile time, `NotGiven[backend.type
     <:< OnPool]`; no `Async.Source` view of a submission, the streaming hook of a later higher level; the `Io` passed
     explicitly, named on every line; `Int` milliseconds; hiding by package, Scala having no module-private).
+
+29. [x] **The criteria verified, and the higher level shown.** A second reader, given the code, the goal and the
+    README's criteria and told to distrust them, ran each check: all four criteria met; against the state before the
+    goal (`5a5734b`, one 634-line `Reactor.scala` holding the interface, `Backend.start(runner, workers, policy)` on
+    every backend, `OnPool` with bodies calling `ReactorAsync`, free functions `perform(r, op)`, results leaving
+    programs through `var`s), orthogonality *improved* and programs *more idiomatic*; the accepted gaps follow from
+    the goal's wording, with the explicit `Io` better justified by path dependence (`r.Op` needs `r`) than by use. It
+    asked for four things, all done: a contract test that a scope's end cancels a submission made in it and waits
+    for its completion; the streaming wrapper's failure reaching the consumer and chunks read ahead released when the
+    consumer stops early (the channel is never closed, since a closed gears channel drops what it holds: the end is a
+    marker, an early close cancels the reader and drains by polling, and a chunk a cancelled `send` did not deliver is
+    released by the reader); the orthogonality criterion worded as the program reaching the runtime through `Pool`;
+    and the wrapper moved outside the `asyncio` package (`higherlevel.HigherLevel`, in the interface's tests), so that
+    it sees only what a program sees. The wrapper is what the goal's last clause asks for, written over `Io` alone:
+    result-returning `read`, `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled
+    read consumed as a gears channel; `FuturesContract` runs it on NIO in each mode, kqueue and Network.framework.
+    The wrapper's early-close check found a bug in every backend: a pooled read that fails on the read call, as on a
+    closed descriptor, threw with the buffer it had taken never released, so the pool could not be closed. Each now
+    releases it before rethrowing (`Commands.PooledRead`, `NWFrameworkOps`, `NioOps.PooledRead`).

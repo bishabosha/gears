@@ -86,13 +86,16 @@ interface, but traits are ok to share implementation; make it more idiomatic to 
 perform and slots is the lowest level detail, and that a higher level API would eventually wrap this mutability for
 either result returning methods or streaming APIs.* Each clause below is given a criterion that can be checked
 without trusting this document, how to check it, and whether it is met or, where it is not, why the gap is accepted
-against the goal's wording. The criteria were checked by an independent review, a reader given the code and the goal
-and not this document (`asyncio-jvm/nio/TODO.md`, item 28), and what it found was fixed or is accepted below.
+against the goal's wording. The criteria were checked twice by readers given the code and the goal and not this
+document's claims: a review that found the gaps fixed in item 28 of `asyncio-jvm/nio/TODO.md`, and a verification
+of these criteria (item 29) that ran each check, judged the two comparative clauses against the state before the goal
+(commit `5a5734b`) and found orthogonality *improved* and programs *more idiomatic*, and asked for the four things
+item 29 lists, all done.
 
 ### Orthogonality of concepts
 
 *Criterion*: a capability trait mentions no kind or thread; a kind mentions no capability; a runner mentions no
-backend; the runtime reaches a backend through `Pool` alone. *Check*: `grep` `Backend.scala` for `thread`, `worker`,
+backend; a program reaches the runtime through `Pool` alone. *Check*: `grep` `Backend.scala` for `thread`, `worker`,
 `socket` in the wrong traits; `grep` the runners for a backend's package; the build, where a runner depends on a
 backend in `Test` only. *Status*: met. Each capability refines `Backend.Io` to carry itself, which is the one thing
 the capability axis knows of the `Io` axis, and is what lets a program over `SocketBackend & FileBackend` be given an
@@ -121,20 +124,27 @@ package fixes who may call `bind`, `Slot.set` and `Handle.wrap`.
 context function over `Async.Spawn` and `AsyncOperations`, returning its value; `Future`, `Async.group`, `sleep`,
 `withTimeout`, `Timer` and cancellation mean what they mean in gears; anything the program may wait on or cancel is a
 gears `Cancellable`. *Check*: `FuturesContract`, the one suite every backend runs, which uses only those, has `sleep`
-and `withTimeout` run on the backend's timers, has cancelling a future cancel its op, and takes every result from the
-value `running` returns. *Status*: met for `perform`; `ReactorFutures.run` returns the program's value as
+and `withTimeout` run on the backend's timers, has cancelling a future cancel its op, has a scope's end cancel a
+submission made in it and wait for its completion, and takes every result from the value `running` returns. *Status*: met for `perform`; `ReactorFutures.run` returns the program's value as
 `Async.blocking` does; `Submission` is a `Cancellable` in the caller's group, as a `Future` is. **Accepted**, as the
 lowest level the goal names: an op's completion is not an `Async.Source`, so selecting an op against a channel takes
 a `Future` per op, the hook a streaming API over this will want and the runtime already has (`Pools.OpWaiter`); the
-`Io` is an explicit parameter where gears passes `Async` as `using`, because a program names it on every line
-(`r.ops`, `r.perform`), unlike an `Async`; time limits are an `Int` of milliseconds, the op's own unit.
+`Io` is an explicit parameter where gears passes `Async` as `using`, because an op's type is path-dependent on it
+(`r.Op`), so `perform` has to be a method of `r` and a program names it on every line, unlike an `Async`; time limits
+are an `Int` of milliseconds, the op's own unit.
 
 ### The lowest level stays the lowest
 
 *Criterion*: ops, `perform` and slots keep their meaning as mutable records the caller owns and reuses; no op but
-`blocking` takes a closure; the guarantee a wrapper relies on is stated where it reads it. *Check*: `Ops.scala` for
-closures; `Io.perform`'s contract. *Status*: met. `whenReady` with its closure became `ready`, an op that completes;
-`Io.perform` states that once it returns or throws the op is out of use everywhere, its buffers and slots the
-caller's and its handle as open as it was. What a higher level wraps is unchanged: a result-returning method is
-`perform` and a slot's `clear`; a streaming API is a repeatable read performed in a loop, and, later, the source view
-above.
+`blocking` takes a closure; the guarantee a wrapper relies on is stated where it reads it; and a higher level of
+both kinds the goal names can be written over the interface's public contract alone and runs on every backend.
+*Check*: `Ops.scala` for closures; `Io.perform`'s contract; `asyncio/src/test/scala/higherlevel/HigherLevel.scala`,
+outside the `asyncio` package so it sees only what a program sees, with result-returning `read`, `writeAll`,
+`accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel, with the
+pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer and chunks read ahead
+released when the consumer stops early; `FuturesContract` runs it on every backend. *Status*: met. `whenReady` with
+its closure became `ready`, an op that completes; `Io.perform` states that once it returns or throws the op is out of
+use everywhere, its buffers and slots the caller's and its handle as open as it was. What the wrapper shows the
+interface costs it: a read's byte count is a buffer-position delta, and there are two slot types since a `Handle` is
+an unboxed `Int`, which are the mutability the goal says a higher level wraps; and a stream spawns a future to feed
+its channel for want of the source view above.
