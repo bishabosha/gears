@@ -12,11 +12,11 @@ import munit.FunSuite
 /** Drives the native kqueue demo executable as a subprocess with the standard Java process API. */
 abstract class DemoSuite extends FunSuite {
 
-  /** Absolute path of the linked demo executable, passed in by the `kqueueDemoTests` sbt project. */
+  /** Absolute path of the linked demo executable, passed in by the `ioDemosTests` sbt project. */
   lazy val binary: String =
     sys.props.get("kqueue.demo.binary").orElse(sys.env.get("KQUEUE_DEMO_BINARY")) match {
       case Some(path) => Paths.get(path).toAbsolutePath.toString
-      case None       => fail("set -Dkqueue.demo.binary=<path to executable>, or run `sbt kqueueDemoTests/test`")
+      case None       => fail("set -Dkqueue.demo.binary=<path to executable>, or run `sbt ioDemosTests/test`")
     }
 
   /** Arguments placed before every demo command; `Seq("gears")` runs the gears mirrors instead. */

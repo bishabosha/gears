@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import gears.async.Async
 import gears.async.AsyncOperations
@@ -8,7 +9,7 @@ import gears.async.Future.awaitAll
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-import asyncio.ReactorBackend
+import gears.async.io.ReactorBackend
 
 
 /** Checks that tasks queued for a worker in particular (`ReactorWorker.sync`: cancelling an op on its reactor, arming

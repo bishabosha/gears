@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets

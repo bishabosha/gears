@@ -4,15 +4,15 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Completion
-import asyncio.Interest
-import asyncio.kqueue.Command
-import asyncio.kqueue.KqueueOp
-import asyncio.kqueue.KqueueReactor
-import asyncio.kqueue.KqueueTimer
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.Sockets.Flavor
-import asyncio.unsafe.Sockets.Transport
+import gears.async.io.Completion
+import gears.async.io.Interest
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.KqueueTimer
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.Sockets.Flavor
+import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleDatagramSocket {

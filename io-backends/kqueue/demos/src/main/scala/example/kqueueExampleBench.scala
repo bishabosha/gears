@@ -11,14 +11,14 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.IpAddress
-import asyncio.UnixAddress
-import asyncio.kqueue.KqueueHandles
-import asyncio.unsafe.KqueueLoop
-import asyncio.unsafe.KqueueLoop.EventQueue
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.NonBlocking
-import asyncio.unsafe.PosixSockets
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueLoop
+import gears.async.io.kqueue.KqueueLoop.EventQueue
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NonBlocking
+import gears.async.io.internal.PosixSockets
 import gearsexample.GearsBench
 
 /** The scenarios of `gearsexample.GearsBench`, written against `KqueueLoop` directly, with no reactor: a reference for
@@ -29,7 +29,7 @@ import gearsexample.GearsBench
   *   - a deadline timer added and deleted with `kevent`, as the reactor does now;
   *   - blocking tasks run on a worker thread that signals through a pipe.
   *
-  * The scenario names, counts, and output match `GearsBench`, so `kqueue-demo/bench/compare.py` can put them side by
+  * The scenario names, counts, and output match `GearsBench`, so `bench/compare.py` can put them side by
   * side.
   */
 object KQueueExampleBench {

@@ -1,24 +1,24 @@
 package gearsexample
 
 import mainargs.{ParserForMethods, arg, main}
-import asyncio.IpAddress
-import asyncio.UnixAddress
-import asyncio.BlockingBackend
-import asyncio.FileBackend
-import asyncio.PipeBackend
-import asyncio.ResolveBackend
-import asyncio.UnixStreamBackend
-import asyncio.nio.NioBackend
-import asyncio.nio.NioOnCaller
-import asyncio.gears.TakePolicy
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+import gears.async.io.BlockingBackend
+import gears.async.io.FileBackend
+import gears.async.io.PipeBackend
+import gears.async.io.ResolveBackend
+import gears.async.io.UnixStreamBackend
+import gears.async.io.nio.NioBackend
+import gears.async.io.nio.NioOnCaller
+import gears.async.io.TakePolicy
 
-/** The gears demos on the JVM, run as `sbt "gearsDemoJVM/run <command>"`, with the commands and flags of
-  * `kqueuedemo gears` that NIO can run: the FIFO and Unix datagram demos need capabilities NIO lacks, so they would not
+/** The gears demos on the JVM, run as `sbt "ioDemosJVM/run <command>"`, with the commands and flags of
+  * `iokqueuedemos gears` that NIO can run: the FIFO and Unix datagram demos need capabilities NIO lacks, so they would not
   * compile here, and `move-bench` is kqueue's own.
   *
   * This is the edge, the one place that chooses NIO: `NioOnCaller`, with no reactor, each op performed on the future's
   * own virtual thread; or, with `-Dasyncio.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor
-  * pool (see `asyncio.gears.ReactorFutures`).
+  * pool (see `gears.async.io.ReactorFutures`).
   */
 object Main {
   given (UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
@@ -116,7 +116,7 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
-  @main(doc = "Stress tests to measure reactor changes against; see kqueue-demo/bench/compare.py")
+  @main(doc = "Stress tests to measure reactor changes against; see bench/compare.py")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,

@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 /** What a reactor must do at a time, in a binary min-heap ordered by deadline, then submission order: its timers, and
   * the ops with a time limit (see `Submitter.submit`), which time out when their deadline comes. Each entry knows its

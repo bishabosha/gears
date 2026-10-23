@@ -1,4 +1,4 @@
-/* The C side of `asyncio.nwframework`: only what Scala Native cannot do itself. Network.framework and Dispatch deliver
+/* The C side of `gears.async.io.nwframework`: only what Scala Native cannot do itself. Network.framework and Dispatch deliver
  * everything as blocks, which Scala Native cannot build, on Dispatch's threads, which it cannot run managed code on. So
  * each block here is a trampoline: it copies its arguments into an event, queues the event on the handle it is for,
  * and wakes the reactor watching that handle. The reactor's thread, a Scala thread, drains the handles with events

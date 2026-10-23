@@ -13,12 +13,12 @@
  *   ulock      each thread waits on a word of its own with os_sync_wait_on_address; its partner changes the word and
  *              wakes it with os_sync_wake_by_address_any; no kqueue, no port
  *
- *   cc -O2 -o /tmp/wakeup-contention kqueue-demo/bench/wakeup-contention.c
+ *   cc -O2 -o /tmp/wakeup-contention bench/wakeup-contention.c
  *   /tmp/wakeup-contention <mode> threads|procs N [round trips]
  *
  * kevent takes the process's descriptor table lock to find its kqueue; mach_msg finds its port without a lock that
  * every thread of the task shares; os_sync_wait_on_address uses no descriptor or port at all. See "macOS serialises
- * descriptor system calls per process" in asyncio/kqueue/TODO.md.
+ * descriptor system calls per process" in io-backends/kqueue/TODO.md.
  */
 #include <mach/mach.h>
 #include <os/os_sync_wait_on_address.h>

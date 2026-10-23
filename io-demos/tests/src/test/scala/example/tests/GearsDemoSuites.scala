@@ -18,7 +18,7 @@ trait GearsBenchCheck extends KQueueDemoSuite {
   }
 }
 
-/** The same checks against the gears demos in `gears-demo`, on kqueue, run as `kqueuedemo gears <command>`. */
+/** The same checks against the gears demos in `io-demos`, on kqueue, run as `iokqueuedemos gears <command>`. */
 class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   override def commandPrefix: Seq[String] = Seq("gears")
 

@@ -1,18 +1,19 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import gears.async.Cancellable
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import scala.concurrent.duration.FiniteDuration
 
-import asyncio.ReactorBackend
+import gears.async.io.ReactorBackend
 
 /** The thread of a pool's worker, for every worker but one started by `ReactorPool.run`, whose first worker runs on
   * the thread that started the pool. It holds its worker, so that finding the worker running the caller takes no
   * thread-local lookup beyond the current thread. A daemon: a program that ends without stopping its pool is not kept
   * alive by it.
   */
-private[gears] final class ReactorWorkerThread(
+private[io] final class ReactorWorkerThread(
     val pool: ReactorPool,
     index: Int,
     started: java.util.concurrent.CountDownLatch
@@ -36,12 +37,12 @@ private[gears] final class ReactorWorkerThread(
   * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
   * thread that called `run`.
   */
-class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val policy: TakePolicy)
+class ReactorPool private[io] (val backend: ReactorBackend, size: Int, val policy: TakePolicy)
     extends ReactorScheduler {
   require(size >= 1 && size <= 64, "A pool has between 1 and 64 workers")
 
   /** The workers, by index; filled in as each starts on its own thread. */
-  private[gears] val workers = new Array[ReactorWorker](size)
+  private[io] val workers = new Array[ReactorWorker](size)
 
   /** The threads of the workers started on threads of their own, for `join`. */
   private var threads: Seq[ReactorWorkerThread] = Nil
@@ -53,13 +54,13 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   private val idle = new java.util.concurrent.atomic.AtomicLong(0L)
 
   /** Workers looking for work on others; while one is, offering work wakes no one else. */
-  private[gears] val searching = new java.util.concurrent.atomic.AtomicInteger(0)
+  private[io] val searching = new java.util.concurrent.atomic.AtomicInteger(0)
 
-  @volatile private[gears] var stopped = false
+  @volatile private[io] var stopped = false
 
   /** For measurement: wake-ups sent to idle workers, offering work and for tasks from outside. */
-  private[gears] val wakeUps = new java.util.concurrent.atomic.AtomicLong
-  private[gears] val injections = new java.util.concurrent.atomic.AtomicLong
+  private[io] val wakeUps = new java.util.concurrent.atomic.AtomicLong
+  private[io] val injections = new java.util.concurrent.atomic.AtomicLong
 
   /** The thread the caller runs on, as the pool knows its workers: on the JVM, a virtual thread's carrier. */
   protected def callerThread(): Thread = Thread.currentThread()
@@ -88,19 +89,19 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   }
 
   /** Queues `task` on the shared queue and wakes an idle worker other than `from`, the worker queueing it if any. */
-  private[gears] def inject(task: Runnable, from: Int = -1): Unit = {
+  private[io] def inject(task: Runnable, from: Int = -1): Unit = {
     injections.incrementAndGet()
     injector.add(task)
     wakeOne(from)
   }
 
-  private[gears] def injected(): Runnable | Null = injector.poll()
+  private[io] def injected(): Runnable | Null = injector.poll()
 
   /** Worker `from` has more queued than it is about to run: wakes another idle worker to take some, unless one is
     * searching. `from` itself may still be marked idle, since a worker runs completions, which queue tasks, in the turn
     * it blocked in; but it is running, so it is not the one to wake.
     */
-  private[gears] def offerWork(from: Int): Unit =
+  private[io] def offerWork(from: Int): Unit =
     if (idle.get() & ~(1L << from)) != 0L && searching.get() == 0 then wakeOne(from)
 
   /** Wakes an idle worker other than `except` (-1 for none). */
@@ -119,18 +120,18 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
     }
   }
 
-  private[gears] def markIdle(index: Int): Unit = {
+  private[io] def markIdle(index: Int): Unit = {
     var mask = idle.get()
     while !idle.compareAndSet(mask, mask | (1L << index)) do mask = idle.get()
   }
 
-  private[gears] def unmarkIdle(index: Int): Unit = {
+  private[io] def unmarkIdle(index: Int): Unit = {
     var mask = idle.get()
     while (mask & (1L << index)) != 0L && !idle.compareAndSet(mask, mask & ~(1L << index)) do mask = idle.get()
   }
 
   /** Whether there is work `worker` could take: from outside the pool, or spare on another worker. */
-  private[gears] def hasWorkFor(worker: ReactorWorker): Boolean =
+  private[io] def hasWorkFor(worker: ReactorWorker): Boolean =
     !injector.isEmpty || workers.exists(other => (other ne worker) && other.hasSpare)
 
   /** Runs `body` after `delay` on the worker running the caller, or on the first worker from outside the pool. */
@@ -140,7 +141,7 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   }
 
   /** Runs the first worker, on the thread that started the pool, until the pool stops. */
-  private[gears] def runFirstWorker(): Unit = workers(0).loop()
+  private[io] def runFirstWorker(): Unit = workers(0).loop()
 
   /** Starts the workers from `from` on, each on a thread of its own, where it opens its reactor, and returns once every
     * one of them is in `workers`: the array is complete, and published to every worker, before any task runs.
@@ -156,13 +157,13 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   }
 
   /** Stops every worker after its current round. */
-  private[gears] def stop(): Unit = {
+  private[io] def stop(): Unit = {
     stopped = true
     workers.foreach(worker => if worker != null then worker.reactor.wakeup())
   }
 
   /** Waits for the workers started on threads of their own to end, once stopped: each closes its reactor first. */
-  private[gears] def join(): Unit = threads.foreach(_.join())
+  private[io] def join(): Unit = threads.foreach(_.join())
 }
 
 object ReactorPool {

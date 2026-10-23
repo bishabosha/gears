@@ -1,24 +1,25 @@
-# asyncio: the interface, and what sits on either side of it
+# gears.async.io: the interface, and what sits on either side of it
 
-Three modules, each depending only on the one before it:
+The interface and its runtime are part of the gears core project; the backends, the contract suites and the demos are
+projects of their own:
 
-| module | holds | depends on |
+| where | holds | depends on |
 | --- | --- | --- |
-| `asyncio` | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handles`, `Slot`, addresses, `BufferPool` | the gears library |
-| `asyncio-unsafe` | implementation the backends share: `Blockers`, `TimerHeap`, `HandleTable` | `asyncio` |
-| `asyncio-gears` | the runtime: `ReactorPool`, `ReactorWorker`, `RunQueue`, `TakePolicy`, `ReactorScheduler`, `Pools` | `asyncio` |
-| `higherlevel` | the higher level the interface is for: result-returning methods and a stream of chunks over `Io` | `asyncio` |
+| `gears.async.io` (core, `shared/`) | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handles`, `Slot`, addresses, `BufferPool`, `TakePolicy` | the rest of gears |
+| `gears.async.io` (core, `jvm/` and `native/`) | the runner, `ReactorFutures`, one per platform | the runtime |
+| `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
+| `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
+| `ioTestkit` (`io-testkit/`) | the contract suites every backend runs, and `BufferArena` | core, munit |
+| `ioDemos` (`io-demos/`) | the gears demos and `higherlevel`, the higher level the interface is for | the backends |
 
-The backends (`asyncio-native/loop`, `asyncio-native/nwframework`, `asyncio-jvm/nio`) depend on the first two; the
-platform runners (`asyncio-native/gears`, `asyncio-jvm/gears`) on the runtime, and on the backends only in their
-tests. A reference from the interface to anything below it, or from a runner to a backend, does not compile. The
-Native implementation the two Native backends share (`NativePool`, the Posix sockets and files) is kept in the loop
-module's `asyncio.unsafe` package, so the Network.framework backend depends on the loop module for it.
+The interface lives in `shared/`, so it compiles on every platform gears does, Scala.js included; the runtime and the
+runners only on the JVM and Scala Native, which have threads to drive reactors with. Nothing in the interface refers
+to the runtime: the runner, in the interface's package, starts it.
 
-What the build does not enforce: what the interface hides from programs it hides by package (`private[asyncio]`:
-`CallerBackend.performHere`, `Slot.set`, `Handle.wrap`), and every module of this repository lives in a package
-under `asyncio`. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside the
-repository would have to be written in a package under `asyncio` too.
+What the build does not enforce: what the interface hides from programs it hides by package (`private[io]`:
+`CallerBackend.performHere`, `Slot.set`, `Handle.wrap`), which `gears.async.io.internal` and every backend's package
+are subpackages of. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside
+this repository would have to be written in a package under `gears.async.io` too.
 
 ## The concepts, and why they are orthogonal
 
@@ -42,7 +43,7 @@ Three axes, chosen independently of one another:
 What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about
 sockets or files; an `Io` says nothing about sockets or files either, and reaches them only through its backend. The
 runtime is reached through one contract, `OnPool`, which says what a pool offers a program (`perform`, `submit`,
-`yield` on its backend's ops) and which `asyncio.gears.Pools.bound` implements. `submit` and `yield` are `OnPool`'s
+`yield` on its backend's ops) and which `gears.async.io.internal.Pools.bound` implements. `submit` and `yield` are `OnPool`'s
 alone: a program written over `Io` runs on either kind, one that submits with its own completion on reactor backends
 only.
 
@@ -87,7 +88,7 @@ can be written once over every backend.
 ## The higher level
 
 The module `higherlevel` is the API the goal says would wrap the lowest level: written over the interface's public
-contract alone, in a package outside `asyncio` so that it sees only what a program sees, and run on every backend.
+contract alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
 `HigherLevel` has result-returning `read`, `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one
 repeatable pooled read consumed as a gears channel, with the pool's window and the channel's backlog as
 back-pressure, failure rethrown to the consumer, and chunks read ahead released when the consumer stops early.

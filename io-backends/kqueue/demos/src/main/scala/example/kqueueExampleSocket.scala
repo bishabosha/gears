@@ -4,14 +4,14 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Completion
-import asyncio.kqueue.Command
-import asyncio.kqueue.Connect
-import asyncio.kqueue.KqueueReactor
-import asyncio.kqueue.ReadIntoBuffer
-import asyncio.kqueue.WriteFromBuffer
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.Sockets.Transport
+import gears.async.io.Completion
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.Connect
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.ReadIntoBuffer
+import gears.async.io.kqueue.WriteFromBuffer
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleSocket {

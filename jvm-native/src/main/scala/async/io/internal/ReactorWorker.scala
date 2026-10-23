@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import gears.async.Cancellable
 
@@ -6,7 +7,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration.FiniteDuration
 
-import asyncio.Reactor
+import gears.async.io.Reactor
 
 /** One worker of a `ReactorPool`: a thread, the reactor it drives, and the tasks queued for it. Its loop alternates
   * between running queued tasks, such as starting a future or resuming a suspended one, and turns of the reactor; with
@@ -15,14 +16,14 @@ import asyncio.Reactor
   *
   * Its reactor is one of `backend`'s, opened on the worker's own thread, so it runs any op the backend builds.
   */
-private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor) {
+private[io] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor) {
 
   /** The thread it runs on, which created it. */
-  private[gears] val owner = Thread.currentThread()
+  private[io] val owner = Thread.currentThread()
 
   // Tasks for this worker, almost all of them: resuming a continuation is queued by a completion, which runs here. A
   // fixed ring that allocates nothing per task, and from which other workers take tasks when they run out.
-  private[gears] val local = new RunQueue
+  private[io] val local = new RunQueue
 
   // Tasks that must run on this worker in particular, queued from other threads, which wake it: cancelling an op
   // pending on its reactor, or arming a timer there (`sync`). `drain` runs them first, never through `local`, from
@@ -59,7 +60,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
     * and hybrid policies; anything else goes where other workers may take it, a full queue overflowing to the pool's
     * shared queue, and with more queued there than this worker is about to run, an idle worker is woken to take some.
     */
-  private[gears] def push(task: Runnable): Unit =
+  private[io] def push(task: Runnable): Unit =
     if inTurn && pool.policy != TakePolicy.Free then home.add(task)
     else if !local.push(task) then pool.inject(task, index)
     else {
@@ -72,7 +73,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
     * run first, its resumes or another queued task. A lone queued task is left to it, since taking it would only move
     * it. Read from any thread.
     */
-  private[gears] def hasSpare: Boolean = {
+  private[io] def hasSpare: Boolean = {
     val queued = local.size
     queued > 1 || queued == 1 && loneSpare
   }
@@ -96,22 +97,22 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
   /** Ops that `perform` may still finish without suspending in this round while no other task is queued, reset by each
     * `drain`. Spent, `perform` suspends even for an op that could finish at once, so the reactor's poll gets to run.
     */
-  private[gears] var fastPathsLeft = ReactorWorker.FastPathBudget
+  private[io] var fastPathsLeft = ReactorWorker.FastPathBudget
 
   /** Ops that `perform` may still finish without suspending in the running task's turn, even with other tasks queued,
     * reset before each task. Spent, `perform` suspends, so a future whose ops rarely wait still gives up its turn.
     */
-  private[gears] var turnFastPathsLeft = 0
+  private[io] var turnFastPathsLeft = 0
 
   /** For measurement, on this worker's thread only: tasks taken from other workers, and the times it blocked. */
-  private[gears] var taken = 0L
-  private[gears] var blocked = 0L
+  private[io] var taken = 0L
+  private[io] var blocked = 0L
 
   /** Whether no task is queued here. On this worker's thread only. */
-  private[gears] def isIdle: Boolean = local.isEmpty && home.isEmpty && inbox.isEmpty
+  private[io] def isIdle: Boolean = local.isEmpty && home.isEmpty && inbox.isEmpty
 
   /** Runs `body` after `delay`, using a timer of this worker's reactor; the returned cancel may be called anywhere. */
-  private[gears] def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+  private[io] def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
     val cancelTimer = new AtomicReference[(() => Unit) | Null](null)
     sync {
       val timer = reactor.ops.timer(delay.toMillis.toInt)
@@ -129,7 +130,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
     * that keeps queueing more, such as a computation yielding between slices, would otherwise keep I/O from ever being
     * polled.
     */
-  private[gears] def drain(): Unit = {
+  private[io] def drain(): Unit = {
     fastPathsLeft = ReactorWorker.FastPathBudget
     // Tasks for this worker in particular run first, here: in `local`, another worker could take one and call this
     // worker's reactor from its own thread. They run as though from the reactor's turn, so that a task they resume,
@@ -218,7 +219,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
   }
 
   /** Runs until the pool stops, then closes the reactor. */
-  private[gears] def loop(): Unit = {
+  private[io] def loop(): Unit = {
     try
       while !pool.stopped do {
         drain()
@@ -242,7 +243,7 @@ private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, 
   }
 }
 
-private[gears] object ReactorWorker {
+private[io] object ReactorWorker {
 
   /** How many ops `perform` may finish without suspending in one round of a worker. */
   inline val FastPathBudget = 32

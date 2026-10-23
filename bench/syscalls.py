@@ -2,7 +2,7 @@
 """Counts the system calls each bench scenario makes per operation, using lldb breakpoints, so it needs neither root
 nor SIP disabled as dtruss does.
 
-    kqueue-demo/bench/syscalls.py [--save FILE] [--scenarios a,b] <executable>[@raw]
+    bench/syscalls.py [--save FILE] [--scenarios a,b] <executable>[@raw]
 
 Each scenario runs twice, at about 100 and 200 operations (more where a scenario works in batches), and the difference
 divided by the extra operations is the count per operation, without connection setup and teardown. Calls are counted
@@ -87,7 +87,7 @@ def main():
         print(json.dumps(count(sys.argv[2:])))
         return
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('executable', help='a kqueuedemo executable; with @raw, its hand-written benchmark')
+    parser.add_argument('executable', help='a iokqueuedemos executable; with @raw, its hand-written benchmark')
     parser.add_argument('--scenarios', help='comma-separated scenarios, or all')
     parser.add_argument('--save', metavar='FILE', help='write the counts, with the build provenance, as JSON')
     args = parser.parse_args()

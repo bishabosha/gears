@@ -1,4 +1,4 @@
-package asyncio
+package gears.async.io
 
 /** What to do when an op finishes. The op comes back with its outcome, so one completion can own many ops. A completion
   * that submits further ops holds on to its submitter itself, since only a reference to that submitter has the right

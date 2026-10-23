@@ -3,7 +3,7 @@
 // longjmp sets the mask with sigprocmask, which takes the process lock and rewrites every thread's mask, so threads
 // making these calls slow each other down. Scala Native's continuations call them on every resume, and its GC's
 // register capture around every @blocking call. Nothing here relies on longjmp restoring the mask. A workaround until
-// Scala Native uses _setjmp itself; see "A second per-process lock" in asyncio/kqueue/TODO.md.
+// Scala Native uses _setjmp itself; see "A second per-process lock" in io-backends/kqueue/TODO.md.
 #if defined(__APPLE__) && defined(__aarch64__)
     .text
     .globl _setjmp

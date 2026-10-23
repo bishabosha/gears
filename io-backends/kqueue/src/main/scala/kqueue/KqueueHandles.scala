@@ -1,4 +1,5 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -14,22 +15,22 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.FifoHandles
-import asyncio.Handle
-import asyncio.IpAddress
-import asyncio.PipeHandles
-import asyncio.ReadinessHandles
-import asyncio.UnixAddress
-import asyncio.UnixDatagramHandles
-import asyncio.UnixStreamHandles
-import asyncio.unsafe.DescriptorTable
-import asyncio.unsafe.Descriptors
-import asyncio.unsafe.NonBlocking
-import asyncio.unsafe.PosixErr.cError
-import asyncio.unsafe.PosixFileOps
-import asyncio.unsafe.PosixSockets
-import asyncio.unsafe.Sockets.Flavor
-import asyncio.unsafe.Sockets.Transport
+import gears.async.io.FifoHandles
+import gears.async.io.Handle
+import gears.async.io.IpAddress
+import gears.async.io.PipeHandles
+import gears.async.io.ReadinessHandles
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagramHandles
+import gears.async.io.UnixStreamHandles
+import gears.async.io.internal.DescriptorTable
+import gears.async.io.internal.Descriptors
+import gears.async.io.internal.NonBlocking
+import gears.async.io.internal.PosixErr.cError
+import gears.async.io.internal.PosixFileOps
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Flavor
+import gears.async.io.internal.Sockets.Transport
 
 /** Kqueue's handles are POSIX file descriptors, opened non-blocking (see `Descriptors`). Descriptor numbers are
   * process-wide, so the Unix paths bound by `listen` and `datagram` are remembered per descriptor and removed when it

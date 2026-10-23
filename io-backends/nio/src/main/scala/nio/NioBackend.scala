@@ -1,13 +1,14 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
-import asyncio.Blocking
-import asyncio.BufferPool
-import asyncio.Files
-import asyncio.Pipes
-import asyncio.Reactor
-import asyncio.ReactorBackend
-import asyncio.Resolving
-import asyncio.UnixStreams
+import gears.async.io.Blocking
+import gears.async.io.BufferPool
+import gears.async.io.Files
+import gears.async.io.Pipes
+import gears.async.io.Reactor
+import gears.async.io.ReactorBackend
+import gears.async.io.Resolving
+import gears.async.io.UnixStreams
 
 /** What NIO can do, for both its backends: IP and Unix stream sockets, regular files and name
   * resolution on the blocker pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK

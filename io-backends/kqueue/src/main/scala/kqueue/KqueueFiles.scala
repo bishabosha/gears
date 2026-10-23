@@ -1,4 +1,5 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -6,10 +7,10 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Handle
-import asyncio.Repeatable
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.PosixErr.cError
+import gears.async.io.Handle
+import gears.async.io.Repeatable
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixErr.cError
 
 /** The file ops (see `FileOps`), each a blocking task on the blocker pool, since the operating system's file I/O blocks
   * for the disk: `open`, `pread`, `pwrite` and `fsync`, through posixlib's `@blocking` bindings, so that a collection

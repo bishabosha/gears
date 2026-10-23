@@ -1,4 +1,5 @@
-package asyncio
+package gears.async.io
+package testkit
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -23,7 +24,7 @@ trait ReactorContract extends FunSuite {
   val backend: ReactorBackend & BlockingBackend & PipeBackend
 
   /** Where the checks' buffers come from, freed when the suite ends. */
-  private lazy val arena = asyncio.testkit.BufferArena.open()
+  private lazy val arena = gears.async.io.testkit.BufferArena.open()
 
   /** A buffer of `capacity` bytes that this backend's ops can fill and drain, live until the suite ends. */
   protected def allocate(capacity: Int): ByteBuffer = arena.allocate(capacity)

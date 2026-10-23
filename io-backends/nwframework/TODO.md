@@ -1,5 +1,14 @@
 # The NWFramework backend: Network.framework as a reactor
 
+> This log was kept while the work lived in modules of its own, and names them as they were then. They are now:
+> `asyncio` is `gears.async.io` in the core project; `asyncio.unsafe` and `asyncio.gears` (the runtime) are
+> `gears.async.io.internal`, except `ReactorFutures` and `TakePolicy`, which are in `gears.async.io`; `asyncio.kqueue`,
+> `asyncio.nio` and `asyncio.nwframework` are `gears.async.io.kqueue`, `.nio` and `.nwframework`, in `io-backends/`;
+> the contract suites and `asyncio.testkit` are `gears.async.io.testkit` (`io-testkit`); `gears-demo` and `higherlevel`
+> are `io-demos`; `kqueue-demo` is `io-backends/kqueue/demos` (`ioKqueueDemos`, executable `iokqueuedemos`), its
+> tests `io-demos/tests` (`ioDemosTests`); and `kqueue-demo/bench` and `kqueue-demo/ce-bench` are `bench/` and
+> `bench/ce-bench`.
+
 `asyncio.nwframework.NWFrameworkBackend` runs `asyncio`'s ops over Apple's Network.framework, the user-space networking stack
 Apple offers instead of BSD sockets (see "SwiftNIO meets the same lock" in `asyncio/kqueue/TODO.md`), through its C
 interface, with Dispatch for what it does not cover. It was built to answer two questions: whether the `Reactor`,

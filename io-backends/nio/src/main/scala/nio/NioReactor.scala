@@ -1,17 +1,18 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import java.nio.channels.CancelledKeyException
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.util.concurrent.TimeoutException
 
-import asyncio.Completion
-import asyncio.Handles
-import asyncio.Interest
-import asyncio.Ops
-import asyncio.Reactor
-import asyncio.Repeatable
-import asyncio.unsafe.TimerHeap
+import gears.async.io.Completion
+import gears.async.io.Handles
+import gears.async.io.Interest
+import gears.async.io.Ops
+import gears.async.io.Reactor
+import gears.async.io.Repeatable
+import gears.async.io.internal.TimerHeap
 
 /** The NIO implementation of `Reactor`, for ops built by `NioOps`, over a `Selector`. A command is performed as soon as
   * it is submitted when it allows that; otherwise, or when it would block, it waits for readiness and is performed on

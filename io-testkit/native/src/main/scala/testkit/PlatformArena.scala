@@ -1,4 +1,5 @@
-package asyncio.testkit
+package gears.async.io
+package testkit
 
 import java.nio.ByteBuffer
 import scala.scalanative.memory.PointerBuffer

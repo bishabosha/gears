@@ -7,17 +7,17 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Completion
-import asyncio.Handle
-import asyncio.UnixAddress
-import asyncio.kqueue.KqueueHandles
-import asyncio.kqueue.KqueueOp
-import asyncio.kqueue.KqueueOps
-import asyncio.kqueue.KqueueReactor
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.NonBlocking
+import gears.async.io.Completion
+import gears.async.io.Handle
+import gears.async.io.UnixAddress
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NonBlocking
 
-/** Measures what moving a descriptor between kqueue reactors costs, run as `kqueuedemo gears move-bench`: ping-pong
+/** Measures what moving a descriptor between kqueue reactors costs, run as `iokqueuedemos gears move-bench`: ping-pong
   * round trips of 64 bytes against an echo server on a reactor thread of its own, driven by completions on the client
   * reactors directly, with no scheduler. Three ways:
   *   - `stay`: one client reactor and one connection, round trips back to back;

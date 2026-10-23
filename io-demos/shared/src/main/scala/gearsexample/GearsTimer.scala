@@ -2,8 +2,8 @@ package gearsexample
 
 import gears.async.Future
 
-import asyncio.Backend
-import asyncio.gears.ReactorFutures
+import gears.async.io.Backend
+import gears.async.io.ReactorFutures
 
 /** Mirror of `example.KQueueExampleTimer`: a five-second one-shot timer, with a one-second ticker running alongside. */
 object GearsTimer {

@@ -1,7 +1,8 @@
-package asyncio.gears
+package gears.async.io
+package nio
 
-import asyncio.Io
-import asyncio.OnCaller
+import gears.async.io.Io
+import gears.async.io.OnCaller
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
@@ -10,13 +11,14 @@ import gears.async.VThreadSupport
 
 import java.nio.charset.StandardCharsets
 
-import asyncio.nio.NioBackend
-import asyncio.nio.NioOnCaller
-import asyncio.testkit.BufferArena
-import higherlevel.HigherLevelChecks
+import gears.async.io.nio.NioBackend
+import gears.async.io.nio.NioOnCaller
+import gears.async.io.testkit.BufferArena
+import gears.async.io.testkit.FuturesContract
+import gears.async.io.internal.ReactorScheduler
 
 /** `FuturesContract` over `NioOnCaller`: gears' own virtual threads, each op performed on its own thread. */
-class NioOnCallerSuite extends FuturesContract with HigherLevelChecks {
+class NioOnCallerSuite extends FuturesContract {
   val backend: NioOnCaller.type = NioOnCaller
 
   protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
@@ -49,7 +51,7 @@ class NioOnCallerSuite extends FuturesContract with HigherLevelChecks {
 }
 
 /** `FuturesContract` over `NioBackend`: futures carried by a pool of `workers` workers driving its reactors. */
-abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract with HigherLevelChecks {
+abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NioBackend.type = NioBackend
 
   protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
@@ -61,7 +63,7 @@ class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
     var onWorker = false
     running { r =>
       onWorker = summon[Async].scheduler match {
-        case s: ReactorScheduler => s.currentWorker.reactor.isInstanceOf[asyncio.nio.NioReactor]
+        case s: ReactorScheduler => s.currentWorker.reactor.isInstanceOf[gears.async.io.nio.NioReactor]
         case _                   => false
       }
     }

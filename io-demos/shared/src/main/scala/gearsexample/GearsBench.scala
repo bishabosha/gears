@@ -11,28 +11,28 @@ import java.nio.file.Paths
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
-import asyncio.Backend
-import asyncio.BlockingBackend
-import asyncio.ReactorBackend
-import asyncio.SocketBackend
-import asyncio.IpSockets
-import asyncio.Blocking
-import asyncio.UnixAddress
-import asyncio.Completion
-import asyncio.Handle
-import asyncio.Received
-import asyncio.Slot
-import asyncio.Submission
-import asyncio.testkit.BufferArena
-import asyncio.Io
-import asyncio.OnPool
-import asyncio.gears.ReactorFutures
-import asyncio.gears.TakePolicy
+import gears.async.io.Backend
+import gears.async.io.BlockingBackend
+import gears.async.io.ReactorBackend
+import gears.async.io.SocketBackend
+import gears.async.io.IpSockets
+import gears.async.io.Blocking
+import gears.async.io.UnixAddress
+import gears.async.io.Completion
+import gears.async.io.Handle
+import gears.async.io.Received
+import gears.async.io.Slot
+import gears.async.io.Submission
+import gears.async.io.testkit.BufferArena
+import gears.async.io.Io
+import gears.async.io.OnPool
+import gears.async.io.ReactorFutures
+import gears.async.io.TakePolicy
 
 /** Stress tests for a reactor and its gears integration, to measure each change against. An echo server runs on one
   * reactor thread and the clients on another, so both sides go through the reactor; each scenario is timed on its own
-  * and stresses a different cost (see `asyncio/kqueue/TODO.md`). Every line it prints for a scenario starts with
-  * `bench:` so that `kqueue-demo/bench/compare.py` can collect the results.
+  * and stresses a different cost (see `io-backends/kqueue/TODO.md`). Every line it prints for a scenario starts with
+  * `bench:` so that `bench/compare.py` can collect the results.
   */
 object GearsBench {
 
@@ -290,7 +290,7 @@ object GearsBench {
     }
   }
 
-  /** Prints one result line, in the format `kqueue-demo/bench/compare.py` reads. */
+  /** Prints one result line, in the format `bench/compare.py` reads. */
   def report(name: String, count: Long, seconds: Double): Unit =
     println(f"bench: $name%-18s $count%10d $seconds%9.3f ${count / seconds}%12.0f ${seconds * 1e6 / count}%8.2f")
 

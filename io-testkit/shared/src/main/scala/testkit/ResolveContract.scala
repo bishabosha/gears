@@ -1,4 +1,5 @@
-package asyncio
+package gears.async.io
+package testkit
 
 /** What a backend that resolves host names must do (see `ReactorContract`). */
 trait ResolveContract extends ReactorContract {

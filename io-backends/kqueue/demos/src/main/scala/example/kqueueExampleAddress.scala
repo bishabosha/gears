@@ -3,13 +3,13 @@ package example
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.*
 
-import asyncio.unsafe.Bracket
-import asyncio.unsafe.Bracket.FileOperation
-import asyncio.unsafe.PosixFileOps
-import asyncio.unsafe.PosixSockets
-import asyncio.unsafe.Sockets.Flavor
-import asyncio.unsafe.Sockets.Transport
-import asyncio.kqueue.KqueueHandles
+import gears.async.io.internal.Bracket
+import gears.async.io.internal.Bracket.FileOperation
+import gears.async.io.internal.PosixFileOps
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Flavor
+import gears.async.io.internal.Sockets.Transport
+import gears.async.io.kqueue.KqueueHandles
 
 enum KQueueExampleAddress {
   case Unix(sock: String)

@@ -23,12 +23,12 @@
  *   uring-fixed  as uring, with the socket and the ring's own descriptor registered, so no request or io_uring_enter
  *                looks up a descriptor
  *
- *   cc -O2 -o /tmp/descriptor-contention kqueue-demo/bench/descriptor-contention.c [-luring on Linux]
+ *   cc -O2 -o /tmp/descriptor-contention bench/descriptor-contention.c [-luring on Linux]
  *   /tmp/descriptor-contention <mode> threads|procs N [iterations]
  *
  * On macOS, every descriptor call takes the process's descriptor table lock twice, and setting the signal mask takes
  * the process lock, so with threads the time per call grows with N, and with processes it does not; on Linux neither
- * does. See "macOS serialises descriptor system calls per process" in asyncio/kqueue/TODO.md.
+ * does. See "macOS serialises descriptor system calls per process" in io-backends/kqueue/TODO.md.
  */
 #include <fcntl.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)

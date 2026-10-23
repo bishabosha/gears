@@ -1,4 +1,4 @@
-package asyncio
+package gears.async.io
 
 import _root_.gears.async.Async
 import _root_.gears.async.AsyncOperations

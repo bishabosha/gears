@@ -8,16 +8,16 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Failure
 
-import asyncio.BlockingBackend
-import asyncio.PipeBackend
-import asyncio.ReactorBackend
-import asyncio.ReadinessBackend
-import asyncio.Completion
-import asyncio.Interest
-import asyncio.Slot
-import asyncio.testkit.BufferArena
+import gears.async.io.BlockingBackend
+import gears.async.io.PipeBackend
+import gears.async.io.ReactorBackend
+import gears.async.io.ReadinessBackend
+import gears.async.io.Completion
+import gears.async.io.Interest
+import gears.async.io.Slot
+import gears.async.io.testkit.BufferArena
 import DemoIO.text
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 
 /** Mirror of `example.KQueueExampleCancel`. Cancellation is just `Future.cancel()`: the bridge asks the reactor to
   * cancel the op, and the future is rejected when the reactor confirms through the completion's `onCancel`. Cancelling

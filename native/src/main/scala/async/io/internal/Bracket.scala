@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 object Bracket {
   @FunctionalInterface

@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import scala.scalanative.posix.arpa.inet
 import scala.scalanative.posix.netdb
@@ -8,8 +9,8 @@ import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.AddressFamily
-import asyncio.ResolvedAddress
+import gears.async.io.AddressFamily
+import gears.async.io.ResolvedAddress
 
 /** Host name resolution with POSIX `getaddrinfo`. It blocks, so a reactor runs it off its own thread. */
 object PosixResolver {

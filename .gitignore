@@ -33,6 +33,6 @@ metals.sbt
 /.worksheet/
 *.local.json
 
-# Benchmark results and provenance records (see kqueue-demo/bench/compare.py and build.sh)
-kqueue-demo/bench/results/
-kqueue-demo/bench/*.json
+# Benchmark results and provenance records (see bench/compare.py and build.sh)
+bench/results/
+bench/*.json

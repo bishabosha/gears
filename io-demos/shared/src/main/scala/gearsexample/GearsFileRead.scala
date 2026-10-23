@@ -3,12 +3,12 @@ package gearsexample
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
-import asyncio.FifoBackend
-import asyncio.ReadinessBackend
-import asyncio.Interest
-import asyncio.testkit.BufferArena
+import gears.async.io.FifoBackend
+import gears.async.io.ReadinessBackend
+import gears.async.io.Interest
+import gears.async.io.testkit.BufferArena
 import DemoIO.drainTo
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {

@@ -7,15 +7,15 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
-import asyncio.Io
-import asyncio.Backend
-import asyncio.Handle
-import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
-import asyncio.UnixStreams
-import asyncio.testkit.BufferArena
+import gears.async.io.Io
+import gears.async.io.Backend
+import gears.async.io.Handle
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamBackend
+import gears.async.io.UnixStreams
+import gears.async.io.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleServerSocket`. The acceptor is a loop, and each connection is its own future whose

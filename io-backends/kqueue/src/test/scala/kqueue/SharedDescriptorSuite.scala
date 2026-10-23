@@ -1,4 +1,5 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
 import munit.FunSuite
 

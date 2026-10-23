@@ -3,21 +3,21 @@
 # (see project/plugins.sbt), in a temporary worktree with its own sbt, so the working tree and its sbt server are left
 # alone.
 #
-#   kqueue-demo/bench/build.sh <commit> <output>
+#   bench/build.sh <commit> <output>
 #
-# Then compare executables with kqueue-demo/bench/compare.py. <commit> may be WORKTREE, for HEAD with the working tree's
+# Then compare executables with bench/compare.py. <commit> may be WORKTREE, for HEAD with the working tree's
 # changes, untracked files included (ignored ones are not). Where the executable came from is written beside it, to
 # <output>.json, which compare.py --save includes in its results.
 #
 # It links with conditional yieldpoints (SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0): on macOS, the trap-based ones that
 # release builds use by default can deadlock a collection in multithreaded programs (see "The GC's signal blocking" in
-# asyncio/kqueue/TODO.md), and they were slower here anyway. YIELDPOINTS=trap links with trap-based ones instead.
+# io-backends/kqueue/TODO.md), and they were slower here anyway. YIELDPOINTS=trap links with trap-based ones instead.
 #
-# PROJECT=ceBench builds the cats-effect and fs2 version of the scenarios (kqueue-demo/ce-bench) instead of kqueueDemo.
+# PROJECT=ceBench builds the cats-effect and fs2 version of the scenarios (bench/ce-bench) instead of ioKqueueDemos.
 set -euo pipefail
 commit=${1:?usage: build.sh <commit> <output>}
 yieldpoints=${YIELDPOINTS:-conditional}
-project=${PROJECT:-kqueueDemo}
+project=${PROJECT:-ioKqueueDemos}
 module=$(echo "$project" | tr '[:upper:]' '[:lower:]')
 # ceBench is a cross project, so its Scala Native side is ceBenchNative, still linked into target/out/.../cebench. A
 # `set` expression names a project by its val in the build, which a cross project's side has none of, so by id.

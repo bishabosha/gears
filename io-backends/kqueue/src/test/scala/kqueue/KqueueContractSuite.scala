@@ -1,10 +1,11 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
-import asyncio.FifoContract
-import asyncio.ReadinessContract
-import asyncio.ResolveContract
-import asyncio.UnixDatagramContract
-import asyncio.UnixStreamContract
+import gears.async.io.testkit.FifoContract
+import gears.async.io.testkit.ReadinessContract
+import gears.async.io.testkit.ResolveContract
+import gears.async.io.testkit.UnixDatagramContract
+import gears.async.io.testkit.UnixStreamContract
 
 class KqueueContractSuite
     extends ReadinessContract

@@ -1,4 +1,5 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import gears.async.Async
 import gears.async.cancellationScope
@@ -7,8 +8,8 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
-import asyncio.CallerBackend
-import asyncio.Interest
+import gears.async.io.CallerBackend
+import gears.async.io.Interest
 
 /** NIO with no reactor: the backend for a program whose threads may block, such as gears' own virtual threads, the
   * JVM's default. It has the ops and handles of `NioBackend`, and does each op on the calling thread. A
@@ -36,7 +37,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     */
   inline val HereBudget = 32
 
-  private[asyncio] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
+  private[io] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {

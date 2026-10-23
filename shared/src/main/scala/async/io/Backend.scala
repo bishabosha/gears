@@ -1,4 +1,4 @@
-package asyncio
+package gears.async.io
 
 import _root_.gears.async.Async
 
@@ -51,7 +51,7 @@ object Backend {
 trait CallerBackend extends Backend {
 
   /** Performs `op` on the calling thread, as `Io.perform` says: what `OnCaller.perform` calls. */
-  private[asyncio] def performHere(op: Op, timeoutMillis: Int)(using Async): Unit
+  private[io] def performHere(op: Op, timeoutMillis: Int)(using Async): Unit
 }
 
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one

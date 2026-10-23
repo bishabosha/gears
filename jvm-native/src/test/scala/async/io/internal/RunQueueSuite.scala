@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import munit.FunSuite
 

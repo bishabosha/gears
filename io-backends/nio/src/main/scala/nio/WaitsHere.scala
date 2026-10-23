@@ -1,4 +1,5 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import gears.async.Cancellable
 

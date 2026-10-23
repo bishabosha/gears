@@ -1,4 +1,6 @@
-package asyncio.gears
+package gears.async.io
+
+import gears.async.io.internal.*
 
 import gears.async.Async
 import gears.async.AsyncOperations
@@ -9,12 +11,12 @@ import gears.async.VThreadSupport
 
 import scala.util.Try
 
-import asyncio.Backend
-import asyncio.Io
-import asyncio.CallerBackend
-import asyncio.OnCaller
-import asyncio.OnPool
-import asyncio.ReactorBackend
+import gears.async.io.Backend
+import gears.async.io.Io
+import gears.async.io.CallerBackend
+import gears.async.io.OnCaller
+import gears.async.io.OnPool
+import gears.async.io.ReactorBackend
 
 /** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program
   * over a backend and gives it an `Io` over it, which performs its ops and is its `AsyncOperations`, so that code

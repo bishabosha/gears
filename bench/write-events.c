@@ -3,11 +3,11 @@
  * after each step, polls the kqueue without blocking, counting write events. Also counts read events from a
  * persistent EV_CLEAR EVFILT_READ on the same socket, for comparison.
  *
- *   cc -O2 -o /tmp/write-events kqueue-demo/bench/write-events.c && /tmp/write-events unix|tcp [turns] [messages]
+ *   cc -O2 -o /tmp/write-events bench/write-events.c && /tmp/write-events unix|tcp [turns] [messages]
  *
  * Each turn the client writes `messages` messages of 64 bytes, the peer reads them all and echoes them, and the client
  * reads the echo. The counts are split by when they appear: after the client's writes, after the peer's read but
- * before its echo, and after the echo. See "Persistent write filters" in asyncio/kqueue/TODO.md.
+ * before its echo, and after the echo. See "Persistent write filters" in io-backends/kqueue/TODO.md.
  */
 #include <arpa/inet.h>
 #include <fcntl.h>

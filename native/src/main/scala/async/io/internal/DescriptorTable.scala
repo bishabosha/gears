@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import java.util.concurrent.atomic.AtomicLongArray
 import java.util.concurrent.atomic.AtomicReferenceArray

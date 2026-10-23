@@ -8,20 +8,20 @@ import gears.async.Future
 import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
 
-import asyncio.Backend
-import asyncio.BufferPool
-import asyncio.Handle
-import asyncio.Io
-import asyncio.Received
-import asyncio.Resolving
-import asyncio.ResolvedAddress
-import asyncio.Slot
-import asyncio.IpSockets
+import gears.async.io.Backend
+import gears.async.io.BufferPool
+import gears.async.io.Handle
+import gears.async.io.Io
+import gears.async.io.Received
+import gears.async.io.Resolving
+import gears.async.io.ResolvedAddress
+import gears.async.io.Slot
+import gears.async.io.IpSockets
 
 /** The higher level the interface is meant to be wrapped by, written over `Io` alone: result-returning methods that
   * own the op and the slot the caller would otherwise reuse, and a stream of chunks over a repeatable pooled read,
   * consumed as a gears channel. Nothing here touches a backend, a kind or the runtime, and being outside the
-  * `asyncio` package it could not: it sees the interface's public contract only, and its module depends on the
+  * `gears.async.io` package it could not: it sees the interface's public contract only, and its module depends on the
   * interface alone. It runs as it is on every backend (`HigherLevelChecks` runs on each, as part of the contract's
   * suites), which is what the lowest level is for; the demos use it where a result or a stream reads better than
   * the op.
