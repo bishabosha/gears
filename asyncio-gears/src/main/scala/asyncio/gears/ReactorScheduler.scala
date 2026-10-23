@@ -5,8 +5,9 @@ import gears.async.Scheduler
 import asyncio.ReactorBackend
 
 /** A gears scheduler whose futures run on a `ReactorPool`'s workers, and so perform their ops on the workers' own
-  * reactors (see `OnPool.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual
-  * threads the pool carries (`VirtualReactorScheduler`). A program's `ReactorBackend.Context` carries it.
+  * reactors (see `Pools.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual threads
+  * the pool carries (`VirtualReactorScheduler`). The `Pool` a program's `Io` is bound to is made over it
+  * (`Pools.bound`).
   */
 private[gears] trait ReactorScheduler extends Scheduler {
   def backend: ReactorBackend

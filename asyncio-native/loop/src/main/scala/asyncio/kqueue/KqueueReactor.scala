@@ -119,6 +119,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   var takenOver = 0L
   var filtersDropped = 0L
 
+  /** The counters, for a runner printing its reactors' statistics. */
+  override def toString: String = s"kqueue(taken over $takenOver, filters dropped $filtersDropped)"
+
   /** Distinguishes this reactor from the others sharing descriptors with it, in `DescriptorTable`. */
   private val id = KqueueReactor.nextId.incrementAndGet()
 

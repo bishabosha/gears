@@ -169,17 +169,17 @@ object ReactorPool {
 
   /** Runs a pool of `workers` workers, each with a reactor of `backend`'s: the calling thread becomes the first, and the
     * others get threads of their own, each opening its reactor there. `drive` then runs on the calling thread: it starts
-    * the program, runs the first worker (`runFirstWorker`) until the program finishes and stops the pool, and rethrows
-    * the program's failure. Each reactor is closed afterwards, on its own thread, then `stopped` is called with the
-    * pool. `newPool` builds the pool, for a platform whose workers are found another way.
+    * the program, runs the first worker (`runFirstWorker`) until the program finishes and stops the pool, returns the
+    * program's result and rethrows its failure. Each reactor is closed afterwards, on its own thread, then `stopped`
+    * is called with the pool. `newPool` builds the pool, for a platform whose workers are found another way.
     */
-  def run(
+  def run[T](
       backend: ReactorBackend,
       workers: Int,
       policy: TakePolicy,
       newPool: (ReactorBackend, Int, TakePolicy) => ReactorPool = new ReactorPool(_, _, _),
       stopped: ReactorPool => Unit = _ => ()
-  )(drive: ReactorPool => Unit): Unit = {
+  )(drive: ReactorPool => T): T = {
     val pool = newPool(backend, workers, policy)
     pool.workers(0) = new ReactorWorker(pool, 0, backend.open()) // opened here too, on its worker's thread
     pool.startThreads(from = 1)

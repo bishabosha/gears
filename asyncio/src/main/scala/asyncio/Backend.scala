@@ -26,7 +26,7 @@ trait Backend {
   /** What a program over this backend performs its ops with: this backend's ops, handles and capabilities, bound to
     * where the program runs (see `Io`): on a pool of its reactors for a reactor backend (`OnPool`), on
     * the calling thread for a caller backend (`OnCaller`). Each capability narrows it to itself, so a program over a
-    * `SocketBackend & FileBackend` is given an `Io & SocketBackend & FileBackend`. Made by `ReactorFutures.run` for
+    * `SocketBackend & FileBackend` is given an `Io & SocketBackend & FileBackend`. Made by the platform's runner for
     * the program it starts, and by nothing else, so that an op is only ever performed where it can be.
     */
   type Io <: asyncio.Io { type Op = Backend.this.Op }
@@ -65,8 +65,8 @@ trait CallerBackend extends Backend {
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
   * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
-  * over this backend runs on a pool of workers driving its reactors, started by `ReactorFutures.run`, and performs its
-  * ops with the `OnPool` it is given, which submits each to the reactor of the worker running the caller (see
+  * over this backend runs on a pool of workers driving its reactors, started by the platform's runner, and performs
+  * its ops with the `OnPool` it is given, which submits each to the reactor of the worker running the caller (see
   * `OnPool`).
   */
 trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
@@ -76,8 +76,8 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   type Io <: asyncio.OnPool { type Op = ReactorBackend.this.Op }
 
-  /** This backend bound to `pool`, for the program the runner starts on it. */
-  private[asyncio] def bind(pool: Pool): Io
+  /** This backend bound to `pool`, a pool of its own reactors, for the program the runner starts on it. */
+  private[asyncio] def bind(pool: Pool.Of[Op]): Io
 
 }
 
@@ -121,9 +121,10 @@ trait ReadinessBackend extends Backend {
   def handles: ReadinessHandles
 }
 
-/** A backend that runs blocking code as an op, off the threads that run its other ops (see `BlockingOps`), so that it
-  * keeps them free: one whose ops run on reactors. A backend whose callers may block anyway has no need of it; they
-  * call the blocking code themselves.
+/** A backend that runs blocking code as an op (see `BlockingOps`): where it may block, with the op's time limit and
+  * cancellation interrupting it, the same whichever the kind. On a reactor backend that is off the reactors' threads,
+  * which keeps them free; on a caller backend it is the calling thread, which may block anyway, so there the op adds
+  * only the limit and the interrupt.
   */
 trait BlockingBackend extends Backend {
   type Io <: asyncio.Io & BlockingBackend { type Op = BlockingBackend.this.Op }

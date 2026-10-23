@@ -629,7 +629,7 @@ private[nwframework] object NWFrameworkHandle {
 object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandles {
 
   // The table: a handle number is an index, reused once closed.
-  private val table = new Handle.Table[NWFrameworkHandle](256)
+  private val table = new asyncio.unsafe.HandleTable[NWFrameworkHandle](256)
 
   private def add(handle: NWFrameworkHandle): Handle = {
     val added = table.add(handle)

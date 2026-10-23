@@ -59,8 +59,8 @@ object GearsCancel {
     }
 
   def run()(using ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend): Unit = {
-    val leftoverInterrupted = new AtomicBoolean() // its task is still running when the reactor closes
-    val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the reactor closes
+    val leftoverInterrupted = new AtomicBoolean() // its task is still running when the program ends
+    val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the program's group is cancelled
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
     BufferArena.scoped { arena =>
       val buf = arena.allocate(64)
@@ -76,7 +76,8 @@ object GearsCancel {
             "blocking" -> Future(r.perform(blocking)),
             "timer" -> Future(r.perform(r.ops.timer(300)))
           )
-          // Submitted straight to the reactor, with no future to cancel it: only closing the reactor can stop it.
+          // Submitted straight to the reactor, with no future: the submission is a member of the program's group all
+          // the same, so the program's end cancels it, as it cancels the futures still running, and waits for it.
           r.submit(
             r.ops.blocking(sleeper(10000, leftoverInterrupted)),
             new Completion[r.Op] {
@@ -153,8 +154,8 @@ object GearsCancel {
         }
       }
     }
-    println(s"close notified the leftover: ${leftoverNotified.get()}")
+    println(s"the program's end notified the leftover: ${leftoverNotified.get()}")
     println(s"the leftover had stopped when notified: ${leftoverStopped.get()}")
-    println(s"blocking interrupted by close: ${interruptedSoon(leftoverInterrupted)}")
+    println(s"blocking interrupted by the program's end: ${interruptedSoon(leftoverInterrupted)}")
   }
 }

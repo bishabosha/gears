@@ -22,12 +22,15 @@ import asyncio.Submission
   */
 private[asyncio] object Pools {
 
-  /** The `Pool` of `scheduler`'s, to bind a backend to (`ReactorBackend.bind`). */
-  def bound(scheduler: ReactorScheduler): Pool = new Pool {
-    def perform(b: ReactorBackend, op: b.Op, timeoutMillis: Int)(using Async): Unit =
+  /** The `Pool` of `scheduler`'s, whose workers drive `b`'s reactors, to bind `b` to (`ReactorBackend.bind`). */
+  def bound(b: ReactorBackend, scheduler: ReactorScheduler): Pool.Of[b.Op] = new Pool {
+    require(scheduler.backend eq b, s"$scheduler drives ${scheduler.backend}'s reactors, not $b's")
+    type Op = b.Op
+
+    def perform(op: b.Op, timeoutMillis: Int)(using Async): Unit =
       performOnReactor(b, op, timeoutMillis, scheduler)
 
-    def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using Async): Submission =
+    def submit(op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using Async): Submission =
       submitOn(b, op, completion, timeoutMillis, scheduler)
 
     /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if
@@ -127,7 +130,8 @@ private[asyncio] object Pools {
   }
 
   /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
-    * `scheduler`, the pool's, with a completion of the caller's own (see `OnPool.submit`).
+    * `scheduler`, the pool's, with a completion of the caller's own (see `OnPool.submit`). The submission is linked
+    * to the caller's group, and unlinks itself once the completion has run.
     */
   private[asyncio] def submitOn(
       b: ReactorBackend,
@@ -137,25 +141,46 @@ private[asyncio] object Pools {
       scheduler: ReactorScheduler
   )(using ac: Async): Submission = {
     scheduler.pin() // as `performOnReactor` does, until the op is submitted on the worker found
-    val worker =
+    val submission =
       try {
         val worker = scheduler.currentWorker
-        worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion, timeoutMillis) // one of `b`'s
-        worker
+        val submission = new PoolSubmission(worker, op, completion)
+        worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, submission, timeoutMillis) // one of `b`'s
+        submission
       } finally scheduler.unpin()
-    new PoolSubmission(worker, op)
+    submission.link() // if the group is already cancelled, this cancels the op at once
   }
 
-  /** `Submission` on a pool: cancelled on the worker the op went to. */
-  private final class PoolSubmission(worker: ReactorWorker, op: Any) extends Submission {
-    def cancel(): Boolean =
-      if worker.isCurrent then {
-        cancelOn(worker, op)
-        true
-      } else {
-        worker.sync(cancelOn(worker, op))
-        false
-      }
+  /** `Submission` on a pool: the caller's completion wrapped, so that the submission leaves the caller's group once
+    * the op is done, and cancelled on the worker the op went to.
+    */
+  private final class PoolSubmission[O](worker: ReactorWorker, op: O, completion: Completion[O])
+      extends Submission
+      with Completion[O] {
+    @volatile private var done = false
+
+    def cancel(): Unit =
+      if !done then
+        if worker.isCurrent then cancelOn(worker, op)
+        else worker.sync(cancelOn(worker, op))
+
+    def onComplete(op: O): Unit = {
+      done = true
+      try completion.onComplete(op)
+      finally unlink()
+    }
+
+    override def onFailure(op: O, failure: Throwable): Unit = {
+      done = true
+      try completion.onFailure(op, failure)
+      finally unlink()
+    }
+
+    override def onCancel(op: O): Unit = {
+      done = true
+      try completion.onCancel(op)
+      finally unlink()
+    }
   }
 
   /** Cancels `op` on `worker`'s reactor, on its thread; the op was built by the backend whose reactor it is. */

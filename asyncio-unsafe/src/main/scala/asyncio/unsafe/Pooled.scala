@@ -14,14 +14,14 @@ import asyncio.Submission
   */
 trait Pooled extends OnPool {
 
-  /** The pool the program runs on (`ReactorBackend.bind`). */
-  protected def pool: Pool
+  /** The pool the program runs on, bound to this backend (`ReactorBackend.bind`). */
+  protected def pool: Pool.Of[Op]
 
-  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit = pool.perform(backend, op, timeoutMillis)
+  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit = pool.perform(op, timeoutMillis)
 
   final def submit(op: Op, completion: Completion[Op], timeoutMillis: Int = Backend.NoTimeout)(using
       Async
-  ): Submission = pool.submit(backend, op, completion, timeoutMillis)
+  ): Submission = pool.submit(op, completion, timeoutMillis)
 
   final override def `yield`()(using Async): Unit = pool.`yield`()
 }

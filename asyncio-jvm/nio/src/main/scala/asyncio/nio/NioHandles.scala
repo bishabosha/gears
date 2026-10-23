@@ -201,7 +201,7 @@ object NioHandles extends UnixStreamHandles with PipeHandles {
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
 
-  private val table = new Handle.Table[Entry]
+  private val table = new asyncio.unsafe.HandleTable[Entry]
 
   /** Gives `entry` a handle. */
   private[nio] def add(entry: Entry): Handle = table.add(entry)

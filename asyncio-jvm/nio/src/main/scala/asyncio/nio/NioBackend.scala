@@ -35,11 +35,11 @@ trait NioCapabilities
 object NioBackend extends ReactorBackend with NioCapabilities {
   type Io = NioOnPool
   def open(): Reactor.Of[Op] = NioReactor.open()
-  private[asyncio] def bind(pool: Pool): NioOnPool = new NioOnPool(pool)
+  private[asyncio] def bind(pool: Pool.Of[Op]): NioOnPool = new NioOnPool(pool)
 }
 
 /** A program's `Io` over NIO's reactors: `NioBackend` bound to the pool the program runs on. */
-final class NioOnPool private[nio] (protected val pool: Pool) extends Pooled with NioCapabilities {
+final class NioOnPool private[nio] (protected val pool: Pool.Of[NioOp]) extends Pooled with NioCapabilities {
   type Io = NioOnPool
   val backend: NioBackend.type = NioBackend
 }
