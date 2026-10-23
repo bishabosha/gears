@@ -17,7 +17,7 @@ import asyncio.ResolvedAddress
 import asyncio.Slot
 import asyncio.UnixAddress
 import asyncio.UnixDatagramOps
-import asyncio.BlockingRun
+import asyncio.unsafe.BlockingRun
 import asyncio.unsafe.NativePool
 
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below

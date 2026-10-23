@@ -211,7 +211,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         promise match {
           case blocking: KqueueBlocking =>
             blocking.restart()
-            asyncio.Blockers.run(blocking)
+            asyncio.unsafe.Blockers.run(blocking)
         }
         waits = true
       case atOnce: KqueueAtOnce =>
