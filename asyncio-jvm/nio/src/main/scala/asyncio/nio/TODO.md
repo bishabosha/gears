@@ -901,5 +901,17 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     completion with the op's outcome, so `OnPool.submit(op)` with no completion (`Completion.ignore`) is the source
     view of an op, raced in `Async.select` against a timer in the contract; `Pools.PoolSubmission` keeps the outcome
     and the listeners under one lock, since a listener registers on the caller's thread while the completion runs on
-    the reactor's. Left as the design the intersection of traits needs: `Io extends Backend`, its one consequence a
-    compile error.
+    the reactor's.
+
+31. [x] **An `Io` is not a `Backend`; the comparative clauses measured.** The capabilities are mixins over
+    `Facilities` (`Op`, `Io`, `ops`, `handles`, `pool`: what a backend has and its `Io` carries): `IpSockets`,
+    `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`, mixed into a
+    backend and into its `Io` alike, and `Io extends Facilities with AsyncOperations`. The names a program asks a
+    backend for are aliases, `SocketBackend = Backend & IpSockets` and so on; a helper over a program's `Io` asks for
+    `Io & IpSockets`. So a backend and its `Io` share their capabilities and nothing else, handing an `Io` to the
+    runner is a type error with no `NotGiven` guard, and the capability axis knows nothing of backends either.
+    `asyncio/criteria.sh` also measures the two comparative clauses against the state before the goal (`5a5734b`):
+    lines of the interface naming the runtime 18 to 0, backends starting the runtime themselves 3 to 0, runtime
+    sources inside the interface module 9 to 0, results leaving the contract's programs through vars 13 to 0, demo
+    files performing ops through free functions 11 to 0, runtime checks for what the types refuse 1 to 0. The
+    higher level's `accept` is used by the key-value and server-socket demos too.

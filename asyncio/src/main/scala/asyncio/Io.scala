@@ -6,19 +6,20 @@ import _root_.gears.async.Cancellable
 
 import scala.util.Try
 
-/** What a program performs its ops with: a backend's ops, handles and capabilities, since it is a `Backend`, bound to
-  * where the program runs, so that `perform` can run an op there. The platform's runner makes one for the program it
+/** What a program performs its ops with: a backend's ops, handles and capabilities (its `Facilities`), bound to
+  * where the program runs, so that `perform` can run an op there. It is not a `Backend`: it has what a backend has,
+  * and a program's helper asks for that, `Io & IpSockets`, never for a backend. The platform's runner makes one for the program it
   * starts, and nothing else does, so an op of a reactor backend is only ever performed where there is a worker, and
   * its reactor, to run it; a caller backend is its own `Io`, since its ops may be performed from any thread. Each
   * capability narrows a backend's `Io` to itself (`Backend.Io`), so a program over a `SocketBackend & FileBackend`
-  * is given an `Io & SocketBackend & FileBackend`. A program's `Io` is lexical: a future it spawns captures it, and
+  * is given an `Io & IpSockets & Files`. A program's `Io` is lexical: a future it spawns captures it, and
   * runs where the program runs. The two kinds are `OnPool` and `OnCaller`.
   *
   * It is also the program's gears `AsyncOperations`, given to it by the runner beside its `Async`: `sleep` is a timer
   * op performed, so gears' `sleep`, `withTimeout` and `Timer` run on the backend's timers, and `yield` gives up the
   * caller's turn the way the kind can.
   */
-trait Io extends Backend with AsyncOperations {
+trait Io extends Facilities with AsyncOperations {
 
   /** Performs `op` with no time limit (see the other `perform`). */
   final def perform(op: Op)(using Async): Unit = perform(op, Backend.NoTimeout)

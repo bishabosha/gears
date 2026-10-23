@@ -24,21 +24,25 @@ written in a package under `asyncio` too.
 
 Three axes, chosen independently of one another:
 
-- **Capability**: what a backend can do, as traits a program asks for by intersection: `SocketBackend`,
-  `FileBackend`, `PipeBackend`, `ResolveBackend`, `ReadinessBackend`, `BlockingBackend`, `UnixStreamBackend`,
-  `UnixDatagramBackend`, `FifoBackend`. Each is its `Ops` and `Handles`; the base `Ops` is read, write, the pooled
-  read, timer and close, and the base `Handles` opens nothing.
+- **Capability**: what a backend can do, as traits mixed into a backend and into its `Io` alike, and asked for by
+  intersection: `IpSockets`, `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`,
+  `UnixDatagrams`, `Fifos`. Each is its `Ops` and `Handles` over `Facilities`, what a backend and an `Io` have in
+  common; the base `Ops` is read, write, the pooled read, timer and close, and the base `Handles` opens nothing. A
+  program asks for a backend with one as `SocketBackend`, which is `Backend & IpSockets`, and likewise for the
+  others; a helper over a program's `Io` asks for the capability itself, `Io & IpSockets`.
 - **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
   thread, which may block. A backend is one kind, with any set of capabilities.
-- **`Io`**: what a program performs with. A backend bound to where the program runs: `OnPool` for a reactor backend,
-  made only by the runner (`ReactorBackend.bind`), or the caller backend itself (`OnCaller`). Each capability narrows
-  a backend's `Io` to itself, so a program over a `SocketBackend & FileBackend` is given an
-  `Io & SocketBackend & FileBackend`. `Io` is also the program's gears `AsyncOperations`.
+- **`Io`**: what a program performs with. A backend's facilities bound to where the program runs: `OnPool` for a
+  reactor backend, made only by the runner (`ReactorBackend.bind`), or the caller backend itself (`OnCaller`). It is
+  not a `Backend`: the two share their capabilities and nothing else. Each capability narrows a backend's `Io` to
+  itself, so a program over a `SocketBackend & FileBackend` is given an `Io & IpSockets & Files`. `Io` is also the
+  program's gears `AsyncOperations`.
 
-What each axis does not know: a capability says nothing about threads; a kind says nothing about sockets or files;
-an `Io` carries both and adds only `perform`. What a capability does know is the `Io` axis: each refines `Backend.Io`
-to carry itself, which is what lets a program over a `SocketBackend & FileBackend` be given an `Io` with both. The
+What each axis does not know: a capability says nothing about threads, kinds or backends; a kind says nothing about
+sockets or files; an `Io` carries the capabilities and adds only `perform`. What a capability does know is the `Io`
+axis: each refines `Facilities.Io` to carry itself, which is what lets a program over a `SocketBackend & FileBackend`
+be given an `Io` with both. The
 runtime is reached through one contract, `Pool`, bound once to a backend's `Op` (`Pool.Of[Op]`), which says what a
 pool offers a program (`perform`, `submit`, `yield` on that backend's ops) and which `asyncio.gears.Pools` implements.
 `submit` and `yield` are `OnPool`'s alone: a program written over `Io` runs on either kind, one that submits with its
@@ -47,7 +51,7 @@ own completion on reactor backends only.
 ## A program
 
 ```scala
-def echo(client: Handle)(using Async, r: Io & SocketBackend): Unit = {
+def echo(client: Handle)(using Async, r: Io & IpSockets): Unit = {
   val buf = ...
   val read = r.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
   val write = r.ops.write(client, buf)
@@ -101,12 +105,12 @@ lists, all done.
 backend; a program reaches the runtime through `Pool` alone. *Check*: the first five checks of `criteria.sh`: the
 interface names nothing below it, no capability trait names a kind, a pool, a worker or a thread, no kind names a
 capability, neither the runtime nor a runner names a backend, and `Pooled` forwards to `Pool` alone; and the build,
-where a runner depends on a backend in `Test` only. *Status*: met. Each capability refines `Backend.Io` to carry itself, which is the one thing
-the capability axis knows of the `Io` axis, and is what lets a program over `SocketBackend & FileBackend` be given an
-`Io` with both. **Accepted**: `Io extends Backend`, since an `Io` must be a `SocketBackend` for a helper over
-`Io & SocketBackend` to take it; what that allowed, an `Io` on a pool passed to the runner as a backend, is refused
-when compiling (`ReactorFutures.run` takes `NotGiven[backend.type <:< OnPool]`, checked by a test), so nothing is
-left to the run.
+where a runner depends on a backend in `Test` only, and `criteria.sh`'s check that `Io` is `Facilities` and not a
+`Backend`. *Status*: met. Each capability refines `Facilities.Io` to carry itself, which is the one thing the
+capability axis knows of the `Io` axis, and is what lets a program over `SocketBackend & FileBackend` be given an
+`Io` with both. An `Io` is not a `Backend`: capabilities are mixins over `Facilities`, mixed into a backend and
+into its `Io` alike, so a backend and its `Io` share their capabilities and nothing else, and handing a program's
+`Io` to the runner as a backend is a type error (checked by a test), not a check at run time.
 
 ### Implementation apart from the interface
 

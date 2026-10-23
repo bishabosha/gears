@@ -7,10 +7,8 @@ import gears.async.Future
 import gears.async.Listener
 import gears.async.native.NativeSuspend
 
-import scala.util.NotGiven
 
 import asyncio.Backend
-import asyncio.OnPool
 import asyncio.ReactorBackend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
@@ -23,12 +21,9 @@ object ReactorFutures {
 
   /** Runs `program` on one worker, the calling thread, and returns what it returns (see the other `run`). Scala
     * Native suspends futures on a pool's workers, which run reactors, so the backend must be a reactor backend. A
-    * program's `Io` on a pool is an `Io` and so a `Backend`, but not one to start a run over: that is refused when
-    * compiling.
+    * program's `Io` is not a `Backend`, so starting a run over one is refused when compiling.
     */
-  def run[T](using backend: Backend)(using NotGiven[backend.type <:< OnPool])(
-      program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T
-  ): T =
+  def run[T](using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")

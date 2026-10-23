@@ -1,13 +1,13 @@
 package asyncio.nio
 
-import asyncio.BlockingBackend
+import asyncio.Blocking
 import asyncio.BufferPool
-import asyncio.FileBackend
-import asyncio.PipeBackend
+import asyncio.Files
+import asyncio.Pipes
 import asyncio.Reactor
 import asyncio.ReactorBackend
-import asyncio.ResolveBackend
-import asyncio.UnixStreamBackend
+import asyncio.Resolving
+import asyncio.UnixStreams
 import asyncio.Pool
 import asyncio.unsafe.Pooled
 
@@ -15,12 +15,7 @@ import asyncio.unsafe.Pooled
   * resolution on the blocker pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK
   * cannot wait on, nor readiness. Handles name entries of one process-wide table.
   */
-trait NioCapabilities
-    extends BlockingBackend
-    with UnixStreamBackend
-    with FileBackend
-    with ResolveBackend
-    with PipeBackend {
+trait NioCapabilities extends Blocking with UnixStreams with Files with Resolving with Pipes {
   type Op = NioOp
   def ops: NioOps.type = NioOps
   def handles: NioHandles.type = NioHandles

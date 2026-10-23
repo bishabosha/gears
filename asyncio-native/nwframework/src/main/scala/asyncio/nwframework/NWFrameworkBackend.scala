@@ -1,14 +1,14 @@
 package asyncio.nwframework
 
-import asyncio.BlockingBackend
+import asyncio.Blocking
 import asyncio.BufferPool
-import asyncio.FifoBackend
-import asyncio.FileBackend
-import asyncio.PipeBackend
+import asyncio.Fifos
+import asyncio.Files
+import asyncio.Pipes
 import asyncio.Reactor
 import asyncio.ReactorBackend
-import asyncio.ResolveBackend
-import asyncio.SocketBackend
+import asyncio.Resolving
+import asyncio.IpSockets
 import asyncio.Pool
 import asyncio.unsafe.Pooled
 
@@ -17,13 +17,7 @@ import asyncio.unsafe.Pooled
   * reports completions and nothing can be tried on a connection without waiting, and no Unix domain sockets, which
   * Network.framework's public interface has no endpoint for.
   */
-trait NWFrameworkCapabilities
-    extends SocketBackend
-    with BlockingBackend
-    with FifoBackend
-    with FileBackend
-    with ResolveBackend
-    with PipeBackend {
+trait NWFrameworkCapabilities extends IpSockets with Blocking with Fifos with Files with Resolving with Pipes {
   type Op = NWFrameworkOp
   type Io = NWFrameworkOnPool
   def ops: NWFrameworkOps.type = NWFrameworkOps

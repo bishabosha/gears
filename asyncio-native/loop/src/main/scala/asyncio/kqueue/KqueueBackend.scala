@@ -1,16 +1,16 @@
 package asyncio.kqueue
 
-import asyncio.BlockingBackend
+import asyncio.Blocking
 import asyncio.BufferPool
-import asyncio.FifoBackend
-import asyncio.FileBackend
-import asyncio.PipeBackend
+import asyncio.Fifos
+import asyncio.Files
+import asyncio.Pipes
 import asyncio.Reactor
 import asyncio.ReactorBackend
-import asyncio.ReadinessBackend
-import asyncio.ResolveBackend
-import asyncio.UnixDatagramBackend
-import asyncio.UnixStreamBackend
+import asyncio.Readiness
+import asyncio.Resolving
+import asyncio.UnixDatagrams
+import asyncio.UnixStreams
 import asyncio.Pool
 import asyncio.unsafe.Pooled
 
@@ -19,14 +19,14 @@ import asyncio.unsafe.Pooled
   * ops on blocker threads, and FIFOs. Kqueue watches POSIX file descriptors, so a handle is the descriptor itself.
   */
 trait KqueueCapabilities
-    extends ReadinessBackend
-    with BlockingBackend
-    with UnixStreamBackend
-    with UnixDatagramBackend
-    with FifoBackend
-    with FileBackend
-    with ResolveBackend
-    with PipeBackend {
+    extends Readiness
+    with Blocking
+    with UnixStreams
+    with UnixDatagrams
+    with Fifos
+    with Files
+    with Resolving
+    with Pipes {
   type Op = KqueueOp
   type Io = KqueueOnPool
   def ops: KqueueOps.type = KqueueOps
