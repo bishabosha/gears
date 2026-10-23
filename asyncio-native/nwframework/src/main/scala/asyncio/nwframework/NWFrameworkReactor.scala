@@ -9,7 +9,7 @@ import scala.scalanative.unsigned.*
 import asyncio.Completion
 import asyncio.Reactor
 import asyncio.Repeatable
-import asyncio.Blockers
+import asyncio.unsafe.Blockers
 import asyncio.unsafe.TimerHeap
 
 /** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is completion-based:

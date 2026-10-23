@@ -15,7 +15,7 @@ import asyncio.ResolveOps
 import asyncio.ResolvedAddress
 import asyncio.SocketOps
 import asyncio.Slot
-import asyncio.BlockingRun
+import asyncio.unsafe.BlockingRun
 import asyncio.unsafe.NativePool
 import asyncio.unsafe.NativeBuffer
 import asyncio.unsafe.NonBlocking
