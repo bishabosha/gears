@@ -52,7 +52,7 @@ trait FuturesContract extends ProgramSuite {
   test("two futures stream bytes through a pipe") {
     val total = 1 << 20
     val received = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
@@ -118,7 +118,6 @@ trait FuturesContract extends ProgramSuite {
           Future {
             val socket = connect()
             try {
-              r.perform(r.backend.ops.connect(socket))
               val buf = arena.allocate(64)
               val read = r.backend.ops.read(socket, buf)
               val write = r.backend.ops.write(socket, buf)
@@ -146,7 +145,7 @@ trait FuturesContract extends ProgramSuite {
 
   test("cancelling a future cancels the op it waits on, which may then be performed again") {
     val outcome = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = arena.allocate(16)
         val read = r.backend.ops.read(in, buf)
@@ -167,7 +166,7 @@ trait FuturesContract extends ProgramSuite {
 
   test("performing a read with a time limit throws TimeoutException, and the read may then be performed again") {
     val outcome = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = arena.allocate(16)
         val read = r.backend.ops.read(in, buf)
@@ -229,7 +228,7 @@ trait FuturesContract extends ProgramSuite {
 
   test("gears' sleep and withTimeout run on the backend's timers: the program's Io is its AsyncOperations") {
     val outcome = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val started = System.nanoTime()
         sleep(20)
@@ -270,7 +269,6 @@ trait FuturesContract extends ProgramSuite {
         val (listener, connect) = listenAndConnect(r, dir)
         val client = connect()
         try {
-          r.perform(r.backend.ops.connect(client))
           val accepted = Handle.Slot()
           r.perform(r.backend.ops.accept(listener, accepted))
           val server = accepted.clear()
@@ -296,7 +294,7 @@ trait FuturesContract extends ProgramSuite {
 
   test("an op waiting on a handle that is closed fails") {
     val failure = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val waiting = Future(r.perform(r.backend.ops.read(in, arena.allocate(4))))
         r.perform(r.backend.ops.timer(20))
@@ -310,12 +308,16 @@ trait FuturesContract extends ProgramSuite {
   test("a connection refused after waiting for it fails perform") {
     val port = freePort() // nothing listens on it: one just given up
     val failure = running { r =>
+      val into = Handle.Slot()
       try {
-        val socket = r.backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
-        try r.perform(r.backend.ops.connect(socket))
-        finally r.perform(r.backend.ops.close(socket))
+        r.perform(r.backend.ops.connect(IpAddress.IPv4("127.0.0.1", port), into))
+        r.perform(r.backend.ops.close(into.clear()))
         null
-      } catch case t: Throwable => t
+      } catch {
+        case t: Throwable =>
+          intercept[IllegalStateException](into.clear()) // a failed connect leaves its slot empty
+          t
+      }
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
   }
@@ -336,7 +338,7 @@ trait FuturesContract extends ProgramSuite {
 
   test("an op that fails fails perform") {
     val failure = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       r.perform(r.backend.ops.close(in))
       r.perform(r.backend.ops.close(out))
       try {
@@ -371,7 +373,7 @@ trait FuturesContract extends ProgramSuite {
     val outcome = running { r =>
       r match {
         case p: gears.async.io.OnPool[backend.type] =>
-          val (in, out) = p.backend.handles.pipe()
+          val (in, out) = pipe(r)
           try {
             val buf = arena.allocate(16)
             val read = p.submit(p.backend.ops.read(in, buf)) // pending: nothing is written

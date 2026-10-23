@@ -34,9 +34,15 @@ final class Slot[A <: AnyRef] {
   */
 trait Repeatable
 
-/** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles (see `Handles`):
+/** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles (see `Handle`):
   * reads and writes of a stream, timers, and closing. Buffers are used between position and limit, and belong to the
   * backend while the op is being performed: on a reactor, from submission until the op's completion.
+  *
+  * Handles are opened by ops too, each kind by the capability that has it (`SocketOps.connect`, `PipeOps.pipe`,
+  * `FileOps.open` and the rest), since opening may wait, for a connection, a bind or the disk, and some environments
+  * can only open asynchronously. Such an op writes what it opened into a slot when it completes; one that fails, is
+  * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
+  * taken from the slot, and the caller closes it with `close`. Failures are `java.io.IOException`s.
   */
 trait Ops[Op] {
 
@@ -80,8 +86,23 @@ trait SocketOps[Op] extends Ops[Op] {
     */
   def accept(handle: Handle, into: Handle.Slot): Op & Repeatable
 
-  /** Connects `handle`, a socket from `handles.connect`. Completes once connected, or fails. */
-  def connect(handle: Handle): Op
+  /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
+    * `into`, which must be empty; fails if the connection is refused or cannot be made.
+    */
+  def connect(address: IpAddress, into: Handle.Slot): Op
+
+  /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`,
+    * which must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be
+    * bound while connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not
+    * wait for them to expire.
+    */
+  def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): Op
+
+  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same
+    * family. Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use
+    * or cannot be bound.
+    */
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot): Op
 
   /** Receives one packet on an IP datagram socket into `buf`, which is left flipped for reading, and writes its sender
     * into `from`, which must be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
@@ -95,12 +116,6 @@ trait SocketOps[Op] extends Ops[Op] {
 
   /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. */
   def send(handle: Handle, buf: ByteBuffer): Op & Repeatable
-
-  /** Completes once `handle`, from `Handles.listener`, is listening, or fails, as `connect` does for a socket to
-    * connect: with an `IOException` if the address is in use or cannot be bound. On a datagram socket from
-    * `Handles.datagram`, completes once it is bound, which may be at once (see `SocketHandles.datagram`).
-    */
-  def listening(handle: Handle): Op
 }
 
 /** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
@@ -147,12 +162,50 @@ trait ResolveOps[Op] extends Ops[Op] {
 /** Readiness, for a backend that has it (see `ReadinessBackend`). */
 trait ReadinessOps[Op] extends Ops[Op] {
 
-  /** Completes once `handle` is ready for `interest`. The caller then uses the handle without waiting
-    * (`ReadinessHandles.readNow`, `writeNow`) until it would block, and performs the op again to wait for the next
-    * readiness. Level-triggered: performed again while the handle is still ready, it completes at once. For what the
-    * other ops do not cover, such as draining a FIFO.
+  /** Completes once `handle` is ready for `interest`. The caller then uses the handle without waiting (`readNow`,
+    * `writeNow`) until it would block, and performs the op again to wait for the next readiness. Level-triggered:
+    * performed again while the handle is still ready, it completes at once. For what the other ops do not cover, such
+    * as draining a FIFO.
     */
   def ready(handle: Handle, interest: Interest): Op & Repeatable
+
+  /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of
+    * stream. Not an op: it runs on the calling thread and returns.
+    */
+  def readNow(handle: Handle, buf: ByteBuffer): Int
+
+  /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits. Not an op. */
+  def writeNow(handle: Handle, buf: ByteBuffer): Int
+}
+
+/** The ops of pipes, for a backend that has them (see `PipeBackend`); `read` and `write` run on either end. */
+trait PipeOps[Op] extends Ops[Op] {
+
+  /** Opens a pipe. Completes after writing its read end into `read` and its write end into `write`, which must both
+    * be empty; one that fails or is cancelled leaves both empty and neither end open.
+    */
+  def pipe(read: Handle.Slot, write: Handle.Slot): Op
+}
+
+/** The ops of FIFOs, for a backend that has them (see `FifoBackend`), which are then read and written as pipes are. */
+trait FifoOps[Op] extends Ops[Op] {
+
+  /** Opens the FIFO at `path` for reading, or for writing with `write`, without waiting for the other end, and
+    * completes after writing it into `into`, which must be empty. Opening one for writing fails while it has no reader.
+    */
+  def openFifo(path: String, write: Boolean, into: Handle.Slot): Op
+}
+
+/** The ops of Unix domain stream sockets, which the ops of IP stream sockets (`accept`, `read`, `write`) also run on. */
+trait UnixStreamOps[Op] extends SocketOps[Op] {
+
+  /** Opens a stream socket and connects it to `address`, as the other `connect` does to an IP address. */
+  def connect(address: UnixAddress, into: Handle.Slot): Op
+
+  /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket
+    * file already there.
+    */
+  def listen(address: UnixAddress, into: Handle.Slot): Op
 }
 
 /** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
@@ -169,8 +222,13 @@ trait BlockingOps[Op] extends Ops[Op] {
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }
 
-/** The ops of Unix domain datagram sockets, as `SocketOps.receive` and `SocketOps.send` are for IP ones. */
+/** The ops of Unix domain datagram sockets, as `SocketOps.datagram`, `receive` and `send` are for IP ones. */
 trait UnixDatagramOps[Op] extends SocketOps[Op] {
+
+  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, as the other `datagram` does. A
+    * client needs a `local` path so that replies can reach it.
+    */
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Handle.Slot): Op
 
   /** Receives one packet on a Unix datagram socket, as `receive` does on an IP one; an unnamed sender has the empty
     * path.

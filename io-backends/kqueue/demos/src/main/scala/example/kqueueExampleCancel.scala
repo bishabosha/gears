@@ -116,7 +116,7 @@ object KQueueExampleCancel {
                 } catch case _: IllegalStateException => true
               println(s"resubmitting the cancelled blocking task: ${if refused then "refused" else "accepted"}")
 
-              // Closing a descriptor fails the ops pending on it, from the loop on a later turn (`Handles.close`), so
+              // Closing a descriptor fails the ops pending on it, from the loop on a later turn (`Ops.close`), so
               // the read's completion hears of it, and a cancel has nothing left to do.
               val (orphanRead, orphanWrite) = KqueueHandles.pipe()
               val orphan = KqueueOps.read(orphanRead, NativeBuffer.allocate(16))

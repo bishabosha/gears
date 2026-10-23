@@ -160,10 +160,9 @@ object GearsKeyValue {
       val outbox = arena.allocate(BufferSize)
       val inbox = arena.allocate(BufferSize)
       ReactorFutures.run { r =>
-        val socket = Sockets.connect(r.backend, address)
+        println(s"connection in progress to: $address")
+        val socket = Sockets.connect(r, address)
         try {
-          println(s"connection in progress to: $address")
-          r.perform(r.backend.ops.connect(socket))
           val sender = Future {
             val write = r.backend.ops.write(socket, outbox)
             var sent = 0

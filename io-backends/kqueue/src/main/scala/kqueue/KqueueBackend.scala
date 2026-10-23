@@ -31,7 +31,6 @@ object KqueueBackend
     with Pipes {
   type Op = KqueueOp
   def ops: KqueueOps.type = KqueueOps
-  def handles: KqueueHandles.type = KqueueHandles
   def pool(bufferSize: Int, buffers: Int): BufferPool = new gears.async.io.internal.NativePool(bufferSize, buffers)
 
   /** Opens a reactor with `KqueueReactor.open`'s defaults. */

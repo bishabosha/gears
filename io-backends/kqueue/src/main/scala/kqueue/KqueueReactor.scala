@@ -35,9 +35,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   def ops: KqueueOps.type = KqueueOps
 
-  /** Kqueue watches POSIX file descriptors, so a handle is the descriptor itself. */
-  def handles: KqueueHandles.type = KqueueHandles
-
   /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may
     * then submit the op again.
     */
@@ -172,6 +169,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     op match {
+      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
       case command: Command =>
         val read = command.interest == Interest.Read
         val slot = currentSlot(command.fd, read)
@@ -236,6 +234,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
     finished
   }
+
+  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure
+    * as an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns
+    * false.
+    */
+  private def opened(connect: ConnectTo, pending: Completion[KqueueOp], finishNow: Boolean): Boolean =
+    try {
+      connect.open()
+      true
+    } catch {
+      case t: Throwable =>
+        connect.completion = pending
+        connect.atOnceFailure = t
+        if !finishNow then ready.add(connect)
+        false
+    }
 
   /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
     * time out then (see `fireDueTimers`).
@@ -324,7 +338,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   }
 
   /** Called from any thread when descriptor `fd`, whose generation in `DescriptorTable` was `generation`, is closed:
-    * the commands pending on it here fail, from the loop, as `Handles.close` says, and its slot forgets it. A slot
+    * the commands pending on it here fail, from the loop, as `Ops.close` says, and its slot forgets it. A slot
     * that knows a later generation knows a reused number, and is left alone.
     */
   private[kqueue] def closed(fd: Int, generation: Int): Unit =
@@ -466,7 +480,13 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       }
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
-      dropped.foreach((op, completion) => completion.onCancel(op))
+      dropped.foreach { (op, completion) =>
+        op match {
+          case opens: Opens => opens.abandon() // what it opened never reaches the caller
+          case _            => ()
+        }
+        completion.onCancel(op)
+      }
     }
   }
 
@@ -530,6 +550,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     */
   private def settleWithdrawn(op: KqueueOp, completion: Completion[KqueueOp], failure: Throwable | Null): Unit =
     op match {
+      case opens: Opens =>
+        opens.abandon() // what it opened never reaches the caller
+        if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
       case blocking: KqueueBlocking if blocking.interrupt() =>
         blocking.cancelling = completion
         blocking.cancelledBy = failure

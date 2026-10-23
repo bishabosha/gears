@@ -41,6 +41,14 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     if ac.group.isCancelled then throw new CancellationException()
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
+      case connect: ConnectTo    =>
+        connect.open()
+        try performCommand(connect, deadline)
+        catch {
+          case t: Throwable =>
+            connect.abandon() // what it opened never reaches the caller
+            throw t
+        }
       case command: Command      => performCommand(command, deadline)
       case timer: NioTimer       => performTimer(timer, deadline)
       case blocking: NioBlocking => performBlocking(blocking, deadline)

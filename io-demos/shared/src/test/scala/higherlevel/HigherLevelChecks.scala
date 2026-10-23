@@ -13,7 +13,7 @@ trait HigherLevelChecks extends ProgramSuite {
 
   test("a higher level over perform: result-returning reads, accept and resolve") {
     val outcome = running { r =>
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = arena.allocate(16)
         val writer = Future {
@@ -34,7 +34,7 @@ trait HigherLevelChecks extends ProgramSuite {
     val total = 1 << 20
     val received = running { r =>
       val pool = r.backend.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
@@ -60,7 +60,7 @@ trait HigherLevelChecks extends ProgramSuite {
   test("a higher level over perform: a stream closed early releases its chunks, and one that fails rethrows") {
     val outcome = running { r =>
       val pool = r.backend.pool(bufferSize = 1024, buffers = 4)
-      val (in, out) = r.backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         HigherLevel.writeAll(r, out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8)))
         val stream = HigherLevel.chunks(r, in, pool, backlog = 2)

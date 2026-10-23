@@ -53,11 +53,6 @@ trait Submitter {
     */
   def ops: Ops[Op]
 
-  /** Opens, uses without waiting, and closes this submitter's handles, as its backend's `handles` does. It does not
-    * touch the submitter either, so it may be used from any thread.
-    */
-  def handles: Handles
-
   /** Submits an op with the completion to run when it finishes, and no time limit (see the other `submit`). */
   final def submit[C <: Op](op: C, completion: Completion[C]): Unit = submit(op, completion, Backend.NoTimeout)
 

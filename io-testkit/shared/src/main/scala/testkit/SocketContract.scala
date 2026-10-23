@@ -8,17 +8,24 @@ import java.nio.charset.StandardCharsets
 trait SocketContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & SocketBackend
 
-  /** A listener on `address`, listening: `handles.listener` and the `listening` op, whose failure is thrown, with the
-    * handle closed.
-    */
+  /** A listener on `address`, listening, from the `listen` op, whose failure is thrown. */
   protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Handle = {
-    val handle = backend.handles.listener(address, reuseAddr)
-    val failure = run(r, backend.ops.listening(handle))
-    if failure != null then {
-      close(r, handle)
-      throw failure
-    }
-    handle
+    val into = Handle.Slot()
+    opened(r, into, backend.ops.listen(address, into, reuseAddr))
+  }
+
+  /** A datagram socket from the `datagram` op, whose failure is thrown. */
+  protected def datagram(r: R, local: IpAddress | Null, remote: IpAddress | Null)(using munit.Location): Handle = {
+    val into = Handle.Slot()
+    opened(r, into, backend.ops.datagram(local, remote, into))
+  }
+
+  /** Submits a `connect` op to `address` on `r`: what it reports, and the slot the socket is written into. */
+  protected def startConnect(r: R, address: IpAddress): (Outcome, Handle.Slot) = {
+    val into = Handle.Slot()
+    val connected = Outcome()
+    r.submit(backend.ops.connect(address, into), connected)
+    (connected, into)
   }
 
   /** Opens something on a free port: no interface tells which port was bound, so it tries a few. */
@@ -45,12 +52,11 @@ trait SocketContract extends ReactorContract {
         val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
-        val client = backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        turnUntil(r)(acceptDone.finished && connected.finished)
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        val client = into.clear()
         try {
-          val connected = Outcome()
-          r.submit(backend.ops.connect(client), connected)
-          turnUntil(r)(acceptDone.finished && connected.finished)
-          assertEquals(connected.completed, 1, String.valueOf(connected.failure))
           val server = accepted.clear()
           val sent = Outcome()
           r.submit(backend.ops.write(client, bytes("tcp ping")), sent)
@@ -76,9 +82,9 @@ trait SocketContract extends ReactorContract {
 
   test("an IPv4 datagram goes to a bound socket, which learns its sender") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => backend.handles.datagram(IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
       try {
-        val client = backend.handles.datagram(null, IpAddress.IPv4("127.0.0.1", port))
+        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
         try {
           val buf = allocate(64)
           val from = Slot[IpAddress]()
@@ -102,21 +108,16 @@ trait SocketContract extends ReactorContract {
     }
   }
 
-  test("listening on a datagram socket completes once it is bound, which may be at once") {
+  test("a datagram socket's op completes once it is bound, and fails, leaving its slot empty, on an address in use") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => backend.handles.datagram(IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
       try {
-        val bound = Outcome()
-        r.submit(backend.ops.listening(server), bound)
-        turnUntil(r)(bound.finished)
-        assertEquals(bound.completed, 1, String.valueOf(bound.failure))
-        val client = backend.handles.datagram(null, IpAddress.IPv4("127.0.0.1", port))
-        try {
-          val connected = Outcome()
-          r.submit(backend.ops.listening(client), connected)
-          turnUntil(r)(connected.finished)
-          assertEquals(connected.completed, 1, String.valueOf(connected.failure))
-        } finally close(r, client)
+        val into = Handle.Slot()
+        val failure = run(r, backend.ops.datagram(IpAddress.IPv4("127.0.0.1", port), null, into))
+        assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+        intercept[IllegalStateException](into.clear())
+        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        close(r, client)
       } finally close(r, server)
     }
   }
@@ -137,12 +138,11 @@ trait SocketContract extends ReactorContract {
         try {
           val accepted = Handle.Slot()
           r.submit(backend.ops.accept(listener, accepted), Outcome())
-          val client = backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+          val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+          turnUntil(r)(connected.finished)
+          assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+          val client = into.clear()
           try {
-            val connected = Outcome()
-            r.submit(backend.ops.connect(client), connected)
-            turnUntil(r)(connected.finished && { accepted.toString; true })
-            turnUntil(r)(connected.finished)
             val server = {
               var h = Handle.Opt.empty
               turnUntil(r) {
@@ -175,49 +175,45 @@ trait SocketContract extends ReactorContract {
     finally pool.close()
   }
 
-  // ---- Listening and closing as ops
+  // ---- Opening and closing as ops
 
-  test("a listener listens once its listening op completes, and accepts") {
+  test("a listener listens once its listen op completes, and accepts") {
     withReactor { r =>
-      val (listener, port) = onFreePort { port =>
-        val h = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port))
-        val listening = Outcome()
-        r.submit(backend.ops.listening(h), listening)
-        turnUntil(r)(listening.finished)
-        if listening.failure != null then {
-          close(r, h)
-          throw new IOException(String.valueOf(listening.failure))
-        }
-        h
-      }
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
         val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
-        val client = backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
-        try {
-          val connected = Outcome()
-          r.submit(backend.ops.connect(client), connected)
-          turnUntil(r)(acceptDone.finished && connected.finished)
-          assertEquals(acceptDone.completed, 1, String.valueOf(acceptDone.failure))
-          close(r, accepted.clear())
-        } finally close(r, client)
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        turnUntil(r)(acceptDone.finished && connected.finished)
+        assertEquals(acceptDone.completed, 1, String.valueOf(acceptDone.failure))
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        close(r, accepted.clear())
+        close(r, into.clear())
       } finally close(r, listener)
     }
   }
 
-  test("listening on an address in use fails the listening op, not the handle's creation") {
+  test("listening on an address in use fails the listen op, leaving its slot empty") {
     withReactor { r =>
       val (taken, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val h = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port), reuseAddr = false)
-        try {
-          val listening = Outcome()
-          r.submit(backend.ops.listening(h), listening)
-          turnUntil(r)(listening.finished)
-          assert(listening.failure.isInstanceOf[IOException], String.valueOf(listening.failure))
-        } finally close(r, h)
+        val into = Handle.Slot()
+        val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), into, reuseAddr = false))
+        assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+        intercept[IllegalStateException](into.clear())
       } finally close(r, taken)
+    }
+  }
+
+  test("a connect to a port nothing listens on fails, leaving its slot empty") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      close(r, listener)
+      val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+      turnUntil(r)(connected.finished)
+      assert(connected.failure.isInstanceOf[IOException], String.valueOf(connected.failure))
+      intercept[IllegalStateException](into.clear())
     }
   }
 
@@ -228,13 +224,7 @@ trait SocketContract extends ReactorContract {
       r.submit(backend.ops.close(first), closed)
       turnUntil(r)(closed.finished)
       assertEquals(closed.completed, 1, String.valueOf(closed.failure))
-      val second = backend.handles.listener(IpAddress.IPv4("127.0.0.1", port), reuseAddr = false)
-      try {
-        val listening = Outcome()
-        r.submit(backend.ops.listening(second), listening)
-        turnUntil(r)(listening.finished)
-        assertEquals(listening.completed, 1, String.valueOf(listening.failure))
-      } finally close(r, second)
+      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = false))
     }
   }
 
@@ -245,10 +235,9 @@ trait SocketContract extends ReactorContract {
         val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
-        val client = backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
-        val connected = Outcome()
-        r.submit(backend.ops.connect(client), connected)
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
         turnUntil(r)(acceptDone.finished && connected.finished)
+        val client = into.clear()
         val server = accepted.clear()
         try {
           val closed = Outcome()

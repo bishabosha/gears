@@ -17,6 +17,7 @@ import gears.async.io.Slot
 import gears.async.io.testkit.BufferArena
 import DemoIO.text
 import gears.async.io.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirrors of `example.KQueueExampleDatagramSocket` and `example.KQueueExampleDatagramServerSocket`, using the
   * reactor's `receive` and `send` ops.
@@ -32,7 +33,7 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.backend.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
+        val socket = HigherLevel.datagram(r, UnixAddress(localSock), UnixAddress(sock))
         val ops = r.backend.ops
         val receive = ops.receive(socket, response, Slot[UnixAddress]())
         try exchange(r, sock, ops.send(socket, request), receive, request, response)
@@ -47,7 +48,7 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.backend.handles.datagram(null, address)
+        val socket = HigherLevel.datagram(r, null, address)
         val ops = r.backend.ops
         val receive = ops.receive(socket, response, Slot[IpAddress]())
         try exchange(r, address, ops.send(socket, request), receive, request, response)
@@ -90,7 +91,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.backend.handles.datagram(address, null)
+        val socket = HigherLevel.datagram(r, address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
         val ops = r.backend.ops
         try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
@@ -103,7 +104,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.backend.handles.datagram(address, null)
+        val socket = HigherLevel.datagram(r, address, null)
         val sender = Slot[IpAddress]()
         val ops = r.backend.ops
         try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))

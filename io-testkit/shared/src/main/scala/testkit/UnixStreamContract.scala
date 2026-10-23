@@ -10,13 +10,16 @@ trait UnixStreamContract extends SocketContract {
 
   /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
   protected def listen(r: R, address: UnixAddress)(using munit.Location): Handle = {
-    val handle = backend.handles.listener(address)
-    val failure = run(r, backend.ops.listening(handle))
-    if failure != null then {
-      close(r, handle)
-      throw failure
-    }
-    handle
+    val into = Handle.Slot()
+    opened(r, into, backend.ops.listen(address, into))
+  }
+
+  /** Submits a `connect` op to a Unix socket path on `r`, as `startConnect` for an IP address. */
+  protected def startConnect(r: R, address: UnixAddress): (Outcome, Handle.Slot) = {
+    val into = Handle.Slot()
+    val connected = Outcome()
+    r.submit(backend.ops.connect(address, into), connected)
+    (connected, into)
   }
 
   test("a socket's reads end after the bytes sent before its peer closed") {
@@ -25,16 +28,15 @@ trait UnixStreamContract extends SocketContract {
       val address = UnixAddress(dir.resolve("end.sock").toString)
       val listener = listen(r, address)
       try {
-        val client = backend.handles.connect(address)
+        val (connected, into) = startConnect(r, address)
         val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
-        turnUntil(r)(acceptDone.finished)
+        turnUntil(r)(acceptDone.finished && connected.finished)
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        val client = into.clear()
         val server = accepted.clear()
         try {
-          val connected = Outcome()
-          r.submit(backend.ops.connect(client), connected)
-          turnUntil(r)(connected.finished)
           val sent = Outcome()
           r.submit(backend.ops.write(client, bytes("last words")), sent)
           turnUntil(r)(sent.finished)
@@ -55,12 +57,11 @@ trait UnixStreamContract extends SocketContract {
         val accepted = Handle.Slot()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
-        val client = backend.handles.connect(address)
-        val connected = Outcome()
-        r.submit(backend.ops.connect(client), connected)
+        val (connected, into) = startConnect(r, address)
         turnUntil(r)(acceptDone.finished && connected.finished)
         assertEquals(connected.completed, 1, String.valueOf(connected.failure))
         assertEquals(acceptDone.completed, 1, String.valueOf(acceptDone.failure))
+        val client = into.clear()
         val server = accepted.clear()
         try {
           val request = bytes("ping")

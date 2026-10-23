@@ -11,7 +11,7 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import munit.FunSuite
 
-/** What every backend's reactors must do, as `Reactor`, `Ops` and `Handles` describe it, checked through the interface
+/** What every backend's reactors must do, as `Reactor` and `Ops` describe it, checked through the interface
   * alone, so that code written against it runs the same on any backend. A backend's suite extends this, and the
   * contracts of the capabilities its backend has (`SocketContract`, `FileContract`, `ResolveContract`,
   * `ReadinessContract`, `UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with the backend; buffers come
@@ -66,6 +66,29 @@ trait ReactorContract extends FunSuite {
 
   /** Closes `handle` from a thread with no reactor, on a reactor opened for it. */
   protected def closeAlone(handle: Handle)(using munit.Location): Unit = withReactor(r => close(r, handle))
+
+  /** Runs `op`, which opens a handle into `into`, on `r`, and returns the handle; throws the op's failure. */
+  protected def opened(r: R, into: Handle.Slot, op: backend.Op)(using munit.Location): Handle = {
+    val failure = run(r, op)
+    if failure != null then throw failure
+    into.clear()
+  }
+
+  /** Opens a pipe through `r`, as the interface has it: its read end and its write end. */
+  protected def pipe(r: R)(using munit.Location): (Handle, Handle) = {
+    val read = Handle.Slot()
+    val write = Handle.Slot()
+    val failure = run(r, backend.ops.pipe(read, write))
+    if failure != null then throw failure
+    (read.clear(), write.clear())
+  }
+
+  /** Opens a pipe from a thread with no reactor, on a reactor opened for it. */
+  protected def pipeAlone()(using munit.Location): (Handle, Handle) = {
+    var ends: (Handle, Handle) | Null = null
+    withReactor(r => ends = pipe(r))
+    ends.nn
+  }
 
   /** Turns `reactors` without blocking until `cond` holds, failing after a few seconds. */
   protected def turnUntil(reactors: Reactor*)(cond: => Boolean)(using loc: munit.Location): Unit = {
@@ -133,7 +156,7 @@ trait ReactorContract extends FunSuite {
 
   test("a read waits for data written later, then completes with it") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = allocate(64)
         val outcome = Outcome()
@@ -154,7 +177,7 @@ trait ReactorContract extends FunSuite {
 
   test("a read at the end of the stream completes without adding bytes") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         close(r, out)
         val buf = allocate(16)
@@ -183,7 +206,7 @@ trait ReactorContract extends FunSuite {
 
   test("a pipe's reads end after the bytes written before its writer closed") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val sent = Outcome()
         r.submit(backend.ops.write(out, bytes("then the end")), sent)
@@ -197,7 +220,7 @@ trait ReactorContract extends FunSuite {
 
   test("writes fill a pipe, wait while it is full, and go on as it drains") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val size = 1 << 20
         val source = allocate(size)
@@ -227,7 +250,7 @@ trait ReactorContract extends FunSuite {
 
   test("cancelling a pending read runs onCancel, and the op may then be submitted again") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = allocate(16)
         val read = backend.ops.read(in, buf)
@@ -254,7 +277,7 @@ trait ReactorContract extends FunSuite {
 
   test("a read with a time limit fails with TimeoutException when nothing comes, and may then be submitted again") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val buf = allocate(16)
         val read = backend.ops.read(in, buf)
@@ -373,7 +396,7 @@ trait ReactorContract extends FunSuite {
   test("a repeatable op moves between two reactors of the backend") {
     withReactor { a =>
       withReactor { b =>
-        val (in, out) = backend.handles.pipe()
+        val (in, out) = pipe(a)
         try {
           val buf = allocate(16)
           val read = backend.ops.read(in, buf)
@@ -397,7 +420,7 @@ trait ReactorContract extends FunSuite {
   }
 
   test("closing a handle that a reactor blocked on another thread has used ends its peer's stream") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     val registered = new CountDownLatch(1)
     @volatile var other: Reactor | Null = null
     val blocked = new Thread(() => {
@@ -428,7 +451,7 @@ trait ReactorContract extends FunSuite {
   }
 
   test("closing a handle fails the op pending on it") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     try
       withReactor { r =>
         val outcome = Outcome()
@@ -443,7 +466,7 @@ trait ReactorContract extends FunSuite {
   }
 
   test("closing a handle fails the op pending on it on a reactor blocked on another thread") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     val registered = new CountDownLatch(1)
     val failed = new CountDownLatch(1)
     @volatile var failure: Throwable | Null = null
@@ -484,7 +507,7 @@ trait ReactorContract extends FunSuite {
   }
 
   test("closing a reactor cancels its pending ops") {
-    val (in, out) = backend.handles.pipe()
+    val (in, out) = pipeAlone()
     try {
       val reactor = backend.open()
       val read = Outcome()
@@ -503,7 +526,7 @@ trait ReactorContract extends FunSuite {
 
   test("an op on a closed handle fails") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       close(r, out)
       close(r, in)
       val outcome = Outcome()
@@ -526,7 +549,7 @@ trait ReactorContract extends FunSuite {
   test("a pooled read fills a buffer of the pool's, which release gives back") {
     val pool = backend.pool(bufferSize = 64, buffers = 2)
     try withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         val into = Slot[Received]()
         val outcome = Outcome()
@@ -552,7 +575,7 @@ trait ReactorContract extends FunSuite {
   test("a pooled read at the end of the stream completes with an empty buffer") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
     try withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         close(r, out)
         val into = Slot[Received]()
@@ -570,7 +593,7 @@ trait ReactorContract extends FunSuite {
   test("a pooled read fails when the pool has no buffer free, and goes on once one is released") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
     try withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       try {
         r.submit(backend.ops.write(out, bytes("one")), Outcome())
         val first = Slot[Received]()
@@ -605,7 +628,7 @@ trait ReactorContract extends FunSuite {
 
   test("a close op completes once the handle is closed, and fails the op pending on it") {
     withReactor { r =>
-      val (in, out) = backend.handles.pipe()
+      val (in, out) = pipe(r)
       val read = Outcome()
       r.submit(backend.ops.read(in, allocate(16)), read)
       r.runOnce(block = false)

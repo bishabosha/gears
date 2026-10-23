@@ -8,15 +8,21 @@ import java.nio.file.Files
 trait FifoContract extends FileContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & FifoBackend & FileBackend
 
+  /** A FIFO from the `openFifo` op, whose failure is thrown. */
+  protected def openFifo(r: R, path: String, write: Boolean)(using munit.Location): Handle = {
+    val into = Handle.Slot()
+    opened(r, into, backend.ops.openFifo(path, write, into))
+  }
+
   test("a FIFO carries what its writer writes, then ends when the writer closes") {
     val dir = tempDir()
     try withReactor { r =>
       val fifo = dir.resolve("fifo")
       val made = new ProcessBuilder("mkfifo", fifo.toString).start().waitFor()
       assertEquals(made, 0)
-      val reader = backend.handles.openFifo(fifo.toString, write = false) // a non-blocking writer needs a reader to open
+      val reader = openFifo(r, fifo.toString, write = false) // a non-blocking writer needs a reader to open
       try {
-        val writer = backend.handles.openFifo(fifo.toString, write = true)
+        val writer = openFifo(r, fifo.toString, write = true)
         val sent = Outcome()
         r.submit(backend.ops.write(writer, bytes("through the fifo")), sent)
         turnUntil(r)(sent.finished)
@@ -35,7 +41,10 @@ trait FifoContract extends FileContract {
       intercept[java.io.IOException](open(r, fifo, write = false))
       val file = dir.resolve("file")
       Files.write(file, "x".getBytes(StandardCharsets.UTF_8))
-      intercept[java.io.IOException](backend.handles.openFifo(file.toString, write = false))
+      val into = Handle.Slot()
+      val failure = run(r, backend.ops.openFifo(file.toString, write = false, into))
+      assert(failure.isInstanceOf[java.io.IOException], String.valueOf(failure))
+      intercept[IllegalStateException](into.clear())
     } finally deleteAll(dir)
   }
 }
