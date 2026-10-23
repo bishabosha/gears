@@ -11,9 +11,10 @@ import java.nio.charset.StandardCharsets
 import asyncio.nio.NioBackend
 import asyncio.nio.NioOnCaller
 import asyncio.testkit.BufferArena
+import higherlevel.HigherLevelChecks
 
 /** `FuturesContract` over `NioOnCaller`: gears' own virtual threads, each op performed on its own thread. */
-class NioOnCallerSuite extends FuturesContract {
+class NioOnCallerSuite extends FuturesContract with HigherLevelChecks {
   val backend: NioOnCaller.type = NioOnCaller
 
   protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
@@ -46,7 +47,7 @@ class NioOnCallerSuite extends FuturesContract {
 }
 
 /** `FuturesContract` over `NioBackend`: futures carried by a pool of `workers` workers driving its reactors. */
-abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
+abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract with HigherLevelChecks {
   val backend: NioBackend.type = NioBackend
 
   protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =

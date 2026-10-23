@@ -6,21 +6,21 @@ import asyncio.IpAddress
 import asyncio.ResolveBackend
 import asyncio.SocketBackend
 import asyncio.AddressFamily
-import asyncio.ResolvedAddress
-import asyncio.Slot
 import asyncio.testkit.BufferArena
 import DemoIO.text
 import asyncio.gears.ReactorFutures
+import higherlevel.HigherLevel
 
-/** Mirror of `example.KQueueExampleWhois`: resolve, connect to port 43, send one query line, print the raw reply. */
+/** Mirror of `example.KQueueExampleWhois`: resolve, connect to port 43, send one query line, print the raw reply.
+  * Written with the higher level where a result reads better than an op and a slot: `resolve` returns the addresses,
+  * `read` the bytes received.
+  */
 object GearsWhois {
   def run(host: String, port: Int, query: String)(using SocketBackend & ResolveBackend): Unit = {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
       ReactorFutures.run { r =>
-        val addresses = Slot[List[ResolvedAddress]]()
-        r.perform(r.ops.resolve(host, addresses)) // a failed lookup throws
-        val resolvedAll = addresses.clear()
+        val resolvedAll = HigherLevel.resolve(r, host) // a failed lookup throws
         val resolved = resolvedAll.head
         val address = resolved.family match {
           case AddressFamily.IPv6 => IpAddress.IPv6(resolved.host, port)
@@ -30,21 +30,19 @@ object GearsWhois {
         val fd = r.handles.connect(address)
         try {
           r.perform(r.ops.connect(fd))
-          val write = r.ops.write(fd, buf)
-          val read = r.ops.read(fd, buf)
           println(s"connected; sending query `$query`")
           buf.clear()
           buf.put(s"$query\r\n".getBytes(StandardCharsets.UTF_8))
           buf.flip()
-          while buf.hasRemaining() do r.perform(write)
+          HigherLevel.writeAll(r, fd, buf)
           var received = 0L
           var eof = false
           while !eof do {
             buf.clear()
-            r.perform(read)
-            if buf.position() == 0 then eof = true // nothing added: the server closed the connection
+            val got = HigherLevel.read(r, fd, buf)
+            if got == 0 then eof = true // nothing added: the server closed the connection
             else {
-              received += buf.position()
+              received += got
               buf.flip()
               print(text(buf)) // Raw reply text, exactly as received.
             }
@@ -58,9 +56,7 @@ object GearsWhois {
   /** Resolves a host through the reactor's blocker pool and prints every address. */
   def resolve(host: String)(using ResolveBackend): Unit = {
     ReactorFutures.run { r =>
-      val addresses = Slot[List[ResolvedAddress]]()
-      r.perform(r.ops.resolve(host, addresses)) // a failed lookup throws
-      val resolvedAll = addresses.clear()
+      val resolvedAll = HigherLevel.resolve(r, host) // a failed lookup throws
       resolvedAll.foreach { a =>
         val family = if a.family == AddressFamily.IPv4 then "IPv4" else "IPv6"
         println(s"$family ${a.host}")

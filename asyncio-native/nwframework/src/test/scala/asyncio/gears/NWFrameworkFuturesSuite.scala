@@ -4,9 +4,10 @@ import gears.async.Async
 import gears.async.AsyncOperations
 
 import asyncio.nwframework.NWFrameworkBackend
+import higherlevel.HigherLevelChecks
 
 /** `FuturesContract` over the NWFramework backend's reactors, on a pool of `workers` workers; its sockets are TCP. */
-abstract class NWFrameworkFuturesSuite(workers: Int) extends FuturesContract {
+abstract class NWFrameworkFuturesSuite(workers: Int) extends FuturesContract with HigherLevelChecks {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
 
   protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =

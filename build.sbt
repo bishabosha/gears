@@ -92,6 +92,20 @@ lazy val asyncio =
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
     .dependsOn(root, asyncioTestkit % Test)
 
+// The higher level the interface is for, over it alone: result-returning methods and a stream of chunks, outside
+// the `asyncio` package, so that it sees only what a program sees. Its checks join every backend's contract suite.
+lazy val higherLevel =
+  crossProject(JVMPlatform, NativePlatform)
+    .crossType(CrossType.Pure)
+    .in(file("higherlevel"))
+    .settings(
+      publish / skip := true,
+      libraryDependencies += "org.scalameta" %% "munit" % "1.3.6" % Test,
+      testFrameworks += MUnitFramework
+    )
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .dependsOn(asyncio % "compile->compile;test->test")
+
 // Implementation the backends share, below the interface: the blocker pool and the timer heap.
 lazy val asyncioUnsafe =
   crossProject(JVMPlatform, NativePlatform)
@@ -159,7 +173,8 @@ lazy val jvmAsyncioGears =
       asyncio.jvm % "compile->compile;test->test",
       asyncioGears.jvm,
       jvmAsyncioNio % Test,
-      asyncioTestkit.jvm % Test
+      asyncioTestkit.jvm % Test,
+      higherLevel.jvm % "test->compile;test->test"
     )
 
 // Gears on Scala Native over reactors: starts the pool of `asyncio`'s scheduler with Native's suspension (see
@@ -174,7 +189,11 @@ lazy val nativeAsyncioGears =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true) }
     )
-    .dependsOn(asyncioGears.native, nativeAsyncioLoop % "test->compile;test->test")
+    .dependsOn(
+      asyncioGears.native,
+      nativeAsyncioLoop % "test->compile;test->test",
+      higherLevel.native % "test->compile;test->test"
+    )
 
 // The NWFramework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and FIFOs, with
 // their C side in its resources (see asyncio-native/nwframework/TODO.md). macOS only; every executable that links it needs
@@ -191,7 +210,11 @@ lazy val nativeAsyncioNWFramework =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
     )
-    .dependsOn(nativeAsyncioLoop % "compile->compile;test->test", nativeAsyncioGears % "test->compile;test->test")
+    .dependsOn(
+      nativeAsyncioLoop % "compile->compile;test->test",
+      nativeAsyncioGears % "test->compile;test->test",
+      higherLevel.native % "test->compile;test->test"
+    )
 
 // The gears demos, written against `asyncio` alone, so the same code runs on kqueue (Scala Native, through
 // kqueueDemo's `kqueuedemo gears ...`) and on NIO (the JVM, `gearsDemoJVM/run ...`). A demo that needs a capability
@@ -212,7 +235,7 @@ lazy val gearsDemo =
       )
     )
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
-    .dependsOn(asyncioTestkit)
+    .dependsOn(asyncioTestkit, higherLevel)
     .jvmConfigure(_.dependsOn(jvmAsyncioGears, jvmAsyncioNio))
     .nativeConfigure(_.dependsOn(nativeAsyncioGears, nativeAsyncioLoop))
 

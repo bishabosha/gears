@@ -20,8 +20,10 @@ import asyncio.SocketBackend
 /** The higher level the interface is meant to be wrapped by, written over `Io` alone: result-returning methods that
   * own the op and the slot the caller would otherwise reuse, and a stream of chunks over a repeatable pooled read,
   * consumed as a gears channel. Nothing here touches a backend, a kind or the runtime, and being outside the
-  * `asyncio` package it could not: it sees the interface's public contract only. It runs as it is on every backend
-  * (`asyncio.gears.FuturesContract` checks it on each), which is what the lowest level is for.
+  * `asyncio` package it could not: it sees the interface's public contract only, and its module depends on the
+  * interface alone. It runs as it is on every backend (`HigherLevelChecks` runs on each, as part of the contract's
+  * suites), which is what the lowest level is for; the demos use it where a result or a stream reads better than
+  * the op.
   */
 object HigherLevel {
 

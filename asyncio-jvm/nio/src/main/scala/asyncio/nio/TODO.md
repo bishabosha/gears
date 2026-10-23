@@ -891,3 +891,15 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     The wrapper's early-close check found a bug in every backend: a pooled read that fails on the read call, as on a
     closed descriptor, threw with the buffer it had taken never released, so the pool could not be closed. Each now
     releases it before rethrowing (`Commands.PooledRead`, `NWFrameworkOps`, `NioOps.PooledRead`).
+
+30. [x] **The criteria measured, the higher level in use, the source view closed.** `asyncio/criteria.sh` turns the
+    checks of the README's criteria into greps over the sources and the build that fail the script if any fails, so
+    the status of each clause is measured, not read. The wrapper is a module of its own, `higherlevel`, depending on
+    the interface alone; `HigherLevelChecks`, in its tests, is mixed into every backend's contract suite; the whois
+    demo resolves and reads through it and the socket demo takes its response as a stream of chunks from the pool's
+    buffers. `Submission` is an `Async.Source[Try[Unit]]` as well as a `Cancellable`, completed once after the
+    completion with the op's outcome, so `OnPool.submit(op)` with no completion (`Completion.ignore`) is the source
+    view of an op, raced in `Async.select` against a timer in the contract; `Pools.PoolSubmission` keeps the outcome
+    and the listeners under one lock, since a listener registers on the caller's thread while the completion runs on
+    the reactor's. Left as the design the intersection of traits needs: `Io extends Backend`, its one consequence a
+    compile error.
