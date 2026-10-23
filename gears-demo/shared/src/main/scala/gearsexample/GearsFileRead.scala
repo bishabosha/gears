@@ -43,14 +43,16 @@ object GearsFileRead {
             result.nn
           }
 
-          val readable = r.ops.whenReady(file, Interest.Read)(drain) // one repeatable op, resubmitted each time
+          val readable = r.ops.ready(file, Interest.Read) // one repeatable op, performed again before each drain
           println("Event registered for file read.")
           println("starting to poll...")
           while true do {
-            r.perform(readable) // completes only at end of file
-            println(s"End of file reached. Contents are ${contents.size} long.")
-            println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
-            contents.reset() // Start over for the next writer
+            r.perform(readable) // completes once the FIFO is readable, at its end included
+            if drain() then { // end of file: everything the writer sent is in `contents`
+              println(s"End of file reached. Contents are ${contents.size} long.")
+              println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
+              contents.reset() // Start over for the next writer
+            }
           }
         } finally r.perform(r.ops.close(file))
       }

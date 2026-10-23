@@ -3,7 +3,7 @@ package asyncio
 import java.util.concurrent.CountDownLatch
 
 /** What a backend with readiness must do (see `ReactorContract`): finish an op at once when its handle is ready, run
-  * `whenReady` bodies, and use handles without waiting.
+  * `ready` ops, and use handles without waiting.
   */
 trait ReadinessContract extends ReactorContract {
   val backend: ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend
@@ -26,27 +26,32 @@ trait ReadinessContract extends ReactorContract {
     }
   }
 
-  test("whenReady runs its body only once the handle is ready, and waits again while it returns false") {
+  test("ready completes once the handle is ready, again at once while it still is, and waits once it is drained") {
     withReactor { r =>
       val (in, out) = backend.handles.pipe()
       try {
         val buf = allocate(64)
-        var runs = 0
-        val ready = backend.ops.whenReady(in, Interest.Read) { () =>
-          runs += 1
-          backend.handles.readNow(in, buf)
-          text(buf).endsWith("!")
-        }
-        val outcome = Outcome()
-        r.submit(ready, outcome)
+        val ready = backend.ops.ready(in, Interest.Read)
+        val first = Outcome()
+        r.submit(ready, first)
         for _ <- 1 to 5 do r.runOnce(block = false)
-        assertEquals(runs, 0)
+        assertEquals(first.completed, 0)
         backend.handles.writeNow(out, bytes("part"))
-        turnUntil(r)(runs > 0)
-        assertEquals(outcome.completed, 0)
+        turnUntil(r)(first.finished)
+        assertEquals(first.completed, 1)
+        val stillReady = Outcome() // the data has not been taken yet
+        r.submit(ready, stillReady)
+        turnUntil(r)(stillReady.finished)
+        assertEquals(stillReady.completed, 1)
+        assertEquals(backend.handles.readNow(in, buf), 4)
+        assertEquals(text(buf), "part")
+        val drained = Outcome()
+        r.submit(ready, drained)
+        for _ <- 1 to 5 do r.runOnce(block = false)
+        assertEquals(drained.completed, 0)
         backend.handles.writeNow(out, bytes("!"))
-        turnUntil(r)(outcome.finished)
-        assertEquals(outcome.completed, 1)
+        turnUntil(r)(drained.finished)
+        assertEquals(backend.handles.readNow(in, buf), 1)
         assertEquals(text(buf), "part!")
       } finally {
         close(r, in)
@@ -62,7 +67,7 @@ trait ReadinessContract extends ReactorContract {
     val blocked = new Thread(() => {
       val b = backend.open()
       other = b
-      b.submit(backend.ops.whenReady(out, Interest.Write)(() => true), _ => registered.countDown())
+      b.submit(backend.ops.ready(out, Interest.Write), _ => registered.countDown())
       b.run() // blocks between turns until stopped
       b.close()
     })

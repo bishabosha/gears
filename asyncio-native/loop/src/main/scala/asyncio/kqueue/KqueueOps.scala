@@ -61,8 +61,7 @@ object KqueueOps
     new ReceiveFrom(fd(handle), buf, from, unix = true)
   def send(handle: Handle, buf: ByteBuffer, to: UnixAddress): SendTo = new SendTo(fd(handle), buf, to)
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
-  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): WhenReady =
-    new WhenReady(fd(handle), interest, perform)
+  def ready(handle: Handle, interest: Interest): Ready = new Ready(fd(handle), interest)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
@@ -138,10 +137,12 @@ trait Command extends KqueueOp with Repeatable {
   def registersReads: Boolean = false
 }
 
-/** A command built from a function, for `ReadinessOps.whenReady`. */
-final class WhenReady(val fd: Int, val interest: Interest, body: () => Boolean) extends Command {
-  def perform(): Boolean = body()
-  override def tryFirst: Boolean = false // `ReadinessOps.whenReady` runs its body only once the descriptor is ready
+/** Readiness itself, for `ReadinessOps.ready`: done as soon as kqueue reports the descriptor ready, which it does at
+  * once while the descriptor stays so, since the command waits on a one-shot, level-triggered filter each time.
+  */
+final class Ready(val fd: Int, val interest: Interest) extends Command {
+  def perform(): Boolean = true
+  override def tryFirst: Boolean = false // the wait is the point: only kqueue says the descriptor is ready
 }
 
 /** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */

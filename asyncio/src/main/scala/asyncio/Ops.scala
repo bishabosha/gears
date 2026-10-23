@@ -147,11 +147,12 @@ trait ResolveOps[Op] extends Ops[Op] {
 /** Readiness, for a backend that has it (see `ReadinessBackend`). */
 trait ReadinessOps[Op] extends Ops[Op] {
 
-  /** Waits until `handle` is ready for `interest`, then runs `perform` on the reactor thread. The op completes when
-    * `perform` returns true; false means it was not ready after all, and the reactor waits again. For operations the
+  /** Completes once `handle` is ready for `interest`. The caller then uses the handle without waiting
+    * (`ReadinessHandles.readNow`, `writeNow`) until it would block, and performs the op again to wait for the next
+    * readiness. Level-triggered: performed again while the handle is still ready, it completes at once. For what the
     * other ops do not cover, such as draining a FIFO.
     */
-  def whenReady(handle: Handle, interest: Interest)(perform: () => Boolean): Op & Repeatable
+  def ready(handle: Handle, interest: Interest): Op & Repeatable
 }
 
 /** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */

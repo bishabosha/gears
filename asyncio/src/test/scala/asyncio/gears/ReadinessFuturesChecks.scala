@@ -15,28 +15,25 @@ import asyncio.SocketBackend
 trait ReadinessFuturesChecks extends FuturesContract {
   val backend: Backend & SocketBackend & PipeBackend & ResolveBackend & ReadinessBackend
 
-  test("whenReady runs its body once the handle is ready") {
+  test("ready completes once the handle is ready, and the handle can then be used without waiting") {
     var outcome = ""
     running { r =>
       val (in, out) = r.handles.pipe()
       try {
         val buf = arena.allocate(16)
-        val runs = new java.util.concurrent.atomic.AtomicInteger
-        val ready = r.ops.whenReady(in, Interest.Read) { () =>
-          runs.incrementAndGet()
-          r.handles.readNow(in, buf) != 0
-        }
+        val ready = r.ops.ready(in, Interest.Read)
         val waiting = Future(r.perform(ready))
         r.perform(r.ops.timer(20))
         r.handles.writeNow(out, arena.of("ready".getBytes(StandardCharsets.UTF_8)))
         waiting.await
-        outcome = s"${text(buf)} after ${runs.get()}"
+        val read = r.handles.readNow(in, buf)
+        outcome = s"${text(buf)} ($read bytes)"
       } finally {
         r.perform(r.ops.close(in))
         r.perform(r.ops.close(out))
       }
     }
-    assertEquals(outcome, "ready after 1")
+    assertEquals(outcome, "ready (5 bytes)")
   }
 
 }
