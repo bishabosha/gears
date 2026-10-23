@@ -929,3 +929,11 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     or threads (12 to 0). The audit also noted that the demos were already gears-shaped before the goal (counts of
     `Async.Spawn`, `using Async` and `Future {` are flat), so the idiom gained is the interface's: `Io` as the
     program's `AsyncOperations`, `Submission` as a `Cancellable` and a `Source`, `run` returning the program's value.
+
+33. [x] **The criteria scaffolding removed.** `asyncio/criteria.sh` and the README's section stating the goal's
+    clauses as criteria with a status for each are gone, the restructuring being finished: what they measured is
+    now the build (the direction of the module dependencies), the types (an `Io` is not a `Backend`, `Submission` is
+    a `Cancellable` and a `Source`, `run` returns the program's value) and the contract suites, which every backend
+    runs. The README keeps the description of the modules, the three axes, the fixed semantics and the higher level,
+    and the trade-offs once listed as accepted (the `Io` an explicit parameter, time limits an `Int` of
+    milliseconds) now sit with the program they concern. Items 28 to 32 record the reviews and the script as history.

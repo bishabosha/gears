@@ -68,7 +68,9 @@ ReactorFutures.run(using NioOnCaller) { r => ... echo(client)(using summon[Async
 does; the run that takes `workers` and a `policy` exists only for a `ReactorBackend`. Inside, gears is gears:
 `Future`, `Async.group`, `sleep`, `withTimeout` and `Timer` work, the last three on the backend's timers, since the
 `Io` is the `AsyncOperations`; a `Submission` is a `Cancellable` linked to the group it was submitted in, so the
-scope's end cancels it and waits for its completion, as it does a `Future`.
+scope's end cancels it and waits for its completion, as it does a `Future`. The `Io` is an explicit parameter
+where gears passes `Async` as `using`, because an op's type is path-dependent on it (`r.Op`), so `perform` has to be
+a method of `r`; time limits are an `Int` of milliseconds, the op's own unit.
 
 ## What the interface fixes, and what it leaves
 
@@ -84,83 +86,16 @@ Left to a higher level, on purpose: ops, `perform` and slots are mutable records
 lowest level there is. A result-returning or streaming API wraps that mutability; the interface only makes sure it
 can be written once over every backend.
 
-## The goal, as criteria, and where each stands
+## The higher level
 
-The goal of the restructuring, in its own words: *improve the orthogonality of concepts, separate implementation from
-interface, but traits are ok to share implementation; make it more idiomatic to gears, but bear in mind that ops,
-perform and slots is the lowest level detail, and that a higher level API would eventually wrap this mutability for
-either result returning methods or streaming APIs.* Each clause below is given a criterion that can be checked
-without trusting this document, how to check it, and whether it is met or, where it is not, why the gap is accepted
-against the goal's wording. The checks that can be mechanical are `asyncio/criteria.sh`, run from the repository's
-root: it greps the sources and the build for each and fails if any fails, so the status below is a measurement, not
-a reading, and it measures the two comparative clauses against the state before the goal (commit `5a5734b`) with
-the same command on both sides. The criteria were also checked by readers given the code and the goal and not this
-document's claims: a review that found the gaps fixed in item 28 of `asyncio-jvm/nio/TODO.md`; a verification of
-these criteria (item 29) that ran each check and found orthogonality *improved* and programs *more idiomatic*; and
-an audit of the script itself (item 32), which reproduced every number, found no loosening in its history, and found
-one measure shaped to pass and four checks that only grepped for strings their author wrote, all since corrected.
+The module `higherlevel` is the API the goal says would wrap the lowest level: written over the interface's public
+contract alone, in a package outside `asyncio` so that it sees only what a program sees, and run on every backend.
+`HigherLevel` has result-returning `read`, `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one
+repeatable pooled read consumed as a gears channel, with the pool's window and the channel's backlog as
+back-pressure, failure rethrown to the consumer, and chunks read ahead released when the consumer stops early.
+`HigherLevelChecks` runs in every backend's contract suite; the whois demo resolves and reads through it, the socket
+demo takes its response as a stream of chunks, and the key-value and server-socket demos accept through it.
 
-### Orthogonality of concepts
-
-*Criterion*: a capability trait mentions no kind or thread; a kind mentions no capability; a runner mentions no
-backend; a program reaches the runtime through `Pool` alone. *Check*: the first five checks of `criteria.sh`: the
-interface names nothing below it, no capability trait names a kind, a pool, a worker or a thread, no kind names a
-capability, neither the runtime nor a runner names a backend, and `Pooled` forwards to `Pool` alone; and the build,
-where a runner depends on a backend in `Test` only, and `criteria.sh`'s check that `Io` is `Facilities` and not a
-`Backend`. *Status*: met. Each capability refines `Facilities.Io` to carry itself, which is the one thing the
-capability axis knows of the `Io` axis, and is what lets a program over `SocketBackend & FileBackend` be given an
-`Io` with both. An `Io` is not a `Backend`: capabilities are mixins over `Facilities`, mixed into a backend and
-into its `Io` alike, so a backend and its `Io` share their capabilities and nothing else, and handing a program's
-`Io` to the runner as a backend is a type error (checked by a test), not a check at run time.
-
-### Implementation apart from the interface
-
-*Criterion*: the interface module depends on the gears library alone; every body in it is a default the contract
-itself states, or a utility over the contract. *Check*: `criteria.sh`, which reads the module's dependencies off
-the build and lists every def with a right-hand side in the interface against the allowed set. *Status*: met. The bodies are `perform(op)` (`perform`
-with no limit), `sleep` (a timer op), `Completion.onFailure` (throws) and `onCancel` (nothing), `Submitter.submit` and
-`trySubmit` with no limit, `Reactor.scoped` (open, use, close), `Slot`, `Handle.Opt` and `Handle.Slot` (the records
-ops write), which the goal's *traits are ok to share implementation* covers, and nothing else: `Handle.Table` moved
-out to `asyncio.unsafe.HandleTable`, the pool's machinery is `asyncio.gears.Pools` behind `Pool`, the forwarding to it
-is `asyncio.unsafe.Pooled`. `Io`, `OnPool`, `OnCaller`, `Submission` and `Pool` are in the interface because they are
-interface: contracts a program or the runtime is written against, with no bodies. **Accepted**: hiding is by package,
-not module, as said above, since Scala has no module-private; the build fixes the direction of dependency and the
-package fixes who may call `bind`, `Slot.set` and `Handle.wrap`.
-
-### Idiomatic to gears
-
-*Criterion*: a program is written with gears' own vocabulary and nothing of the backend's beyond `perform`: a
-context function over `Async.Spawn` and `AsyncOperations`, returning its value; `Future`, `Async.group`, `sleep`,
-`withTimeout`, `Timer` and cancellation mean what they mean in gears; anything the program may wait on or cancel is a
-gears `Cancellable` and an `Async.Source`, so it composes in `select` with a channel or a timer. *Check*:
-`FuturesContract`, the one suite every backend runs, which uses only those, has `sleep` and `withTimeout` run on the
-backend's timers, has cancelling a future cancel its op, has a scope's end cancel a submission made in it and wait
-for its completion, races a submission against a timer in `Async.select`, and takes every result from the value
-`running` returns; `criteria.sh` checks the types (`Io` an `AsyncOperations`, `Submission` a `Cancellable` and a
-`Source`, `run` returning a value) and that the contract declares no variable at test scope, which is how a result
-was smuggled out of a program before.
-*Status*: met. `ReactorFutures.run` returns the program's value as `Async.blocking` does; `Submission` is a
-`Cancellable` in the caller's group, as a `Future` is, and a `Source` of the op's outcome, as a `Future` is, so
-`OnPool.submit(op)` with no completion of the caller's own is the source view of an op. **Accepted**, as the lowest
-level the goal names: the `Io` is an explicit parameter where gears passes `Async` as `using`, because an op's type
-is path-dependent on it (`r.Op`), so `perform` has to be a method of `r` and a program names it on every line,
-unlike an `Async`; time limits are an `Int` of milliseconds, the op's own unit.
-
-### The lowest level stays the lowest
-
-*Criterion*: ops, `perform` and slots keep their meaning as mutable records the caller owns and reuses; no op but
-`blocking` takes a closure; the guarantee a wrapper relies on is stated where it reads it; and a higher level of
-both kinds the goal names can be written over the interface's public contract alone, runs on every backend, and is
-used by real programs. *Check*: `criteria.sh`: the closures in `Ops.scala`, the guarantee on `Io.perform`, the
-module `higherlevel` depending on the interface alone and its source naming nothing below it, its checks mixed into
-every backend's contract suite, and the demos that use it. The module (`higherlevel.HigherLevel`, outside the
-`asyncio` package so it sees only what a program sees) has result-returning `read`, `writeAll`, `accept` and
-`resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel, with the pool's window
-and the channel's backlog as back-pressure, failure rethrown to the consumer and chunks read ahead released when the
-consumer stops early; `HigherLevelChecks` runs in every backend's contract suite; the whois demo resolves and reads
-through it and the socket demo takes its response as a stream of chunks. *Status*: met. `whenReady` with
-its closure became `ready`, an op that completes; `Io.perform` states that once it returns or throws the op is out of
-use everywhere, its buffers and slots the caller's and its handle as open as it was. What the wrapper shows the
-interface costs it: a read's byte count is a buffer-position delta, and there are two slot types since a `Handle` is
-an unboxed `Int`, which are the mutability the goal says a higher level wraps; and a stream spawns a future to feed
-its channel, as a `Future` is the gears way to turn a loop of ops into a channel.
+What the wrapper shows the interface costs it: a read's byte count is a buffer-position delta, and there are two slot
+types since a `Handle` is an unboxed `Int`, which are the mutability a higher level wraps; and a stream spawns a
+future to feed its channel, as a `Future` is the gears way to turn a loop of ops into a channel.
