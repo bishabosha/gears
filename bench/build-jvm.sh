@@ -1,5 +1,5 @@
 #!/bin/bash
-# Packages the JVM gears demo from the working tree for kqueue-demo/bench/compare.py: its jars are copied into
+# Packages the JVM gears demo from the working tree for bench/compare.py: its jars are copied into
 # <output>/lib, so later builds do not change what is measured, and three executables beside them run the bench
 # scenarios, each taking `gears bench <args>` as compare.py passes them:
 #
@@ -10,11 +10,11 @@
 #                           least a design on Selector does (gearsexample.SelectorIo)
 #   <output>/jdk-selector-here  no reactor: non-blocking channels, each waiting virtual thread selecting on the
 #                           channel's own selector, with no selector thread (gearsexample.SelectorHereIo)
-#   <output>/cats-effect    the same scenarios with cats-effect and fs2 (kqueue-demo/ce-bench), a selector per worker;
+#   <output>/cats-effect    the same scenarios with cats-effect and fs2 (bench/ce-bench), a selector per worker;
 #                           it runs as `<this> bench <args>`, so compare it as `<label>=<output>/cats-effect@raw`
 #
-#   gears-demo/bench/build-jvm.sh <output>
-#   kqueue-demo/bench/compare.py nio-jdk=<output>/nio-jdk nio-reactors=<output>/nio-reactors jdk=<output>/jdk-vthreads \
+#   bench/build-jvm.sh <output>
+#   bench/compare.py nio-jdk=<output>/nio-jdk nio-reactors=<output>/nio-reactors jdk=<output>/jdk-vthreads \
 #     ce=<output>/cats-effect@raw
 #
 # Every run first runs each scenario at a fifth of its count, unreported (`--warmup`), so the JIT has compiled what is
@@ -37,7 +37,7 @@ package() { # package <project> <directory>: copies the project's runtime classp
     cp "$path" "$output/$2/"
   done
 }
-package gearsDemoJVM lib
+package ioDemosJVM lib
 package ceBenchJVM lib-ce
 
 java=${JAVA:-$(command -v java)}
@@ -48,7 +48,7 @@ jdk=$("$java" -version 2>&1 | head -1)
 write() { # write <name> <java options> <command>
   cat >"$output/$1" <<EOF
 #!/bin/bash
-# compare.py runs \`<this> gears bench <args>\`; see gears-demo/bench/build-jvm.sh.
+# compare.py runs \`<this> gears bench <args>\`; see bench/build-jvm.sh.
 shift 2
 exec "$java" $2 -cp "$output/lib/*" gearsexample.Main $3 --warmup "\$@"
 EOF
@@ -65,7 +65,7 @@ write jdk-selector-here "--enable-preview" "jdk-bench --selector-here"
 # compare.py runs `<this> bench <args>` for a build marked @raw.
 cat >"$output/cats-effect" <<EOF
 #!/bin/bash
-# compare.py runs \`<this> bench <args>\`; see gears-demo/bench/build-jvm.sh.
+# compare.py runs \`<this> bench <args>\`; see bench/build-jvm.sh.
 command=\$1
 shift
 exec "$java" -cp "$output/lib-ce/*" cebench.CeBench "\$command" --warmup "\$@"

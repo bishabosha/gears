@@ -2,9 +2,9 @@ package gearsexample
 
 import java.nio.charset.StandardCharsets
 
-import asyncio.FifoBackend
-import asyncio.testkit.BufferArena
-import asyncio.gears.ReactorFutures
+import gears.async.io.FifoBackend
+import gears.async.io.testkit.BufferArena
+import gears.async.io.ReactorFutures
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {

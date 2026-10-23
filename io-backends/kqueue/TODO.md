@@ -1,5 +1,14 @@
 # Kqueue reactor: syscall reduction TODO
 
+> This log was kept while the work lived in modules of its own, and names them as they were then. They are now:
+> `asyncio` is `gears.async.io` in the core project; `asyncio.unsafe` and `asyncio.gears` (the runtime) are
+> `gears.async.io.internal`, except `ReactorFutures` and `TakePolicy`, which are in `gears.async.io`; `asyncio.kqueue`,
+> `asyncio.nio` and `asyncio.nwframework` are `gears.async.io.kqueue`, `.nio` and `.nwframework`, in `io-backends/`;
+> the contract suites and `asyncio.testkit` are `gears.async.io.testkit` (`io-testkit`); `gears-demo` and `higherlevel`
+> are `io-demos`; `kqueue-demo` is `io-backends/kqueue/demos` (`ioKqueueDemos`, executable `iokqueuedemos`), its
+> tests `io-demos/tests` (`ioDemosTests`); and `kqueue-demo/bench` and `kqueue-demo/ce-bench` are `bench/` and
+> `bench/ce-bench`.
+
 Most operations used to pay for a `kevent` call of their own, or a trip through the wake pipe, even when the work could
 be done right away on the reactor thread: a gears `perform(r, read)` that found data already waiting cost about 7
 syscalls. Now it costs 1, the `read` itself, and an op that has to wait costs no `kevent` of its own either; see what

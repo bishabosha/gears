@@ -1,4 +1,4 @@
-package asyncio
+package gears.async.io
 
 /** Where an IP socket lives: a numeric IPv4 or IPv6 address and a port. */
 enum IpAddress {

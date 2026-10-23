@@ -1,8 +1,9 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import munit.FunSuite
-import asyncio.ReactorBackend
-import asyncio.kqueue.KqueueBackend
+import gears.async.io.ReactorBackend
+import gears.async.io.kqueue.KqueueBackend
 
 /** Checks of the pool's parts under contention, each across several threads. */
 class ReactorPoolSuite extends FunSuite {

@@ -6,10 +6,10 @@ import gears.async.Future
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
-import asyncio.gears.FuturesContract
+import gears.async.io.testkit.ProgramSuite
 
-/** `FuturesContract`'s checks of the higher level, run by every backend's suite: what the lowest level is for. */
-trait HigherLevelChecks extends FuturesContract {
+/** Checks of the higher level, run over every backend by the demos' suites: what the lowest level is for. */
+trait HigherLevelChecks extends ProgramSuite {
 
   test("a higher level over perform: result-returning reads, accept and resolve") {
     val outcome = running { r =>

@@ -1,5 +1,14 @@
 # NIO backend and gears on the JVM
 
+> This log was kept while the work lived in modules of its own, and names them as they were then. They are now:
+> `asyncio` is `gears.async.io` in the core project; `asyncio.unsafe` and `asyncio.gears` (the runtime) are
+> `gears.async.io.internal`, except `ReactorFutures` and `TakePolicy`, which are in `gears.async.io`; `asyncio.kqueue`,
+> `asyncio.nio` and `asyncio.nwframework` are `gears.async.io.kqueue`, `.nio` and `.nwframework`, in `io-backends/`;
+> the contract suites and `asyncio.testkit` are `gears.async.io.testkit` (`io-testkit`); `gears-demo` and `higherlevel`
+> are `io-demos`; `kqueue-demo` is `io-backends/kqueue/demos` (`ioKqueueDemos`, executable `iokqueuedemos`), its
+> tests `io-demos/tests` (`ioDemosTests`); and `kqueue-demo/bench` and `kqueue-demo/ce-bench` are `bench/` and
+> `bench/ce-bench`.
+
 `asyncio-jvm/nio` (sbt `jvmAsyncioNio`, package `asyncio.nio`) implements `asyncio.Backend` on the JVM, as
 `asyncio-native/loop` does with kqueue on Scala Native. `asyncio-jvm/gears` (sbt `jvmAsyncioGears`) is the JVM's
 `ReactorFutures`, so that gears code calling `perform` is the same on both platforms; only the given backend differs.

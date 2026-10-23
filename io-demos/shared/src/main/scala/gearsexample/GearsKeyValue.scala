@@ -10,15 +10,15 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import scala.collection.mutable
 
-import asyncio.Io
-import asyncio.Backend
-import asyncio.Handle
-import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
-import asyncio.UnixStreams
-import asyncio.testkit.BufferArena
+import gears.async.io.Io
+import gears.async.io.Backend
+import gears.async.io.Handle
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamBackend
+import gears.async.io.UnixStreams
+import gears.async.io.testkit.BufferArena
 import DemoIO.{FrameParser, StreamProtocol}
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleKeyValue`, the pipelined key-value service. Each session is a reader future and a

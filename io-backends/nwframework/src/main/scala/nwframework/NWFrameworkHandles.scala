@@ -1,4 +1,5 @@
-package asyncio.nwframework
+package gears.async.io
+package nwframework
 
 import java.io.IOException
 import scala.collection.mutable
@@ -13,14 +14,14 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.FifoHandles
-import asyncio.Handle
-import asyncio.IpAddress
-import asyncio.PipeHandles
-import asyncio.Received
-import asyncio.SocketHandles
-import asyncio.unsafe.Descriptors
-import asyncio.unsafe.NativePool
+import gears.async.io.FifoHandles
+import gears.async.io.Handle
+import gears.async.io.IpAddress
+import gears.async.io.PipeHandles
+import gears.async.io.Received
+import gears.async.io.SocketHandles
+import gears.async.io.internal.Descriptors
+import gears.async.io.internal.NativePool
 import NWFrameworkEvent.*
 import NWFrameworkHandle.{Close, Connect, Read, Write}
 
@@ -632,7 +633,7 @@ private[nwframework] object NWFrameworkHandle {
 object NWFrameworkHandles extends SocketHandles with FifoHandles with PipeHandles {
 
   // The table: a handle number is an index, reused once closed.
-  private val table = new asyncio.unsafe.HandleTable[NWFrameworkHandle](256)
+  private val table = new gears.async.io.internal.HandleTable[NWFrameworkHandle](256)
 
   private def add(handle: NWFrameworkHandle): Handle = {
     val added = table.add(handle)

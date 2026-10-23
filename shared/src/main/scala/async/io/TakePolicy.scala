@@ -1,4 +1,4 @@
-package asyncio.gears
+package gears.async.io
 
 /** Which of a worker's tasks other workers may take when they run out of work. */
 enum TakePolicy {

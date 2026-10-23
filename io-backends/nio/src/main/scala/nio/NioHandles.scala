@@ -1,4 +1,5 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import java.io.IOException
 import java.net.Inet4Address
@@ -23,11 +24,11 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
-import asyncio.Handle
-import asyncio.IpAddress
-import asyncio.PipeHandles
-import asyncio.UnixAddress
-import asyncio.UnixStreamHandles
+import gears.async.io.Handle
+import gears.async.io.IpAddress
+import gears.async.io.PipeHandles
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamHandles
 
 /** What a handle names: an I/O object, and how to read and write it without waiting. `read` returns the bytes read, 0
   * if none are available, or -1 at end of stream; `write` returns the bytes written, or -1 if nothing fits.
@@ -201,7 +202,7 @@ object NioHandles extends UnixStreamHandles with PipeHandles {
   /** Connections a listener queues before it accepts them, as `SOMAXCONN` on macOS. */
   private inline val Backlog = 128
 
-  private val table = new asyncio.unsafe.HandleTable[Entry]
+  private val table = new gears.async.io.internal.HandleTable[Entry]
 
   /** Gives `entry` a handle. */
   private[nio] def add(entry: Entry): Handle = table.add(entry)

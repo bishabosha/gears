@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import gears.async.Async
 import gears.async.Cancellable
@@ -11,16 +12,16 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
-import asyncio.Completion
-import asyncio.OnPool
-import asyncio.Reactor
-import asyncio.ReactorBackend
-import asyncio.Submission
+import gears.async.io.Completion
+import gears.async.io.OnPool
+import gears.async.io.Reactor
+import gears.async.io.ReactorBackend
+import gears.async.io.Submission
 
 /** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `OnPool` a
   * program is given, over a scheduler of the pool's.
   */
-private[asyncio] object Pools {
+private[io] object Pools {
 
   /** The `OnPool` over `b` on `scheduler`'s pool, whose workers drive `b`'s reactors: the program's `Io`. */
   def bound(b: ReactorBackend, scheduler: ReactorScheduler): OnPool[b.type] = new OnPool[b.type] {
@@ -51,7 +52,7 @@ private[asyncio] object Pools {
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  private[asyncio] def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int, scheduler: ReactorScheduler)(
+  private[io] def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int, scheduler: ReactorScheduler)(
       using ac: Async
   ): Unit = {
     // Pinned to its thread from finding the worker to submitting on it (see `ReactorScheduler.pin`): `performHere`
@@ -133,7 +134,7 @@ private[asyncio] object Pools {
     * `scheduler`, the pool's, with a completion of the caller's own (see `OnPool.submit`). The submission is linked
     * to the caller's group, and unlinks itself once the completion has run.
     */
-  private[asyncio] def submitOn(
+  private[io] def submitOn(
       b: ReactorBackend,
       op: b.Op,
       completion: Completion[b.Op],

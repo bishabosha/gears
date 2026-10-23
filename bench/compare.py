@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Compares `kqueuedemo gears bench` across builds of the demo executable.
+"""Compares `iokqueuedemos gears bench` across builds of the demo executable.
 
-Build the executables to compare with kqueue-demo/bench/build.sh, which links a commit in release-fast mode against the
+Build the executables to compare with bench/build.sh, which links a commit in release-fast mode against the
 Scala Native nightly (0.5.12's GC can crash multithreaded release builds), then compare them:
 
-    kqueue-demo/bench/build.sh HEAD~ /tmp/kqueuedemo.before
-    kqueue-demo/bench/build.sh HEAD /tmp/kqueuedemo.after
-    kqueue-demo/bench/compare.py before=/tmp/kqueuedemo.before after=/tmp/kqueuedemo.after raw=/tmp/kqueuedemo.after@raw
+    bench/build.sh HEAD~ /tmp/iokqueuedemos.before
+    bench/build.sh HEAD /tmp/iokqueuedemos.after
+    bench/compare.py before=/tmp/iokqueuedemos.before after=/tmp/iokqueuedemos.after raw=/tmp/iokqueuedemos.after@raw
 
 A build runs the gears benchmark, `gears bench`; suffix its path with `@raw` to run the same scenarios written against
 `KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`; or with `@nwframework` to run them on the Darwin backend
@@ -16,7 +16,7 @@ Each build runs `--runs` times, alternating between builds so drift in machine l
 shows each scenario's median microseconds per operation, and each later build's change against the first.
 Arguments after `--` go to `bench`, for example `-- --scenarios pingpong,pipelined --scale 0.5`.
 
---save writes the results as JSON to kqueue-demo/bench/results/<date>-<labels>.json (ignored by git), and --save-to FILE
+--save writes the results as JSON to bench/results/<date>-<labels>.json (ignored by git), and --save-to FILE
 to FILE: every run's numbers and the medians, each build's provenance from build.sh (the <executable>.json beside it),
 the arguments, the date, and the load average.
 """
@@ -75,7 +75,7 @@ def main():
     parser.add_argument(
         "--save",
         action="store_true",
-        help="write the results as JSON to kqueue-demo/bench/results/<date>-<labels>.json",
+        help="write the results as JSON to bench/results/<date>-<labels>.json",
     )
     parser.add_argument("--save-to", metavar="FILE", help="write the results as JSON to FILE")
     args = parser.parse_args(argv)

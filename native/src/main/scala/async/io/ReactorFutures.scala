@@ -1,4 +1,6 @@
-package asyncio.gears
+package gears.async.io
+
+import gears.async.io.internal.*
 
 import gears.async.Async
 import gears.async.AsyncOperations
@@ -8,10 +10,10 @@ import gears.async.Listener
 import gears.async.native.NativeSuspend
 
 
-import asyncio.Backend
-import asyncio.Io
-import asyncio.OnPool
-import asyncio.ReactorBackend
+import gears.async.io.Backend
+import gears.async.io.Io
+import gears.async.io.OnPool
+import gears.async.io.ReactorBackend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
 object ReactorSupport extends AsyncSupport with NativeSuspend {

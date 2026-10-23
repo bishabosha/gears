@@ -1,6 +1,7 @@
-package asyncio.gears
+package gears.async.io
+package testkit
 
-import asyncio.Io
+import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
@@ -18,18 +19,18 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import munit.FunSuite
 
-import asyncio.Handle
-import asyncio.Interest
-import asyncio.IpAddress
-import asyncio.Backend
-import asyncio.PipeBackend
-import asyncio.ResolveBackend
-import asyncio.ResolvedAddress
-import asyncio.Slot
-import asyncio.SocketBackend
-import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
-import asyncio.testkit.BufferArena
+import gears.async.io.Handle
+import gears.async.io.Interest
+import gears.async.io.IpAddress
+import gears.async.io.Backend
+import gears.async.io.PipeBackend
+import gears.async.io.ResolveBackend
+import gears.async.io.ResolvedAddress
+import gears.async.io.Slot
+import gears.async.io.SocketBackend
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamBackend
+import gears.async.io.testkit.BufferArena
 
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
@@ -37,89 +38,7 @@ import asyncio.testkit.BufferArena
   * on one and several reactors, kqueue's on a pool of one and of several workers, Darwin's likewise. The checks with
   * stream sockets use Unix ones on a backend that has them, and TCP on the loopback otherwise.
   */
-trait FuturesContract extends FunSuite {
-
-  /** The backend under test: one with sockets, pipes and name resolution, which the checks use. */
-  val backend: Backend & SocketBackend & PipeBackend & ResolveBackend
-
-  /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
-    * them, and on TCP at a free port of the loopback otherwise.
-    */
-  protected def listenAndConnect(r: Io[backend.type], dir: java.nio.file.Path)(using
-      Async
-  ): (Handle, () => Handle) = r.backend match {
-    case unix: (asyncio.UnixStreams & r.backend.type) =>
-      val address = UnixAddress(dir.resolve("echo.sock").toString)
-      val listener = unix.handles.listener(address)
-      r.perform(unix.ops.listening(listener))
-      (listener, () => unix.handles.connect(address))
-    case _ =>
-      // A port nothing listens on: the first the listening op does not fail on.
-      val random = new java.util.Random()
-      var attempts = 0
-      var found: (Handle, () => Handle) | Null = null
-      while found == null do {
-        val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
-        val listener = r.backend.handles.listener(address)
-        try {
-          r.perform(r.backend.ops.listening(listener))
-          found = (listener, () => r.backend.handles.connect(address))
-        } catch {
-          case e: IOException =>
-            r.perform(r.backend.ops.close(listener))
-            attempts += 1
-            if attempts > 10 then throw e
-        }
-      }
-      found.nn
-  }
-
-  /** Runs `body` as a program over `backend`, the platform's way, given the backend's `Io`, and returns its result. */
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T
-
-  /** A port nothing listens on, found by listening on it with the backend and letting it go. */
-  protected def freePort(): Int = running { r =>
-    var port = -1
-    val random = new java.util.Random()
-    var attempts = 0
-    while port < 0 do {
-      val candidate = 20000 + random.nextInt(30000)
-      val listener = r.backend.handles.listener(IpAddress.IPv4("127.0.0.1", candidate))
-      try {
-        r.perform(r.backend.ops.listening(listener))
-        port = candidate
-      } catch {
-        case e: IOException =>
-          attempts += 1
-          if attempts > 10 then throw e
-      } finally r.perform(r.backend.ops.close(listener))
-    }
-    port
-  }
-
-  // The buffers of every test, which their futures share across threads.
-  protected lazy val arena: BufferArena = BufferArena.open()
-
-  override def afterAll(): Unit = {
-    arena.close()
-    super.afterAll()
-  }
-
-  private def withTempDir[T](body: java.nio.file.Path => T): T = {
-    val dir = Files.createTempDirectory("gears")
-    try body(dir)
-    finally if Files.exists(dir) then {
-      Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
-      Files.deleteIfExists(dir): Unit
-    }
-  }
-
-  protected def text(buf: ByteBuffer): String = {
-    val copy = buf.duplicate().flip()
-    val out = new Array[Byte](copy.remaining())
-    copy.get(out)
-    new String(out, StandardCharsets.UTF_8)
-  }
+trait FuturesContract extends ProgramSuite {
 
   test("a program waits on a timer, and run returns what the program returns") {
     val waited = running { r =>
@@ -273,7 +192,7 @@ trait FuturesContract extends FunSuite {
   test("a blocking op past its time limit is interrupted, and perform throws TimeoutException") {
     val outcome = running { r =>
       r.backend match {
-        case b: (asyncio.Blocking & r.backend.type) =>
+        case b: (gears.async.io.Blocking & r.backend.type) =>
           val returned = new java.util.concurrent.atomic.AtomicBoolean
           val op = b.ops.blocking { () =>
             try Thread.sleep(10_000)
@@ -431,11 +350,11 @@ trait FuturesContract extends FunSuite {
   test("a submission is cancelled when the group it was made in ends, and the group waits for its completion") {
     val outcome = running { r =>
       r match {
-        case p: asyncio.OnPool[backend.type] =>
+        case p: gears.async.io.OnPool[backend.type] =>
           val notified = new java.util.concurrent.atomic.AtomicBoolean
           val started = System.nanoTime()
           Async.group {
-            p.submit(p.backend.ops.timer(60_000), new asyncio.Completion[p.Op] {
+            p.submit(p.backend.ops.timer(60_000), new gears.async.io.Completion[p.Op] {
               def onComplete(op: p.Op): Unit = ()
               override def onCancel(op: p.Op): Unit = notified.set(true)
             })
@@ -451,7 +370,7 @@ trait FuturesContract extends FunSuite {
   test("a submission is a source: raced in select against a timer, and completed by its cancel") {
     val outcome = running { r =>
       r match {
-        case p: asyncio.OnPool[backend.type] =>
+        case p: gears.async.io.OnPool[backend.type] =>
           val (in, out) = p.backend.handles.pipe()
           try {
             val buf = arena.allocate(16)

@@ -35,7 +35,7 @@ instead.
   `EVFILT_AIO` has real filter ops (`aio_filtops`), so completions could land in the reactor's `kevent` wait. That
   is the only attraction, and it does not pay for the rest.
 
-Against `asyncio.Blockers`, which every backend already shares:
+Against `gears.async.io.internal.Blockers`, which every backend already shares:
 
 | | aio | `Blockers` |
 |---|---|---|

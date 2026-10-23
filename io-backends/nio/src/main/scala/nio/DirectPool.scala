@@ -1,17 +1,18 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-import asyncio.BufferPool
-import asyncio.Received
+import gears.async.io.BufferPool
+import gears.async.io.Received
 
 /** A `BufferPool` of direct buffers, for NIO: one allocation sliced into `buffers` of `bufferSize` bytes, a `Received`
   * made once per buffer and reused, and a free list that takes no lock, since the pool is shared by the reactors'
   * threads and the virtual threads that take the fast path, and a `Received` may be released from any of them: a
   * stack of slot indexes whose head is a compare-and-set word, the index tagged with a count of changes so that a
-  * slot released and taken again meanwhile cannot be mistaken for the one seen (as `asyncio.unsafe.NativePool`).
+  * slot released and taken again meanwhile cannot be mistaken for the one seen (as `gears.async.io.internal.NativePool`).
   */
 final class DirectPool(val bufferSize: Int, val buffers: Int) extends BufferPool {
   require(bufferSize > 0 && buffers > 0, "A pool needs buffers of some size")

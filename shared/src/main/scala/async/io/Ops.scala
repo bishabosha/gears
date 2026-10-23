@@ -1,4 +1,4 @@
-package asyncio
+package gears.async.io
 
 import java.nio.ByteBuffer
 
@@ -22,7 +22,7 @@ final class Slot[A <: AnyRef] {
     v.nn
   }
 
-  private[asyncio] def set(outcome: A): Unit = {
+  private[io] def set(outcome: A): Unit = {
     if value != null then throw new IllegalStateException("Slot was already set")
     value = outcome.nn
   }

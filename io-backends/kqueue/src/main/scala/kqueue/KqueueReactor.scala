@@ -1,17 +1,18 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
 import java.io.IOException
 import java.util.concurrent.TimeoutException
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Completion
-import asyncio.Interest
-import asyncio.Reactor
-import asyncio.Repeatable
-import asyncio.unsafe.DescriptorTable
-import asyncio.unsafe.KqueueLoop
-import asyncio.unsafe.KqueueLoop.Event
+import gears.async.io.Completion
+import gears.async.io.Interest
+import gears.async.io.Reactor
+import gears.async.io.Repeatable
+import gears.async.io.internal.DescriptorTable
+import gears.async.io.kqueue.KqueueLoop
+import gears.async.io.kqueue.KqueueLoop.Event
 
 /** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command is performed as soon as it is
   * submitted when its descriptor is known to be ready, or when readiness is not known yet and the command allows it;
@@ -131,7 +132,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   private var slots = new Array[Slot | Null](64)
   // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
-  private val timers = new asyncio.unsafe.TimerHeap[KqueueOp]
+  private val timers = new gears.async.io.internal.TimerHeap[KqueueOp]
   private var nextTimerOrder = 0L
   private var running = false
 
@@ -214,7 +215,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         promise match {
           case blocking: KqueueBlocking =>
             blocking.restart()
-            asyncio.unsafe.Blockers.run(blocking)
+            gears.async.io.internal.Blockers.run(blocking)
         }
         waits = true
       case atOnce: KqueueAtOnce =>

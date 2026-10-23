@@ -1,4 +1,7 @@
-package asyncio.unsafe
+package gears.async.io
+package kqueue
+
+import gears.async.io.internal.{Bracket, PosixErr, Unblocked}
 
 import java.io.IOException
 import scala.scalanative.annotation.alwaysinline
@@ -13,7 +16,7 @@ import scala.scalanative.unsigned.USize
 import scala.scalanative.unsigned.{*, given}
 
 import PosixErr.cError
-import asyncio.unsafe.Bracket.FileOperation
+import gears.async.io.internal.Bracket.FileOperation
 
 object KqueueLoop {
 

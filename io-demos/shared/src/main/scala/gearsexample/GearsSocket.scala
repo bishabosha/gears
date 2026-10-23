@@ -3,12 +3,12 @@ package gearsexample
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
-import asyncio.Backend
-import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
-import asyncio.testkit.BufferArena
+import gears.async.io.Backend
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamBackend
+import gears.async.io.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF, the

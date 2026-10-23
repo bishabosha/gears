@@ -8,12 +8,12 @@
  *        blocking in `read` on its socket (busy-polling two non-blocking sockets in one process was slower still,
  *        the two threads competing for the descriptor lock)
  *
- *   cc -O2 -o /tmp/network-framework kqueue-demo/bench/network-framework.c -framework Network
+ *   cc -O2 -o /tmp/network-framework bench/network-framework.c -framework Network
  *   /tmp/network-framework nw|tcp threads|procs N [round trips]
  *
  * Both disable Nagle's algorithm. Sampling a run shows which system calls Network.framework makes, and so whether it
  * uses the user-space stack (Skywalk channels, `__channel_sync`) or the kernel's sockets. See "SwiftNIO meets the same
- * lock" in asyncio/kqueue/TODO.md.
+ * lock" in io-backends/kqueue/TODO.md.
  */
 #include <Network/Network.h>
 #include <arpa/inet.h>

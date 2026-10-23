@@ -67,7 +67,7 @@ with `whenReady` on channel descriptors falls out of it.
 
 - **Loop.** The channel descriptors join the reactor's kqueue. A turn drains the RX ring of each channel that
   signalled readable, runs the protocol state machines, fills TX rings, and calls `os_channel_sync` once per channel
-  touched at the turn's end, which is the batching `Reactor.submit` allows. `asyncio.unsafe.TimerHeap` serves the
+  touched at the turn's end, which is the batching `Reactor.submit` allows. `gears.async.io.internal.TimerHeap` serves the
   protocol timers. `trySubmit` finishes a read from bytes already in the receive buffer, as kqueue's does.
 - **Handles are table indexes**, as in `NWFrameworkBackend`, since a handle is a flow rather than a descriptor.
 - **Ops.** `receive` and `send` map onto UDP flows, one packet per slot, with the IP and UDP headers written by the

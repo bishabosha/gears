@@ -1,8 +1,8 @@
 package example
 
-import asyncio.Completion
-import asyncio.kqueue.KqueueReactor
-import asyncio.kqueue.KqueueTimer
+import gears.async.io.Completion
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.KqueueTimer
 
 /** Many timers at once, some cancelled: checks that the reactor fires them in deadline order, never fires a cancelled
   * one, and fires all the others.

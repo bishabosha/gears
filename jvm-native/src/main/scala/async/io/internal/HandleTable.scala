@@ -1,9 +1,10 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicReferenceArray
 
-import asyncio.Handle
+import gears.async.io.Handle
 
 /** A process-wide table of what a backend's handles name, for a backend whose I/O objects are not numbers, such as
   * NIO's channels or Network.framework's connections: a handle is an index into it, so that, like a descriptor, it

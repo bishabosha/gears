@@ -1,4 +1,5 @@
-package asyncio.nwframework
+package gears.async.io
+package nwframework
 
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*

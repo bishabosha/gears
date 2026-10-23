@@ -78,58 +78,59 @@ limitations under the License.
 
 See [LICENSE](./LICENSE) for more details.
 
-## Scala Native async I/O demos
+## Async I/O (`gears.async.io`)
 
-The cross-built `asyncio` project (JVM and Native) is interface only: `Op`, `Completion`,
-the `Reactor` trait with `Reactor.Factory`, and the `Ops` factory that each reactor exposes
-as `reactor.ops` for building reads, writes, accepts, connects, timers, custom readiness
-ops, blocking tasks, and name resolution. The reactor has no promise op: code written
-against it uses gears promises. A scheduler drives the loop with `runOnce`, and other
-threads wake it with `wakeup`. `nativeAsyncioLoop` implements it in
-`asyncio.kqueue`: `KqueueReactor`, `KqueueOps`, and the concrete op classes; the blocker
-pool (`asyncio.Blockers`) is shared by every backend. The kqueue demos use those internals directly. The gears demos use only the interface,
-including `reactor.handles` for opening files, sockets, and pipes by `Address`, so they
-work with any reactor's handle type; they receive a `Reactor.Factory` from their `Main`,
-the one place naming kqueue.
+gears has an interface for asynchronous I/O in `gears.async.io`, on every platform: a backend
+(`Backend`) builds ops (`Ops`) on the handles they name, with capabilities such as IP sockets,
+files, pipes and name resolution mixed in, and a program performs those ops with an `Io` over
+the backend, which is also its gears `AsyncOperations`. `ReactorFutures.run` starts a program
+over a backend on the JVM and on Scala Native, on a pool of workers driving the backend's
+reactors. The runtime and what the backends share is in `gears.async.io.internal`. See
+[docs/io/README.md](docs/io/README.md) for the design.
 
-The `nativeAsyncioLoop` and `kqueueDemo` sbt projects were ported
+The backends incubate in projects of their own, each with the contract suites from `ioTestkit`:
+
+| Project | Backend | Platform |
+| --- | --- | --- |
+| `ioKqueue` (`io-backends/kqueue`) | kqueue | Scala Native, macOS |
+| `ioNWFramework` (`io-backends/nwframework`) | Network.framework and Dispatch | Scala Native, macOS |
+| `ioNio` (`io-backends/nio`) | NIO selectors, or each op on the calling thread | JVM |
+
+`ioDemos` holds the gears demos, written against the interface alone, and `higherlevel`, a
+result-returning and streaming API over it; `ioKqueueDemos` holds the plain kqueue demos, over
+the kqueue backend's own types with no gears. The kqueue backend and its demos were ported
 from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0),
-and extended with Unix datagrams and IPv4/IPv6 sockets. These low-level experiments
-require kqueue and are tested on macOS.
+and extended with Unix datagrams and IPv4/IPv6 sockets.
 
-Kqueue operations use `scala.scalanative.bsd.kevent` from Scala Native's `posixlib`,
-including its native event size and get/set helpers. The original custom Scala/C
-bindings and `nativeAsyncioCore` project are no longer needed. Scala Native 0.5.11
-does not export `EVFILT_TIMER`, so the timer helper keeps that constant locally
-and uses kqueue's default millisecond units.
+### The kqueue demos
 
 ```bash
-sbt 'kqueueDemo/run timer'
-sbt 'kqueueDemo/run target-info'
-sbt 'kqueueDemo/run echo --msg hello'
+sbt 'ioKqueueDemos/run timer'
+sbt 'ioKqueueDemos/run target-info'
+sbt 'ioKqueueDemos/run echo --msg hello'
 ```
 
 For the FIFO demos, create a named pipe with `mkfifo /tmp/gears-demo.fifo`, then
 run the reader and writer in separate terminals:
 
 ```bash
-sbt 'kqueueDemo/run file-read --fifo /tmp/gears-demo.fifo'
-sbt 'kqueueDemo/run file-write --fifo /tmp/gears-demo.fifo -m hello'
+sbt 'ioKqueueDemos/run file-read --fifo /tmp/gears-demo.fifo'
+sbt 'ioKqueueDemos/run file-write --fifo /tmp/gears-demo.fifo -m hello'
 ```
 
 For Unix domain stream sockets, start the server first, then the client in another terminal:
 
 ```bash
-sbt 'kqueueDemo/run sock-serve --sock /tmp/gears-demo.sock'
-sbt 'kqueueDemo/run sock --sock /tmp/gears-demo.sock'
+sbt 'ioKqueueDemos/run sock-serve --sock /tmp/gears-demo.sock'
+sbt 'ioKqueueDemos/run sock --sock /tmp/gears-demo.sock'
 ```
 
 Unix domain datagrams preserve message boundaries and echo each packet to its
 sender. The client binds its own path so the server can reply:
 
 ```bash
-sbt 'kqueueDemo/run datagram-serve --sock /tmp/gears-datagram.sock'
-sbt 'kqueueDemo/run datagram --sock /tmp/gears-datagram.sock --local-sock /tmp/gears-client.sock -m hello'
+sbt 'ioKqueueDemos/run datagram-serve --sock /tmp/gears-datagram.sock'
+sbt 'ioKqueueDemos/run datagram --sock /tmp/gears-datagram.sock --local-sock /tmp/gears-client.sock -m hello'
 ```
 
 Use distinct client and server paths, and a different client path for each
@@ -141,10 +142,10 @@ addresses `127.0.0.1` and `::1`. Start each server before its corresponding clie
 
 | Transport | Address family | Server | Client |
 | --- | --- | --- | --- |
-| TCP stream | IPv4 | `sbt 'kqueueDemo/run sock4-serve --port 9999'` | `sbt 'kqueueDemo/run sock4 --port 9999'` |
-| TCP stream | IPv6 | `sbt 'kqueueDemo/run sock6-serve --port 9999'` | `sbt 'kqueueDemo/run sock6 --port 9999'` |
-| UDP datagram | IPv4 | `sbt 'kqueueDemo/run datagram4-serve --port 9999'` | `sbt 'kqueueDemo/run datagram4 --port 9999 -m hello'` |
-| UDP datagram | IPv6 | `sbt 'kqueueDemo/run datagram6-serve --port 9999'` | `sbt 'kqueueDemo/run datagram6 --port 9999 -m hello'` |
+| TCP stream | IPv4 | `sbt 'ioKqueueDemos/run sock4-serve --port 9999'` | `sbt 'ioKqueueDemos/run sock4 --port 9999'` |
+| TCP stream | IPv6 | `sbt 'ioKqueueDemos/run sock6-serve --port 9999'` | `sbt 'ioKqueueDemos/run sock6 --port 9999'` |
+| UDP datagram | IPv4 | `sbt 'ioKqueueDemos/run datagram4-serve --port 9999'` | `sbt 'ioKqueueDemos/run datagram4 --port 9999 -m hello'` |
+| UDP datagram | IPv6 | `sbt 'ioKqueueDemos/run datagram6-serve --port 9999'` | `sbt 'ioKqueueDemos/run datagram6 --port 9999 -m hello'` |
 
 `--host` overrides the numeric address; DNS names and IPv6 scope suffixes are not
 resolved. Ports must be in `0..65535` (binding port `0` asks the OS to choose one).
@@ -163,8 +164,8 @@ increments without waiting, reading the replies as they come back, so each socke
 a read and a write pending at the same time. `kv4` and `kv6` use IP addresses:
 
 ```bash
-sbt 'kqueueDemo/run kv-serve --sock /tmp/gears-kv.sock'
-sbt 'kqueueDemo/run kv --sock /tmp/gears-kv.sock --count 20000'
+sbt 'ioKqueueDemos/run kv-serve --sock /tmp/gears-kv.sock'
+sbt 'ioKqueueDemos/run kv --sock /tmp/gears-kv.sock --count 20000'
 ```
 
 `whois` pulls a real reply off the internet with the WHOIS protocol on port 43. It
@@ -174,52 +175,53 @@ non-blocking `getaddrinfo`, so it runs on a worker thread and signals the reacto
 through a pipe, the way libuv does. `resolve` runs just that step:
 
 ```bash
-sbt 'kqueueDemo/run whois --host whois.iana.org --query example.com'
-sbt 'kqueueDemo/run resolve --host localhost'
+sbt 'ioKqueueDemos/run whois --host whois.iana.org --query example.com'
+sbt 'ioKqueueDemos/run resolve --host localhost'
 ```
 
-Every reactor demo also has a gears mirror in `gears-demo/shared/src/main/scala/gearsexample`,
-run by putting `gears` before the command, for example `kqueueDemo/run gears kv-serve
---sock /tmp/gears-kv.sock`. The mirrors are written against the `asyncio` interface alone, so the same
-code runs on the JVM over NIO, with the commands NIO has the capabilities for: `gearsDemoJVM/run kv-serve
+Every reactor demo also has a gears mirror in `io-demos/shared/src/main/scala/gearsexample`,
+with the same commands: `ioDemosNative/run kv-serve --sock /tmp/gears-kv.sock` on kqueue, or
+`ioKqueueDemos/run gears kv-serve --sock /tmp/gears-kv.sock` through the kqueue demos'
+executable. The mirrors are written against the interface alone, so the same code runs on
+the JVM over NIO, with the commands NIO has the capabilities for: `ioDemosJVM/run kv-serve
 --sock /tmp/gears-kv.sock`. With `-Dasyncio.gears.carriers=reactors` among its JVM options
-(`set gearsDemoJVM / run / javaOptions += "-Dasyncio.gears.carriers=reactors"`), the futures are carried by
-the reactor pool instead of the JDK's virtual thread scheduler. Each completion step becomes a call to `ReactorFutures.perform`, which suspends
-the caller until the op finishes, so the code reads sequentially; wrapping a call in a
-`Future` runs the op alongside other work. Reactors are thread-owned: `ReactorFutures.run` makes the calling
-thread a reactor thread, running the program as a future on a pool of workers, each a thread
-alternating between its queued tasks and turns of its own reactor's loop, blocking only when
-it has no task to run and none to take from another worker. With one worker, the default,
-everything a program spawns stays on the calling thread; with more, a worker out of work takes
-queued tasks from the others, and a task's ops go to the reactor of whichever worker runs it.
-The test suites run against both versions, and the gears one on the JVM too.
+(`set ioDemosJVM / run / javaOptions += "-Dasyncio.gears.carriers=reactors"`), the futures are carried by
+the reactor pool instead of the JDK's virtual thread scheduler. Each step is an op performed
+with `Io.perform`, which suspends the caller until the op finishes, so the code reads
+sequentially; wrapping a call in a `Future` runs the op alongside other work. Reactors are
+thread-owned: `ReactorFutures.run` makes the calling thread a reactor thread, running the
+program as a future on a pool of workers, each a thread alternating between its queued tasks
+and turns of its own reactor's loop, blocking only when it has no task to run and none to take
+from another worker. With one worker, the default, everything a program spawns stays on the
+calling thread; with more, a worker out of work takes queued tasks from the others, and a
+task's ops go to the reactor of whichever worker runs it.
 
-`kqueueDemo/run gears bench` is a stress test to measure reactor changes against: an
+`ioKqueueDemos/run gears bench` is a stress test to measure reactor changes against: an
 echo server and its clients run on two reactor threads in one process, through five
 scenarios that each stress a different cost (one message in flight; the same with a
 timeout armed and cancelled per round trip; many connections at once; full-duplex
 pipelining with a write per message; and blocking tasks completing on worker threads).
-`kqueueDemo/run bench` runs the same scenarios written against `KqueueLoop` directly,
+`ioKqueueDemos/run bench` runs the same scenarios written against `KqueueLoop` directly,
 with no reactor, as a reference for what a hand-written loop costs.
-`kqueue-demo/bench/compare.py before=<old executable> after=<new executable>` runs saved
+`bench/compare.py before=<old executable> after=<new executable>` runs saved
 builds alternately and reports each scenario's median microseconds per operation and the
 change (add `raw=<executable>@raw` for the reference).
-`kqueue-demo/bench/build.sh <commit> <output>` builds an executable to compare: the commit
+`bench/build.sh <commit> <output>` builds an executable to compare: the commit
 linked in release-fast mode against a Scala Native nightly, because 0.5.12's GC can crash
 multithreaded release builds of the gears demos (scala-native#5080). Setting
 `SCALA_NATIVE_NIGHTLY=1` when starting sbt builds against the nightly too; otherwise the
 build uses Scala Native 0.5.12.
 
-Stop the long-running servers with Ctrl+C. Use `sbt 'show kqueueDemo/nativeLink'`
+Stop the long-running servers with Ctrl+C. Use `sbt 'show ioKqueueDemos/nativeLink'`
 to build and locate the executable for running directly.
 
-The `kqueueDemoTests` project holds JVM munit suites that link the demo executable
-and drive it as a subprocess with Java sockets and FIFOs. They check timer expiry,
+The `ioDemosTests` project holds JVM munit suites that link the demo executable
+and drive it as a subprocess, and the gears demos on the JVM likewise, with Java sockets and FIFOs. They check timer expiry,
 FIFO read/write readiness, and all six socket combinations, including fragmented
 stream requests, queued datagrams, empty packets, multiple senders, and invalid
 addresses. Java has no Unix domain datagram sockets, so that case uses native
 clients only. The suites skip themselves on other operating systems.
 
 ```bash
-sbt kqueueDemoTests/test
+sbt ioDemosTests/test
 ```

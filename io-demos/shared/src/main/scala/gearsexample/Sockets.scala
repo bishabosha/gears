@@ -5,12 +5,12 @@ import java.nio.file.Paths
 
 import gears.async.Async
 
-import asyncio.Io
-import asyncio.Handle
-import asyncio.IpAddress
-import asyncio.IpSockets
-import asyncio.UnixAddress
-import asyncio.UnixStreams
+import gears.async.io.Io
+import gears.async.io.Handle
+import gears.async.io.IpAddress
+import gears.async.io.IpSockets
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreams
 
 /** Where a stream demo's server listens: an IP address, or a Unix path on a backend with Unix stream sockets. */
 type StreamAddress = IpAddress | UnixAddress

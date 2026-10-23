@@ -6,17 +6,17 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
-import asyncio.Completion
-import asyncio.Handle
-import asyncio.Interest
-import asyncio.kqueue.Accept
-import asyncio.kqueue.Command
-import asyncio.kqueue.KqueueHandles
-import asyncio.kqueue.KqueueOps
-import asyncio.kqueue.KqueueReactor
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.PosixSockets
-import asyncio.unsafe.Sockets.Transport
+import gears.async.io.Completion
+import gears.async.io.Handle
+import gears.async.io.Interest
+import gears.async.io.kqueue.Accept
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleServerSocket {

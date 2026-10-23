@@ -1,4 +1,5 @@
-package asyncio.nio
+package gears.async.io
+package nio
 
 import java.io.IOException
 import java.net.Inet4Address
@@ -10,27 +11,27 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
-import asyncio.AddressFamily
-import asyncio.unsafe.Blockers
-import asyncio.BlockingOps
-import asyncio.unsafe.BlockingRun
-import asyncio.BufferPool
-import asyncio.Received
-import asyncio.Completion
-import asyncio.FileOps
-import asyncio.Handle
-import asyncio.Interest
-import asyncio.IpAddress
-import asyncio.Repeatable
-import asyncio.ResolveOps
-import asyncio.ResolvedAddress
-import asyncio.Slot
-import asyncio.SocketOps
+import gears.async.io.AddressFamily
+import gears.async.io.internal.Blockers
+import gears.async.io.BlockingOps
+import gears.async.io.internal.BlockingRun
+import gears.async.io.BufferPool
+import gears.async.io.Received
+import gears.async.io.Completion
+import gears.async.io.FileOps
+import gears.async.io.Handle
+import gears.async.io.Interest
+import gears.async.io.IpAddress
+import gears.async.io.Repeatable
+import gears.async.io.ResolveOps
+import gears.async.io.ResolvedAddress
+import gears.async.io.Slot
+import gears.async.io.SocketOps
 
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
   * code that only knows the `Reactor` interface builds them through `reactor.ops`.
   */
-sealed trait NioOp extends asyncio.unsafe.TimerHeap.Entry {
+sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
   // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
   /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */

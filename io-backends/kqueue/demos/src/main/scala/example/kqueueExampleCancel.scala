@@ -3,16 +3,16 @@ package example
 import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.*
 
-import asyncio.Completion
-import asyncio.Slot
-import asyncio.kqueue.KqueueBlocking
-import asyncio.kqueue.KqueueHandles
-import asyncio.kqueue.KqueueOp
-import asyncio.kqueue.KqueueOps
-import asyncio.kqueue.KqueueReactor
-import asyncio.kqueue.KqueueTimer
-import asyncio.kqueue.ReadIntoBuffer
-import asyncio.unsafe.NativeBuffer
+import gears.async.io.Completion
+import gears.async.io.Slot
+import gears.async.io.kqueue.KqueueBlocking
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.KqueueTimer
+import gears.async.io.kqueue.ReadIntoBuffer
+import gears.async.io.internal.NativeBuffer
 import KQueueExampleIO.*
 
 /** Cancels one op of each kind while it is still pending: a read on an empty pipe, a blocking task, and a timer. Then

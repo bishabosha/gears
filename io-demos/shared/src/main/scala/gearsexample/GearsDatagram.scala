@@ -7,16 +7,16 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
-import asyncio.Io
-import asyncio.Backend
-import asyncio.IpAddress
-import asyncio.SocketBackend
-import asyncio.UnixAddress
-import asyncio.UnixDatagramBackend
-import asyncio.Slot
-import asyncio.testkit.BufferArena
+import gears.async.io.Io
+import gears.async.io.Backend
+import gears.async.io.IpAddress
+import gears.async.io.SocketBackend
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagramBackend
+import gears.async.io.Slot
+import gears.async.io.testkit.BufferArena
 import DemoIO.text
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 
 /** Mirrors of `example.KQueueExampleDatagramSocket` and `example.KQueueExampleDatagramServerSocket`, using the
   * reactor's `receive` and `send` ops.

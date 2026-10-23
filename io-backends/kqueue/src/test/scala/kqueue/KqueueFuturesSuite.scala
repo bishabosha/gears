@@ -1,14 +1,16 @@
-package asyncio.gears
+package gears.async.io
+package kqueue
 
-import asyncio.Io
+import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
 
-import asyncio.kqueue.KqueueBackend
-import higherlevel.HigherLevelChecks
+import gears.async.io.kqueue.KqueueBackend
+import gears.async.io.testkit.FuturesContract
+import gears.async.io.testkit.ReadinessFuturesChecks
 
 /** `FuturesContract` over kqueue's reactors, on a pool of `workers` workers. */
-abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks with HigherLevelChecks {
+abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
   protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =

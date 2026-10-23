@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import gears.async.Cancellable
 
@@ -9,14 +10,14 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ThreadFactory
 import scala.concurrent.duration.FiniteDuration
 
-import asyncio.ReactorBackend
+import gears.async.io.ReactorBackend
 
 /** Virtual threads carried by a `ReactorPool`'s workers, through what the JDK keeps to itself: a virtual thread builder
   * that takes the executor to run its threads on, the carrier of the running virtual thread, and the pin that keeps a
   * virtual thread on its carrier. The first two need `--add-opens java.base/java.lang=ALL-UNNAMED`, the pin
   * `--add-opens java.base/jdk.internal.vm=ALL-UNNAMED`.
   */
-private[gears] object VirtualCarriers {
+private[io] object VirtualCarriers {
 
   private def opened[A](what: String, pkg: String = "java.lang")(get: => A): A =
     try get
@@ -76,7 +77,7 @@ private[gears] object VirtualCarriers {
 }
 
 /** A pool whose workers carry virtual threads, so the worker running a caller is its carrier's. */
-private[gears] final class CarriedPool(backend: ReactorBackend, size: Int, policy: TakePolicy)
+private[io] final class CarriedPool(backend: ReactorBackend, size: Int, policy: TakePolicy)
     extends ReactorPool(backend, size, policy) {
   override protected def callerThread(): Thread = VirtualCarriers.currentCarrier()
   override def pin(): Unit = VirtualCarriers.pin()
@@ -86,7 +87,7 @@ private[gears] final class CarriedPool(backend: ReactorBackend, size: Int, polic
 /** The gears scheduler of a program whose futures are virtual threads carried by `pool`: a task is a new virtual
   * thread, whose continuations the pool runs; a delayed one waits on a reactor's timer.
   */
-private[gears] final class VirtualReactorScheduler(val pool: ReactorPool, factory: ThreadFactory)
+private[io] final class VirtualReactorScheduler(val pool: ReactorPool, factory: ThreadFactory)
     extends ReactorScheduler {
   def backend: ReactorBackend = pool.backend
   def currentWorker: ReactorWorker = pool.currentWorker

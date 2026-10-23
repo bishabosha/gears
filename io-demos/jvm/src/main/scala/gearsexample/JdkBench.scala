@@ -25,7 +25,7 @@ import GearsBench.report
   * on virtual threads (or, with `selector`, the least a selector design does: see `SelectorIo`), concurrency with structured task scopes (a preview API, run with `--enable-preview`), and
   * timers on a `ScheduledThreadPoolExecutor`. The echo server, a virtual thread per connection, runs in the same
   * process, over a Unix socket. Each scenario prints its `bench:` line as `GearsBench` does, so
-  * `kqueue-demo/bench/compare.py` reads both.
+  * `bench/compare.py` reads both.
   *
   * Where the reactor has no direct counterpart, the closest JDK one stands in: an op built anew is no different from
   * one kept (`pingpong-fresh-ops` is `pingpong`); a blocking op is a subtask forked and joined, so it too runs on

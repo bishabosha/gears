@@ -1,14 +1,14 @@
 package gearsexample
 
 import mainargs.{ParserForMethods, arg, main}
-import asyncio.IpAddress
-import asyncio.UnixAddress
-import asyncio.kqueue.KqueueBackend
-import asyncio.gears.TakePolicy
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+import gears.async.io.kqueue.KqueueBackend
+import gears.async.io.TakePolicy
 
-/** The gears mirrors, run as `kqueuedemo gears <command>` with the same commands and flags as the plain demos.
+/** The gears mirrors, run as `iokqueuedemos gears <command>` with the same commands and flags as the plain demos.
   *
-  * This is the edge: the demos only know the `asyncio` interface, and this is the one place that chooses kqueue. Each
+  * This is the edge: the demos only know the `gears.async.io` interface, and this is the one place that chooses kqueue. Each
   * demo asks for the capabilities it needs (Unix sockets, FIFOs), and kqueue has them all.
   */
 object Main {
@@ -134,7 +134,7 @@ object Main {
   ): Unit = {
     GearsMoveBench.run(roundTrips, only, every)
   }
-  @main(doc = "Stress tests to measure reactor changes against; see kqueue-demo/bench/compare.py")
+  @main(doc = "Stress tests to measure reactor changes against; see bench/compare.py")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,
@@ -173,9 +173,9 @@ object Main {
     .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
 
   /** Runs `body` with the backend named: kqueue, or nwframework, Network.framework. */
-  private def withBackend(backend: String)(body: asyncio.SocketBackend => Unit): Unit = backend match {
+  private def withBackend(backend: String)(body: gears.async.io.SocketBackend => Unit): Unit = backend match {
     case "kqueue" => body(KqueueBackend)
-    case "nwframework" => body(asyncio.nwframework.NWFrameworkBackend)
+    case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
     case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
   }
   def main(args: Array[String]): Unit = {

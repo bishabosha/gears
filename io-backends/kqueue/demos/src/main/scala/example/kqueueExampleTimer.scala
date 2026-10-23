@@ -1,8 +1,8 @@
 package example
 
-import asyncio.Completion
-import asyncio.kqueue.KqueueReactor
-import asyncio.kqueue.KqueueTimer
+import gears.async.io.Completion
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.KqueueTimer
 
 /** A five-second one-shot timer, with a one-second ticker running alongside. Both are `KqueueTimer` ops. */
 object KQueueExampleTimer {

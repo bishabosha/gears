@@ -1,16 +1,17 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
-import asyncio.Blocking
-import asyncio.BufferPool
-import asyncio.Fifos
-import asyncio.Files
-import asyncio.Pipes
-import asyncio.Reactor
-import asyncio.ReactorBackend
-import asyncio.Readiness
-import asyncio.Resolving
-import asyncio.UnixDatagrams
-import asyncio.UnixStreams
+import gears.async.io.Blocking
+import gears.async.io.BufferPool
+import gears.async.io.Fifos
+import gears.async.io.Files
+import gears.async.io.Pipes
+import gears.async.io.Reactor
+import gears.async.io.ReactorBackend
+import gears.async.io.Readiness
+import gears.async.io.Resolving
+import gears.async.io.UnixDatagrams
+import gears.async.io.UnixStreams
 
 /** Kqueue's reactors, with every capability a backend may have: IP, Unix stream and Unix datagram sockets, regular
   * files and name resolution on the blocker pool, pipes, readiness, blocking ops on blocker threads, and FIFOs. Kqueue
@@ -31,7 +32,7 @@ object KqueueBackend
   type Op = KqueueOp
   def ops: KqueueOps.type = KqueueOps
   def handles: KqueueHandles.type = KqueueHandles
-  def pool(bufferSize: Int, buffers: Int): BufferPool = new asyncio.unsafe.NativePool(bufferSize, buffers)
+  def pool(bufferSize: Int, buffers: Int): BufferPool = new gears.async.io.internal.NativePool(bufferSize, buffers)
 
   /** Opens a reactor with `KqueueReactor.open`'s defaults. */
   def open(): Reactor.Of[Op] = KqueueReactor.open()

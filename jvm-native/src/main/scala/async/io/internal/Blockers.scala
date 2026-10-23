@@ -1,12 +1,13 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-import asyncio.Handle
-import asyncio.Slot
+import gears.async.io.Handle
+import gears.async.io.Slot
 
 /** A blocking task run by `Blockers` off a reactor's thread, for a backend's blocking ops: `block` is the body, and
   * `settled` tells the backend it has returned. Cancelling it skips `block` if it has not started, and interrupts the
@@ -54,7 +55,7 @@ trait BlockingRun {
   /** Makes the task ready to run again, for a `Repeatable` op submitted again: called by the reactor on each
     * submission, before the task goes to the pool, once its previous run has ended or its cancel has been delivered.
     */
-  private[asyncio] def restart(): Unit = synchronized {
+  private[io] def restart(): Unit = synchronized {
     require(runner == null, "A blocking task cannot be restarted while it is running")
     cancelled = false
     ended = false
@@ -88,7 +89,7 @@ trait BlockingRun {
   /** Runs the task on a blocker thread: `block`, then `settled` with its outcome. A task cancelled before it started is
     * skipped, and settled all the same, so that the reactor learns the pool has let go of it (see `interrupt`).
     */
-  private[asyncio] def runAndSettle(): Unit = {
+  private[io] def runAndSettle(): Unit = {
     val ran = runBlock()
     settled(if ran then thrown else null)
   }

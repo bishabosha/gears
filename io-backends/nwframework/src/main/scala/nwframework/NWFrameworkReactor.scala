@@ -1,4 +1,5 @@
-package asyncio.nwframework
+package gears.async.io
+package nwframework
 
 import java.io.IOException
 import java.util.concurrent.TimeoutException
@@ -6,11 +7,11 @@ import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Completion
-import asyncio.Reactor
-import asyncio.Repeatable
-import asyncio.unsafe.Blockers
-import asyncio.unsafe.TimerHeap
+import gears.async.io.Completion
+import gears.async.io.Reactor
+import gears.async.io.Repeatable
+import gears.async.io.internal.Blockers
+import gears.async.io.internal.TimerHeap
 
 /** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is completion-based:
   * a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback. The C side

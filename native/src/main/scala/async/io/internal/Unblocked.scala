@@ -1,4 +1,5 @@
-package asyncio.unsafe
+package gears.async.io
+package internal
 
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.time
@@ -18,7 +19,7 @@ import scala.scalanative.unsafe.*
   * single pointer argument; it is variadic in C, and declared so here.
   */
 @extern
-private[asyncio] object Unblocked {
+private[io] object Unblocked {
   def read(fildes: CInt, buf: CVoidPtr, nbyte: CSize): CInt = extern
 
   def write(fildes: CInt, buf: CVoidPtr, nbyte: CSize): CInt = extern

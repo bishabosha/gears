@@ -1,4 +1,5 @@
-package asyncio.gears
+package gears.async.io
+package internal
 
 import java.util.concurrent.atomic.AtomicLong
 
@@ -16,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
   * used. A task written into a slot is published by the owner's volatile write of the tail that follows it, and a
   * thread moving tasks reads the tail before the slots.
   */
-private[gears] final class RunQueue {
+private[io] final class RunQueue {
   import RunQueue.*
 
   private val buffer = new Array[Runnable](Capacity)
@@ -98,7 +99,7 @@ private[gears] final class RunQueue {
   }
 }
 
-private[gears] object RunQueue {
+private[io] object RunQueue {
 
   /** How many tasks a queue holds; a power of two. */
   inline val Capacity = 256

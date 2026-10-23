@@ -2,13 +2,13 @@ package gearsexample
 
 import java.nio.charset.StandardCharsets
 
-import asyncio.IpAddress
-import asyncio.ResolveBackend
-import asyncio.SocketBackend
-import asyncio.AddressFamily
-import asyncio.testkit.BufferArena
+import gears.async.io.IpAddress
+import gears.async.io.ResolveBackend
+import gears.async.io.SocketBackend
+import gears.async.io.AddressFamily
+import gears.async.io.testkit.BufferArena
 import DemoIO.text
-import asyncio.gears.ReactorFutures
+import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleWhois`: resolve, connect to port 43, send one query line, print the raw reply.

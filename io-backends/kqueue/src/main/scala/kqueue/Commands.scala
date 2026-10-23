@@ -1,18 +1,19 @@
-package asyncio.kqueue
+package gears.async.io
+package kqueue
 
 import java.nio.ByteBuffer
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import asyncio.Handle
-import asyncio.Interest
-import asyncio.Received
-import asyncio.Slot
-import asyncio.unsafe.NativeBuffer
-import asyncio.unsafe.NativePool
-import asyncio.unsafe.NonBlocking
-import asyncio.unsafe.PosixSockets
+import gears.async.io.Handle
+import gears.async.io.Interest
+import gears.async.io.Received
+import gears.async.io.Slot
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NativePool
+import gears.async.io.internal.NonBlocking
+import gears.async.io.internal.PosixSockets
 
 /** The kqueue commands behind `KqueueOps`. `perform` returns true once the op is done, and false when the descriptor
   * was not ready after all, so the reactor waits again without completing it.
@@ -118,7 +119,7 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
       NativeBuffer.advance(buf, size)
       buf.flip()
       val sender = KqueueHandles.decode(address, !length)
-      if sender.isInstanceOf[asyncio.UnixAddress] != unix then
+      if sender.isInstanceOf[gears.async.io.UnixAddress] != unix then
         throw new java.io.IOException(s"Received from $sender on a socket of the other family")
       from.asInstanceOf[Slot[SocketAddress]].set(sender)
     }
