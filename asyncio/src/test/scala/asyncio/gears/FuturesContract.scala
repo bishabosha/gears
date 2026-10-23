@@ -425,6 +425,52 @@ trait FuturesContract extends FunSuite {
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
   }
 
+  test("a higher level over perform: result-returning reads, accept and resolve") {
+    val outcome = running { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val buf = arena.allocate(16)
+        val writer = Future {
+          HigherLevel.writeAll(r, out, arena.of("wrapped".getBytes(StandardCharsets.UTF_8)))
+          r.perform(r.ops.close(out))
+        }
+        val got = HigherLevel.read(r, in, buf)
+        writer.await
+        val atEnd = HigherLevel.read(r, in, buf)
+        val resolved = HigherLevel.resolve(r, "localhost").nonEmpty
+        s"$got ${text(buf)} $atEnd $resolved"
+      } finally r.perform(r.ops.close(in))
+    }
+    assertEquals(outcome, "7 wrapped 0 true")
+  }
+
+  test("a higher level over perform: a stream of chunks consumed as a gears channel, with back-pressure") {
+    val total = 1 << 20
+    val received = running { r =>
+      val pool = r.pool(bufferSize = 4096, buffers = 4) // a window of four chunks, with a backlog of two more
+      val (in, out) = r.handles.pipe()
+      try {
+        val writer = Future {
+          val buf = arena.allocate(8192)
+          var sent = 0
+          while sent < total do {
+            buf.clear().limit(math.min(8192, total - sent))
+            HigherLevel.writeAll(r, out, buf)
+            sent += buf.limit()
+          }
+          r.perform(r.ops.close(out))
+        }
+        val received = HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
+        writer.await
+        received
+      } finally {
+        r.perform(r.ops.close(in))
+        pool.close()
+      }
+    }
+    assertEquals(received, total.toLong)
+  }
+
   test("a failure of the program is rethrown") {
     intercept[IllegalStateException](running(_ => throw new IllegalStateException("boom")))
   }
