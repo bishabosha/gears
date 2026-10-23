@@ -36,7 +36,7 @@ object InboxCheck {
       workers = pool.workers
       var round = 0
       while round < rounds do {
-        val worker = pool.currentWorker.nn
+        val worker = pool.currentWorker
         val queued = new AtomicBoolean
         val poster = new Thread(() => {
           worker.sync {

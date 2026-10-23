@@ -64,8 +64,10 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
   /** The thread the caller runs on, as the pool knows its workers: on the JVM, a virtual thread's carrier. */
   protected def callerThread(): Thread = Thread.currentThread()
 
-  /** The worker running the caller, if it is one of this pool's. */
-  def currentWorker: ReactorWorker | Null =
+  /** The worker running the caller, if it is one of this pool's: for the pool's own queueing, which the JDK may ask
+    * for from a thread of its own (see `CarriedPool`).
+    */
+  private def workerOrNull: ReactorWorker | Null =
     callerThread() match {
       case thread: ReactorWorkerThread => if thread.pool eq this then thread.worker else null
       case thread                      =>
@@ -73,9 +75,15 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
         if first != null && (first.owner eq thread) then first else null
     }
 
+  def currentWorker: ReactorWorker = {
+    val worker = workerOrNull
+    if worker == null then throw new IllegalStateException(s"${Thread.currentThread()} is no worker of $this")
+    worker
+  }
+
   /** Queues `body` on the worker running the caller, or on the shared queue from outside the pool. */
   def execute(body: Runnable): Unit = {
-    val worker = currentWorker
+    val worker = workerOrNull
     if worker != null then worker.push(body) else inject(body)
   }
 
@@ -127,7 +135,7 @@ class ReactorPool private[gears] (val backend: ReactorBackend, size: Int, val po
 
   /** Runs `body` after `delay` on the worker running the caller, or on the first worker from outside the pool. */
   def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
-    val worker = currentWorker
+    val worker = workerOrNull
     (if worker != null then worker else workers(0)).schedule(delay, body)
   }
 

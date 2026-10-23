@@ -5,6 +5,7 @@ import java.nio.file.Paths
 
 import gears.async.Async
 
+import asyncio.gears.Io
 import asyncio.Handle
 import asyncio.IpAddress
 import asyncio.SocketBackend
@@ -23,7 +24,7 @@ object Sockets {
   }
 
   /** A listener on `address`, listening: the handle, and its `listening` op performed. */
-  def listen(b: UnixStreamBackend, address: StreamAddress)(using Async): Handle = {
+  def listen(b: Io & UnixStreamBackend, address: StreamAddress)(using Async): Handle = {
     val listener = address match {
       case unix: UnixAddress => b.handles.listener(unix)
       case ip: IpAddress     => b.handles.listener(ip)
@@ -40,7 +41,7 @@ object Sockets {
     case unix: UnixAddress => connect(unixSockets(b, unix), unix)
   }
 
-  def listen(b: SocketBackend, address: StreamAddress)(using Async): Handle = address match {
+  def listen(b: Io & SocketBackend, address: StreamAddress)(using Async): Handle = address match {
     case ip: IpAddress =>
       val listener = b.handles.listener(ip)
       ReactorAsync.perform(b, b.ops.listening(listener))
@@ -48,8 +49,8 @@ object Sockets {
     case unix: UnixAddress => listen(unixSockets(b, unix), unix)
   }
 
-  private def unixSockets(b: SocketBackend, address: UnixAddress): UnixStreamBackend = b match {
-    case unix: UnixStreamBackend => unix
+  private def unixSockets(b: SocketBackend, address: UnixAddress): UnixStreamBackend & b.type = b match {
+    case unix: (UnixStreamBackend & b.type) => unix
     case _ => throw new IllegalArgumentException(s"$b has no Unix domain sockets, so cannot use $address; use TCP")
   }
 

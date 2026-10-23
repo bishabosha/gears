@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
+import asyncio.gears.Io
 import asyncio.Backend
 import asyncio.Handle
 import asyncio.UnixAddress
@@ -23,7 +24,7 @@ object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
-  private def serve(r: UnixStreamBackend, client: Handle)(using Async): Unit = {
+  private def serve(r: Io & UnixStreamBackend, client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)

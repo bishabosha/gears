@@ -7,13 +7,9 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
-import asyncio.BlockingBackend
-import asyncio.BufferPool
-import asyncio.FileBackend
+import asyncio.CallerBackend
 import asyncio.Interest
-import asyncio.PipeBackend
-import asyncio.ResolveBackend
-import asyncio.UnixStreamBackend
+import asyncio.gears.OnCaller
 
 /** NIO with no reactor: the backend for a program whose threads may block, such as gears' own virtual threads, the
   * JVM's default. It has the ops and handles of `NioBackend`, and `perform` does each op on the calling thread. A
@@ -25,23 +21,14 @@ import asyncio.UnixStreamBackend
   * interrupted from a timer thread if its time limit is up; an op done at once, such as a close, is done. Cancelling
   * the caller ends the wait, and the handle stays open. Nothing spins: busy waiting gave the best latency and starved
   * the other futures, so it was dropped (see the NIO TODO, items 10 and 11). A time limit runs from the call: an op
-  * whose time runs out has done nothing and throws. Needs no runner: `perform` works from any `Async` context, and
-  * `ReactorFutures.run` only hands the program this backend. Nothing of the JDK beyond its public interface.
+  * whose time runs out has done nothing and throws. It is its own `Io`, so `perform` works from any `Async` context
+  * with no runner, and `ReactorFutures.run` only hands the program this backend. Nothing of the JDK beyond its public
+  * interface.
   */
-object NioOnCaller
-    extends BlockingBackend
-    with UnixStreamBackend
-    with FileBackend
-    with ResolveBackend
-    with PipeBackend {
+object NioOnCaller extends CallerBackend with OnCaller with NioCapabilities {
+  type Io = NioOnCaller.type
 
-  type Op = NioOp
-
-  def ops: NioOps.type = NioOps
-
-  def handles: NioHandles.type = NioHandles
-
-  def pool(bufferSize: Int, buffers: Int): BufferPool = new DirectPool(bufferSize, buffers)
+  private[asyncio] def bind(): NioOnCaller.type = this
 
   /** How many times a command that would block is tried again after a yield, before it waits on its selector
     * (`-Dasyncio.gears.retriesHere`).

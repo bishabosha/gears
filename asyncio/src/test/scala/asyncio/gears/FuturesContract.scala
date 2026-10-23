@@ -40,7 +40,7 @@ trait FuturesContract extends FunSuite {
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.
     */
-  protected def listenAndConnect(dir: java.nio.file.Path)(using Async): (Handle, () => Handle) = backend match {
+  protected def listenAndConnect(r: backend.Io, dir: java.nio.file.Path)(using Async): (Handle, () => Handle) = r match {
     case unix: UnixStreamBackend =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = unix.handles.listener(address)
@@ -53,13 +53,13 @@ trait FuturesContract extends FunSuite {
       var found: (Handle, () => Handle) | Null = null
       while found == null do {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
-        val listener = backend.handles.listener(address)
+        val listener = r.handles.listener(address)
         try {
-          perform(backend, backend.ops.listening(listener))
-          found = (listener, () => backend.handles.connect(address))
+          perform(r, r.ops.listening(listener))
+          found = (listener, () => r.handles.connect(address))
         } catch {
           case e: IOException =>
-            perform(backend, backend.ops.close(listener))
+            perform(r, r.ops.close(listener))
             attempts += 1
             if attempts > 10 then throw e
         }
@@ -67,8 +67,8 @@ trait FuturesContract extends FunSuite {
       found.nn
   }
 
-  /** Runs `body` as a program over `backend`, the platform's way. */
-  protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit
+  /** Runs `body` as a program over `backend`, the platform's way, with the backend's `Context`. */
+  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit
 
   /** A port nothing listens on, found by listening on it with the backend and letting it go. */
   protected def freePort(): Int = {
@@ -165,7 +165,7 @@ trait FuturesContract extends FunSuite {
     val trips = 200
     var echoed = 0
     try running { r =>
-      val (listener, connect) = listenAndConnect(dir)
+      val (listener, connect) = listenAndConnect(r, dir)
       try {
         val server = Future {
           val accepted = Handle.Slot()
@@ -325,7 +325,7 @@ trait FuturesContract extends FunSuite {
     var outcome = ""
     withTempDir { dir =>
       running { r =>
-        val (listener, connect) = listenAndConnect(dir)
+        val (listener, connect) = listenAndConnect(r, dir)
         val client = connect()
         try {
           perform(r, r.ops.connect(client))
