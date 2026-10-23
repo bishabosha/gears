@@ -251,3 +251,11 @@ it is for, Apple's user-space stack on a real interface, needs a second machine 
 except where the framework has no counterpart (above), and the backend is kept as the reference for a completion-based
 reactor, which io_uring's would resemble, with one difference that matters for cost: io_uring's completions land in a
 ring the submitting thread reads, with no second thread between the kernel and the loop.
+
+- **Done: a listener's close op waits for the cancelled state.** `NWFrameworkHandle.closeAsync` completed a
+  listener's (and a bound datagram socket's) close at once after `nwf_cancel_async`, which does not wait for
+  Network.framework to cancel it, so the port could still be held when the op said it was closed: the contract's
+  "a closed listener's port can be listened on again once its close op completes" failed now and then with "Address
+  already in use". The close op now registers its waiter and completes on the cancelled event, as a connection's
+  does; descriptors and files still close at once, having no cancelled state. Seen in the futures suites' run of
+  2026-10-23; the contract suite passed five runs in a row after.

@@ -498,9 +498,12 @@ private[nwframework] final class NWFrameworkHandle(
     * is cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
     * connections not taken and flows go with it.
     */
-  /** The close op: begins closing, as `close` does, but a connection's cancellation is not waited for: false, with
-    * the close waiter registered, told once the connection is cancelled, when `closeDone` is true; a descriptor, a
-    * file or a listener is closed at once: true.
+  /** The close op: begins closing, as `close` does, but the framework's cancellation is not waited for here: false,
+    * with the close waiter registered, told once the cancelled state has come, when `closeDone` is true. For a
+    * connection that is once its sends have gone; for a listener, or a bound datagram socket, once the framework has
+    * let its port go, so that a port whose listener's close op has completed can be listened on again at once,
+    * which completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once:
+    * true.
     */
   def closeAsync(reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
     if closed then throw closedFailure
@@ -512,17 +515,17 @@ private[nwframework] final class NWFrameworkHandle(
       unistd.close(fd)
       released = true
       true
-    } else if kind == NWFrameworkHandle.Stream || kind == NWFrameworkHandle.Datagram then {
+    } else if kind == NWFrameworkHandle.Descriptor || kind == NWFrameworkHandle.File then {
+      NWFrameworkIo.nwf_cancel_async(ptr) // its sources' cancellation closes the descriptor; no state to wait for
+      finishClose()
+      true
+    } else {
+      if kind == NWFrameworkHandle.Listener || kind == NWFrameworkHandle.BoundDatagram then cancelChildren()
       closeReactor = reactor
       closeToken = token
       updateWatcher()
       NWFrameworkIo.nwf_cancel_async(ptr)
       false
-    } else {
-      cancelChildren()
-      NWFrameworkIo.nwf_cancel_async(ptr)
-      finishClose()
-      true
     }
   }
 
