@@ -40,31 +40,25 @@ trait Io extends Backend with AsyncOperations {
 /** An `Io` on a pool of workers driving a reactor backend's reactors: an op is submitted to the reactor of the worker
   * running the caller, which suspends until the reactor finishes with it, and may also be submitted with a completion
   * of the caller's own (`submit`). Cancelling the caller asks the reactor to cancel the op, and waits until it has.
-  * The pool itself is the runtime's (`Pool`): this only says what a program may do on it.
+  * The pool itself is the runtime's (`Pool`), and how these three reach it is the backends' (`asyncio.unsafe.Pooled`):
+  * this only says what a program may do on it.
   */
 trait OnPool extends Io {
 
   /** The reactor backend whose ops these are, and whose reactors the pool's workers drive. */
   val backend: ReactorBackend { type Op = OnPool.this.Op }
 
-  /** The pool the program runs on, which the runner bound this to (`ReactorBackend.bind`). */
-  private[asyncio] def pool: Pool
-
-  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit = pool.perform(backend, op, timeoutMillis)
-
   /** Submits `op` to the reactor of the worker running the caller, with a completion of the caller's own instead of
     * suspending: the completion runs on that worker's thread, which may not be the caller's by then, since a task may
     * resume on another worker. The returned handle cancels the op there. With a time limit, which the reactor keeps
     * (see `Submitter.submit`).
     */
-  final def submit(op: Op, completion: Completion[Op], timeoutMillis: Int = Backend.NoTimeout)(using
-      Async
-  ): Submission = pool.submit(backend, op, completion, timeoutMillis)
+  def submit(op: Op, completion: Completion[Op], timeoutMillis: Int = Backend.NoTimeout)(using Async): Submission
 
   /** Gives up the caller's turn the pool's way: its resume queued behind the tasks already queued on its worker, so
     * the futures sharing the worker run first, as a long computation should between slices.
     */
-  override def `yield`()(using Async): Unit = pool.`yield`()
+  override def `yield`()(using Async): Unit
 }
 
 /** A pool of workers driving a reactor backend's reactors, as the interface sees it: what a program on it may do with

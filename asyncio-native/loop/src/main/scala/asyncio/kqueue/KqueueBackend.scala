@@ -11,8 +11,8 @@ import asyncio.ReadinessBackend
 import asyncio.ResolveBackend
 import asyncio.UnixDatagramBackend
 import asyncio.UnixStreamBackend
-import asyncio.OnPool
 import asyncio.Pool
+import asyncio.unsafe.Pooled
 
 /** What kqueue can do, as the backend and as a program's `Io` over it: every capability a backend may have: IP, Unix
   * stream and Unix datagram sockets, regular files and name resolution on the blocker pool, pipes, readiness, blocking
@@ -45,8 +45,8 @@ object KqueueBackend extends ReactorBackend with KqueueCapabilities {
 }
 
 /** A program's `Io` over kqueue: `KqueueBackend` bound to the pool the program runs on. */
-final class KqueueOnPool private[kqueue] (private[asyncio] val pool: Pool)
-    extends OnPool
+final class KqueueOnPool private[kqueue] (protected val pool: Pool)
+    extends Pooled
     with KqueueCapabilities {
   val backend: KqueueBackend.type = KqueueBackend
 }

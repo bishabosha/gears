@@ -8,8 +8,8 @@ import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.ResolveBackend
 import asyncio.UnixStreamBackend
-import asyncio.OnPool
 import asyncio.Pool
+import asyncio.unsafe.Pooled
 
 /** What NIO can do, for both its backends and their `Io`s: IP and Unix stream sockets, regular files and name
   * resolution on the blocker pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK
@@ -39,7 +39,7 @@ object NioBackend extends ReactorBackend with NioCapabilities {
 }
 
 /** A program's `Io` over NIO's reactors: `NioBackend` bound to the pool the program runs on. */
-final class NioOnPool private[nio] (private[asyncio] val pool: Pool) extends OnPool with NioCapabilities {
+final class NioOnPool private[nio] (protected val pool: Pool) extends Pooled with NioCapabilities {
   type Io = NioOnPool
   val backend: NioBackend.type = NioBackend
 }
