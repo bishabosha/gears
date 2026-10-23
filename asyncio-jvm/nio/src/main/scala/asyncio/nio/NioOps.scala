@@ -145,7 +145,13 @@ final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received
     val slot = pool.take()
     if slot == null then throw new IOException("The pool has no buffer free")
     val buffer = slot.nn.buffer
-    val read = entry.nn.read(buffer)
+    val read =
+      try entry.nn.read(buffer)
+      catch {
+        case failure: Throwable =>
+          slot.nn.release() // a failed read holds nothing
+          throw failure
+      }
     if read == 0 then {
       slot.nn.release()
       false

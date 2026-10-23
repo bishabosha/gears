@@ -29,6 +29,7 @@ import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
+import higherlevel.HigherLevel
 
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
@@ -447,7 +448,7 @@ trait FuturesContract extends FunSuite {
   test("a higher level over perform: a stream of chunks consumed as a gears channel, with back-pressure") {
     val total = 1 << 20
     val received = running { r =>
-      val pool = r.pool(bufferSize = 4096, buffers = 4) // a window of four chunks, with a backlog of two more
+      val pool = r.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
       val (in, out) = r.handles.pipe()
       try {
         val writer = Future {
@@ -469,6 +470,56 @@ trait FuturesContract extends FunSuite {
       }
     }
     assertEquals(received, total.toLong)
+  }
+
+  test("a higher level over perform: a stream closed early releases its chunks, and one that fails rethrows") {
+    val outcome = running { r =>
+      val pool = r.pool(bufferSize = 1024, buffers = 4)
+      val (in, out) = r.handles.pipe()
+      try {
+        HigherLevel.writeAll(r, out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8)))
+        val stream = HigherLevel.chunks(r, in, pool, backlog = 2)
+        val first = stream.read().map { chunk =>
+          val n = chunk.buffer.remaining()
+          chunk.release()
+          n
+        }
+        r.perform(r.ops.timer(20)) // lets the reader fill the window and the backlog
+        stream.close() // releases what was read ahead
+        val freed = pool.available == pool.buffers
+        r.perform(r.ops.close(in)) // the next stream's read fails on the closed handle
+        val failed =
+          try {
+            HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
+            false
+          } catch case _: IOException => true
+        s"${first.exists(_ > 0)} $freed $failed ${pool.available == pool.buffers}"
+      } finally {
+        r.perform(r.ops.close(out))
+        pool.close()
+      }
+    }
+    assertEquals(outcome, "true true true true")
+  }
+
+  test("a submission is cancelled when the group it was made in ends, and the group waits for its completion") {
+    val outcome = running { r =>
+      r match {
+        case p: asyncio.OnPool =>
+          val notified = new java.util.concurrent.atomic.AtomicBoolean
+          val started = System.nanoTime()
+          Async.group {
+            p.submit(p.ops.timer(60_000), new asyncio.Completion[p.Op] {
+              def onComplete(op: p.Op): Unit = ()
+              override def onCancel(op: p.Op): Unit = notified.set(true)
+            })
+          } // ends with the timer pending: the submission is cancelled, and its onCancel has run by here
+          val waited = System.nanoTime() - started
+          s"${notified.get()} ${waited < 1_000_000_000L}"
+        case _ => "true true" // no submissions on a caller backend
+      }
+    }
+    assertEquals(outcome, "true true")
   }
 
   test("a failure of the program is rethrown") {
