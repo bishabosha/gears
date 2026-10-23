@@ -151,35 +151,69 @@ private[asyncio] object Pools {
     submission.link() // if the group is already cancelled, this cancels the op at once
   }
 
-  /** `Submission` on a pool: the caller's completion wrapped, so that the submission leaves the caller's group once
-    * the op is done, and cancelled on the worker the op went to.
+  /** `Submission` on a pool: the caller's completion wrapped, so that the submission completes itself as a source
+    * and leaves the caller's group once the op is done, and cancelled on the worker the op went to. The outcome and
+    * the listeners waiting for it share one lock, since a listener registers on the caller's thread while the
+    * completion runs on the reactor's.
     */
   private final class PoolSubmission[O](worker: ReactorWorker, op: O, completion: Completion[O])
       extends Submission
       with Completion[O] {
-    @volatile private var done = false
+    private var outcome: Try[Unit] | Null = null // guarded by `this`
+    private var listeners: List[Listener[Try[Unit]]] = Nil // guarded by `this`, until the outcome arrives
 
     def cancel(): Unit =
-      if !done then
+      if synchronized(outcome) == null then
         if worker.isCurrent then cancelOn(worker, op)
         else worker.sync(cancelOn(worker, op))
 
-    def onComplete(op: O): Unit = {
-      done = true
+    def onComplete(op: O): Unit =
       try completion.onComplete(op)
-      finally unlink()
-    }
+      finally finish(done)
 
-    override def onFailure(op: O, failure: Throwable): Unit = {
-      done = true
+    override def onFailure(op: O, failure: Throwable): Unit =
       try completion.onFailure(op, failure)
+      finally finish(Failure(failure))
+
+    override def onCancel(op: O): Unit =
+      try completion.onCancel(op)
+      finally finish(Failure(new CancellationException()))
+
+    private def finish(result: Try[Unit]): Unit = {
+      val waiting = synchronized {
+        outcome = result
+        val waiting = listeners
+        listeners = Nil
+        waiting
+      }
+      try waiting.foreach(_.completeNow(result, this))
       finally unlink()
     }
 
-    override def onCancel(op: O): Unit = {
-      done = true
-      try completion.onCancel(op)
-      finally unlink()
+    override def poll(): Option[Try[Unit]] = {
+      val result = synchronized(outcome)
+      if result == null then None else Some(result.nn)
+    }
+
+    def poll(k: Listener[Try[Unit]]): Boolean = {
+      val result = synchronized(outcome)
+      if result == null then false
+      else {
+        k.completeNow(result.nn, this)
+        true
+      }
+    }
+
+    def onComplete(k: Listener[Try[Unit]]): Unit = {
+      val result = synchronized {
+        if outcome == null then listeners = k :: listeners
+        outcome
+      }
+      if result != null then k.completeNow(result.nn, this)
+    }
+
+    def dropListener(k: Listener[Try[Unit]]): Unit = synchronized {
+      listeners = listeners.filterNot(_ eq k)
     }
   }
 

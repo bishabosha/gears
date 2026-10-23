@@ -9,8 +9,11 @@ import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
+import higherlevel.HigherLevel
 
-/** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF. */
+/** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF, the
+  * response as the higher level's stream of chunks, read from the backend's own buffers.
+  */
 object GearsSocket {
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
 
@@ -20,32 +23,33 @@ object GearsSocket {
       val response = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         val socket = Sockets.connect(r, address)
+        val pool = r.pool(bufferSize = 8192, buffers = 4)
         try {
           println(s"connection in progress to: $address")
           r.perform(r.ops.connect(socket))
-          // One repeatable op per direction, resubmitted until the request is out and the response is in.
+          // One repeatable op, resubmitted until the request is out.
           val write = r.ops.write(socket, buf)
-          val read = r.ops.read(socket, buf)
           StreamProtocol.frame("Hello from Scala Native KQueue Example!\n", buf)
           while buf.hasRemaining() do {
             val before = buf.position()
             r.perform(write)
             println(s"Wrote ${buf.position() - before} bytes to socket.")
           }
-          buf.clear() // The request is out; the buffer now collects the response.
-          var eof = false
-          while !eof do {
-            r.perform(read)
-            if buf.position() == 0 then eof = true // Nothing added: the server closed after its response.
-            else {
-              println(s"Read ${buf.position()} bytes from socket.")
-              buf.flip()
-              drainTo(buf, response)
-              buf.clear()
-            }
+          // The response as a stream: a chunk at a time from the pool's buffers, until the server closes.
+          val chunks = HigherLevel.chunks(r, socket, pool, backlog = 2)
+          var next = chunks.read()
+          while next.isDefined do {
+            val chunk = next.get
+            println(s"Read ${chunk.buffer.remaining()} bytes from socket.")
+            drainTo(chunk.buffer, response)
+            chunk.release()
+            next = chunks.read()
           }
           println(s"Received message: `${new String(response.toByteArray, StandardCharsets.UTF_8)}`")
-        } finally r.perform(r.ops.close(socket))
+        } finally {
+          r.perform(r.ops.close(socket))
+          pool.close()
+        }
       }
     }
   }

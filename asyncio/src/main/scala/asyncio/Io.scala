@@ -4,6 +4,8 @@ import _root_.gears.async.Async
 import _root_.gears.async.AsyncOperations
 import _root_.gears.async.Cancellable
 
+import scala.util.Try
+
 /** What a program performs its ops with: a backend's ops, handles and capabilities, since it is a `Backend`, bound to
   * where the program runs, so that `perform` can run an op there. The platform's runner makes one for the program it
   * starts, and nothing else does, so an op of a reactor backend is only ever performed where there is a worker, and
@@ -61,6 +63,12 @@ trait OnPool extends Io {
     */
   def submit(op: Op, completion: Completion[Op], timeoutMillis: Int = Backend.NoTimeout)(using Async): Submission
 
+  /** Submits `op` with no completion of the caller's own: its outcome is the submission's, as a source. */
+  final def submit(op: Op)(using Async): Submission = submit(op, Completion.ignore, Backend.NoTimeout)
+
+  /** Submits `op` with no completion of the caller's own, and a time limit (see `Submitter.submit`). */
+  final def submit(op: Op, timeoutMillis: Int)(using Async): Submission = submit(op, Completion.ignore, timeoutMillis)
+
   /** Gives up the caller's turn the pool's way: its resume queued behind the tasks already queued on its worker, so
     * the futures sharing the worker run first, as a long computation should between slices.
     */
@@ -92,9 +100,11 @@ private[asyncio] object Pool {
 }
 
 /** An op submitted with `OnPool.submit`: a gears `Cancellable`, linked to the caller's group when submitted and
-  * unlinked once its completion has run.
+  * unlinked once its completion has run, and a gears `Async.Source` of the op's outcome, completed once, after the
+  * completion: `Success` when the op finished, its failure, or a `CancellationException` when it was cancelled. As a
+  * source it composes as any other does: awaited, or raced with a channel or a timer in `Async.select`.
   */
-trait Submission extends Cancellable {
+trait Submission extends Cancellable with Async.Source[Try[Unit]] {
 
   /** Asks the reactor the op went to to cancel it, from any thread; nothing if it has already finished. The
     * completion's `onCancel` runs on that reactor's thread once the op is stopped, which is before this returns when
