@@ -795,3 +795,15 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     `OnPool` `submit`, the top-level `ReactorAsync.perform` and `submit` are gone too: programs write `r.perform(op)`
     and `r.submit(op, completion)`; `yieldNow` stays, since it is about the `Async`, not an op. A Node or browser
     backend, when it comes, is a third kind whose one submitter is the host loop.
+
+22. [x] **The interface by concept, the blocker pool out of it, and `Io` as the program's `AsyncOperations`.** Three
+    commits. The interface module is one file per concept (`Submitter`, `Backend`, `Ops`, `Handles`, `Addresses`,
+    `BufferPool`) in place of `Reactor.scala`, and `Blockers` with `BlockingRun` moved to `asyncio.unsafe`, beside the
+    other implementation the backends share (`TimerHeap`, `NativePool`), so `asyncio` holds interface only. Then `Io`
+    extends gears' `AsyncOperations`: `sleep` performs a timer op, so gears' `sleep`, `withTimeout` and `Timer` run on
+    the backend's timers, and `OnPool` overrides `yield` with the pool's own, which queues the resume on the worker
+    without spawning a task; the runner gives the program its `Io` as the `AsyncOperations` beside its `Async`, so
+    programs are typed `backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit` and `yieldNow` is gone, as is
+    `ReactorAsync`: what it held is `OnPool`'s companion (`performOnReactor`, `submitOn`, `Submission`, the waiter).
+    Checked by a new contract test on every backend: `sleep(20)` sleeps, and `withTimeout(20.millis)` around a read
+    throws `TimeoutException` with the buffer untouched.

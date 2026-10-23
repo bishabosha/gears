@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets
 import asyncio.FifoBackend
 import asyncio.testkit.BufferArena
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {

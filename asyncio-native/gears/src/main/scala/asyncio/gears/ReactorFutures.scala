@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.AsyncSupport
 import gears.async.Future
 import gears.async.Listener
@@ -15,12 +16,10 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
   type Scheduler = ReactorPool
 }
 
-/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is `ReactorAsync`'s. */
+/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is `OnPool`'s. */
 object ReactorFutures extends Runner {
-  export ReactorAsync.*
-
   /** Runs `program` on one worker, the calling thread (see the other `run`). */
-  def run(using backend: Backend)(program: backend.Io => Async.Spawn ?=> Unit): Unit = run(1)(program)
+  def run(using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = run(1)(program)
 
   /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s, which must be a
     * `ReactorBackend` (see `ReactorPool`): the calling thread becomes the first. The program starts as a future, is
@@ -30,19 +29,20 @@ object ReactorFutures extends Runner {
     * stop.
     */
   def run(workers: Int, policy: TakePolicy = TakePolicy.Affine)(using backend: Backend)(
-      program: backend.Io => Async.Spawn ?=> Unit
+      program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend.start(this, workers, policy)(program)
 
   /** Scala Native suspends futures on a pool's workers, which run reactors; there is no other carrier. */
-  def onCaller(b: CallerBackend)(program: b.Io => Async.Spawn ?=> Unit): Unit =
+  def onCaller(b: CallerBackend)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
     throw new UnsupportedOperationException(s"$b performs ops on the caller, and Scala Native runs futures on reactors")
 
-  def onPool(b: ReactorBackend, workers: Int, policy: TakePolicy)(program: b.Io => Async.Spawn ?=> Unit): Unit = {
+  def onPool(b: ReactorBackend, workers: Int, policy: TakePolicy)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = {
     val stats = sys.env.get("GEARS_POOL_STATS").contains("1")
     ReactorPool.run(b, workers, policy, stopped = pool => if stats then printStats(pool)) { pool =>
       given ReactorPool = pool
       given ReactorSupport.type = ReactorSupport
       val io = b.bind(pool)
+      given AsyncOperations = io
       Async.blocking {
         val main = Future(program(io)) // queued on the first worker: it starts with that worker's first round
         main.onComplete(Listener((_, _) => pool.stop()))

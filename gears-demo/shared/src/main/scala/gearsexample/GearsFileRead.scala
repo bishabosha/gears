@@ -9,7 +9,6 @@ import asyncio.Interest
 import asyncio.testkit.BufferArena
 import DemoIO.drainTo
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleFileRead`. Use with a FIFO. */
 object GearsFileRead {

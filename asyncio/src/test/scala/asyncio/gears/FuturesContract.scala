@@ -1,8 +1,13 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.Future
+import gears.async.AsyncOperations.sleep
 import gears.async.Future.awaitAll
+import gears.async.withTimeout
+
+import scala.concurrent.duration.*
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -24,7 +29,6 @@ import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
-import ReactorAsync.*
 
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
@@ -68,7 +72,7 @@ trait FuturesContract extends FunSuite {
   }
 
   /** Runs `body` as a program over `backend`, the platform's way, with the backend's `Context`. */
-  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit
+  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit
 
   /** A port nothing listens on, found by listening on it with the backend and letting it go. */
   protected def freePort(): Int = {
@@ -303,6 +307,29 @@ trait FuturesContract extends FunSuite {
       outcome = s"$timedOut ${waited >= 20_000_000L && waited < 30_000_000_000L}"
     }
     assertEquals(outcome, "true true")
+  }
+
+  test("gears' sleep and withTimeout run on the backend's timers: the program's Io is its AsyncOperations") {
+    var outcome = ""
+    running { r =>
+      val (in, out) = r.handles.pipe()
+      try {
+        val started = System.nanoTime()
+        sleep(20)
+        val slept = System.nanoTime() - started
+        val buf = arena.allocate(16)
+        val timedOut =
+          try {
+            withTimeout(20.millis)(r.perform(r.ops.read(in, buf)))
+            false
+          } catch case _: TimeoutException => true
+        outcome = s"${slept >= 20_000_000L} $timedOut ${buf.position()}"
+      } finally {
+        r.perform(r.ops.close(in))
+        r.perform(r.ops.close(out))
+      }
+    }
+    assertEquals(outcome, "true true 0")
   }
 
   test("a cancelled timer stops waiting, and may be performed again") {

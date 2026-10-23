@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.FactoryVThreadSupport
 import gears.async.Future
 import gears.async.VThreadScheduler
@@ -11,7 +12,7 @@ import asyncio.CallerBackend
 import asyncio.ReactorBackend
 
 /** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program
-  * over a backend and gives it the backend's `Io`, and the rest is `ReactorAsync`'s, so that code calling `perform`
+  * over a backend and gives it the backend's `Io`, and the rest is `OnPool`'s, so that code calling `perform`
   * is the same here as on Scala Native. The backend's kind says how its futures are carried. A `ReactorBackend`,
   * such as `NioBackend`, runs its program on a `ReactorPool` whose workers carry the virtual threads and drive the
   * reactors, as gears' futures are on Scala Native: an op goes to the reactor of the worker carrying its future,
@@ -23,14 +24,13 @@ import asyncio.ReactorBackend
   * performed on the future's own thread, and needs nothing of the JDK beyond its public interface.
   */
 object ReactorFutures extends Runner {
-  export ReactorAsync.*
-
   /** Runs `program` with one worker (see the other `run`). */
-  def run(using backend: Backend)(program: backend.Io => Async.Spawn ?=> Unit): Unit = run(1)(program)
+  def run(using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = run(1)(program)
 
   /** Runs `program` as a future on a virtual thread, and gives it the backend's `Io`: the backend, with its own
-    * capabilities, bound to where the program runs, with which it performs its ops. A failure of the program is
-    * rethrown.
+    * capabilities, bound to where the program runs, with which it performs its ops, and which is also its
+    * `AsyncOperations`, so that gears' `sleep` and `withTimeout` run on the backend's timers. A failure of the program
+    * is rethrown.
     *
     * A `ReactorBackend` gets `workers` reactors of its own, on a pool of workers that carry the program's futures,
     * which run until the program finishes and are closed afterwards; `policy` says which tasks a worker out of work
@@ -39,12 +39,13 @@ object ReactorFutures extends Runner {
     */
   def run(workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: Backend
-  )(program: backend.Io => Async.Spawn ?=> Unit): Unit = backend.start(this, workers, policy)(program)
+  )(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = backend.start(this, workers, policy)(program)
 
-  def onCaller(b: CallerBackend)(program: b.Io => Async.Spawn ?=> Unit): Unit = {
+  def onCaller(b: CallerBackend)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     val io = b.bind()
+    given AsyncOperations = io
     // `Async.blocking` runs its body on the calling thread, which may be a platform thread; a future's is virtual.
     Async.blocking(Future(program(io)).await)
   }
@@ -52,12 +53,13 @@ object ReactorFutures extends Runner {
   /** Runs `program` on virtual threads carried by a pool's workers, with the backend bound to the pool; the calling
     * thread is the first worker.
     */
-  def onPool(b: ReactorBackend, workers: Int, policy: TakePolicy)(program: b.Io => Async.Spawn ?=> Unit): Unit = {
+  def onPool(b: ReactorBackend, workers: Int, policy: TakePolicy)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit = {
     VirtualCarriers.check()
     ReactorPool.run(b, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
       val scheduler = new VirtualReactorScheduler(pool, factory)
       val io = b.bind(scheduler)
+      given AsyncOperations = io
       given support: FactoryVThreadSupport[VirtualReactorScheduler] = new FactoryVThreadSupport(factory)
       given VirtualReactorScheduler = scheduler
       @volatile var failure: Throwable | Null = null

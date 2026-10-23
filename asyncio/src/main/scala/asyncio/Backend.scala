@@ -1,6 +1,7 @@
 package asyncio
 
 import _root_.gears.async.Async
+import _root_.gears.async.AsyncOperations
 
 /** A way of doing I/O: the ops it can perform and the handles they name. How an op is performed is its kind's: a
   * reactor backend submits its ops with completions on reactors it opens (`ReactorBackend`), and a program over it
@@ -39,10 +40,10 @@ trait Backend {
   def handles: Handles
 
   /** Starts `program` over this backend with `runner`, the platform's way for a backend of this kind, giving it the
-    * backend's `Io` (see `ReactorFutures.run`, which calls this).
+    * backend's `Io`, which is also its `AsyncOperations` (see `ReactorFutures.run`, which calls this).
     */
   private[asyncio] def start(runner: asyncio.gears.Runner, workers: Int, policy: asyncio.gears.TakePolicy)(
-      program: Io => Async.Spawn ?=> Unit
+      program: Io => (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit
 
   /** Opens a pool of `buffers` buffers of up to `bufferSize` bytes each, for the reads into buffers of the backend's
@@ -68,7 +69,7 @@ trait CallerBackend extends Backend {
   private[asyncio] def bind(): Io
 
   private[asyncio] final def start(runner: asyncio.gears.Runner, workers: Int, policy: asyncio.gears.TakePolicy)(
-      program: Io => Async.Spawn ?=> Unit
+      program: Io => (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = runner.onCaller(this)(program)
 }
 
@@ -77,7 +78,7 @@ trait CallerBackend extends Backend {
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
   * over this backend runs on a pool of workers driving its reactors, started by `ReactorFutures.run`, and performs its
   * ops with the `OnPool` it is given, which submits each to the reactor of the worker running the caller (see
-  * `asyncio.gears.ReactorAsync`).
+  * `asyncio.gears.OnPool`).
   */
 trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
@@ -90,7 +91,7 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   private[asyncio] def bind(scheduler: asyncio.gears.ReactorScheduler): Io
 
   private[asyncio] final def start(runner: asyncio.gears.Runner, workers: Int, policy: asyncio.gears.TakePolicy)(
-      program: Io => Async.Spawn ?=> Unit
+      program: Io => (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = runner.onPool(this, workers, policy)(program)
 }
 
