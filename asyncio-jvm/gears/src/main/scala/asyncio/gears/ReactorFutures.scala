@@ -10,11 +10,14 @@ import gears.async.VThreadSupport
 import scala.util.Try
 
 import asyncio.Backend
+import asyncio.Io
 import asyncio.CallerBackend
+import asyncio.OnCaller
+import asyncio.OnPool
 import asyncio.ReactorBackend
 
 /** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program
-  * over a backend and gives it the backend's `Io`, which performs its ops and is its `AsyncOperations`, so that code
+  * over a backend and gives it an `Io` over it, which performs its ops and is its `AsyncOperations`, so that code
   * calling `perform` is the same here as on Scala Native. The backend's kind says how its futures are carried. A
   * `ReactorBackend`, such as `NioBackend`, runs its program on a `ReactorPool` whose workers carry the virtual threads
   * and drive the reactors, as gears' futures are on Scala Native: an op goes to the reactor of the worker carrying its
@@ -31,7 +34,7 @@ object ReactorFutures {
     * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` is not a
     * `Backend`, so starting a run over one is refused when compiling.
     */
-  def run[T](using backend: Backend)(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
+  def run[T](using backend: Backend)(program: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case caller: (CallerBackend & backend.type)    => onCaller(caller)(program)
@@ -40,17 +43,17 @@ object ReactorFutures {
 
   /** Runs `program` on a pool of `workers` workers driving reactors of `backend`'s, which carry the program's futures,
     * run until it finishes and are closed afterwards; `policy` says which tasks a worker out of work may take from
-    * another. The program is given the backend's `Io`, bound to the pool, and what it returns is returned; a failure
+    * another. The program is given an `Io` over the backend on the pool, and what it returns is returned; a failure
     * of the program is rethrown.
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend
-  )(program: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T = {
+  )(program: OnPool[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T = {
     VirtualCarriers.check()
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
       val scheduler = new VirtualReactorScheduler(pool, factory)
-      val io = backend.bind(Pools.bound(backend, scheduler))
+      val io = Pools.bound(backend, scheduler)
       given AsyncOperations = io
       given support: FactoryVThreadSupport[VirtualReactorScheduler] = new FactoryVThreadSupport(factory)
       given VirtualReactorScheduler = scheduler
@@ -68,10 +71,10 @@ object ReactorFutures {
   }
 
   /** Runs `program` on gears' own virtual threads, each op performed on the future's own thread. */
-  private def onCaller[T](b: CallerBackend)(program: b.Io => (Async.Spawn, AsyncOperations) ?=> T): T = {
+  private def onCaller[T](b: CallerBackend)(program: Io[b.type] => (Async.Spawn, AsyncOperations) ?=> T): T = {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
-    val io = b.bind()
+    val io = OnCaller[b.type](b)
     given AsyncOperations = io
     // `Async.blocking` runs its body on the calling thread, which may be a platform thread; a future's is virtual.
     Async.blocking(Future(program(io)).await)

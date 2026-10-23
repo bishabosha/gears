@@ -1,5 +1,6 @@
 package asyncio.gears
 
+import asyncio.Io
 import gears.async.Async
 import gears.async.AsyncOperations
 
@@ -10,7 +11,7 @@ import higherlevel.HigherLevelChecks
 abstract class NWFrameworkFuturesSuite(workers: Int) extends FuturesContract with HigherLevelChecks {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
 
-  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

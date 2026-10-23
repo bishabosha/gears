@@ -22,13 +22,13 @@ object GearsSocket {
       val buf = arena.allocate(8192)
       val response = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
-        val socket = Sockets.connect(r, address)
-        val pool = r.pool(bufferSize = 8192, buffers = 4)
+        val socket = Sockets.connect(r.backend, address)
+        val pool = r.backend.pool(bufferSize = 8192, buffers = 4)
         try {
           println(s"connection in progress to: $address")
-          r.perform(r.ops.connect(socket))
+          r.perform(r.backend.ops.connect(socket))
           // One repeatable op, resubmitted until the request is out.
-          val write = r.ops.write(socket, buf)
+          val write = r.backend.ops.write(socket, buf)
           StreamProtocol.frame("Hello from Scala Native KQueue Example!\n", buf)
           while buf.hasRemaining() do {
             val before = buf.position()
@@ -47,7 +47,7 @@ object GearsSocket {
           }
           println(s"Received message: `${new String(response.toByteArray, StandardCharsets.UTF_8)}`")
         } finally {
-          r.perform(r.ops.close(socket))
+          r.perform(r.backend.ops.close(socket))
           pool.close()
         }
       }

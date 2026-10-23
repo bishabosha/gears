@@ -1,5 +1,7 @@
 package asyncio.gears
 
+import asyncio.Io
+import asyncio.OnCaller
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
@@ -17,28 +19,28 @@ import higherlevel.HigherLevelChecks
 class NioOnCallerSuite extends FuturesContract with HigherLevelChecks {
   val backend: NioOnCaller.type = NioOnCaller
 
-  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(using backend)(body)
 
-  test("a program over NioOnCaller needs no runner: it is its own Io, and performs on the calling thread") {
+  test("a program over NioOnCaller needs no runner: its Io is an OnCaller anyone may make, on the calling thread") {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     var outcome = ""
     Async.blocking {
-      val r = NioOnCaller
-      val (in, out) = r.handles.pipe()
+      val r = OnCaller(NioOnCaller)
+      val (in, out) = r.backend.handles.pipe()
       val arena = BufferArena.open()
       try {
         val buf = arena.allocate(16)
-        val reading = Future(r.perform(r.ops.read(in, buf))) // on a virtual thread
-        r.perform(r.ops.timer(10)) // on this, a platform thread
-        r.perform(r.ops.write(out, arena.of("no runner".getBytes(StandardCharsets.UTF_8))))
+        val reading = Future(r.perform(r.backend.ops.read(in, buf))) // on a virtual thread
+        r.perform(r.backend.ops.timer(10)) // on this, a platform thread
+        r.perform(r.backend.ops.write(out, arena.of("no runner".getBytes(StandardCharsets.UTF_8))))
         reading.await
         buf.flip()
         outcome = StandardCharsets.UTF_8.decode(buf).toString
       } finally {
-        r.perform(r.ops.close(in))
-        r.perform(r.ops.close(out))
+        r.perform(r.backend.ops.close(in))
+        r.perform(r.backend.ops.close(out))
         arena.close()
       }
     }
@@ -50,12 +52,12 @@ class NioOnCallerSuite extends FuturesContract with HigherLevelChecks {
 abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract with HigherLevelChecks {
   val backend: NioBackend.type = NioBackend
 
-  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 
 class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
-  test("a program's Io is the backend on the pool: its ops go to the reactor of the worker running the caller") {
+  test("a program's Io is an OnPool over the backend: its ops go to the reactor of the worker running the caller") {
     var onWorker = false
     running { r =>
       onWorker = summon[Async].scheduler match {

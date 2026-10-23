@@ -8,6 +8,7 @@ import gears.async.Future
 import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
 
+import asyncio.Backend
 import asyncio.BufferPool
 import asyncio.Handle
 import asyncio.Io
@@ -28,29 +29,29 @@ import asyncio.IpSockets
 object HigherLevel {
 
   /** Reads into `buf` once and returns how many bytes arrived, 0 at the end of the stream. */
-  def read(r: Io, handle: Handle, buf: ByteBuffer)(using Async): Int = {
+  def read(r: Io[Backend], handle: Handle, buf: ByteBuffer)(using Async): Int = {
     val before = buf.position()
-    r.perform(r.ops.read(handle, buf))
+    r.perform(r.backend.ops.read(handle, buf))
     buf.position() - before
   }
 
   /** Writes all of `buf`, however many writes it takes. */
-  def writeAll(r: Io, handle: Handle, buf: ByteBuffer)(using Async): Unit = {
-    val write = r.ops.write(handle, buf)
+  def writeAll(r: Io[Backend], handle: Handle, buf: ByteBuffer)(using Async): Unit = {
+    val write = r.backend.ops.write(handle, buf)
     while buf.hasRemaining do r.perform(write)
   }
 
   /** Accepts one connection and returns it. */
-  def accept(r: Io & IpSockets, listener: Handle)(using Async): Handle = {
+  def accept(r: Io[IpSockets], listener: Handle)(using Async): Handle = {
     val into = Handle.Slot()
-    r.perform(r.ops.accept(listener, into))
+    r.perform(r.backend.ops.accept(listener, into))
     into.clear()
   }
 
   /** Resolves `host` and returns its addresses. */
-  def resolve(r: Io & Resolving, host: String)(using Async): List[ResolvedAddress] = {
+  def resolve(r: Io[Resolving], host: String)(using Async): List[ResolvedAddress] = {
     val into = Slot[List[ResolvedAddress]]()
-    r.perform(r.ops.resolve(host, into))
+    r.perform(r.backend.ops.resolve(host, into))
     into.clear()
   }
 
@@ -88,12 +89,12 @@ object HigherLevel {
     * future's op; a chunk in the reader's hands when it is cancelled, one a `send` did not deliver, is released by
     * the reader itself.
     */
-  def chunks(r: Io, handle: Handle, pool: BufferPool, backlog: Int)(using Async.Spawn): Chunks = {
+  def chunks(r: Io[Backend], handle: Handle, pool: BufferPool, backlog: Int)(using Async.Spawn): Chunks = {
     require(pool.buffers >= backlog + 2, s"a backlog of $backlog needs a pool of ${backlog + 2} buffers")
     val channel = BufferedChannel[Option[Received]](backlog)
     val reader = Future {
       val into = Slot[Received]()
-      val read = r.ops.read(handle, pool, into)
+      val read = r.backend.ops.read(handle, pool, into)
       var inHand: Received | Null = null
       try {
         var atEnd = false

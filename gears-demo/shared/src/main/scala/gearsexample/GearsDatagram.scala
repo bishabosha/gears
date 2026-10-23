@@ -32,9 +32,11 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
-        try exchange(r, sock, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[UnixAddress]()), request, response)
-        finally r.perform(r.ops.close(socket))
+        val socket = r.backend.handles.datagram(UnixAddress(localSock), UnixAddress(sock))
+        val ops = r.backend.ops
+        val receive = ops.receive(socket, response, Slot[UnixAddress]())
+        try exchange(r, sock, ops.send(socket, request), receive, request, response)
+        finally r.perform(ops.close(socket))
       }
     }
   }
@@ -45,17 +47,24 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.handles.datagram(null, address)
-        try exchange(r, address, r.ops.send(socket, request), r.ops.receive(socket, response, Slot[IpAddress]()), request, response)
-        finally r.perform(r.ops.close(socket))
+        val socket = r.backend.handles.datagram(null, address)
+        val ops = r.backend.ops
+        val receive = ops.receive(socket, response, Slot[IpAddress]())
+        try exchange(r, address, ops.send(socket, request), receive, request, response)
+        finally r.perform(ops.close(socket))
       }
     }
   }
 
   /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done. */
-  private def exchange(r: Io, remote: Any, send: r.Op, receive: r.Op, request: ByteBuffer, response: ByteBuffer)(
-      using Async
-  ): Unit = {
+  private def exchange(
+      r: Io[Backend],
+      remote: Any,
+      send: r.Op,
+      receive: r.Op,
+      request: ByteBuffer,
+      response: ByteBuffer
+  )(using Async): Unit = {
     println(s"Connected datagram socket to $remote")
     // Scoped, so the exchange is cancelled and settled before the socket is closed.
     Async.group {
@@ -66,7 +75,7 @@ object GearsDatagram {
         println(s"Received datagram of ${response.remaining()} bytes: `${text(response)}`")
       }
       // UDP has no delivery guarantee; make a missing reply visible in the demo.
-      val deadline = Future(r.perform(r.ops.timer(5000)))
+      val deadline = Future(r.perform(r.backend.ops.timer(5000)))
       Async.select(
         ping.handle(_.get),
         deadline.handle(_ => throw new IOException("Timed out waiting for datagram socket readiness or a reply"))
@@ -81,10 +90,11 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.handles.datagram(address, null)
+        val socket = r.backend.handles.datagram(address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
-        try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally r.perform(r.ops.close(socket))
+        val ops = r.backend.ops
+        try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
+        finally r.perform(ops.close(socket))
       }
     }
 
@@ -93,17 +103,18 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { r =>
-        val socket = r.handles.datagram(address, null)
+        val socket = r.backend.handles.datagram(address, null)
         val sender = Slot[IpAddress]()
-        try echo(r, r.ops.receive(socket, packet, sender), packet, () => r.ops.send(socket, packet, sender.clear()))
-        finally r.perform(r.ops.close(socket))
+        val ops = r.backend.ops
+        try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
+        finally r.perform(ops.close(socket))
       }
     }
 
   /** Receives packets with `receive`, one repeatable op, and echoes each, keeping it until the whole echo has gone,
     * with a new op per sender from `reply`.
     */
-  private def echo(r: Io, receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
+  private def echo(r: Io[Backend], receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
     println("Datagram socket is now waiting for messages.")
     while true do {
       r.perform(receive)

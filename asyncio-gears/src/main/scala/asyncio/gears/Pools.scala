@@ -12,31 +12,31 @@ import scala.util.Success
 import scala.util.Try
 
 import asyncio.Completion
-import asyncio.Pool
+import asyncio.OnPool
 import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.Submission
 
-/** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `Pool` the
-  * interface sees, over a scheduler of the pool's.
+/** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `OnPool` a
+  * program is given, over a scheduler of the pool's.
   */
 private[asyncio] object Pools {
 
-  /** The `Pool` of `scheduler`'s, whose workers drive `b`'s reactors, to bind `b` to (`ReactorBackend.bind`). */
-  def bound(b: ReactorBackend, scheduler: ReactorScheduler): Pool.Of[b.Op] = new Pool {
+  /** The `OnPool` over `b` on `scheduler`'s pool, whose workers drive `b`'s reactors: the program's `Io`. */
+  def bound(b: ReactorBackend, scheduler: ReactorScheduler): OnPool[b.type] = new OnPool[b.type] {
     require(scheduler.backend eq b, s"$scheduler drives ${scheduler.backend}'s reactors, not $b's")
-    type Op = b.Op
+    val backend: b.type = b
 
-    def perform(op: b.Op, timeoutMillis: Int)(using Async): Unit =
+    def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
       performOnReactor(b, op, timeoutMillis, scheduler)
 
-    def submit(op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using Async): Submission =
+    def submit(op: Op, completion: Completion[Op], timeoutMillis: Int)(using Async): Submission =
       submitOn(b, op, completion, timeoutMillis, scheduler)
 
     /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if
       * the caller has been cancelled by the time it resumes. Cheaper than gears' own, which spawns a task.
       */
-    def `yield`()(using ac: Async): Unit = {
+    override def `yield`()(using ac: Async): Unit = {
       ac.withGroup(CompletionGroup.Unlinked).await(Yield)
       if ac.group.isCancelled then throw new CancellationException()
     }

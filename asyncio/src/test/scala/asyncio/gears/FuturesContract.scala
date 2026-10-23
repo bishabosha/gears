@@ -1,5 +1,6 @@
 package asyncio.gears
 
+import asyncio.Io
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
@@ -44,11 +45,13 @@ trait FuturesContract extends FunSuite {
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.
     */
-  protected def listenAndConnect(r: backend.Io, dir: java.nio.file.Path)(using Async): (Handle, () => Handle) = r match {
-    case unix: asyncio.UnixStreams =>
+  protected def listenAndConnect(r: Io[backend.type], dir: java.nio.file.Path)(using
+      Async
+  ): (Handle, () => Handle) = r.backend match {
+    case unix: (asyncio.UnixStreams & r.backend.type) =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = unix.handles.listener(address)
-      unix.perform(unix.ops.listening(listener))
+      r.perform(unix.ops.listening(listener))
       (listener, () => unix.handles.connect(address))
     case _ =>
       // A port nothing listens on: the first the listening op does not fail on.
@@ -57,13 +60,13 @@ trait FuturesContract extends FunSuite {
       var found: (Handle, () => Handle) | Null = null
       while found == null do {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
-        val listener = r.handles.listener(address)
+        val listener = r.backend.handles.listener(address)
         try {
-          r.perform(r.ops.listening(listener))
-          found = (listener, () => r.handles.connect(address))
+          r.perform(r.backend.ops.listening(listener))
+          found = (listener, () => r.backend.handles.connect(address))
         } catch {
           case e: IOException =>
-            r.perform(r.ops.close(listener))
+            r.perform(r.backend.ops.close(listener))
             attempts += 1
             if attempts > 10 then throw e
         }
@@ -72,7 +75,7 @@ trait FuturesContract extends FunSuite {
   }
 
   /** Runs `body` as a program over `backend`, the platform's way, given the backend's `Io`, and returns its result. */
-  protected def running[T](body: backend.Io => (Async.Spawn, AsyncOperations) ?=> T): T
+  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T
 
   /** A port nothing listens on, found by listening on it with the backend and letting it go. */
   protected def freePort(): Int = running { r =>
@@ -81,15 +84,15 @@ trait FuturesContract extends FunSuite {
     var attempts = 0
     while port < 0 do {
       val candidate = 20000 + random.nextInt(30000)
-      val listener = r.handles.listener(IpAddress.IPv4("127.0.0.1", candidate))
+      val listener = r.backend.handles.listener(IpAddress.IPv4("127.0.0.1", candidate))
       try {
-        r.perform(r.ops.listening(listener))
+        r.perform(r.backend.ops.listening(listener))
         port = candidate
       } catch {
         case e: IOException =>
           attempts += 1
           if attempts > 10 then throw e
-      } finally r.perform(r.ops.close(listener))
+      } finally r.perform(r.backend.ops.close(listener))
     }
     port
   }
@@ -121,7 +124,7 @@ trait FuturesContract extends FunSuite {
   test("a program waits on a timer, and run returns what the program returns") {
     val waited = running { r =>
       val started = System.nanoTime()
-      r.perform(r.ops.timer(20))
+      r.perform(r.backend.ops.timer(20))
       System.nanoTime() - started
     }
     assert(waited >= 20_000_000L, s"waited only ${waited / 1000} µs")
@@ -130,22 +133,22 @@ trait FuturesContract extends FunSuite {
   test("two futures stream bytes through a pipe") {
     val total = 1 << 20
     val received = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
-          val write = r.ops.write(out, buf)
+          val write = r.backend.ops.write(out, buf)
           var sent = 0
           while sent < total do {
             buf.clear().limit(math.min(8192, total - sent))
             while buf.hasRemaining do r.perform(write)
             sent += buf.limit()
           }
-          r.perform(r.ops.close(out))
+          r.perform(r.backend.ops.close(out))
         }
         val reader = Future {
           val buf = arena.allocate(8192)
-          val read = r.ops.read(in, buf)
+          val read = r.backend.ops.read(in, buf)
           var received = 0
           var atEnd = false
           while !atEnd do {
@@ -157,7 +160,7 @@ trait FuturesContract extends FunSuite {
         }
         writer.await
         reader.await
-      } finally r.perform(r.ops.close(in))
+      } finally r.perform(r.backend.ops.close(in))
     }
     assertEquals(received, total)
   }
@@ -172,14 +175,14 @@ trait FuturesContract extends FunSuite {
       try {
         val server = Future {
           val accepted = Handle.Slot()
-          val accept = r.ops.accept(listener, accepted)
+          val accept = r.backend.ops.accept(listener, accepted)
           val connections = (1 to clients).map { _ =>
             r.perform(accept)
             val socket = accepted.clear()
             Future {
               val buf = arena.allocate(64)
-              val read = r.ops.read(socket, buf)
-              val write = r.ops.write(socket, buf)
+              val read = r.backend.ops.read(socket, buf)
+              val write = r.backend.ops.write(socket, buf)
               try
                 for _ <- 1 to trips do {
                   buf.clear().limit(5)
@@ -187,7 +190,7 @@ trait FuturesContract extends FunSuite {
                   buf.flip()
                   while buf.hasRemaining do r.perform(write)
                 }
-              finally r.perform(r.ops.close(socket))
+              finally r.perform(r.backend.ops.close(socket))
             }
           }
           connections.awaitAll
@@ -196,10 +199,10 @@ trait FuturesContract extends FunSuite {
           Future {
             val socket = connect()
             try {
-              r.perform(r.ops.connect(socket))
+              r.perform(r.backend.ops.connect(socket))
               val buf = arena.allocate(64)
-              val read = r.ops.read(socket, buf)
-              val write = r.ops.write(socket, buf)
+              val read = r.backend.ops.read(socket, buf)
+              val write = r.backend.ops.write(socket, buf)
               for _ <- 1 to trips do {
                 buf.clear().put("hello".getBytes(StandardCharsets.UTF_8)).flip()
                 while buf.hasRemaining do r.perform(write)
@@ -208,13 +211,13 @@ trait FuturesContract extends FunSuite {
                 assertEquals(text(buf), "hello")
               }
               1
-            } finally r.perform(r.ops.close(socket))
+            } finally r.perform(r.backend.ops.close(socket))
           }
         }
         val echoed = done.awaitAll.sum
         server.await
         echoed
-      } finally r.perform(r.ops.close(listener))
+      } finally r.perform(r.backend.ops.close(listener))
       } finally if Files.exists(dir) then {
         Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
         Files.deleteIfExists(dir): Unit
@@ -224,20 +227,20 @@ trait FuturesContract extends FunSuite {
 
   test("cancelling a future cancels the op it waits on, which may then be performed again") {
     val outcome = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
         val buf = arena.allocate(16)
-        val read = r.ops.read(in, buf)
+        val read = r.backend.ops.read(in, buf)
         val waiting = Future(r.perform(read))
-        r.perform(r.ops.timer(20)) // so that the read is pending
+        r.perform(r.backend.ops.timer(20)) // so that the read is pending
         waiting.cancel()
         val cancelled = waiting.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
-        r.perform(r.ops.write(out, arena.of("again".getBytes(StandardCharsets.UTF_8))))
+        r.perform(r.backend.ops.write(out, arena.of("again".getBytes(StandardCharsets.UTF_8))))
         r.perform(read)
         s"$cancelled ${text(buf)}"
       } finally {
-        r.perform(r.ops.close(in))
-        r.perform(r.ops.close(out))
+        r.perform(r.backend.ops.close(in))
+        r.perform(r.backend.ops.close(out))
       }
     }
     assertEquals(outcome, "true again")
@@ -245,10 +248,10 @@ trait FuturesContract extends FunSuite {
 
   test("performing a read with a time limit throws TimeoutException, and the read may then be performed again") {
     val outcome = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
         val buf = arena.allocate(16)
-        val read = r.ops.read(in, buf)
+        val read = r.backend.ops.read(in, buf)
         val started = System.nanoTime()
         val timedOut =
           try {
@@ -256,12 +259,12 @@ trait FuturesContract extends FunSuite {
             false
           } catch case _: TimeoutException => true
         val waited = System.nanoTime() - started
-        r.perform(r.ops.write(out, arena.of("in time".getBytes(StandardCharsets.UTF_8))))
+        r.perform(r.backend.ops.write(out, arena.of("in time".getBytes(StandardCharsets.UTF_8))))
         r.perform(read, timeoutMillis = 5_000)
         s"$timedOut ${waited >= 20_000_000L} ${buf.position()} ${text(buf)}"
       } finally {
-        r.perform(r.ops.close(in))
-        r.perform(r.ops.close(out))
+        r.perform(r.backend.ops.close(in))
+        r.perform(r.backend.ops.close(out))
       }
     }
     assertEquals(outcome, "true true 7 in time")
@@ -269,8 +272,8 @@ trait FuturesContract extends FunSuite {
 
   test("a blocking op past its time limit is interrupted, and perform throws TimeoutException") {
     val outcome = running { r =>
-      r match {
-        case b: asyncio.Blocking =>
+      r.backend match {
+        case b: (asyncio.Blocking & r.backend.type) =>
           val returned = new java.util.concurrent.atomic.AtomicBoolean
           val op = b.ops.blocking { () =>
             try Thread.sleep(10_000)
@@ -280,7 +283,7 @@ trait FuturesContract extends FunSuite {
           val started = System.nanoTime()
           val timedOut =
             try {
-              b.perform(op, timeoutMillis = 20)
+              r.perform(op, timeoutMillis = 20)
               false
             } catch case _: TimeoutException => true
           val waited = System.nanoTime() - started
@@ -296,7 +299,7 @@ trait FuturesContract extends FunSuite {
       val started = System.nanoTime()
       val timedOut =
         try {
-          r.perform(r.ops.timer(60_000), timeoutMillis = 20)
+          r.perform(r.backend.ops.timer(60_000), timeoutMillis = 20)
           false
         } catch case _: TimeoutException => true
       val waited = System.nanoTime() - started
@@ -307,7 +310,7 @@ trait FuturesContract extends FunSuite {
 
   test("gears' sleep and withTimeout run on the backend's timers: the program's Io is its AsyncOperations") {
     val outcome = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
         val started = System.nanoTime()
         sleep(20)
@@ -315,13 +318,13 @@ trait FuturesContract extends FunSuite {
         val buf = arena.allocate(16)
         val timedOut =
           try {
-            withTimeout(20.millis)(r.perform(r.ops.read(in, buf)))
+            withTimeout(20.millis)(r.perform(r.backend.ops.read(in, buf)))
             false
           } catch case _: TimeoutException => true
         s"${slept >= 20_000_000L} $timedOut ${buf.position()}"
       } finally {
-        r.perform(r.ops.close(in))
-        r.perform(r.ops.close(out))
+        r.perform(r.backend.ops.close(in))
+        r.perform(r.backend.ops.close(out))
       }
     }
     assertEquals(outcome, "true true 0")
@@ -329,14 +332,14 @@ trait FuturesContract extends FunSuite {
 
   test("a cancelled timer stops waiting, and may be performed again") {
     val outcome = running { r =>
-      val timer = r.ops.timer(60_000)
+      val timer = r.backend.ops.timer(60_000)
       val sleeping = Future(r.perform(timer))
-      r.perform(r.ops.timer(20)) // so that the long timer is waiting
+      r.perform(r.backend.ops.timer(20)) // so that the long timer is waiting
       val started = System.nanoTime()
       sleeping.cancel()
       val cancelled = sleeping.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
       val waited = System.nanoTime() - started
-      r.perform(r.ops.timer(1)) // the op again, now for a moment
+      r.perform(r.backend.ops.timer(1)) // the op again, now for a moment
       s"$cancelled ${waited < 1_000_000_000L}"
     }
     assertEquals(outcome, "true true")
@@ -348,24 +351,24 @@ trait FuturesContract extends FunSuite {
         val (listener, connect) = listenAndConnect(r, dir)
         val client = connect()
         try {
-          r.perform(r.ops.connect(client))
+          r.perform(r.backend.ops.connect(client))
           val accepted = Handle.Slot()
-          r.perform(r.ops.accept(listener, accepted))
+          r.perform(r.backend.ops.accept(listener, accepted))
           val server = accepted.clear()
           try {
             val buf = arena.allocate(16)
-            val read = r.ops.read(client, buf)
+            val read = r.backend.ops.read(client, buf)
             val waiting = Future(r.perform(read))
-            r.perform(r.ops.timer(20))
+            r.perform(r.backend.ops.timer(20))
             waiting.cancel()
             val cancelled = waiting.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
-            r.perform(r.ops.write(server, arena.of("still".getBytes(StandardCharsets.UTF_8))))
+            r.perform(r.backend.ops.write(server, arena.of("still".getBytes(StandardCharsets.UTF_8))))
             r.perform(read)
             s"$cancelled ${text(buf)}"
-          } finally r.perform(r.ops.close(server))
+          } finally r.perform(r.backend.ops.close(server))
         } finally {
-          r.perform(r.ops.close(client))
-          r.perform(r.ops.close(listener))
+          r.perform(r.backend.ops.close(client))
+          r.perform(r.backend.ops.close(listener))
         }
       }
     }
@@ -374,13 +377,13 @@ trait FuturesContract extends FunSuite {
 
   test("an op waiting on a handle that is closed fails") {
     val failure = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
-        val waiting = Future(r.perform(r.ops.read(in, arena.allocate(4))))
-        r.perform(r.ops.timer(20))
-        r.perform(r.ops.close(in))
+        val waiting = Future(r.perform(r.backend.ops.read(in, arena.allocate(4))))
+        r.perform(r.backend.ops.timer(20))
+        r.perform(r.backend.ops.close(in))
         waiting.awaitResult.failed.toOption.orNull
-      } finally r.perform(r.ops.close(out))
+      } finally r.perform(r.backend.ops.close(out))
     }
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
   }
@@ -389,9 +392,9 @@ trait FuturesContract extends FunSuite {
     val port = freePort() // nothing listens on it: one just given up
     val failure = running { r =>
       try {
-        val socket = r.handles.connect(IpAddress.IPv4("127.0.0.1", port))
-        try r.perform(r.ops.connect(socket))
-        finally r.perform(r.ops.close(socket))
+        val socket = r.backend.handles.connect(IpAddress.IPv4("127.0.0.1", port))
+        try r.perform(r.backend.ops.connect(socket))
+        finally r.perform(r.backend.ops.close(socket))
         null
       } catch case t: Throwable => t
     }
@@ -401,7 +404,7 @@ trait FuturesContract extends FunSuite {
   test("an op that is not Repeatable is performed only once") {
     val failure = running { r =>
       val into = Slot[List[ResolvedAddress]]()
-      val resolve = r.ops.resolve("localhost", into)
+      val resolve = r.backend.ops.resolve("localhost", into)
       r.perform(resolve)
       into.clear()
       try {
@@ -414,11 +417,11 @@ trait FuturesContract extends FunSuite {
 
   test("an op that fails fails perform") {
     val failure = running { r =>
-      val (in, out) = r.handles.pipe()
-      r.perform(r.ops.close(in))
-      r.perform(r.ops.close(out))
+      val (in, out) = r.backend.handles.pipe()
+      r.perform(r.backend.ops.close(in))
+      r.perform(r.backend.ops.close(out))
       try {
-        r.perform(r.ops.read(in, arena.allocate(4)))
+        r.perform(r.backend.ops.read(in, arena.allocate(4)))
         null
       } catch case t: Throwable => t
     }
@@ -428,11 +431,11 @@ trait FuturesContract extends FunSuite {
   test("a submission is cancelled when the group it was made in ends, and the group waits for its completion") {
     val outcome = running { r =>
       r match {
-        case p: asyncio.OnPool =>
+        case p: asyncio.OnPool[backend.type] =>
           val notified = new java.util.concurrent.atomic.AtomicBoolean
           val started = System.nanoTime()
           Async.group {
-            p.submit(p.ops.timer(60_000), new asyncio.Completion[p.Op] {
+            p.submit(p.backend.ops.timer(60_000), new asyncio.Completion[p.Op] {
               def onComplete(op: p.Op): Unit = ()
               override def onCancel(op: p.Op): Unit = notified.set(true)
             })
@@ -448,20 +451,20 @@ trait FuturesContract extends FunSuite {
   test("a submission is a source: raced in select against a timer, and completed by its cancel") {
     val outcome = running { r =>
       r match {
-        case p: asyncio.OnPool =>
-          val (in, out) = p.handles.pipe()
+        case p: asyncio.OnPool[backend.type] =>
+          val (in, out) = p.backend.handles.pipe()
           try {
             val buf = arena.allocate(16)
-            val read = p.submit(p.ops.read(in, buf)) // pending: nothing is written
-            val timer = p.submit(p.ops.timer(20))
+            val read = p.submit(p.backend.ops.read(in, buf)) // pending: nothing is written
+            val timer = p.submit(p.backend.ops.timer(20))
             val first = Async.select(timer.handle(_ => "timer"), read.handle(_ => "read"))
             read.cancel()
             val cancelled = read.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
             val timed = timer.awaitResult.isSuccess
             s"$first $cancelled $timed"
           } finally {
-            p.perform(p.ops.close(in))
-            p.perform(p.ops.close(out))
+            p.perform(p.backend.ops.close(in))
+            p.perform(p.backend.ops.close(out))
           }
         case _ => "timer true true" // no submissions on a caller backend
       }
