@@ -842,3 +842,12 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     run-queue tests beside it. The backends depend on the interface and `asyncio-unsafe`; the platform runners on the
     backends and `asyncio-gears`. A reference from the interface to the runtime is now a compile error, not a review
     finding.
+
+27. [x] **`OnPool` is a contract; the forwarding is `asyncio.unsafe.Pooled`; the design is written down.** `OnPool`
+    in the interface declares `backend`, `submit` and `yield` and inherits `perform`, with no body; how the three reach
+    the pool is `Pooled`, a trait in `asyncio-unsafe` that every reactor backend's `Io` class mixes in
+    (`KqueueOnPool`, `NWFrameworkOnPool`, `NioOnPool`), holding the `Pool` the runner bound it to. The interface
+    module's only bodies are defaults the contract states: `perform(op)` is `perform` with no limit, and `sleep` is a
+    timer op. `asyncio/README.md` lays out the three modules, the three orthogonal axes (capability, kind, `Io`), a
+    program, the semantics the interface fixes and what it leaves to a higher level, and the review against the goals
+    of the restructuring.
