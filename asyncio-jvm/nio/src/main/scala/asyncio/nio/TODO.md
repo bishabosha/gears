@@ -807,3 +807,12 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     `ReactorAsync`: what it held is `OnPool`'s companion (`performOnReactor`, `submitOn`, `Submission`, the waiter).
     Checked by a new contract test on every backend: `sleep(20)` sleeps, and `withTimeout(20.millis)` around a read
     throws `TimeoutException` with the buffer untouched.
+
+23. [x] **The runner out of the interface; workers and policy on the reactor kind only.** `Io`, `OnPool`, `OnCaller`
+    and `Submission` are interface (`asyncio`), what a program is given; the pool's machinery behind them is
+    `asyncio.gears.Pools`, which `OnPool` delegates to, a trait sharing implementation. `Backend.start` and `Runner`
+    are gone: `ReactorFutures.run(using backend: Backend)` dispatches once, by the backend's kind, with intersection
+    patterns and no cast, and `run(workers, policy)(using backend: ReactorBackend)` exists only for the kind that has
+    workers and a policy. The bench's `runOn` narrows to the reactor kind for its `--workers`; a caller backend gets
+    the plain `run`. The interface module now names nothing of the gears runtime but `ReactorScheduler`, in
+    `ReactorBackend.bind`, the one seam where the runner binds a backend to its pool.

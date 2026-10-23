@@ -8,8 +8,8 @@ import gears.async.Future.awaitAll
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-import asyncio.Backend
-import ReactorFutures.*
+import asyncio.ReactorBackend
+
 
 /** Checks that tasks queued for a worker in particular (`ReactorWorker.sync`: cancelling an op on its reactor, arming
   * or cancelling a timer there) run on that worker's thread, whatever other workers take, (see `InboxSuite`). They call
@@ -25,7 +25,7 @@ object InboxCheck {
   /** How the check went: queued tasks run, those run on another worker's thread, and tasks other workers took. */
   final case class Outcome(ran: Long, elsewhere: Long, taken: Long)
 
-  def run(rounds: Int)(using Backend): Outcome = {
+  def run(rounds: Int)(using ReactorBackend): Outcome = {
     val ran = new AtomicLong
     val elsewhere = new AtomicLong
     var workers = Array.empty[ReactorWorker]

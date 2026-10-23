@@ -11,7 +11,7 @@ import asyncio.ReadinessBackend
 import asyncio.ResolveBackend
 import asyncio.UnixDatagramBackend
 import asyncio.UnixStreamBackend
-import asyncio.gears.OnPool
+import asyncio.OnPool
 import asyncio.gears.ReactorScheduler
 
 /** What kqueue can do, as the backend and as a program's `Io` over it: every capability a backend may have: IP, Unix

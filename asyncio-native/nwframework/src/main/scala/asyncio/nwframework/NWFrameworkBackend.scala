@@ -9,7 +9,7 @@ import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.ResolveBackend
 import asyncio.SocketBackend
-import asyncio.gears.OnPool
+import asyncio.OnPool
 import asyncio.gears.ReactorScheduler
 
 /** What Network.framework can do, as the backend and as a program's `Io` over it: IP sockets, regular files and name
