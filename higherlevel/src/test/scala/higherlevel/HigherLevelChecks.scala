@@ -13,19 +13,19 @@ trait HigherLevelChecks extends FuturesContract {
 
   test("a higher level over perform: result-returning reads, accept and resolve") {
     val outcome = running { r =>
-      val (in, out) = r.handles.pipe()
+      val (in, out) = r.backend.handles.pipe()
       try {
         val buf = arena.allocate(16)
         val writer = Future {
           HigherLevel.writeAll(r, out, arena.of("wrapped".getBytes(StandardCharsets.UTF_8)))
-          r.perform(r.ops.close(out))
+          r.perform(r.backend.ops.close(out))
         }
         val got = HigherLevel.read(r, in, buf)
         writer.await
         val atEnd = HigherLevel.read(r, in, buf)
         val resolved = HigherLevel.resolve(r, "localhost").nonEmpty
         s"$got ${text(buf)} $atEnd $resolved"
-      } finally r.perform(r.ops.close(in))
+      } finally r.perform(r.backend.ops.close(in))
     }
     assertEquals(outcome, "7 wrapped 0 true")
   }
@@ -33,8 +33,8 @@ trait HigherLevelChecks extends FuturesContract {
   test("a higher level over perform: a stream of chunks consumed as a gears channel, with back-pressure") {
     val total = 1 << 20
     val received = running { r =>
-      val pool = r.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
-      val (in, out) = r.handles.pipe()
+      val pool = r.backend.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
+      val (in, out) = r.backend.handles.pipe()
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
@@ -44,13 +44,13 @@ trait HigherLevelChecks extends FuturesContract {
             HigherLevel.writeAll(r, out, buf)
             sent += buf.limit()
           }
-          r.perform(r.ops.close(out))
+          r.perform(r.backend.ops.close(out))
         }
         val received = HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
         writer.await
         received
       } finally {
-        r.perform(r.ops.close(in))
+        r.perform(r.backend.ops.close(in))
         pool.close()
       }
     }
@@ -59,8 +59,8 @@ trait HigherLevelChecks extends FuturesContract {
 
   test("a higher level over perform: a stream closed early releases its chunks, and one that fails rethrows") {
     val outcome = running { r =>
-      val pool = r.pool(bufferSize = 1024, buffers = 4)
-      val (in, out) = r.handles.pipe()
+      val pool = r.backend.pool(bufferSize = 1024, buffers = 4)
+      val (in, out) = r.backend.handles.pipe()
       try {
         HigherLevel.writeAll(r, out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8)))
         val stream = HigherLevel.chunks(r, in, pool, backlog = 2)
@@ -69,10 +69,10 @@ trait HigherLevelChecks extends FuturesContract {
           chunk.release()
           n
         }
-        r.perform(r.ops.timer(20)) // lets the reader fill the window and the backlog
+        r.perform(r.backend.ops.timer(20)) // lets the reader fill the window and the backlog
         stream.close() // releases what was read ahead
         val freed = pool.available == pool.buffers
-        r.perform(r.ops.close(in)) // the next stream's read fails on the closed handle
+        r.perform(r.backend.ops.close(in)) // the next stream's read fails on the closed handle
         val failed =
           try {
             HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
@@ -80,7 +80,7 @@ trait HigherLevelChecks extends FuturesContract {
           } catch case _: IOException => true
         s"${first.exists(_ > 0)} $freed $failed ${pool.available == pool.buffers}"
       } finally {
-        r.perform(r.ops.close(out))
+        r.perform(r.backend.ops.close(out))
         pool.close()
       }
     }

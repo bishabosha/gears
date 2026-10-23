@@ -18,7 +18,7 @@ object GearsFileRead {
       val contents = new ByteArrayOutputStream()
       ReactorFutures.run { r =>
         println(s"attempt to open file $fifo")
-        val file = r.handles.openFifo(fifo, write = false)
+        val file = r.backend.handles.openFifo(fifo, write = false)
         try {
           println(s"opened file: $file")
 
@@ -29,7 +29,7 @@ object GearsFileRead {
             var result: Boolean | Null = null
             while result == null do {
               chunk.clear()
-              val read = r.handles.readNow(file, chunk)
+              val read = r.backend.handles.readNow(file, chunk)
               if read < 0 then result = true
               else if read == 0 then {
                 println("No more data available to read (EAGAIN or EWOULDBLOCK).")
@@ -43,7 +43,8 @@ object GearsFileRead {
             result.nn
           }
 
-          val readable = r.ops.ready(file, Interest.Read) // one repeatable op, performed again before each drain
+          // One repeatable op, performed again before each drain.
+          val readable = r.backend.ops.ready(file, Interest.Read)
           println("Event registered for file read.")
           println("starting to poll...")
           while true do {
@@ -54,7 +55,7 @@ object GearsFileRead {
               contents.reset() // Start over for the next writer
             }
           }
-        } finally r.perform(r.ops.close(file))
+        } finally r.perform(r.backend.ops.close(file))
       }
     }
   }

@@ -24,12 +24,12 @@ object Sockets {
 
   /** A listener on `address`, listening: the handle, and its `listening` op performed. */
   @annotation.targetName("listenUnix")
-  def listen(b: Io & UnixStreams, address: StreamAddress)(using Async): Handle = {
+  def listen(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = {
     val listener = address match {
-      case unix: UnixAddress => b.handles.listener(unix)
-      case ip: IpAddress     => b.handles.listener(ip)
+      case unix: UnixAddress => r.backend.handles.listener(unix)
+      case ip: IpAddress     => r.backend.handles.listener(ip)
     }
-    b.perform(b.ops.listening(listener))
+    r.perform(r.backend.ops.listening(listener))
     listener
   }
 
@@ -41,12 +41,13 @@ object Sockets {
     case unix: UnixAddress => connect(unixSockets(b, unix), unix)
   }
 
-  def listen(b: Io & IpSockets, address: StreamAddress)(using Async): Handle = address match {
-    case ip: IpAddress =>
-      val listener = b.handles.listener(ip)
-      b.perform(b.ops.listening(listener))
-      listener
-    case unix: UnixAddress => listen(unixSockets(b, unix), unix)
+  def listen(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = {
+    val listener = address match {
+      case ip: IpAddress     => r.backend.handles.listener(ip)
+      case unix: UnixAddress => unixSockets(r.backend, unix).handles.listener(unix)
+    }
+    r.perform(r.backend.ops.listening(listener))
+    listener
   }
 
   private def unixSockets(b: IpSockets, address: UnixAddress): UnixStreams & b.type = b match {

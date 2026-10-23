@@ -60,7 +60,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      r: Io & UnixStreams,
+      r: Io[UnixStreams],
       fd: Handle,
       inbox: ByteBuffer,
       store: Store,
@@ -69,7 +69,7 @@ object GearsKeyValue {
       Async
   ): Unit = {
     val commands = new FrameParser
-    val readCommands = r.ops.read(fd, inbox) // one repeatable op for the whole session
+    val readCommands = r.backend.ops.read(fd, inbox) // one repeatable op for the whole session
     var eof = false
     while !eof do {
       inbox.clear()
@@ -91,10 +91,10 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: Io & UnixStreams, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
+  private def writeReplies(r: Io[UnixStreams], fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
       using Async
   ): Unit = {
-    val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
+    val writeReplies = r.backend.ops.write(fd, outbox) // one repeatable op for the whole session
     var done = false
     while !done do {
       val batch = replies.read().right.get
@@ -114,7 +114,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: Io & UnixStreams, fd: Handle, store: Store)(using Async): Unit = {
+  private def session(r: Io[UnixStreams], fd: Handle, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)
@@ -130,7 +130,7 @@ object GearsKeyValue {
       case e: IOException => println(s"Client socket $fd failed: ${e.getMessage}")
     } finally {
       arena.close()
-      r.perform(r.ops.close(fd))
+      r.perform(r.backend.ops.close(fd))
       println(s"Closed client socket: $fd")
     }
   }
@@ -146,7 +146,7 @@ object GearsKeyValue {
           println(s"Accepted new client connection: $client")
           Future(session(r, client, store))
         }
-      } finally r.perform(r.ops.close(server))
+      } finally r.perform(r.backend.ops.close(server))
     }
   }
 
@@ -160,12 +160,12 @@ object GearsKeyValue {
       val outbox = arena.allocate(BufferSize)
       val inbox = arena.allocate(BufferSize)
       ReactorFutures.run { r =>
-        val socket = Sockets.connect(r, address)
+        val socket = Sockets.connect(r.backend, address)
         try {
           println(s"connection in progress to: $address")
-          r.perform(r.ops.connect(socket))
+          r.perform(r.backend.ops.connect(socket))
           val sender = Future {
-            val write = r.ops.write(socket, outbox)
+            val write = r.backend.ops.write(socket, outbox)
             var sent = 0
             while sent < batch.length do {
               outbox.clear()
@@ -177,7 +177,7 @@ object GearsKeyValue {
           }
           val receiver = Future {
             val parser = new FrameParser
-            val read = r.ops.read(socket, inbox)
+            val read = r.backend.ops.read(socket, inbox)
             var received = 0
             var lastReply = ""
             while received < batch.length do {
@@ -197,7 +197,7 @@ object GearsKeyValue {
             println(s"Received $received replies; last reply: `$lastReply`")
           }
           Seq(sender, receiver).awaitAllOrCancel
-        } finally r.perform(r.ops.close(socket))
+        } finally r.perform(r.backend.ops.close(socket))
       }
     }
   }

@@ -4,8 +4,8 @@ Three modules, each depending only on the one before it:
 
 | module | holds | depends on |
 | --- | --- | --- |
-| `asyncio` | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and `Pool`, `Ops`, `Handles`, `Slot`, addresses, `BufferPool` | the gears library |
-| `asyncio-unsafe` | implementation the backends share: `Blockers`, `TimerHeap`, `HandleTable`, `Pooled` | `asyncio` |
+| `asyncio` | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handles`, `Slot`, addresses, `BufferPool` | the gears library |
+| `asyncio-unsafe` | implementation the backends share: `Blockers`, `TimerHeap`, `HandleTable` | `asyncio` |
 | `asyncio-gears` | the runtime: `ReactorPool`, `ReactorWorker`, `RunQueue`, `TakePolicy`, `ReactorScheduler`, `Pools` | `asyncio` |
 | `higherlevel` | the higher level the interface is for: result-returning methods and a stream of chunks over `Io` | `asyncio` |
 
@@ -16,45 +16,43 @@ Native implementation the two Native backends share (`NativePool`, the Posix soc
 module's `asyncio.unsafe` package, so the Network.framework backend depends on the loop module for it.
 
 What the build does not enforce: what the interface hides from programs it hides by package (`private[asyncio]`:
-`bind`, `Pool`, `Slot.set`, `Handle.wrap`), and every module of this repository lives in a package under `asyncio`.
-That keeps a program from performing an op where it cannot run, and a backend outside the repository would have to be
-written in a package under `asyncio` too.
+`CallerBackend.performHere`, `Slot.set`, `Handle.wrap`), and every module of this repository lives in a package
+under `asyncio`. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside the
+repository would have to be written in a package under `asyncio` too.
 
 ## The concepts, and why they are orthogonal
 
 Three axes, chosen independently of one another:
 
-- **Capability**: what a backend can do, as traits mixed into a backend and into its `Io` alike, and asked for by
-  intersection: `IpSockets`, `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`,
-  `UnixDatagrams`, `Fifos`. Each is its `Ops` and `Handles` over `Facilities`, what a backend and an `Io` have in
-  common; the base `Ops` is read, write, the pooled read, timer and close, and the base `Handles` opens nothing. A
-  program asks for a backend with one as `SocketBackend`, which is `Backend & IpSockets`, and likewise for the
-  others; a helper over a program's `Io` asks for the capability itself, `Io & IpSockets`.
+- **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpSockets`,
+  `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
+  `Backend` narrowed to its own `Ops` and `Handles`; the base `Ops` is read, write, the pooled read, timer and close,
+  and the base `Handles` opens nothing. A program asks for a backend with one as `SocketBackend`, which is
+  `Backend & IpSockets`, and likewise for the others.
 - **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
   thread, which may block. A backend is one kind, with any set of capabilities.
-- **`Io`**: what a program performs with. A backend's facilities bound to where the program runs: `OnPool` for a
-  reactor backend, made only by the runner (`ReactorBackend.bind`), or the caller backend itself (`OnCaller`). It is
-  not a `Backend`: the two share their capabilities and nothing else. Each capability narrows a backend's `Io` to
-  itself, so a program over a `SocketBackend & FileBackend` is given an `Io & IpSockets & Files`. `Io` is also the
-  program's gears `AsyncOperations`.
+- **`Io`**: where a program's ops run. An `Io[B]` has a backend, `backend: B`, and adds only `perform`: it has no
+  ops or handles of its own, and it is not a `Backend`. Its kinds are `OnPool`, on a pool of workers driving a
+  reactor backend's reactors, which the runtime implements and the runner gives the program it starts, and
+  `OnCaller`, over a caller backend, which anyone may make. The type names the backend, and is covariant in it, so
+  a program over a `SocketBackend & FileBackend` is given an `Io` over that backend, which a helper asking for
+  `Io[IpSockets]` takes. `Io` is also the program's gears `AsyncOperations`.
 
-What each axis does not know: a capability says nothing about threads, kinds or backends; a kind says nothing about
-sockets or files; an `Io` carries the capabilities and adds only `perform`. What a capability does know is the `Io`
-axis: each refines `Facilities.Io` to carry itself, which is what lets a program over a `SocketBackend & FileBackend`
-be given an `Io` with both. The
-runtime is reached through one contract, `Pool`, bound once to a backend's `Op` (`Pool.Of[Op]`), which says what a
-pool offers a program (`perform`, `submit`, `yield` on that backend's ops) and which `asyncio.gears.Pools` implements.
-`submit` and `yield` are `OnPool`'s alone: a program written over `Io` runs on either kind, one that submits with its
-own completion on reactor backends only.
+What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about
+sockets or files; an `Io` says nothing about sockets or files either, and reaches them only through its backend. The
+runtime is reached through one contract, `OnPool`, which says what a pool offers a program (`perform`, `submit`,
+`yield` on its backend's ops) and which `asyncio.gears.Pools.bound` implements. `submit` and `yield` are `OnPool`'s
+alone: a program written over `Io` runs on either kind, one that submits with its own completion on reactor backends
+only.
 
 ## A program
 
 ```scala
-def echo(client: Handle)(using Async, r: Io & IpSockets): Unit = {
+def echo(client: Handle)(using Async, r: Io[IpSockets]): Unit = {
   val buf = ...
-  val read = r.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
-  val write = r.ops.write(client, buf)
+  val read = r.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
+  val write = r.backend.ops.write(client, buf)
   while { buf.clear(); r.perform(read); buf.position() > 0 } do {
     buf.flip()
     while buf.hasRemaining() do r.perform(write)

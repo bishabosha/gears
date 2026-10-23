@@ -10,12 +10,12 @@ object GearsTimer {
   def run()(using Backend): Unit = {
     ReactorFutures.run { r =>
       println("Creating and registering timer event...")
-      val fired = Future(r.perform(r.ops.timer(5000)))
+      val fired = Future(r.perform(r.backend.ops.timer(5000)))
       println("Event registered successfully. Waiting for it to trigger...")
       println("calling kevent to wait for events...")
       val ticker = Future {
         var seconds = 0
-        val timer = r.ops.timer(1000)
+        val timer = r.backend.ops.timer(1000)
         while true do {
           r.perform(timer)
           seconds += 1

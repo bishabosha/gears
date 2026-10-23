@@ -9,10 +9,9 @@ import java.util.concurrent.TimeoutException
 
 import asyncio.CallerBackend
 import asyncio.Interest
-import asyncio.OnCaller
 
 /** NIO with no reactor: the backend for a program whose threads may block, such as gears' own virtual threads, the
-  * JVM's default. It has the ops and handles of `NioBackend`, and `perform` does each op on the calling thread. A
+  * JVM's default. It has the ops and handles of `NioBackend`, and does each op on the calling thread. A
   * command is tried at once, since a non-blocking channel may be used from any thread; one that would block is tried
   * again after a yield, up to `Retries` times, because in request-response traffic the reply often arrives within
   * microseconds, and a yield puts the caller behind every other thread ready to run, so this stays fair; then it
@@ -21,14 +20,11 @@ import asyncio.OnCaller
   * interrupted from a timer thread if its time limit is up; an op done at once, such as a close, is done. Cancelling
   * the caller ends the wait, and the handle stays open. Nothing spins: busy waiting gave the best latency and starved
   * the other futures, so it was dropped (see the NIO TODO, items 10 and 11). A time limit runs from the call: an op
-  * whose time runs out has done nothing and throws. It is its own `Io`, so `perform` works from any `Async` context
-  * with no runner, and `ReactorFutures.run` only hands the program this backend. Nothing of the JDK beyond its public
+  * whose time runs out has done nothing and throws. Its `Io` is an `OnCaller` over it, which works from any `Async`
+  * context with no runner, and is what `ReactorFutures.run` hands the program. Nothing of the JDK beyond its public
   * interface.
   */
-object NioOnCaller extends CallerBackend with OnCaller with NioCapabilities {
-  type Io = NioOnCaller.type
-
-  private[asyncio] def bind(): NioOnCaller.type = this
+object NioOnCaller extends CallerBackend with NioCapabilities {
 
   /** How many times a command that would block is tried again after a yield, before it waits on its selector
     * (`-Dasyncio.gears.retriesHere`).
@@ -40,7 +36,7 @@ object NioOnCaller extends CallerBackend with OnCaller with NioCapabilities {
     */
   inline val HereBudget = 32
 
-  def perform(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
+  private[asyncio] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {

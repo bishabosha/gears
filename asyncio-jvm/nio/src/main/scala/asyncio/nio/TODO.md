@@ -937,3 +937,22 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     runs. The README keeps the description of the modules, the three axes, the fixed semantics and the higher level,
     and the trade-offs once listed as accepted (the `Io` an explicit parameter, time limits an `Int` of
     milliseconds) now sit with the program they concern. Items 28 to 32 record the reviews and the script as history.
+
+34. [x] **An `Io` has a backend, and is not one.** Item 31 kept the two apart by giving them a common supertype,
+    `Facilities` (`Op`, `Io`, `ops`, `handles`, `pool`), mixed into both, so an `Io` still restated its backend:
+    each reactor backend's `Io` class (`KqueueOnPool`, `NWFrameworkOnPool`, `NioOnPool`) mixed in the backend's
+    capabilities again beside a `backend` field, each capability refined `type Io` to carry itself into the `Io`, and
+    an `Io` had a `type Io`. Now `Facilities` is gone and its members are `Backend`'s; a capability is a `Backend`
+    narrowed to its ops and handles and knows nothing of `Io`. `Io[+B <: Backend]` has `val backend: B`, `type Op =
+    backend.Op` and `perform`, and no ops or handles of its own; a program writes `r.backend.ops.read(...)` and
+    `r.perform(op)`, and a helper asks for `Io[IpSockets]`, which an `Io` over a `SocketBackend & FileBackend` is,
+    by covariance. Its kinds are generic: `OnPool[B]`, which the runtime implements (`Pools.bound(b, scheduler):
+    OnPool[b.type]`, replacing `Pool`, `Pool.Of`, `ReactorBackend.bind` and `asyncio.unsafe.Pooled`), and `final class
+    OnCaller[B <: CallerBackend](backend)`, which anyone may make, performing through `CallerBackend.performHere`
+    (`private[asyncio]`); `NioOnCaller` is a plain caller backend and no longer its own `Io`. The per-backend `Io`
+    classes are gone, and kqueue's and Network.framework's capabilities traits are folded into their backend objects
+    (NIO keeps `NioCapabilities`, shared by its two backends). The runner's one-argument `run` gives
+    `Io[backend.type]`; `run(workers)` gives `OnPool[backend.type]`, which `GearsCancel` now uses for `submit`. What
+    it costs: a test of a capability at run time is on the backend (`r.backend match { case b: (Blocking &
+    r.backend.type) => r.perform(b.ops...) }`), and a val holding such a backend needs its type written, or the
+    compiler loses that its `Op` is `r.Op`.

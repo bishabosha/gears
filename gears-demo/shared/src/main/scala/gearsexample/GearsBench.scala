@@ -55,7 +55,7 @@ object GearsBench {
   )
 
   trait Client {
-    def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit
+    def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit
   }
 
   val scenarios: Seq[Scenario] = Seq(
@@ -64,7 +64,7 @@ object GearsBench {
       "one message in flight: a resume and a readiness wait per message on each side",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false)
       }
     ),
@@ -73,7 +73,7 @@ object GearsBench {
       "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, freshOps = true)
       }
     ),
@@ -83,7 +83,7 @@ object GearsBench {
         + "over without a copy",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, pooled = true)
       }
     ),
@@ -93,7 +93,7 @@ object GearsBench {
         + "at a size where they count",
       2_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count, messageSize = LargeMessage)
       }
     ),
@@ -102,7 +102,7 @@ object GearsBench {
       "as large, reading into the backend's pool, whose buffers fit one message too",
       2_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count, messageSize = LargeMessage, pooled = true)
       }
     ),
@@ -111,7 +111,7 @@ object GearsBench {
       "as pingpong, with a time limit on every op of the round trip, as a request with a timeout has",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = true)
       }
     ),
@@ -120,7 +120,7 @@ object GearsBench {
       "many connections ping-ponging at once: many events and registrations per turn",
       100_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false))).awaitAll
         }
@@ -131,7 +131,7 @@ object GearsBench {
       "as concurrent, with a slice of computation after each round trip, in the connection's own future",
       100_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Inline))).awaitAll
         }
@@ -142,7 +142,7 @@ object GearsBench {
       "as concurrent-compute, with each slice in a future of its own, awaited before the next round trip",
       100_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(r, address, each, deadline = false, work = Work.Offload))).awaitAll
         }
@@ -153,7 +153,7 @@ object GearsBench {
       "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
       20_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
           var i = 0
           while i < count do {
             pingPong(r, address, 1, deadline = false)
@@ -167,7 +167,7 @@ object GearsBench {
       "one connection, each message its own write while replies are read at the same time",
       200_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pipelined(r, address, count)
       }
     ),
@@ -176,11 +176,11 @@ object GearsBench {
       "trivial blocking tasks one after another: a wake-up from a worker thread for each",
       100_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
-          val b = blocking(r)
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit = {
+          val b: Blocking & r.backend.type = blocking(r)
           var i = 0
           while i < count do {
-            b.perform(b.ops.blocking(() => ()))
+            r.perform(b.ops.blocking(() => ()))
             i += 1
           }
         }
@@ -192,7 +192,7 @@ object GearsBench {
       "a trivial blocking task and a round trip in turn on one connection: moving between blocking work and I/O",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           pingPong(r, address, count, deadline = false, blockingFirst = true)
       },
       _.isInstanceOf[BlockingBackend]
@@ -202,7 +202,7 @@ object GearsBench {
       s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
       200_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           timerStress(reactors(r), count)
       },
       _.isInstanceOf[ReactorBackend]
@@ -213,7 +213,7 @@ object GearsBench {
         + "the time between ticks, which rises if busy futures stop yielding",
       200_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           fairness(r, address, count)
       }
     ),
@@ -224,7 +224,7 @@ object GearsBench {
         + "and -max: how late, in µs, the checker woke",
       100_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           starvation(r, address, count, connections)
       }
     ),
@@ -234,7 +234,7 @@ object GearsBench {
         + "mixed-compute, the time per slice meanwhile",
       50_000,
       new Client {
-        def apply(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using Async.Spawn): Unit =
           mixed(r, address, count)
       }
     )
@@ -244,22 +244,24 @@ object GearsBench {
     * a caller backend runs it on gears' own threads.
     */
   private def runOn(workers: Int, policy: TakePolicy)(using backend: SocketBackend)(
-      program: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit
+      program: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend match {
     case reactors: (ReactorBackend & backend.type) => ReactorFutures.run(workers, policy)(using reactors)(program)
     case _                                         => ReactorFutures.run(using backend)(program)
   }
 
-  /** `r` as the reactor backend a scenario that runs only on one needs: still `r`, so its context serves. */
-  private def reactors(r: Io): OnPool & r.type = r match {
-    case reactors: (OnPool & r.type) => reactors
+  /** `r` as the `Io` on a pool a scenario that runs only on one needs: still `r`, so its context serves. */
+  private def reactors(r: Io[Backend]): OnPool[ReactorBackend] & r.type = r match {
+    case reactors: (OnPool[ReactorBackend] & r.type) => reactors
     case _                           => throw new IllegalArgumentException(s"$r has no reactors")
   }
 
-  /** `r` as the backend with blocking ops a scenario that runs only on one needs: still `r`. */
-  private def blocking(r: Io): Blocking & r.type = r match {
-    case blocking: (Blocking & r.type) => blocking
-    case _                                    => throw new IllegalArgumentException(s"$r has no blocking ops")
+  /** `r`'s backend as one with blocking ops, which a scenario that runs only on one needs: still `r`'s, so `r`
+    * performs its ops.
+    */
+  private def blocking(r: Io[Backend]): Blocking & r.backend.type = r.backend match {
+    case blocking: (Blocking & r.backend.type) => blocking
+    case _                                     => throw new IllegalArgumentException(s"$r has no blocking ops")
   }
 
   /** How many timers the `timers` scenario has pending at once. */
@@ -268,7 +270,7 @@ object GearsBench {
   /** Arms timers `TimerBatch` at a time: half for 0 ms, which fire, and half for a minute, which are cancelled once the
     * others have fired. Each timer, armed and then fired or cancelled, is one operation.
     */
-  private def timerStress(r: OnPool, count: Int)(using Async): Unit = {
+  private def timerStress(r: OnPool[ReactorBackend], count: Int)(using Async): Unit = {
     var done = 0
     while done < count do {
       val batch = math.min(TimerBatch, count - done)
@@ -277,12 +279,12 @@ object GearsBench {
       val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
       var i = 0
       while i < batch do {
-        if i % 2 == 0 then r.submit(r.ops.timer(0), counter)
-        else toCancel += r.submit(r.ops.timer(60_000), counter)
+        if i % 2 == 0 then r.submit(r.backend.ops.timer(0), counter)
+        else toCancel += r.submit(r.backend.ops.timer(60_000), counter)
         i += 1
       }
       val firing = (batch + 1) / 2
-      while fired.get() < firing do r.perform(r.ops.timer(0)) // lets the loops turn until the short timers fire
+      while fired.get() < firing do r.perform(r.backend.ops.timer(0)) // lets the loops turn until the short timers fire
       toCancel.foreach(_.cancel())
       done += batch
     }
@@ -312,7 +314,7 @@ object GearsBench {
     * done. Between slices it yields to the scheduler with `yieldNow`, so that the ping-pong continuations run in
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
-  private def mixed(r: Io & IpSockets, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
+  private def mixed(r: Io[IpSockets], address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
     val pingPongDone = new java.util.concurrent.atomic.AtomicBoolean // read by the other future, maybe on another worker
     var slices = 0L
     val start = System.nanoTime()
@@ -341,14 +343,14 @@ object GearsBench {
     * lateness is how long the program takes to respond, whatever else it is doing. Reports the median, 99th
     * percentile and worst lateness, in µs, as `starvation-p50`, `-p99` and `-max`.
     */
-  private def starvation(r: Io & IpSockets, address: StreamAddress, count: Int, connections: Int)(using
+  private def starvation(r: Io[IpSockets], address: StreamAddress, count: Int, connections: Int)(using
       Async.Spawn
   ): Unit = {
     val done = new java.util.concurrent.atomic.AtomicBoolean // read by the other futures, maybe on other threads
     val interval = StarvationCheckMillis * 1_000_000L
     val late = scala.collection.mutable.ArrayBuffer.empty[Long]
     val checker = Future {
-      val timer = r.ops.timer(StarvationCheckMillis)
+      val timer = r.backend.ops.timer(StarvationCheckMillis)
       while !done.get() do {
         val started = System.nanoTime()
         r.perform(timer)
@@ -381,12 +383,12 @@ object GearsBench {
   }
 
   /** Connects to `address`, runs `body` on the connection, and closes it. */  /** Connects to `address`, runs `body` on the connection, and closes it. */
-  private def withConnection(r: Io & IpSockets, address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
-    val fd = Sockets.connect(r, address)
+  private def withConnection(r: Io[IpSockets], address: StreamAddress)(body: Handle => Unit)(using Async): Unit = {
+    val fd = Sockets.connect(r.backend, address)
     try {
-      r.perform(r.ops.connect(fd))
+      r.perform(r.backend.ops.connect(fd))
       body(fd)
-    } finally r.perform(r.ops.close(fd))
+    } finally r.perform(r.backend.ops.close(fd))
   }
 
   /** Computation done after each round trip by the compute variants of `concurrent`. */
@@ -400,7 +402,7 @@ object GearsBench {
     * runs before each round trip; `work` says whether a slice of computation follows each, and where.
     */
   private def pingPong(
-      r: Io & IpSockets,
+      r: Io[IpSockets],
       address: StreamAddress,
       count: Int,
       deadline: Boolean,
@@ -412,24 +414,27 @@ object GearsBench {
   )(using Async.Spawn): Unit = {
     // The pool outlives the connection: a receive into one of its buffers may be outstanding until the close op is
     // done, which gives the buffer back.
-    val pool = if pooled then r.pool(messageSize, 2) else null
+    val pool = if pooled then r.backend.pool(messageSize, 2) else null
     try withConnection(r, address) { fd =>
       val arena = BufferArena.open()
       try {
         val buf = arena.allocate(messageSize)
-        val write = r.ops.write(fd, buf)
-        val read = r.ops.read(fd, buf)
+        val write = r.backend.ops.write(fd, buf)
+        val read = r.backend.ops.read(fd, buf)
         val into = Slot[Received]()
-        val pooledRead = if pooled then r.ops.read(fd, pool.nn, into) else null
+        val pooledRead = if pooled then r.backend.ops.read(fd, pool.nn, into) else null
         // The time limit, where the scenario has one: long enough never to be reached, so it costs only its arming.
         val limit = if deadline then 60_000 else Backend.NoTimeout
-        val blocker = if blockingFirst then blocking(r) else null
+        val blocker: Option[Blocking & r.backend.type] = if blockingFirst then Some(blocking(r)) else None
         var worked = 0L
         var i = 0
         while i < count do {
-          if blocker != null then blocker.perform(blocker.ops.blocking(() => ()))
+          blocker match {
+            case Some(b) => r.perform(b.ops.blocking(() => ()))
+            case None    => ()
+          }
           buf.clear()
-          while buf.hasRemaining() do r.perform(if freshOps then r.ops.write(fd, buf) else write, limit)
+          while buf.hasRemaining() do r.perform(if freshOps then r.backend.ops.write(fd, buf) else write, limit)
           if pooled then {
             var got = 0
             while got < messageSize do {
@@ -444,7 +449,7 @@ object GearsBench {
             buf.clear()
             while buf.hasRemaining() do {
               val before = buf.position()
-              r.perform(if freshOps then r.ops.read(fd, buf) else read, limit)
+              r.perform(if freshOps then r.backend.ops.read(fd, buf) else read, limit)
               if buf.position() == before then throw new IOException("The server closed the connection")
             }
           }
@@ -464,13 +469,13 @@ object GearsBench {
     * in another, into a buffer of 8 KB, or, with `pooled`, into the backend's pool of buffers the size of a message.
     */
   private def pipelined(
-      r: Io & IpSockets,
+      r: Io[IpSockets],
       address: StreamAddress,
       count: Int,
       messageSize: Int = MessageSize,
       pooled: Boolean = false
   )(using Async.Spawn): Unit = {
-    val pool = if pooled then r.pool(messageSize, 2) else null // outlives the connection: see `pingPong`
+    val pool = if pooled then r.backend.pool(messageSize, 2) else null // outlives the connection: see `pingPong`
     try withConnection(r, address) { fd =>
       val arena = BufferArena.open()
       try {
@@ -478,7 +483,7 @@ object GearsBench {
         val out = arena.allocate(messageSize)
         val in = arena.allocate(if messageSize > 8192 then messageSize else 8192)
         val writer = Future {
-          val write = r.ops.write(fd, out)
+          val write = r.backend.ops.write(fd, out)
           var i = 0
           while i < count do {
             out.clear()
@@ -489,7 +494,7 @@ object GearsBench {
         var received = 0L
         if pooled then {
           val into = Slot[Received]()
-          val read = r.ops.read(fd, pool.nn, into)
+          val read = r.backend.ops.read(fd, pool.nn, into)
           while received < total do {
             r.perform(read)
             val got = into.clear()
@@ -499,7 +504,7 @@ object GearsBench {
             received += n
           }
         } else {
-          val read = r.ops.read(fd, in)
+          val read = r.backend.ops.read(fd, in)
           while received < total do {
             in.clear()
             r.perform(read)
@@ -516,13 +521,13 @@ object GearsBench {
     * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations
     * rarely wait must still let it run.
     */
-  private def fairness(r: Io & IpSockets, address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
+  private def fairness(r: Io[IpSockets], address: StreamAddress, count: Int)(using Async.Spawn): Unit = {
     val trafficDone = new java.util.concurrent.atomic.AtomicBoolean // read by the ticker, maybe on another worker
     var ticks = 0L
     val start = System.nanoTime()
     val ticker = Future {
       while !trafficDone.get() do {
-        r.perform(r.ops.timer(0))
+        r.perform(r.backend.ops.timer(0))
         ticks += 1
       }
     }
@@ -534,12 +539,12 @@ object GearsBench {
   }
 
   /** Echoes everything a connection sends until it closes. */
-  private def echo(r: Io & IpSockets, client: Handle)(using Async): Unit = {
+  private def echo(r: Io[IpSockets], client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
-      val read = r.ops.read(client, buf)
-      val write = r.ops.write(client, buf)
+      val read = r.backend.ops.read(client, buf)
+      val write = r.backend.ops.write(client, buf)
       var open = true
       while open do {
         buf.clear()
@@ -553,7 +558,7 @@ object GearsBench {
     } catch case _: IOException => () // a client that goes away mid-write ends only its own connection
     finally {
       arena.close()
-      r.perform(r.ops.close(client))
+      r.perform(r.backend.ops.close(client))
     }
   }
 
@@ -585,7 +590,7 @@ object GearsBench {
           try Sockets.listen(r, address)
           finally listening.countDown()
         val accepted = Handle.Slot()
-        val accept = r.ops.accept(server, accepted)
+        val accept = r.backend.ops.accept(server, accepted)
         while true do {
           r.perform(accept)
           val client = accepted.clear()
