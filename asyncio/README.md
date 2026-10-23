@@ -93,11 +93,12 @@ either result returning methods or streaming APIs.* Each clause below is given a
 without trusting this document, how to check it, and whether it is met or, where it is not, why the gap is accepted
 against the goal's wording. The checks that can be mechanical are `asyncio/criteria.sh`, run from the repository's
 root: it greps the sources and the build for each and fails if any fails, so the status below is a measurement, not
-a reading. The criteria were also checked twice by readers given the code and the goal and not this document's
-claims: a review that found the gaps fixed in item 28 of `asyncio-jvm/nio/TODO.md`, and a verification of these
-criteria (item 29) that ran each check, judged the two comparative clauses against the state before the goal (commit
-`5a5734b`) and found orthogonality *improved* and programs *more idiomatic*, and asked for the four things item 29
-lists, all done.
+a reading, and it measures the two comparative clauses against the state before the goal (commit `5a5734b`) with
+the same command on both sides. The criteria were also checked by readers given the code and the goal and not this
+document's claims: a review that found the gaps fixed in item 28 of `asyncio-jvm/nio/TODO.md`; a verification of
+these criteria (item 29) that ran each check and found orthogonality *improved* and programs *more idiomatic*; and
+an audit of the script itself (item 32), which reproduced every number, found no loosening in its history, and found
+one measure shaped to pass and four checks that only grepped for strings their author wrote, all since corrected.
 
 ### Orthogonality of concepts
 
@@ -135,7 +136,9 @@ gears `Cancellable` and an `Async.Source`, so it composes in `select` with a cha
 `FuturesContract`, the one suite every backend runs, which uses only those, has `sleep` and `withTimeout` run on the
 backend's timers, has cancelling a future cancel its op, has a scope's end cancel a submission made in it and wait
 for its completion, races a submission against a timer in `Async.select`, and takes every result from the value
-`running` returns; `criteria.sh` checks those tests are present and that the contract holds no result variables.
+`running` returns; `criteria.sh` checks the types (`Io` an `AsyncOperations`, `Submission` a `Cancellable` and a
+`Source`, `run` returning a value) and that the contract declares no variable at test scope, which is how a result
+was smuggled out of a program before.
 *Status*: met. `ReactorFutures.run` returns the program's value as `Async.blocking` does; `Submission` is a
 `Cancellable` in the caller's group, as a `Future` is, and a `Source` of the op's outcome, as a `Future` is, so
 `OnPool.submit(op)` with no completion of the caller's own is the source view of an op. **Accepted**, as the lowest

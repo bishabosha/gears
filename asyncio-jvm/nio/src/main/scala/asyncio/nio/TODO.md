@@ -915,3 +915,17 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     sources inside the interface module 9 to 0, results leaving the contract's programs through vars 13 to 0, demo
     files performing ops through free functions 11 to 0, runtime checks for what the types refuse 1 to 0. The
     higher level's `accept` is used by the key-value and server-socket demos too.
+
+32. [x] **The script audited.** A reader given `criteria.sh`, its history and the goal's wording reproduced all
+    twelve comparative numbers and found no loosening in the script's two commits (the allowed set of bodies never
+    changed), but also: one measure shaped to pass, the result-variable count using a pattern before that it dropped
+    after (with one pattern it read 13 to 1); four checks that grepped for strings their author wrote (a doc
+    sentence and three test names); a check computing a count it never used; and two measures missing. Done: the
+    variable measure is structural and the same on both sides (vars declared at a test's scope, 13 to 0; the two
+    left are loop state inside a program, returned as its value); the four greps are gone, what they stood for being
+    the contract suites' to check; the `Pooled` check requires all three forwarders; the before side reads the same
+    code lines as the after side; and two measures added, defs with bodies in the interface (22 to 17, the blocker
+    pool's and `Backend.start`'s gone) and lines of the interface naming the runtime's pool, policy, runner, workers
+    or threads (12 to 0). The audit also noted that the demos were already gears-shaped before the goal (counts of
+    `Async.Spawn`, `using Async` and `Future {` are flat), so the idiom gained is the interface's: `Io` as the
+    program's `AsyncOperations`, `Submission` as a `Cancellable` and a `Source`, `run` returning the program's value.
