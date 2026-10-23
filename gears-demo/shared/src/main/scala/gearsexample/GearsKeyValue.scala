@@ -72,7 +72,7 @@ object GearsKeyValue {
     var eof = false
     while !eof do {
       inbox.clear()
-      perform(r, readCommands)
+      r.perform(readCommands)
       if inbox.position() == 0 then eof = true // Nothing added: end of stream. Answer what has been parsed, then close.
       else {
         inbox.flip()
@@ -106,7 +106,7 @@ object GearsKeyValue {
           outbox.put(batch, offset, chunk)
           outbox.flip()
           offset += chunk
-          while outbox.hasRemaining() do perform(r, writeReplies)
+          while outbox.hasRemaining() do r.perform(writeReplies)
         }
       }
     }
@@ -129,7 +129,7 @@ object GearsKeyValue {
       case e: IOException => println(s"Client socket $fd failed: ${e.getMessage}")
     } finally {
       arena.close()
-      perform(r, r.ops.close(fd))
+      r.perform(r.ops.close(fd))
       println(s"Closed client socket: $fd")
     }
   }
@@ -143,12 +143,12 @@ object GearsKeyValue {
         val accepted = Handle.Slot() // each accept writes its connection here, like a read fills a buffer
         val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
-          perform(r, accept) // completes once a connection has been accepted
+          r.perform(accept) // completes once a connection has been accepted
           val client = accepted.clear()
           println(s"Accepted new client connection: $client")
           Future(session(r, client, store))
         }
-      } finally perform(r, r.ops.close(server))
+      } finally r.perform(r.ops.close(server))
     }
   }
 
@@ -165,7 +165,7 @@ object GearsKeyValue {
         val socket = Sockets.connect(r, address)
         try {
           println(s"connection in progress to: $address")
-          perform(r, r.ops.connect(socket))
+          r.perform(r.ops.connect(socket))
           val sender = Future {
             val write = r.ops.write(socket, outbox)
             var sent = 0
@@ -173,7 +173,7 @@ object GearsKeyValue {
               outbox.clear()
               while sent < batch.length && StreamProtocol.append(batch(sent), outbox) do sent += 1
               outbox.flip()
-              while outbox.hasRemaining() do perform(r, write)
+              while outbox.hasRemaining() do r.perform(write)
             }
             println(s"Pipelined ${batch.length} commands.")
           }
@@ -184,7 +184,7 @@ object GearsKeyValue {
             var lastReply = ""
             while received < batch.length do {
               inbox.clear()
-              perform(r, read)
+              r.perform(read)
               if inbox.position() == 0 then
                 throw new IOException(s"Server closed the connection after $received replies")
               inbox.flip()
@@ -199,7 +199,7 @@ object GearsKeyValue {
             println(s"Received $received replies; last reply: `$lastReply`")
           }
           Seq(sender, receiver).awaitAllOrCancel
-        } finally perform(r, r.ops.close(socket))
+        } finally r.perform(r.ops.close(socket))
       }
     }
   }

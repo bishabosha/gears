@@ -29,7 +29,7 @@ object Sockets {
       case unix: UnixAddress => b.handles.listener(unix)
       case ip: IpAddress     => b.handles.listener(ip)
     }
-    ReactorAsync.perform(b, b.ops.listening(listener))
+    b.perform(b.ops.listening(listener))
     listener
   }
 
@@ -44,7 +44,7 @@ object Sockets {
   def listen(b: Io & SocketBackend, address: StreamAddress)(using Async): Handle = address match {
     case ip: IpAddress =>
       val listener = b.handles.listener(ip)
-      ReactorAsync.perform(b, b.ops.listening(listener))
+      b.perform(b.ops.listening(listener))
       listener
     case unix: UnixAddress => listen(unixSockets(b, unix), unix)
   }

@@ -35,8 +35,6 @@ trait NWFrameworkCapabilities
   * Its ops keep no state of one reactor between submissions, so an op may go to any of its reactors in turn.
   */
 object NWFrameworkBackend extends ReactorBackend with NWFrameworkCapabilities {
-  def attachment(op: Op): AnyRef | Null = op.attachment
-  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
   def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
   private[asyncio] def bind(scheduler: ReactorScheduler): NWFrameworkOnPool = new NWFrameworkOnPool(scheduler)
 }

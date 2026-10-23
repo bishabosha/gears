@@ -16,29 +16,13 @@ import asyncio.Completion
 import asyncio.Reactor
 import asyncio.ReactorBackend
 
-/** What gears futures do with a program's `Io`: perform ops, on any kind, and, on a pool, submit them; and yield. The
-  * same on every platform. A program over a reactor backend runs on a `ReactorPool`, whose workers run both the
+/** How a program's `Io` performs its ops, and `yieldNow`: `Io.perform` and `OnPool.submit` come here. The same on every
+  * platform. A program over a reactor backend runs on a `ReactorPool`, whose workers run both the
   * futures and the reactors, as on Scala Native and with `NioBackend` on the JVM, and its `OnPool` sends each op to
   * the reactor of the worker running the caller (`performHere`); a caller backend, such as `NioOnCaller`, the JVM's
   * default, performs its ops on the calling thread and needs none of this.
   */
 object ReactorAsync {
-
-  /** Performs `op`, which must have been built by `r.ops`, and suspends the caller until it is done, as `Io.perform`
-    * says. To run an op alongside other work, call this inside a `Future`.
-    */
-  def perform(r: Io, op: r.Op)(using Async): Unit = r.perform(op)
-
-  /** Performs `op` with a time limit, as `Io.perform` says: `TimeoutException` if it is not done `timeoutMillis`
-    * milliseconds after it was started, the op stopped and its buffers and slots the caller's again. A read with a
-    * timeout is this, not a race against a timer.
-    */
-  def perform(r: Io, op: r.Op, timeoutMillis: Int)(using Async): Unit = r.perform(op, timeoutMillis)
-
-  /** Submits `op` with a completion of the caller's own, as `OnPool.submit` says. */
-  def submit(r: OnPool, op: r.Op, completion: Completion[r.Op], timeoutMillis: Int = Backend.NoTimeout)(using
-      Async
-  ): Submission = r.submit(op, completion, timeoutMillis)
 
   /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
     * `scheduler`, the pool's, and suspends the caller until the reactor finishes with it: it returns when the op
@@ -76,19 +60,19 @@ object ReactorAsync {
       timeoutMillis: Int
   )(using ac: Async): Unit = {
     val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
-    // An op performed again reuses its waiter, kept as its attachment, so that performing it allocates nothing here,
-    // even when it last ran on another worker. A waiter still in use (the op performed twice at once, which the
-    // reactor refuses) is left alone.
+    // An op performed again reuses its waiter, kept as its attachment (`Submitter.attachment`, which belongs to the op,
+    // so any reactor of the backend reads it), so that performing it allocates nothing here, even when it last ran on
+    // another worker. A waiter still in use (the op performed twice at once, which the reactor refuses) is left alone.
     val waiter =
       try {
         if ac.group.isCancelled then throw new CancellationException()
-        b.attachment(op) match {
+        r.attachment(op) match {
           case reused: OpWaiter if !reused.inUse =>
             reused.reset(worker)
             reused
           case _ =>
             val fresh = new OpWaiter(worker, op)
-            b.attach(op, fresh)
+            r.attach(op, fresh)
             fresh
         }
       } catch {

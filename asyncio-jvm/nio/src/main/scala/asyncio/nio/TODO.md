@@ -785,3 +785,13 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     the way: a path-dependent proof `backend.Context`, which could not be narrowed (a context for `r` is not one for
     `r` seen as a `ReactorBackend`), and a contravariant `Context[-B]`, which could but cost every helper a second
     context parameter. Checks unchanged in number: JVM 17/41/45 and the demo suites 30, Native 49/68/32.
+
+21. [x] **`CompletionBackend` gone, and the top-level `perform` with it.** The attachment an op carries belongs to
+    the op and is read through any submitter (`Submitter.attachment`), so the backend-level copy, which existed only
+    for the gears waiter, is dropped: `performHere` reads it through the worker's reactor, and `ReactorBackend` is a
+    `Backend` and a `Reactor.Factory`, nothing between. The interface module is now `Submitter`, `Reactor`, `Ops`,
+    `Handles`, the capabilities, and the two kinds of `Backend`; what every backend object implements is `ops`,
+    `handles`, `pool`, its `Io`, and for a reactor backend `open` and `bind`. With `Io` having `perform` and
+    `OnPool` `submit`, the top-level `ReactorAsync.perform` and `submit` are gone too: programs write `r.perform(op)`
+    and `r.submit(op, completion)`; `yieldNow` stays, since it is about the `Async`, not an op. A Node or browser
+    backend, when it comes, is a third kind whose one submitter is the host loop.

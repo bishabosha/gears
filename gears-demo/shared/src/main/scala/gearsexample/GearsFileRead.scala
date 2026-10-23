@@ -48,12 +48,12 @@ object GearsFileRead {
           println("Event registered for file read.")
           println("starting to poll...")
           while true do {
-            perform(r, readable) // completes only at end of file
+            r.perform(readable) // completes only at end of file
             println(s"End of file reached. Contents are ${contents.size} long.")
             println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
             contents.reset() // Start over for the next writer
           }
-        } finally perform(r, r.ops.close(file))
+        } finally r.perform(r.ops.close(file))
       }
     }
   }
