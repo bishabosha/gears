@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 
 import asyncio.kqueue.KqueueBackend
 
@@ -8,7 +9,7 @@ import asyncio.kqueue.KqueueBackend
 abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
-  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

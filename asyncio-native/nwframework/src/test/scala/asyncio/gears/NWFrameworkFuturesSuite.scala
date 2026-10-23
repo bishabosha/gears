@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 
 import asyncio.nwframework.NWFrameworkBackend
 
@@ -8,7 +9,7 @@ import asyncio.nwframework.NWFrameworkBackend
 abstract class NWFrameworkFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
 
-  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

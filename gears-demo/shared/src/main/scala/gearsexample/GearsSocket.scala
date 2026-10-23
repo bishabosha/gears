@@ -9,7 +9,6 @@ import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF. */
 object GearsSocket {

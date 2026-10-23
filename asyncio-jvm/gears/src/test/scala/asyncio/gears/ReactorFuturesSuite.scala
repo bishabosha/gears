@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
@@ -15,7 +16,7 @@ import asyncio.testkit.BufferArena
 class NioOnCallerSuite extends FuturesContract {
   val backend: NioOnCaller.type = NioOnCaller
 
-  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
     ReactorFutures.run(using backend)(body)
 
   test("a program over NioOnCaller needs no runner: it is its own Io, and performs on the calling thread") {
@@ -48,7 +49,7 @@ class NioOnCallerSuite extends FuturesContract {
 abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NioBackend.type = NioBackend
 
-  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => (Async.Spawn, AsyncOperations) ?=> Unit): Unit =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

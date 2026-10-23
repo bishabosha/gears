@@ -1,6 +1,7 @@
 package asyncio.gears
 
 import gears.async.Async
+import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.Future.awaitAll
 
@@ -48,7 +49,7 @@ object InboxCheck {
         poster.start()
         while !queued.get() do Thread.onSpinWait() // keeps the worker busy, so the task waits for its next round
         poster.join()
-        yieldNow() // resumed in that round, with the queued task beside it
+        AsyncOperations.`yield`() // resumed in that round, with the queued task beside it
         val spawned = (1 to 3).map(_ => Future(()))
         val until = System.nanoTime() + 1_000_000L
         while System.nanoTime() < until do Thread.onSpinWait() // so the idle worker takes some meanwhile

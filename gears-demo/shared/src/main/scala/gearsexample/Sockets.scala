@@ -11,7 +11,6 @@ import asyncio.IpAddress
 import asyncio.SocketBackend
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
-import asyncio.gears.ReactorAsync
 
 /** Where a stream demo's server listens: an IP address, or a Unix path on a backend with Unix stream sockets. */
 type StreamAddress = IpAddress | UnixAddress

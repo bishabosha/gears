@@ -15,7 +15,6 @@ import asyncio.UnixStreamBackend
 import asyncio.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 
 /** Mirror of `example.KQueueExampleServerSocket`. The acceptor is a loop, and each connection is its own future whose
   * state machine is now plain sequential code.

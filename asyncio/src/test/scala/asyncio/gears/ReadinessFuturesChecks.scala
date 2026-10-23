@@ -10,7 +10,6 @@ import asyncio.PipeBackend
 import asyncio.ReadinessBackend
 import asyncio.ResolveBackend
 import asyncio.SocketBackend
-import ReactorAsync.*
 
 /** `FuturesContract`'s checks of readiness, for a backend that has it. */
 trait ReadinessFuturesChecks extends FuturesContract {

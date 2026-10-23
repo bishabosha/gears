@@ -17,7 +17,6 @@ import asyncio.Slot
 import asyncio.testkit.BufferArena
 import DemoIO.text
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 
 /** Mirrors of `example.KQueueExampleDatagramSocket` and `example.KQueueExampleDatagramServerSocket`, using the
   * reactor's `receive` and `send` ops.

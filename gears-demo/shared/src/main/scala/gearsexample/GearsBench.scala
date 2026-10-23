@@ -23,7 +23,6 @@ import asyncio.testkit.BufferArena
 import asyncio.gears.Io
 import asyncio.gears.OnPool
 import asyncio.gears.ReactorFutures
-import asyncio.gears.ReactorFutures.*
 import asyncio.gears.TakePolicy
 
 /** Stress tests for a reactor and its gears integration, to measure each change against. An echo server runs on one
@@ -261,7 +260,7 @@ object GearsBench {
       val batch = math.min(TimerBatch, count - done)
       val fired = new java.util.concurrent.atomic.AtomicInteger // counted on the worker the timers went to
       val counter: Completion[r.Op] = _ => fired.incrementAndGet()
-      val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
+      val toCancel = scala.collection.mutable.ArrayBuffer.empty[OnPool.Submission]
       var i = 0
       while i < batch do {
         if i % 2 == 0 then r.submit(r.ops.timer(0), counter)
@@ -307,7 +306,7 @@ object GearsBench {
       var result = 0L
       while !pingPongDone.get() do {
         result += computeSlice(slices)
-        yieldNow()
+        r.`yield`()
         slices += 1
       }
       computeSink = result
@@ -348,7 +347,7 @@ object GearsBench {
         var slice = core.toLong
         while !done.get() do {
           result += computeSlice(slice)
-          yieldNow()
+          r.`yield`()
           slice += 1
         }
         if result == 1L then computeSink = result // only so that the work cannot be optimised away
