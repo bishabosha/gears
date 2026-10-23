@@ -63,7 +63,6 @@ object GearsServerSocket {
             drainTo(buf, body)
           }
           if open then {
-            println(s"message contents: `${body.toString(StandardCharsets.UTF_8)}`")
             buf.clear()
             buf.put(Response)
             buf.flip()
@@ -78,23 +77,17 @@ object GearsServerSocket {
     } finally {
       arena.close()
       r.perform(r.backend.ops.close(client))
-      println(s"Closed client socket: $client")
     }
   }
 
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
 
-  def run(address: StreamAddress)(using UnixStreamBackend): Unit = {
+  def run(address: StreamAddress)(using UnixStreamBackend): Unit =
     ReactorFutures.run { r =>
       val server = Sockets.listen(r, address)
       try {
         println("Socket is now listening for connections.")
-        while true do {
-          val client = HigherLevel.accept(r, server) // returns once a connection has been accepted
-          println(s"Accepted new client connection: $client")
-          Future(serve(r, client))
-        }
+        Sockets.serve(r, server)(client => serve(r, client))
       } finally r.perform(r.backend.ops.close(server))
     }
-  }
 }

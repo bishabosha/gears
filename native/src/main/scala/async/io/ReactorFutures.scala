@@ -43,6 +43,7 @@ object ReactorFutures {
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using backend: ReactorBackend)(
       program: OnPool[backend.type] => (Async.Spawn, AsyncOperations) ?=> T
   ): T = {
+    FileLimit.raised: Unit // as the JVM does, so that a server's sockets are not capped at a shell's 256
     val stats = sys.env.get("GEARS_POOL_STATS").contains("1")
     ReactorPool.run(backend, workers, policy, stopped = pool => if stats then printStats(pool)) { pool =>
       given ReactorPool = pool

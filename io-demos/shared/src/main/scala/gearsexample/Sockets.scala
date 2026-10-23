@@ -4,6 +4,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 import gears.async.Async
+import gears.async.Future
 
 import gears.async.io.Io
 import gears.async.io.Handle
@@ -51,6 +52,35 @@ object Sockets {
       val sockets: UnixStreams & r.backend.type = unixSockets(r.backend, unix)
       r.perform(sockets.ops.listen(unix, into))
       into.clear()
+  }
+
+  /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A
+    * failed accept leaves the server running: the connection it was for is gone, and running out of descriptors
+    * (`EMFILE`) passes as connections close, so it waits a little and accepts again. One repeatable accept op serves
+    * every connection.
+    */
+  def serve(r: Io[IpSockets], listener: Handle)(serve: Handle => Async.Spawn ?=> Unit)(using Async.Spawn): Unit = {
+    val accepted = Handle.Slot()
+    val accept = r.backend.ops.accept(listener, accepted)
+    var failing = false
+    while true do {
+      val client =
+        try {
+          r.perform(accept)
+          failing = false
+          Handle.Opt(accepted.clear())
+        } catch {
+          case e: java.io.IOException =>
+            if !failing then println(s"Accepting failed, and is tried again: ${e.getMessage}") // once per run of them
+            failing = true
+            r.sleep(10)
+            Handle.Opt.empty
+        }
+      if client.nonEmpty then {
+        val connection = client.get
+        Future(serve(connection))
+      }
+    }
   }
 
   private def unixSockets(b: IpSockets, address: UnixAddress): UnixStreams & b.type = b match {

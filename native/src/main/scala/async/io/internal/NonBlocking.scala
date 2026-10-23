@@ -28,7 +28,10 @@ object NonBlocking {
     * accepted socket has the listening socket's properties, `O_NONBLOCK` among them (see accept(2)).
     */
   def accept(serverFd: Int): Int = {
-    val clientFd = Unblocked.accept(serverFd, null, null)
+    var clientFd = Unblocked.accept(serverFd, null, null)
+    // A connection its client reset while it was queued is gone, not a failure of the listener: the next one, as the
+    // JDK's accept does.
+    while clientFd < 0 && errno.errno == errno.ECONNABORTED do clientFd = Unblocked.accept(serverFd, null, null)
     if clientFd < 0 then {
       val transient = wouldBlock
       if !transient then throw new IOException(s"Failed to accept connection: ${cError()}")

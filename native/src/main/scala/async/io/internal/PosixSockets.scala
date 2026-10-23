@@ -85,7 +85,11 @@ object PosixSockets {
     if failed then throw new IOException(s"Failed to set socket descriptor to non-blocking: ${cError()}")
   }
 
-  def maxConnections: Int = socket.SOMAXCONN
+  /** The backlog listeners ask for. The kernel caps it at its own limit (`kern.ipc.somaxconn` on macOS, 128 unless
+    * raised; `net.core.somaxconn` on Linux), so asking for more than `SOMAXCONN` lets a raised limit take effect:
+    * connections that arrive while the queue is full are reset, which a burst of clients sees.
+    */
+  def maxConnections: Int = 4096
 
   @alwaysinline
   private def unixSocketAddrLen(pathLength: Int): socket.socklen_t =
@@ -233,7 +237,8 @@ object PosixSockets {
     * notified when a connection is available.
     */
   def accept(fd: Int): Int = {
-    val clientFd = socket.accept(fd, null, null)
+    var clientFd = socket.accept(fd, null, null)
+    while (clientFd < 0 && errno.errno == errno.ECONNABORTED) clientFd = socket.accept(fd, null, null) // reset while queued
     if (clientFd < 0) {
       if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK)
         // TODO: perhaps between the event and calling accept the socket was closed?

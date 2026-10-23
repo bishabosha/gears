@@ -588,13 +588,7 @@ object GearsBench {
         val server =
           try Sockets.listen(r, address)
           finally listening.countDown()
-        val accepted = Handle.Slot()
-        val accept = r.backend.ops.accept(server, accepted)
-        while true do {
-          r.perform(accept)
-          val client = accepted.clear()
-          Future(echo(r, client))
-        }
+        Sockets.serve(r, server)(client => echo(r, client))
       }
     catch {
       case t: Throwable =>
