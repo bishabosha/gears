@@ -56,30 +56,28 @@ object Sockets {
 
   /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A
     * failed accept leaves the server running: the connection it was for is gone, and running out of descriptors
-    * (`EMFILE`) passes as connections close, so it waits a little and accepts again. One repeatable accept op serves
-    * every connection.
+    * (`EMFILE`) passes as connections close, so it waits a little and accepts again. One repeatable op serves every
+    * connection, taking all that are pending each time (`acceptAll`), so that a burst does not wait an op apiece behind
+    * the connections already being served while the listen queue fills.
     */
   def serve(r: Io[IpSockets], listener: Handle)(serve: Handle => Async.Spawn ?=> Unit)(using Async.Spawn): Unit = {
-    val accepted = Handle.Slot()
-    val accept = r.backend.ops.accept(listener, accepted)
+    val accepted = gears.async.io.Slot[Array[Handle]]()
+    val accept = r.backend.ops.acceptAll(listener, accepted, max = 64)
     var failing = false
     while true do {
-      val client =
+      val clients =
         try {
           r.perform(accept)
           failing = false
-          Handle.Opt(accepted.clear())
+          accepted.clear()
         } catch {
           case e: java.io.IOException =>
             if !failing then println(s"Accepting failed, and is tried again: ${e.getMessage}") // once per run of them
             failing = true
             r.sleep(10)
-            Handle.Opt.empty
+            Array.empty[Handle]
         }
-      if client.nonEmpty then {
-        val connection = client.get
-        Future(serve(connection))
-      }
+      for client <- clients do Future(serve(client))
     }
   }
 

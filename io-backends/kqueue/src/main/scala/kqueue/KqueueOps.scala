@@ -59,6 +59,10 @@ object KqueueOps
   def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd(handle), buf)
   def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd(handle), buf)
   def accept(handle: Handle, into: Handle.Slot): Accept = Accept(fd(handle), into)
+  def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): AcceptAll = {
+    require(max > 0, s"max must be positive, not $max")
+    new AcceptAll(fd(handle), into, max)
+  }
   def connect(address: IpAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
   def connect(address: UnixAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
   def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): KqueueOp =

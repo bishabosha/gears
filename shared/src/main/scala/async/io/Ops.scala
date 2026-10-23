@@ -86,6 +86,13 @@ trait SocketOps[Op] extends Ops[Op] {
     */
   def accept(handle: Handle, into: Handle.Slot): Op & Repeatable
 
+  /** Accepts the connections pending on a listening socket, as `accept` does one: completes once at least one has been
+    * accepted, after writing them, at most `max`, into `into`, which must be empty. A server under a burst of
+    * connections takes them in one op each time the listener is ready rather than one op apiece, which keeps its
+    * listen queue from filling, and the kernel from resetting what arrives meanwhile, while its other work runs.
+    */
+  def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): Op & Repeatable
+
   /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
     * `into`, which must be empty; fails if the connection is refused or cannot be made.
     */

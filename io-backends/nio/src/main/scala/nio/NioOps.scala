@@ -61,6 +61,10 @@ object NioOps
   def read(handle: Handle, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): Write = new Write(handle, buf)
   def accept(handle: Handle, into: Handle.Slot): Accept = new Accept(handle, into)
+  def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): AcceptAll = {
+    require(max > 0, s"max must be positive, not $max")
+    new AcceptAll(handle, into, max)
+  }
   def connect(address: IpAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
   def connect(address: UnixAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
   def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): NioOp =
@@ -246,6 +250,38 @@ final class Accept(val handle: Handle, into: Handle.Slot) extends Command {
       into.set(NioHandles.add(Selectable(client, null)))
     }
     client != null
+  }
+}
+
+/** Accepts the connections pending on a listener, at most `max`, writing their handles into `into` (see
+  * `SocketOps.acceptAll`). Done once at least one has been accepted.
+  */
+final class AcceptAll(val handle: Handle, into: Slot[Array[Handle]], max: Int) extends Command {
+  def interest: Interest = Interest.Read
+  def perform(): Boolean = {
+    val listener = selectable(classOf[ServerSocketChannel], "Accepting")
+    val clients = scala.collection.mutable.ArrayBuffer.empty[Handle]
+    var more = true
+    try
+      while more && clients.length < max do {
+        val client = listener.accept()
+        if client == null then more = false
+        else {
+          try client.configureBlocking(false)
+          catch {
+            case t: Throwable =>
+              client.close()
+              throw t
+          }
+          clients += NioHandles.add(Selectable(client, null))
+        }
+      }
+    catch {
+      case failure: Throwable =>
+        if clients.isEmpty then throw failure // with some accepted, they are delivered, and the next accept fails instead
+    }
+    if clients.nonEmpty then into.set(clients.toArray)
+    clients.nonEmpty
   }
 }
 

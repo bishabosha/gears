@@ -59,6 +59,10 @@ object NWFrameworkOps
   def read(handle: Handle, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
   def accept(handle: Handle, into: Handle.Slot): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
+  def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): NWFrameworkAcceptAll = {
+    require(max > 0, s"max must be positive, not $max")
+    new NWFrameworkAcceptAll(handle, into, max)
+  }
   def connect(address: IpAddress, into: Handle.Slot): NWFrameworkOp = new NWFrameworkConnectTo(address, into)
   def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): NWFrameworkOp =
     new NWFrameworkListen(address, reuseAddr, into)
@@ -168,6 +172,20 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
         true
       }
     }
+}
+
+/** Accepts the connections waiting on a listener, at most `max`, writing their handles into `into`. */
+final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[Handle]], max: Int) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Read
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+    val accepted = h.acceptAll(max, reactor, token)
+    if accepted == null then false
+    else {
+      into.set(accepted.map(NWFrameworkHandles.accepted))
+      true
+    }
+  }
 }
 
 /** A command that opens the handle it waits on, and writes it into a slot (see `Ops`): `open` makes the handle when

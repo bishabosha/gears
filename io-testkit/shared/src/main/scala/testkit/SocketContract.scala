@@ -206,6 +206,32 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("acceptAll takes the pending connections, at most max at a time, until each is accepted") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val connecting = (1 to 3).map(_ => startConnect(r, IpAddress.IPv4("127.0.0.1", port)))
+        turnUntil(r)(connecting.forall(_._1.finished))
+        val clients = connecting.map { (connected, into) =>
+          assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+          into.clear()
+        }
+        val accepted = Slot[Array[Handle]]()
+        val accept = backend.ops.acceptAll(listener, accepted, max = 2)
+        val servers = scala.collection.mutable.ArrayBuffer.empty[Handle]
+        while servers.length < 3 do {
+          val failure = run(r, accept)
+          assert(failure == null, String.valueOf(failure))
+          val batch = accepted.clear()
+          assert(batch.length >= 1 && batch.length <= 2, s"accepted ${batch.length} at once with max 2")
+          servers ++= batch
+        }
+        assertEquals(servers.distinct.length, 3)
+        (servers ++ clients).foreach(close(r, _))
+      } finally close(r, listener)
+    }
+  }
+
   test("a connect to a port nothing listens on fails, leaving its slot empty") {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))

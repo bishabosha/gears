@@ -445,6 +445,24 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
+  /** The accept-all op: the accepted connections waiting, at most `max`, or null with the read waiter registered. */
+  def acceptAll(max: Int, reactor: NWFrameworkReactor, token: Long): Array[NWFrameworkIo.Handle] | Null = synchronized {
+    checkOpen()
+    if !accepted.isEmpty then {
+      val taken = new Array[NWFrameworkIo.Handle](math.min(max, accepted.size))
+      var i = 0
+      while i < taken.length do {
+        taken(i) = accepted.poll()
+        i += 1
+      }
+      taken
+    } else if state == 2 then throw failure("accept", error)
+    else {
+      await(Read, reactor, token)
+      null
+    }
+  }
+
   /** The receive op: the next datagram, or null with the read waiter registered; a connected socket keeps one receive
     * outstanding.
     */
