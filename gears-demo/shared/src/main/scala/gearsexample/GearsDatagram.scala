@@ -7,6 +7,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
+import asyncio.gears.Io
 import asyncio.Backend
 import asyncio.IpAddress
 import asyncio.SocketBackend
@@ -53,7 +54,7 @@ object GearsDatagram {
   }
 
   /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done. */
-  private def exchange(r: Backend, remote: Any, send: r.Op, receive: r.Op, request: ByteBuffer, response: ByteBuffer)(
+  private def exchange(r: Io, remote: Any, send: r.Op, receive: r.Op, request: ByteBuffer, response: ByteBuffer)(
       using Async
   ): Unit = {
     println(s"Connected datagram socket to $remote")
@@ -103,7 +104,7 @@ object GearsDatagram {
   /** Receives packets with `receive`, one repeatable op, and echoes each, keeping it until the whole echo has gone,
     * with a new op per sender from `reply`.
     */
-  private def echo(r: Backend, receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
+  private def echo(r: Io, receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
     println("Datagram socket is now waiting for messages.")
     while true do {
       perform(r, receive)

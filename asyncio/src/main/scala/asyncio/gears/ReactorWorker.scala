@@ -15,7 +15,7 @@ import asyncio.Reactor
   *
   * Its reactor is one of `backend`'s, opened on the worker's own thread, so it runs any op the backend builds.
   */
-private[gears] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor) {
+private[asyncio] final class ReactorWorker(val pool: ReactorPool, val index: Int, val reactor: Reactor) {
 
   /** The thread it runs on, which created it. */
   private[gears] val owner = Thread.currentThread()

@@ -69,6 +69,8 @@ class ReactorSuite extends FunSuite {
       def attach(op: Op, value: AnyRef | Null): Unit = ()
       def open(): Reactor.Of[Op] = reactor
       def pool(bufferSize: Int, buffers: Int): BufferPool = throw new UnsupportedOperationException
+      type Io = Nothing
+      private[asyncio] def bind(scheduler: asyncio.gears.ReactorScheduler): Io = throw new UnsupportedOperationException
     }
     Reactor.scoped(_ => ())
     assert(reactor.closed)

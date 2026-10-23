@@ -764,3 +764,24 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     such lock, and is where to measure before anything like the hand-off comes back. `NioBackend` on a pool is untouched,
     as it should be: it never used the ladder. (Measured with the caller path still a hook on `NioBackend`; the
     split into its own backend changed no code on the path.)
+
+20. [x] **`Io`: the backend bound to where a program runs, with `perform` on it, and capabilities as intersections.**
+    `Backend` is now pure: `Op`, `ops`, `handles`, `pool`, and the type of its `Io`. `perform` moved to
+    `asyncio.gears.Io`, a `Backend` bound to where the program runs: `OnPool` holds the pool's scheduler, reads the
+    worker running the caller from it (never from the `Async`, and never null: `ReactorScheduler.currentWorker`
+    throws for a thread that is no worker's, which a program cannot reach), and adds `submit`; `OnCaller` is a
+    `CallerBackend` itself. A runner makes an `OnPool` for the program it starts (`ReactorBackend.bind`), and nothing
+    else can, so performing an op of a reactor backend with the bare backend is a type error (checked in
+    `ReactorCarriersSuite`). Each capability trait narrows `type Io` to itself
+    (`type Io <: Io & SocketBackend { type Op = ... }`), so a program over a `SocketBackend & FileBackend` is given an
+    `Io & SocketBackend & FileBackend`: intersections, no type parameter, and a helper written for
+    `Io & SocketBackend` takes any program's. Per backend one capabilities trait (`KqueueCapabilities`,
+    `NWFrameworkCapabilities`, `NioCapabilities`) is shared by the backend object and its `OnPool` class
+    (`KqueueOnPool`, `NWFrameworkOnPool`, `NioOnPool`), so NIO's two backends list their capabilities once.
+    `ReactorFutures.run(using backend)(program: backend.Io => Async.Spawn ?=> Unit)` dispatches by the backend's
+    kind through `Backend.start`, so the runner has no match and no cast; Native's `onCaller` refuses, since it has no
+    caller backends. The demos' helpers take `Io & SocketBackend` where they perform, and nothing else about them
+    changed: `perform(r, op)` reads as before, `r` being the program's `Io`. Two designs were tried and dropped on
+    the way: a path-dependent proof `backend.Context`, which could not be narrowed (a context for `r` is not one for
+    `r` seen as a `ReactorBackend`), and a contravariant `Context[-B]`, which could but cost every helper a second
+    context parameter. Checks unchanged in number: JVM 17/41/45 and the demo suites 30, Native 49/68/32.

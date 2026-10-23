@@ -89,7 +89,7 @@ private[gears] final class CarriedPool(backend: ReactorBackend, size: Int, polic
 private[gears] final class VirtualReactorScheduler(val pool: ReactorPool, factory: ThreadFactory)
     extends ReactorScheduler {
   def backend: ReactorBackend = pool.backend
-  def currentWorker: ReactorWorker | Null = pool.currentWorker
+  def currentWorker: ReactorWorker = pool.currentWorker
   override def pin(): Unit = VirtualCarriers.pin()
   override def unpin(): Unit = VirtualCarriers.unpin()
 

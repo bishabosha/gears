@@ -10,6 +10,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import scala.collection.mutable
 
+import asyncio.gears.Io
 import asyncio.Backend
 import asyncio.Handle
 import asyncio.UnixAddress
@@ -58,7 +59,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      r: UnixStreamBackend,
+      r: Io & UnixStreamBackend,
       fd: Handle,
       inbox: ByteBuffer,
       store: Store,
@@ -89,7 +90,7 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: UnixStreamBackend, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
+  private def writeReplies(r: Io & UnixStreamBackend, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
       using Async
   ): Unit = {
     val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
@@ -112,7 +113,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: UnixStreamBackend, fd: Handle, store: Store)(using Async): Unit = {
+  private def session(r: Io & UnixStreamBackend, fd: Handle, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)

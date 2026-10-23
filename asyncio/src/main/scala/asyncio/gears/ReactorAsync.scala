@@ -16,60 +16,54 @@ import asyncio.Completion
 import asyncio.Reactor
 import asyncio.ReactorBackend
 
-/** What gears futures do with a program's backend: perform ops, on any backend, and, on a reactor backend, submit
-  * them; and yield. The same on every platform. A program over a reactor backend runs on a `ReactorPool`, whose
-  * workers run both the futures and the reactors, as on Scala Native and with `NioBackend` on the JVM, and sends each
-  * op to the reactor of the worker running the caller (`performHere`); a backend that performs its ops on the calling
-  * thread, such as `NioOnCaller`, the JVM's default, needs none of this.
+/** What gears futures do with a program's `Io`: perform ops, on any kind, and, on a pool, submit them; and yield. The
+  * same on every platform. A program over a reactor backend runs on a `ReactorPool`, whose workers run both the
+  * futures and the reactors, as on Scala Native and with `NioBackend` on the JVM, and its `OnPool` sends each op to
+  * the reactor of the worker running the caller (`performHere`); a caller backend, such as `NioOnCaller`, the JVM's
+  * default, performs its ops on the calling thread and needs none of this.
   */
 object ReactorAsync {
 
-  /** Performs `op`, which must have been built by `b.ops`, and suspends the caller until it is done, as `b.perform`
+  /** Performs `op`, which must have been built by `r.ops`, and suspends the caller until it is done, as `Io.perform`
     * says. To run an op alongside other work, call this inside a `Future`.
     */
-  def perform(b: Backend, op: b.Op)(using Async): Unit = b.perform(op)
+  def perform(r: Io, op: r.Op)(using Async): Unit = r.perform(op)
 
-  /** Performs `op` with a time limit, as `b.perform` says: `TimeoutException` if it is not done `timeoutMillis`
+  /** Performs `op` with a time limit, as `Io.perform` says: `TimeoutException` if it is not done `timeoutMillis`
     * milliseconds after it was started, the op stopped and its buffers and slots the caller's again. A read with a
     * timeout is this, not a race against a timer.
     */
-  def perform(b: Backend, op: b.Op, timeoutMillis: Int)(using Async): Unit = b.perform(op, timeoutMillis)
+  def perform(r: Io, op: r.Op, timeoutMillis: Int)(using Async): Unit = r.perform(op, timeoutMillis)
 
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, and
-    * suspends the caller until the reactor finishes with it: it returns when the op completes, throws its failure,
-    * throws `CancellationException` when it is cancelled, or throws `TimeoutException` when its time limit,
-    * `timeoutMillis` unless negative, ran out first (see `Submitter.submit`). The caller must be on a worker of a pool
-    * of `b`'s, which `ReactorFutures.run` starts; from anywhere else it is refused with `IllegalStateException`. A
-    * repeatable op may go to a different reactor each time. This is `ReactorBackend.perform`.
+  /** Submits `op` with a completion of the caller's own, as `OnPool.submit` says. */
+  def submit(r: OnPool, op: r.Op, completion: Completion[r.Op], timeoutMillis: Int = Backend.NoTimeout)(using
+      Async
+  ): Submission = r.submit(op, completion, timeoutMillis)
+
+  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
+    * `scheduler`, the pool's, and suspends the caller until the reactor finishes with it: it returns when the op
+    * completes, throws its failure, throws `CancellationException` when it is cancelled, or throws
+    * `TimeoutException` when its time limit, `timeoutMillis` unless negative, ran out first (see `Submitter.submit`).
+    * A repeatable op may go to a different reactor each time. This is `ReactorBackend.perform`, through `OnPool`.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int)(using ac: Async): Unit =
-    ac.scheduler match {
-      case scheduler: ReactorScheduler if scheduler.backend eq b =>
-        // Pinned to its thread from finding the worker to submitting on it (see `ReactorScheduler.pin`): `performHere`
-        // unpins once the op is submitted, before it waits.
-        scheduler.pin()
-        val worker = scheduler.currentWorker
-        if worker != null then performHere(b, op, worker, scheduler, timeoutMillis)
-        else {
+  private[asyncio] def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int, scheduler: ReactorScheduler)(
+      using ac: Async
+  ): Unit = {
+    // Pinned to its thread from finding the worker to submitting on it (see `ReactorScheduler.pin`): `performHere`
+    // unpins once the op is submitted, before it waits.
+    scheduler.pin()
+    val worker =
+      try scheduler.currentWorker
+      catch {
+        case t: Throwable =>
           scheduler.unpin()
-          throw noWorker(b)
-        }
-      case _ => throw noWorker(b)
-    }
-
-  private def noWorker(b: ReactorBackend) = new IllegalStateException(
-    s"Ops of $b run on its reactors: perform them from a program that ReactorFutures.run started with it"
-  )
-
-  /** Whether the caller runs on a worker of a pool of its backend, so that `submit` can send an op to its reactor. */
-  def onWorker(using ac: Async): Boolean =
-    ac.scheduler match {
-      case scheduler: ReactorScheduler => scheduler.currentWorker != null
-      case _                           => false
-    }
+          throw t
+      }
+    performHere(b, op, worker, scheduler, timeoutMillis)
+  }
 
   /** `perform` on the worker running the caller, which `pinned` keeps there until the op is submitted: an op the
     * reactor finishes at once returns without suspending. The reactor keeps the time limit.
@@ -133,29 +127,23 @@ object ReactorAsync {
     } finally waiter.inUse = false
   }
 
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, with a
-    * completion of the caller's own instead of suspending: the completion runs on that worker's thread, which may not
-    * be the caller's by then, since a task may resume on another worker. The returned handle cancels the op there.
-    * As `perform`, only for a caller on a worker of a pool of `b`'s (`onWorker`).
+  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
+    * `scheduler`, the pool's, with a completion of the caller's own (see `OnPool.submit`).
     */
-  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op])(using ac: Async): Submission =
-    submit(b, op, completion, Backend.NoTimeout)
-
-  /** `submit` with a time limit, which the reactor keeps (see `Submitter.submit`). */
-  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using
-      ac: Async
-  ): Submission = {
-    val worker = ac.scheduler match {
-      case scheduler: ReactorScheduler if scheduler.backend eq b =>
-        scheduler.pin() // as `performOnReactor` does, until the op is submitted on the worker found
-        try {
-          val worker = scheduler.currentWorker
-          if worker == null then throw noWorker(b)
-          worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion, timeoutMillis) // one of `b`'s
-          worker
-        } finally scheduler.unpin()
-      case _ => throw noWorker(b)
-    }
+  private[asyncio] def submitOn(
+      b: ReactorBackend,
+      op: b.Op,
+      completion: Completion[b.Op],
+      timeoutMillis: Int,
+      scheduler: ReactorScheduler
+  )(using ac: Async): Submission = {
+    scheduler.pin() // as `performOnReactor` does, until the op is submitted on the worker found
+    val worker =
+      try {
+        val worker = scheduler.currentWorker
+        worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, completion, timeoutMillis) // one of `b`'s
+        worker
+      } finally scheduler.unpin()
     new Submission(worker, op)
   }
 

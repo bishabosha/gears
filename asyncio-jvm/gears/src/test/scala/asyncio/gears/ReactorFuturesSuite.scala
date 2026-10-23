@@ -15,10 +15,10 @@ import asyncio.testkit.BufferArena
 class NioOnCallerSuite extends FuturesContract {
   val backend: NioOnCaller.type = NioOnCaller
 
-  protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
     ReactorFutures.run(using backend)(body)
 
-  test("a program over NioOnCaller needs no runner: ops are performed on the calling thread") {
+  test("a program over NioOnCaller needs no runner: it is its own Io, and performs on the calling thread") {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     var outcome = ""
@@ -48,25 +48,22 @@ class NioOnCallerSuite extends FuturesContract {
 abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NioBackend.type = NioBackend
 
-  protected def running(body: backend.type => Async.Spawn ?=> Unit): Unit =
+  protected def running(body: backend.Io => Async.Spawn ?=> Unit): Unit =
     ReactorFutures.run(workers)(using backend)(body)
 }
 
 class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
-  test("futures run on the pool's workers, whose reactors their ops go to") {
+  test("a program's Io is the backend on the pool: its ops go to the reactor of the worker running the caller") {
     var onWorker = false
-    ReactorFutures.run(1)(using NioBackend) { r =>
-      onWorker = ReactorAsync.onWorker
+    running { r =>
+      onWorker = r.scheduler.currentWorker.reactor.isInstanceOf[asyncio.nio.NioReactor]
     }
     assert(onWorker)
   }
 
-  test("an op of a reactor backend performed outside its pool is refused") {
-    given VThreadSupport.type = VThreadSupport
-    given VThreadScheduler.type = VThreadScheduler
-    Async.blocking {
-      intercept[IllegalStateException](ReactorAsync.perform(NioBackend, NioBackend.ops.timer(1)))
-    }
+  test("an op of a reactor backend cannot be performed with the backend itself, only with a program's Io") {
+    val errors = compileErrors("def outside(using Async): Unit = ReactorAsync.perform(NioBackend, NioBackend.ops.timer(1))")
+    assert(errors.nonEmpty, errors)
   }
 }
 class ReactorCarriersOnFourSuite extends ReactorFuturesSuite(workers = 4)
