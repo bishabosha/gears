@@ -111,11 +111,11 @@ class ReactorSuite extends FunSuite {
   }
 
   test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {
-    assert(compileErrors("def ready(b: Backend)(h: Handle) = b.ops.whenReady(h, Interest.Read)(() => true)").nonEmpty)
+    assert(compileErrors("def ready(b: Backend)(h: Handle) = b.ops.ready(h, Interest.Read)").nonEmpty)
     assert(compileErrors("def now(b: Backend)(h: Handle) = b.handles.readNow(h, null)").nonEmpty)
     assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
     assertEquals(
-      compileErrors("def ready(b: ReadinessBackend)(h: Handle) = b.ops.whenReady(h, Interest.Read)(() => true)"),
+      compileErrors("def ready(b: ReadinessBackend)(h: Handle): Repeatable = b.ops.ready(h, Interest.Read)"),
       ""
     )
     assertEquals(compileErrors("def now(b: ReadinessBackend)(h: Handle) = b.handles.readNow(h, null)"), "")

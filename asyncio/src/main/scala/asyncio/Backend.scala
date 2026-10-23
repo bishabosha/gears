@@ -112,7 +112,8 @@ trait PipeBackend extends Backend {
 }
 
 /** A backend that can say when a handle is ready, and use it without waiting (see `ReadinessOps` and
-  * `ReadinessHandles`): one over non-blocking descriptors or channels, such as kqueue's and NIO's.
+  * `ReadinessHandles`): one over non-blocking descriptors whose reactor is the only thread to touch them, such as
+  * kqueue's.
   */
 trait ReadinessBackend extends Backend {
   type Io <: asyncio.Io & ReadinessBackend { type Op = ReadinessBackend.this.Op }

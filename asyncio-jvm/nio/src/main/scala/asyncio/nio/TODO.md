@@ -816,3 +816,12 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     workers and a policy. The bench's `runOn` narrows to the reactor kind for its `--workers`; a caller backend gets
     the plain `run`. The interface module now names nothing of the gears runtime but `ReactorScheduler`, in
     `ReactorBackend.bind`, the one seam where the runner binds a backend to its pool.
+
+24. [x] **Readiness is an op that completes, not a closure.** `ReadinessOps.whenReady(handle, interest)(body)` ran
+    `body` on the reactor thread and waited again while it returned false; a higher-level API would rather not inherit
+    a closure in the lowest layer. It is now `ready(handle, interest): Op & Repeatable`, which completes once the
+    handle is ready, level-triggered: the caller uses the handle without waiting (`readNow`, `writeNow`) until it
+    would block, and performs the op again, which completes at once while the handle is still ready and waits once it
+    is drained. On kqueue it is the same one-shot, level-triggered filter the closure version waited on
+    (`KqueueOps.Ready`, `perform` always true, never tried first). The FIFO reader and the cancel demo keep their
+    behaviour with a drain loop around it, and the kqueue demo suite that drives them passes.

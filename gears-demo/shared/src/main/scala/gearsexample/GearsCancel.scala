@@ -6,7 +6,6 @@ import gears.async.Future.Promise
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import scala.util.Failure
 
 import asyncio.BlockingBackend
@@ -70,11 +69,7 @@ object GearsCancel {
         val (readFd, writeFd) = r.handles.pipe()
         try {
           val sleeperInterrupted = new AtomicBoolean()
-          val readPerforms = new AtomicInteger() // shows the cancelled read is never performed
-          val read = r.ops.whenReady(readFd, Interest.Read) { () =>
-            readPerforms.incrementAndGet()
-            r.handles.readNow(readFd, buf) != 0
-          }
+          val read = r.ops.ready(readFd, Interest.Read)
           val blocking = r.ops.blocking(sleeper(1000, sleeperInterrupted))
           val pending = Seq(
             "read" -> Future(r.perform(read)), // nothing has been written yet
@@ -147,7 +142,7 @@ object GearsCancel {
 
           // Past the cancelled timer's deadline, with the interrupted sleeper long stopped.
           r.perform(r.ops.timer(500))
-          val late = readPerforms.get() + pending.count((_, future) => !isCancelled(future))
+          val late = pending.count((_, future) => !isCancelled(future))
           println(s"blocking interrupted: ${sleeperInterrupted.get()}")
           println(s"cancelled completions run: $late")
           // Each future can only have been rejected by its completion's onCancel.
