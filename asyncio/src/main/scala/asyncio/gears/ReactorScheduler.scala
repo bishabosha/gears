@@ -8,7 +8,7 @@ import asyncio.ReactorBackend
   * reactors (see `OnPool.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual
   * threads the pool carries (`VirtualReactorScheduler`). A program's `ReactorBackend.Context` carries it.
   */
-private[asyncio] trait ReactorScheduler extends Scheduler {
+private[gears] trait ReactorScheduler extends Scheduler {
   def backend: ReactorBackend
 
   /** The worker running the caller, whose reactor the caller may use directly. Every thread a program on this

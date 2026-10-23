@@ -10,7 +10,7 @@ import asyncio.ReactorBackend
 import asyncio.ResolveBackend
 import asyncio.SocketBackend
 import asyncio.OnPool
-import asyncio.gears.ReactorScheduler
+import asyncio.Pool
 
 /** What Network.framework can do, as the backend and as a program's `Io` over it: IP sockets, regular files and name
   * resolution on the shared blocker pool, pipes, blocking ops, and FIFOs; no readiness, since Network.framework
@@ -36,11 +36,11 @@ trait NWFrameworkCapabilities
   */
 object NWFrameworkBackend extends ReactorBackend with NWFrameworkCapabilities {
   def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
-  private[asyncio] def bind(scheduler: ReactorScheduler): NWFrameworkOnPool = new NWFrameworkOnPool(scheduler)
+  private[asyncio] def bind(pool: Pool): NWFrameworkOnPool = new NWFrameworkOnPool(pool)
 }
 
 /** A program's `Io` over Network.framework: `NWFrameworkBackend` bound to the pool the program runs on. */
-final class NWFrameworkOnPool private[nwframework] (private[asyncio] val scheduler: ReactorScheduler)
+final class NWFrameworkOnPool private[nwframework] (private[asyncio] val pool: Pool)
     extends OnPool
     with NWFrameworkCapabilities {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend

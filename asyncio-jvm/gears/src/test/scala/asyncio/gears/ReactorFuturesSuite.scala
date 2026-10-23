@@ -57,7 +57,10 @@ class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
   test("a program's Io is the backend on the pool: its ops go to the reactor of the worker running the caller") {
     var onWorker = false
     running { r =>
-      onWorker = r.scheduler.currentWorker.reactor.isInstanceOf[asyncio.nio.NioReactor]
+      onWorker = summon[Async].scheduler match {
+        case s: ReactorScheduler => s.currentWorker.reactor.isInstanceOf[asyncio.nio.NioReactor]
+        case _                   => false
+      }
     }
     assert(onWorker)
   }

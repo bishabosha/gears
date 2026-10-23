@@ -12,12 +12,32 @@ import scala.util.Success
 import scala.util.Try
 
 import asyncio.Completion
+import asyncio.Pool
 import asyncio.Reactor
 import asyncio.ReactorBackend
 import asyncio.Submission
 
-/** How an `OnPool` performs and submits its ops on the pool: the same on every platform. */
+/** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `Pool` the
+  * interface sees, over a scheduler of the pool's.
+  */
 private[asyncio] object Pools {
+
+  /** The `Pool` of `scheduler`'s, to bind a backend to (`ReactorBackend.bind`). */
+  def bound(scheduler: ReactorScheduler): Pool = new Pool {
+    def perform(b: ReactorBackend, op: b.Op, timeoutMillis: Int)(using Async): Unit =
+      performOnReactor(b, op, timeoutMillis, scheduler)
+
+    def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using Async): Submission =
+      submitOn(b, op, completion, timeoutMillis, scheduler)
+
+    /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if
+      * the caller has been cancelled by the time it resumes. Cheaper than gears' own, which spawns a task.
+      */
+    def `yield`()(using ac: Async): Unit = {
+      ac.withGroup(CompletionGroup.Unlinked).await(Yield)
+      if ac.group.isCancelled then throw new CancellationException()
+    }
+  }
 
   /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
     * `scheduler`, the pool's, and suspends the caller until the reactor finishes with it: it returns when the op
@@ -147,7 +167,7 @@ private[asyncio] object Pools {
   /** Never ready when polled, and completes a listener as soon as it is added, so that awaiting it resumes the caller
     * from the back of its scheduler's queue (see `OnPool.yield`).
     */
-  private[asyncio] object Yield extends Async.Source[Unit] {
+  private object Yield extends Async.Source[Unit] {
     override def poll(): Option[Unit] = None
     def poll(k: Listener[Unit]): Boolean = false
     def onComplete(k: Listener[Unit]): Unit = k.completeNow((), this)

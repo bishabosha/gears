@@ -76,8 +76,8 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   type Io <: asyncio.OnPool { type Op = ReactorBackend.this.Op }
 
-  /** This backend bound to a pool whose scheduler is `scheduler`, for the program the runner starts on it. */
-  private[asyncio] def bind(scheduler: asyncio.gears.ReactorScheduler): Io
+  /** This backend bound to `pool`, for the program the runner starts on it. */
+  private[asyncio] def bind(pool: Pool): Io
 
 }
 
