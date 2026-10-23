@@ -9,7 +9,7 @@ import asyncio.ReactorBackend
 import asyncio.ResolveBackend
 import asyncio.UnixStreamBackend
 import asyncio.OnPool
-import asyncio.gears.ReactorScheduler
+import asyncio.Pool
 
 /** What NIO can do, for both its backends and their `Io`s: IP and Unix stream sockets, regular files and name
   * resolution on the blocker pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK
@@ -35,11 +35,11 @@ trait NioCapabilities
 object NioBackend extends ReactorBackend with NioCapabilities {
   type Io = NioOnPool
   def open(): Reactor.Of[Op] = NioReactor.open()
-  private[asyncio] def bind(scheduler: ReactorScheduler): NioOnPool = new NioOnPool(scheduler)
+  private[asyncio] def bind(pool: Pool): NioOnPool = new NioOnPool(pool)
 }
 
 /** A program's `Io` over NIO's reactors: `NioBackend` bound to the pool the program runs on. */
-final class NioOnPool private[nio] (private[asyncio] val scheduler: ReactorScheduler) extends OnPool with NioCapabilities {
+final class NioOnPool private[nio] (private[asyncio] val pool: Pool) extends OnPool with NioCapabilities {
   type Io = NioOnPool
   val backend: NioBackend.type = NioBackend
 }

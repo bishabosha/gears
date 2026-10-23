@@ -825,3 +825,11 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     is drained. On kqueue it is the same one-shot, level-triggered filter the closure version waited on
     (`KqueueOps.Ready`, `perform` always true, never tried first). The FIFO reader and the cancel demo keep their
     behaviour with a drain loop around it, and the kqueue demo suite that drives them passes.
+
+25. [x] **The interface names nothing of the runtime.** `asyncio.Pool` is what a pool offers a program, as the
+    interface sees it: `perform`, `submit` and `yield` for a reactor backend's ops. The runtime implements it
+    (`asyncio.gears.Pools.bound(scheduler)`), the runner binds a backend to it (`ReactorBackend.bind(pool)`), and
+    `OnPool` delegates its three operations to it, so the interface package (`asyncio`, with `asyncio.unsafe` for the
+    implementation backends share) refers to the gears library only, never to `asyncio.gears`: `ReactorScheduler` and
+    `ReactorWorker` are the runtime's own again (`private[gears]`), and the per-backend `OnPool` classes hold a
+    `Pool`, not a scheduler. The fast path, the waiter and the pool's yield live in `Pools`, where they belong.

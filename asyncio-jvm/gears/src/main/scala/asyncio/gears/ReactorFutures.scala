@@ -46,7 +46,7 @@ object ReactorFutures {
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
       val scheduler = new VirtualReactorScheduler(pool, factory)
-      val io = backend.bind(scheduler)
+      val io = backend.bind(Pools.bound(scheduler))
       given AsyncOperations = io
       given support: FactoryVThreadSupport[VirtualReactorScheduler] = new FactoryVThreadSupport(factory)
       given VirtualReactorScheduler = scheduler

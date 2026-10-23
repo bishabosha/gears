@@ -40,7 +40,7 @@ object ReactorFutures {
     ReactorPool.run(backend, workers, policy, stopped = pool => if stats then printStats(pool)) { pool =>
       given ReactorPool = pool
       given ReactorSupport.type = ReactorSupport
-      val io = backend.bind(pool)
+      val io = backend.bind(Pools.bound(pool))
       given AsyncOperations = io
       Async.blocking {
         val main = Future(program(io)) // queued on the first worker: it starts with that worker's first round

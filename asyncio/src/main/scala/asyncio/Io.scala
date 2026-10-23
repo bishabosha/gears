@@ -2,9 +2,6 @@ package asyncio
 
 import _root_.gears.async.Async
 import _root_.gears.async.AsyncOperations
-import _root_.gears.async.CompletionGroup
-
-import java.util.concurrent.CancellationException
 
 /** What a program performs its ops with: a backend's ops, handles and capabilities, since it is a `Backend`, bound to
   * where the program runs, so that `perform` can run an op there. A runner makes one for the program it starts
@@ -41,20 +38,19 @@ trait Io extends Backend with AsyncOperations {
 }
 
 /** An `Io` on a pool of workers driving a reactor backend's reactors: an op is submitted to the reactor of the worker
-  * running the caller, which suspends until the reactor finishes with it (`asyncio.gears.Pools.performOnReactor`), and may also be
-  * submitted with a completion of the caller's own (`submit`). Cancelling the caller asks the reactor to cancel the
-  * op, and waits until it has.
+  * running the caller, which suspends until the reactor finishes with it, and may also be submitted with a completion
+  * of the caller's own (`submit`). Cancelling the caller asks the reactor to cancel the op, and waits until it has.
+  * The pool itself is the runtime's (`Pool`): this only says what a program may do on it.
   */
 trait OnPool extends Io {
 
   /** The reactor backend whose ops these are, and whose reactors the pool's workers drive. */
   val backend: ReactorBackend { type Op = OnPool.this.Op }
 
-  /** The pool's scheduler, which knows the worker running the caller. */
-  private[asyncio] def scheduler: asyncio.gears.ReactorScheduler
+  /** The pool the program runs on, which the runner bound this to (`ReactorBackend.bind`). */
+  private[asyncio] def pool: Pool
 
-  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
-    asyncio.gears.Pools.performOnReactor(backend, op, timeoutMillis, scheduler)
+  final def perform(op: Op, timeoutMillis: Int)(using Async): Unit = pool.perform(backend, op, timeoutMillis)
 
   /** Submits `op` to the reactor of the worker running the caller, with a completion of the caller's own instead of
     * suspending: the completion runs on that worker's thread, which may not be the caller's by then, since a task may
@@ -63,17 +59,27 @@ trait OnPool extends Io {
     */
   final def submit(op: Op, completion: Completion[Op], timeoutMillis: Int = Backend.NoTimeout)(using
       Async
-  ): Submission = asyncio.gears.Pools.submitOn(backend, op, completion, timeoutMillis, scheduler)
+  ): Submission = pool.submit(backend, op, completion, timeoutMillis)
 
-  /** Gives up the caller's turn: suspends it and queues its resume behind the tasks already queued on its worker, so
-    * the futures sharing the worker run first, as a long computation should between slices. Cheaper than gears'
-    * own, which spawns a task to the same end. Throws `CancellationException` if the caller has been cancelled by the
-    * time it resumes.
+  /** Gives up the caller's turn the pool's way: its resume queued behind the tasks already queued on its worker, so
+    * the futures sharing the worker run first, as a long computation should between slices.
     */
-  override def `yield`()(using ac: Async): Unit = {
-    ac.withGroup(CompletionGroup.Unlinked).await(asyncio.gears.Pools.Yield)
-    if ac.group.isCancelled then throw new CancellationException()
-  }
+  override def `yield`()(using Async): Unit = pool.`yield`()
+}
+
+/** A pool of workers driving a reactor backend's reactors, as the interface sees it: what a program on it may do with
+  * an op. The runtime implements it (`asyncio.gears.Pools`) and binds a backend to it for the program it starts.
+  */
+private[asyncio] trait Pool {
+
+  /** Performs `op` on the reactor of the worker running the caller, as `Io.perform` says. */
+  def perform(b: ReactorBackend, op: b.Op, timeoutMillis: Int)(using Async): Unit
+
+  /** Submits `op` with a completion of the caller's own, as `OnPool.submit` says. */
+  def submit(b: ReactorBackend, op: b.Op, completion: Completion[b.Op], timeoutMillis: Int)(using Async): Submission
+
+  /** Gives up the caller's turn, as `OnPool.yield` says. */
+  def `yield`()(using Async): Unit
 }
 
 /** An op submitted with `OnPool.submit`, which it cancels on the reactor it went to. */
