@@ -45,7 +45,7 @@ trait FuturesContract extends FunSuite {
     * them, and on TCP at a free port of the loopback otherwise.
     */
   protected def listenAndConnect(r: backend.Io, dir: java.nio.file.Path)(using Async): (Handle, () => Handle) = r match {
-    case unix: UnixStreamBackend =>
+    case unix: asyncio.UnixStreams =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = unix.handles.listener(address)
       unix.perform(unix.ops.listening(listener))
@@ -270,7 +270,7 @@ trait FuturesContract extends FunSuite {
   test("a blocking op past its time limit is interrupted, and perform throws TimeoutException") {
     val outcome = running { r =>
       r match {
-        case b: asyncio.BlockingBackend =>
+        case b: asyncio.Blocking =>
           val returned = new java.util.concurrent.atomic.AtomicBoolean
           val op = b.ops.blocking { () =>
             try Thread.sleep(10_000)

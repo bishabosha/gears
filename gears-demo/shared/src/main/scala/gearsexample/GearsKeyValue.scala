@@ -15,9 +15,11 @@ import asyncio.Backend
 import asyncio.Handle
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
+import asyncio.UnixStreams
 import asyncio.testkit.BufferArena
 import DemoIO.{FrameParser, StreamProtocol}
 import asyncio.gears.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleKeyValue`, the pipelined key-value service. Each session is a reader future and a
   * writer future joined by a bounded channel of reply batches, which replaces the shared flags and the byte backlog:
@@ -58,7 +60,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      r: Io & UnixStreamBackend,
+      r: Io & UnixStreams,
       fd: Handle,
       inbox: ByteBuffer,
       store: Store,
@@ -89,7 +91,7 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: Io & UnixStreamBackend, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
+  private def writeReplies(r: Io & UnixStreams, fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
       using Async
   ): Unit = {
     val writeReplies = r.ops.write(fd, outbox) // one repeatable op for the whole session
@@ -112,7 +114,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: Io & UnixStreamBackend, fd: Handle, store: Store)(using Async): Unit = {
+  private def session(r: Io & UnixStreams, fd: Handle, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)
@@ -139,11 +141,8 @@ object GearsKeyValue {
       val server = Sockets.listen(r, address)
       try {
         println("Key-value server is now listening for connections.")
-        val accepted = Handle.Slot() // each accept writes its connection here, like a read fills a buffer
-        val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
-          r.perform(accept) // completes once a connection has been accepted
-          val client = accepted.clear()
+          val client = HigherLevel.accept(r, server) // returns once a connection has been accepted
           println(s"Accepted new client connection: $client")
           Future(session(r, client, store))
         }

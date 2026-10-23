@@ -8,23 +8,23 @@ import gears.async.Async
 import asyncio.Io
 import asyncio.Handle
 import asyncio.IpAddress
-import asyncio.SocketBackend
+import asyncio.IpSockets
 import asyncio.UnixAddress
-import asyncio.UnixStreamBackend
+import asyncio.UnixStreams
 
 /** Where a stream demo's server listens: an IP address, or a Unix path on a backend with Unix stream sockets. */
 type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
-  def connect(b: UnixStreamBackend, address: StreamAddress): Handle = address match {
+  def connect(b: UnixStreams, address: StreamAddress): Handle = address match {
     case unix: UnixAddress => b.handles.connect(unix)
     case ip: IpAddress     => b.handles.connect(ip)
   }
 
   /** A listener on `address`, listening: the handle, and its `listening` op performed. */
   @annotation.targetName("listenUnix")
-  def listen(b: UnixStreamBackend & Io, address: StreamAddress)(using Async): Handle = {
+  def listen(b: Io & UnixStreams, address: StreamAddress)(using Async): Handle = {
     val listener = address match {
       case unix: UnixAddress => b.handles.listener(unix)
       case ip: IpAddress     => b.handles.listener(ip)
@@ -36,12 +36,12 @@ object Sockets {
   /** For code whose address is chosen when it runs, such as the bench's: on any backend for an IP address, and on one
     * with Unix stream sockets for a Unix one, refused otherwise.
     */
-  def connect(b: SocketBackend, address: StreamAddress): Handle = address match {
+  def connect(b: IpSockets, address: StreamAddress): Handle = address match {
     case ip: IpAddress     => b.handles.connect(ip)
     case unix: UnixAddress => connect(unixSockets(b, unix), unix)
   }
 
-  def listen(b: SocketBackend & Io, address: StreamAddress)(using Async): Handle = address match {
+  def listen(b: Io & IpSockets, address: StreamAddress)(using Async): Handle = address match {
     case ip: IpAddress =>
       val listener = b.handles.listener(ip)
       b.perform(b.ops.listening(listener))
@@ -49,8 +49,8 @@ object Sockets {
     case unix: UnixAddress => listen(unixSockets(b, unix), unix)
   }
 
-  private def unixSockets(b: SocketBackend, address: UnixAddress): UnixStreamBackend & b.type = b match {
-    case unix: (UnixStreamBackend & b.type) => unix
+  private def unixSockets(b: IpSockets, address: UnixAddress): UnixStreams & b.type = b match {
+    case unix: (UnixStreams & b.type) => unix
     case _ => throw new IllegalArgumentException(s"$b has no Unix domain sockets, so cannot use $address; use TCP")
   }
 

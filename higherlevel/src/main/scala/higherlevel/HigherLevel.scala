@@ -12,10 +12,10 @@ import asyncio.BufferPool
 import asyncio.Handle
 import asyncio.Io
 import asyncio.Received
-import asyncio.ResolveBackend
+import asyncio.Resolving
 import asyncio.ResolvedAddress
 import asyncio.Slot
-import asyncio.SocketBackend
+import asyncio.IpSockets
 
 /** The higher level the interface is meant to be wrapped by, written over `Io` alone: result-returning methods that
   * own the op and the slot the caller would otherwise reuse, and a stream of chunks over a repeatable pooled read,
@@ -41,14 +41,14 @@ object HigherLevel {
   }
 
   /** Accepts one connection and returns it. */
-  def accept(r: Io & SocketBackend, listener: Handle)(using Async): Handle = {
+  def accept(r: Io & IpSockets, listener: Handle)(using Async): Handle = {
     val into = Handle.Slot()
     r.perform(r.ops.accept(listener, into))
     into.clear()
   }
 
   /** Resolves `host` and returns its addresses. */
-  def resolve(r: Io & ResolveBackend, host: String)(using Async): List[ResolvedAddress] = {
+  def resolve(r: Io & Resolving, host: String)(using Async): List[ResolvedAddress] = {
     val into = Slot[List[ResolvedAddress]]()
     r.perform(r.ops.resolve(host, into))
     into.clear()

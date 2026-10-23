@@ -12,9 +12,11 @@ import asyncio.Backend
 import asyncio.Handle
 import asyncio.UnixAddress
 import asyncio.UnixStreamBackend
+import asyncio.UnixStreams
 import asyncio.testkit.BufferArena
 import DemoIO.{StreamProtocol, drainTo}
 import asyncio.gears.ReactorFutures
+import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleServerSocket`. The acceptor is a loop, and each connection is its own future whose
   * state machine is now plain sequential code.
@@ -23,7 +25,7 @@ object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
   /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
-  private def serve(r: Io & UnixStreamBackend, client: Handle)(using Async): Unit = {
+  private def serve(r: Io & UnixStreams, client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -87,11 +89,8 @@ object GearsServerSocket {
       val server = Sockets.listen(r, address)
       try {
         println("Socket is now listening for connections.")
-        val accepted = Handle.Slot() // each accept writes its connection here, like a read fills a buffer
-        val accept = r.ops.accept(server, accepted) // one repeatable op, resubmitted for every connection
         while true do {
-          r.perform(accept) // completes once a connection has been accepted
-          val client = accepted.clear()
+          val client = HigherLevel.accept(r, server) // returns once a connection has been accepted
           println(s"Accepted new client connection: $client")
           Future(serve(r, client))
         }

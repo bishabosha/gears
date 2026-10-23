@@ -66,9 +66,9 @@ class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
     assert(onWorker)
   }
 
-  test("a program's Io cannot start a run, although it is a Backend") {
+  test("a program's Io cannot start a run: it is not a Backend") {
     val errors = compileErrors("running(r => ReactorFutures.run(using r)(_ => ()))")
-    assert(errors.contains("NotGiven"), errors)
+    assert(errors.nonEmpty, errors)
   }
 
   test("an op of a reactor backend cannot be performed with the backend itself, only with a program's Io") {
