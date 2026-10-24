@@ -74,6 +74,16 @@ object GearsBench {
       }
     ),
     Scenario(
+      "churn",
+      "a connection per round trip: connect, one message each way, close; the cost of opening and closing, and of a "
+        + "handle per connection",
+      10_000,
+      new Client {
+        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+          churn(io, connect, count)
+      }
+    ),
+    Scenario(
       "pingpong-fresh-ops",
       "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
       50_000,
@@ -388,6 +398,28 @@ object GearsBench {
     report("starvation-p50", 1, at(0.5) / 1e9)
     report("starvation-p99", 1, at(0.99) / 1e9)
     report("starvation-max", 1, at(1.0) / 1e9)
+  }
+
+  /** Opens `count` connections one after another, each for one round trip of a message, and closes each. */
+  private def churn(io: Io[IpSockets], connect: Connect, count: Int)(using Async): Unit = {
+    val arena = BufferArena.open()
+    try {
+      val buf = arena.allocate(MessageSize)
+      var i = 0
+      while i < count do {
+        withConnection(io, connect) { fd =>
+          buf.clear()
+          while buf.hasRemaining() do io.perform(io.backend.ops.write(fd, buf))
+          buf.clear()
+          while buf.hasRemaining() do {
+            val before = buf.position()
+            io.perform(io.backend.ops.read(fd, buf))
+            if buf.position() == before then throw new IOException("The server closed the connection")
+          }
+        }
+        i += 1
+      }
+    } finally arena.close()
   }
 
   /** Opens a connection with `connect`, runs `body` on it, and closes it. */
