@@ -30,10 +30,11 @@ final class OpenFile(path: String, write: Boolean, into: Slot[Handle]) extends K
 /** A read at an offset (see `FileOps.read`): fills `buf` from the file at the op's offset, which each completion
   * advances by the bytes read, so that submitting the op again goes on from there.
   */
-final class PositionalRead(val fd: Int, buf: ByteBuffer, private var offset: Long)
+final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  def block(): Unit = {
+  def block(): Unit = KqueueHandles.using(handle) {
+    val fd = handle.fd
     val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
     val n = read.toInt
@@ -47,10 +48,11 @@ final class PositionalRead(val fd: Int, buf: ByteBuffer, private var offset: Lon
 /** A write at an offset (see `FileOps.write`): drains `buf` into the file at the op's offset, which each completion
   * advances by the bytes written.
   */
-final class PositionalWrite(val fd: Int, buf: ByteBuffer, private var offset: Long)
+final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  def block(): Unit = {
+  def block(): Unit = KqueueHandles.using(handle) {
+    val fd = handle.fd
     val written = unistd.pwrite(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if written < 0 then throw new IOException(s"Failed to write descriptor $fd at $offset: ${cError()}")
     val n = written.toInt
@@ -62,7 +64,9 @@ final class PositionalWrite(val fd: Int, buf: ByteBuffer, private var offset: Lo
 }
 
 /** `fsync` (see `FileOps.sync`). */
-final class FileSync(val fd: Int) extends KqueueBlocking with Repeatable {
-  def block(): Unit =
+final class FileSync(handle: Handle) extends KqueueBlocking with Repeatable {
+  def block(): Unit = KqueueHandles.using(handle) {
+    val fd = handle.fd
     if unistd.fsync(fd) < 0 then throw new IOException(s"Failed to sync descriptor $fd: ${cError()}")
+  }
 }

@@ -132,8 +132,8 @@ object KqueueHandles {
 
   private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()
 
-  def readNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.read(fd(handle), buf)
-  def writeNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.write(fd(handle), buf)
+  def readNow(handle: Handle, buf: ByteBuffer): Int = using(handle)(NonBlocking.read(handle.fd, buf))
+  def writeNow(handle: Handle, buf: ByteBuffer): Int = using(handle)(NonBlocking.write(handle.fd, buf))
 
   /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
     * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on
@@ -141,9 +141,18 @@ object KqueueHandles {
     * while it is being closed.
     */
   def close(handle: Handle): Unit = {
-    if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
+    if !handle.closeUses() then throw notOpen(handle)
     closeDescriptor(handle.fd)
   }
+
+  /** Runs `body` as a use of `handle`'s descriptor (see `KqueueBackend.Handle`); throws if the handle is closed. */
+  private[kqueue] inline def using[A](handle: Handle)(inline body: A): A = {
+    if !handle.acquire() then throw notOpen(handle)
+    try body
+    finally handle.release()
+  }
+
+  private[kqueue] def notOpen(handle: Handle): IOException = new IOException(s"Not an open handle: $handle")
 
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {

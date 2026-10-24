@@ -56,12 +56,12 @@ object KqueueOps
     with BlockingOps[KqueueOp, Handle]
     with FileOps[KqueueOp, Handle]
     with ResolveOps[KqueueOp, Handle] {
-  def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd(handle), buf)
-  def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd(handle), buf)
-  def accept(handle: Handle, into: Slot[Handle]): Accept = Accept(fd(handle), into)
+  def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = on(handle)(ReadIntoBuffer(fd(handle), buf))
+  def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = on(handle)(WriteFromBuffer(fd(handle), buf))
+  def accept(handle: Handle, into: Slot[Handle]): Accept = on(handle)(Accept(fd(handle), into))
   def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): AcceptAll = {
     require(max > 0, s"max must be positive, not $max")
-    new AcceptAll(fd(handle), into, max)
+    on(handle)(new AcceptAll(fd(handle), into, max))
   }
   def connect(address: IpAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
   def connect(address: UnixAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
@@ -79,31 +79,37 @@ object KqueueOps
     new OpenDatagram(local, remote, into)
   def pipe(read: Slot[Handle], write: Slot[Handle]): KqueueOp = new OpenPipe(read, write)
   def openFifo(path: String, write: Boolean, into: Slot[Handle]): KqueueOp = new OpenFifo(path, write, into)
-  def readNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.read(fd(handle), buf)
-  def writeNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.write(fd(handle), buf)
+  def readNow(handle: Handle, buf: ByteBuffer): Int = KqueueHandles.readNow(handle, buf)
+  def writeNow(handle: Handle, buf: ByteBuffer): Int = KqueueHandles.writeNow(handle, buf)
   def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
-    new ReceiveFrom(fd(handle), buf, from, unix = false)
-  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): SendTo = new SendTo(fd(handle), buf, to)
-  def send(handle: Handle, buf: ByteBuffer): SendTo = new SendTo(fd(handle), buf, null)
+    on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = false))
+  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): SendTo = on(handle)(new SendTo(fd(handle), buf, to))
+  def send(handle: Handle, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   @annotation.targetName("receiveUnix")
   def receive(handle: Handle, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
-    new ReceiveFrom(fd(handle), buf, from, unix = true)
-  def send(handle: Handle, buf: ByteBuffer, to: UnixAddress): SendTo = new SendTo(fd(handle), buf, to)
+    on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = true))
+  def send(handle: Handle, buf: ByteBuffer, to: UnixAddress): SendTo = on(handle)(new SendTo(fd(handle), buf, to))
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
-  def ready(handle: Handle, interest: Interest): Ready = new Ready(fd(handle), interest)
+  def ready(handle: Handle, interest: Interest): Ready = on(handle)(new Ready(fd(handle), interest))
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
-    PooledRead(fd(handle), KqueueOps.native(pool), into)
+    on(handle)(PooledRead(fd(handle), KqueueOps.native(pool), into))
   def close(handle: Handle): KqueueOp = new Close(handle)
-  def shutdownOutput(handle: Handle): KqueueOp = new ShutdownOutput(fd(handle))
+  def shutdownOutput(handle: Handle): KqueueOp = new ShutdownOutput(handle)
   def open(path: String, write: Boolean, into: Slot[Handle]): KqueueOp = new OpenFile(path, write, into)
-  def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(fd(handle), buf, offset)
-  def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(fd(handle), buf, offset)
-  def sync(handle: Handle): FileSync = new FileSync(fd(handle))
+  def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
+  def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
+  def sync(handle: Handle): FileSync = new FileSync(handle)
 
   private def fd(handle: Handle): Int = KqueueHandles.fd(handle)
+
+  /** `command`, carrying `handle`, which the reactor takes for each use of the descriptor (see `Command.handle`). */
+  private def on[C <: Command](handle: Handle)(command: C): C = {
+    command.handle = handle
+    command
+  }
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -225,8 +231,8 @@ final class Close(val handle: Handle) extends KqueueAtOnce {
 /** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, since the kernel sends what is queued,
   * then the end of the stream, after the call returns.
   */
-final class ShutdownOutput(val fd: Int) extends KqueueAtOnce {
-  def perform(): Unit = gears.async.io.internal.PosixSockets.shutdownOutput(fd)
+final class ShutdownOutput(val handle: Handle) extends KqueueAtOnce {
+  def perform(): Unit = KqueueHandles.using(handle)(gears.async.io.internal.PosixSockets.shutdownOutput(handle.fd))
 }
 
 /** What to do with a descriptor once kqueue reports it ready. `perform` runs a non-blocking operation on the reactor
@@ -237,6 +243,12 @@ trait Command extends KqueueOp with Repeatable {
   def fd: Int
   def interest: Interest
   def perform(): Boolean
+
+  /** The handle the command was built on, through `KqueueOps`, which the reactor takes around each use of the
+    * descriptor, the command's system call and its registration, failing the command if it is closed; null for a
+    * command built on a descriptor directly, as kqueue's own code does.
+    */
+  private[kqueue] var handle: KqueueBackend.Handle | Null = null
 
   /** Whether the reactor may perform this command as soon as it is submitted, before waiting for readiness. True for
     * operations that simply report would-block when not ready, so trying first only saves the wait when they are.

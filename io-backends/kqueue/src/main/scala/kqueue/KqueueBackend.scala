@@ -32,20 +32,44 @@ object KqueueBackend
   type Op = KqueueOp
 
   /** An open descriptor, as this backend's ops name it: made only by the ops that open one (and `KqueueHandles`, for
-    * kqueue's own code), so that a program cannot forge a handle from a number, and closed once, a second close
-    * failing without touching the descriptor, whose number may by then be another's.
+    * kqueue's own code), so that a program cannot forge a handle from a number. Every use of the descriptor (a
+    * command's system call and registration, a file op on a blocker thread, `readNow` and `writeNow`) takes the handle
+    * for its length (`acquire`), which fails once the handle is closed, so that a stale handle fails its op rather
+    * than reaching whatever reuses the descriptor's number; and closing marks it closed first, then waits for the
+    * uses in progress to end before the descriptor is closed, so that its number is not reused under one of them.
     */
   final class Handle private[kqueue] (private[kqueue] val fd: Int) {
-    @volatile private var open = true
+    // The sign bit: closed. The rest: how many uses of the descriptor are in progress.
+    private val state = new java.util.concurrent.atomic.AtomicInteger(0)
 
     /** Whether it has not been closed. */
-    private[kqueue] def isOpen: Boolean = open
+    private[kqueue] def isOpen: Boolean = state.get() >= 0
 
-    /** Marks it closed; false if it already was. */
-    private[kqueue] def markClosed(): Boolean = synchronized {
-      val was = open
-      open = false
-      was
+    /** Starts a use of the descriptor; false, starting none, if the handle is closed. */
+    private[kqueue] def acquire(): Boolean = {
+      var current = state.get()
+      while current >= 0 && !state.compareAndSet(current, current + 1) do current = state.get()
+      current >= 0
+    }
+
+    /** Ends a use `acquire` started. */
+    private[kqueue] def release(): Unit = state.decrementAndGet(): Unit
+
+    /** Marks it closed, so that no use starts after, and waits for the uses in progress to end: a system call or a
+      * registration, short, unless a file op is reading or writing the disk. False if it was already closed.
+      */
+    private[kqueue] def closeUses(): Boolean = {
+      var current = state.get()
+      while current >= 0 && !state.compareAndSet(current, current | Int.MinValue) do current = state.get()
+      if current < 0 then false
+      else {
+        var spins = 0
+        while (state.get() & Int.MaxValue) != 0 do {
+          if spins < 100 then Thread.onSpinWait() else Thread.`yield`()
+          spins += 1
+        }
+        true
+      }
     }
 
     override def toString: String = s"Handle($fd)"

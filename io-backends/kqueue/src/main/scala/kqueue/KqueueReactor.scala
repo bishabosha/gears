@@ -172,29 +172,38 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     op match {
       case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
       case command: Command =>
-        val read = command.interest == Interest.Read
-        val slot = currentSlot(command.fd, read)
-        // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
-        if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
-        else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
-        command.completion = pending
-        if read then {
-          val attempt =
-            slot.readReadiness == KqueueReactor.Ready ||
-              (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
-          if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
-          else {
-            slot.read = command
-            waitToRead(command, slot)
-            waits = true
-          }
-        } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
-        else {
-          slot.write = command
-          if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
-          else arm(command.fd, read = false)
-          waits = true
-        }
+        // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
+        val handle = command.handle
+        if handle != null && !handle.acquire() then {
+          command.completion = pending
+          command.atOnceFailure = KqueueHandles.notOpen(handle)
+          if finishNow then finished = true else ready.add(command)
+        } else
+          try {
+            val read = command.interest == Interest.Read
+            val slot = currentSlot(command.fd, read)
+            // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+            if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
+            else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+            command.completion = pending
+            if read then {
+              val attempt =
+                slot.readReadiness == KqueueReactor.Ready ||
+                  (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
+              if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
+              else {
+                slot.read = command
+                waitToRead(command, slot)
+                waits = true
+              }
+            } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
+            else {
+              slot.write = command
+              if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
+              else arm(command.fd, read = false)
+              waits = true
+            }
+          } finally if handle != null then handle.release()
       case timer: KqueueTimer =>
         require(timer.heapIndex < 0, "This timer is already pending")
         // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
@@ -668,27 +677,39 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           if write then slot.write = null else slot.read = null
           pending.nn match {
             case command: Command =>
-              // A throwing command fails its own op; an exception thrown by the completion itself still escapes.
+              // A throwing command fails its own op; an exception thrown by the completion itself still escapes. The
+              // system call, and a registration again if it was not ready, are a use of the command's handle (see
+              // `Command.handle`), ended before the completion runs, which may close the handle.
+              val handle = command.handle
               var failure: Throwable | Null = null
-              val done =
-                try command.perform()
-                catch {
-                  case t: Throwable =>
-                    failure = t
-                    true
-                }
+              var done = true
               // Readiness is settled before the completion runs, since it may submit the next read at once.
-              if !write then settleAfterRead(command, slot, done, failure != null, KqueueLoop.data(event).toLong)
+              if handle != null && !handle.acquire() then {
+                failure = KqueueHandles.notOpen(handle)
+                if !write then settleAfterRead(command, slot, done = true, failed = true, -1L)
+              } else
+                try {
+                  done =
+                    try command.perform()
+                    catch {
+                      case t: Throwable =>
+                        failure = t
+                        true
+                    }
+                  if !write then settleAfterRead(command, slot, done, failure != null, KqueueLoop.data(event).toLong)
+                  if !done then {
+                    if write then {
+                      // Not ready after all: wait again, without the completion ever seeing it.
+                      slot.write = command
+                      arm(ident, read = false)
+                    } else {
+                      slot.read = command
+                      waitToRead(command, slot)
+                    }
+                  }
+                } finally if handle != null then handle.release()
               if failure != null then fail(command, failure.nn)
               else if done then complete(command)
-              else if write then {
-                // Not ready after all: wait again, without the completion ever seeing it.
-                slot.write = command
-                arm(ident, read = false)
-              } else {
-                slot.read = command
-                waitToRead(command, slot)
-              }
             case _ => () // Only commands live in descriptor slots.
           }
         }

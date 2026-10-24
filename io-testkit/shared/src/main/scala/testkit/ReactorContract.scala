@@ -157,6 +157,31 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("an op on a closed handle fails, and what reuses the handle's I/O object gets nothing of it") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      val built = backend.ops.write(out, bytes("stale")) // built before the close, submitted after
+      close(r, in)
+      close(r, out)
+      val again = run(r, backend.ops.close(out))
+      assert(again.isInstanceOf[IOException], s"closing it again: $again")
+      val (in2, out2) = pipe(r) // on kqueue, most likely the same two descriptor numbers
+      try {
+        val early = run(r, built)
+        assert(early.isInstanceOf[IOException], s"an op built before the close: $early")
+        val late = run(r, backend.ops.write(out, bytes("stale")))
+        assert(late.isInstanceOf[IOException], s"an op built after the close: $late")
+        assertEquals(run(r, backend.ops.write(out2, bytes("new"))), null)
+        val buf = allocate(16)
+        assertEquals(run(r, backend.ops.read(in2, buf)), null)
+        assertEquals(text(buf), "new")
+      } finally {
+        close(r, in2)
+        close(r, out2)
+      }
+    }
+  }
+
   test("a read waits for data written later, then completes with it") {
     withReactor { r =>
       val (in, out) = pipe(r)

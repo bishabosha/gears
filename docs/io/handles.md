@@ -180,9 +180,20 @@ close fails without touching a descriptor whose number may be another's by then.
   closed handle fails it with "Not an open handle", so a stale handle reaches nothing. `HandleTable` is gone from
   NIO; Network.framework keeps it, keyed by an `Int` of its own, only for its C side, which tags each of its objects
   with that number so that an event finds its object.
-- **Runtime, kqueue: not yet.** Its ops take the descriptor from the handle when they are built and do not check the
-  closed flag, so a stale handle still reaches whatever reuses its descriptor, as before. Checking the flag where the
-  op is built, or carrying the handle into the command and checking it at submission, would close it.
+- **Runtime, kqueue.** A command built on a handle carries it (`Command.handle`), and every use of the descriptor
+  takes the handle for its length: a command's system call and its registration in the reactor, a file op's on its
+  blocker thread, `readNow` and `writeNow`. Taking it fails once the handle is closed, so a stale handle fails its op,
+  whether built before the close or after, rather than reaching what reuses the descriptor. Kqueue's own code still
+  builds commands on bare descriptors, unchecked, as before.
+- **A close concurrent with a use (kqueue).** The handle counts the uses in progress, in one atomic integer with its
+  closed flag. A close marks the handle closed first, so that no use starts after, then waits for those in progress,
+  a system call or a registration of microseconds, or a file op's disk read or write, before closing the descriptor,
+  so that its number is not reused under one of them. A use is held only around a system call, never while an op
+  waits for readiness, and ends before its completion runs, so that a close never waits for an op that it alone
+  would fail, nor for a completion on its own thread. `HandleCloseSuite` closes a pipe 200 times while a thread
+  writes through it and checks that nothing reaches the pipes opened at once after, which the kernel gives the same
+  numbers: it fails with the count taken out. NIO's channels and Network.framework's connections are objects the
+  runtime closes, with no number to reuse under a call in progress.
 
 Measured against the commit before (release builds; `bench/results/2026-10-25-handle-objects-*.json`), by alternating
 runs, the median of each, change from numbers to objects:
@@ -195,6 +206,11 @@ runs, the median of each, change from numbers to objects:
 | `pipelined` | +5.8% | 0.0% | -1.9% | +0.9% | |
 | `concurrent` | +8.7% | -2.6% | +3.2% | +0.7% | +0.3% |
 | `timers` (no handles: a control) | +0.1% | -0.5% | | | |
+
+The count of uses on kqueue, two atomic operations around each system call, measured against the commit before it
+(9 alternating runs, `bench/results/2026-10-25-handle-uses-kqueue.json`): `connections` +1.4%, `pingpong` +0.3%,
+`pingpong-fresh-ops` 0.0%, `pipelined` -2.8%, `concurrent` +1.0%, `timers` +0.1%; the fastest runs equal to a hundredth
+of a microsecond. Within the spread again.
 
 The first kqueue run's slowdowns were the build that ran second in each pair, under a load average of 7 to 11 (an
 indexer running): its slow runs were bimodal, its fastest equal to the other build's (`pingpong` 6.98 µs against 6.94),
@@ -312,8 +328,7 @@ Proposal 4 for programs, and proposal 3, now built, under it:
 - **Proposal 3 under it**, as a backstop for the low level and for code outside the compiler's checks. It was chosen
   over proposals 1 and 2 because it also refuses forged handles and another backend's when compiling, needs no bits
   split between a number and a generation, cannot wrap, removes the table lookup on NIO, and gives capture checking a
-  class to classify; its cost, measured, is within noise on every backend. Kqueue still has to check the closed flag
-  for its ops (see "Proposal 3, as built").
+  class to classify; its cost, measured, is within noise on every backend, kqueue's count of uses included.
 
 ## Open questions
 
@@ -321,8 +336,6 @@ Proposal 4 for programs, and proposal 3, now built, under it:
   channels read with it; the first step is to try it on gears' own types in a branch.
 - How `Slot[H]` and `acceptAll`'s `Array[H]` hold tracked handles: a slot that receives a fresh capability, and an
   array of them, need capture checking's support for collections of capabilities.
-- Where kqueue checks a handle's closed flag: where an op is built, which throws from a builder, or in the command at
-  submission, which would mean commands carry the handle rather than the descriptor that the plain demos build them
-  from.
-- Whether a close concurrent with a use is made safe (a count of the ops using a handle, closing once the last leaves),
-  which proposal 3 needs to be airtight on kqueue, where the descriptor number is the kernel's to reuse.
+- Whether a close should interrupt a file op reading or writing the disk on a blocker thread, which it now waits for,
+  as the JDK's `FileChannel` does not: by `dup2`ing a closed descriptor over it, as the JDK closes a socket a thread
+  is blocked in.
