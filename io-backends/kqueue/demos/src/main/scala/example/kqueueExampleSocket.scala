@@ -46,12 +46,18 @@ object KQueueExampleSocket {
           r.stop()
         } else {
           println(s"Read ${buf.position() - before} bytes from socket.")
-          val reply = reader.nn.advance() // the buffer's limit stays at what is expected next
-          before = buf.position()
-          if reply != null then {
-            println(s"Received message: `$reply`")
-            r.stop()
-          } else r.submit(read, this)
+          try {
+            val reply = reader.nn.advance() // the buffer's limit stays at what is expected next
+            before = buf.position()
+            if reply != null then {
+              println(s"Received message: `$reply`")
+              r.stop()
+            } else r.submit(read, this)
+          } catch {
+            case invalid: InvalidFrame =>
+              println(s"Invalid message size from the server: ${invalid.length}")
+              r.stop()
+          }
         }
       case _ => ()
     }
