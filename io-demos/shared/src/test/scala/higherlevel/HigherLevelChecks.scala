@@ -6,6 +6,7 @@ import gears.async.Future
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 
+import gears.async.io.IpAddress
 import gears.async.io.testkit.ProgramSuite
 
 /** Checks of the higher level, run over every backend by the demos' suites: what the lowest level is for. */
@@ -28,6 +29,41 @@ trait HigherLevelChecks extends ProgramSuite {
       } finally io.perform(io.backend.ops.close(in))
     }
     assertEquals(outcome, "7 wrapped 0 true")
+  }
+
+  test("a graceful close delivers the whole reply to a client that sent more than the server read") {
+    val port = freePort()
+    val replySize = 256 * 1024
+    val received = running { io ?=>
+      val address = IpAddress.IPv4("127.0.0.1", port)
+      val listener = HigherLevel.listen(address)
+      try {
+        val server = Future {
+          val client = HigherLevel.accept(listener)
+          val scratch = arena.allocate(4096)
+          scratch.limit(4)
+          HigherLevel.read(client, scratch) // a little of the request: the rest is still unread when it replies
+          HigherLevel.writeAll(client, arena.allocate(replySize))
+          HigherLevel.closeGracefully(client, scratch) // closing outright would reset, and could cut the reply short
+        }
+        val socket = HigherLevel.connect(address)
+        try {
+          HigherLevel.writeAll(socket, arena.of(("x" * 65536).getBytes(StandardCharsets.UTF_8)))
+          HigherLevel.shutdownOutput(socket)
+          val buf = arena.allocate(65536)
+          var total = 0L
+          var got = 1
+          while got > 0 do {
+            buf.clear()
+            got = HigherLevel.read(socket, buf)
+            total += got
+          }
+          server.await
+          total
+        } finally io.perform(io.backend.ops.close(socket))
+      } finally io.perform(io.backend.ops.close(listener))
+    }
+    assertEquals(received, replySize.toLong)
   }
 
   test("a higher level over perform: a stream of chunks consumed as a gears channel, with back-pressure") {

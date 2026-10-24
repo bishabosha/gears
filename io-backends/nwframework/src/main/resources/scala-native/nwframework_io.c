@@ -506,14 +506,13 @@ void nwf_receive_message(nwf_handle_t *h) {
   });
 }
 
-/* Sends `len` bytes, copied, as one message: bytes of a stream, or one datagram; `NWF_EV_SENT` once processed. */
-void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
-  dispatch_data_t data = dispatch_data_create(bytes, len, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+/* Sends `data`, which may be NULL, in `context`; `NWF_EV_SENT` once processed, with `len` as its length. */
+static void nwf_send_in(nwf_handle_t *h, dispatch_data_t data, int len, nw_content_context_t context) {
   nwf_handle_retain(h);
   pthread_mutex_lock(&h->lock);
   h->sends++;
   pthread_mutex_unlock(&h->lock);
-  nw_connection_send(h->connection, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t error) {
+  nw_connection_send(h->connection, data, context, true, ^(nw_error_t error) {
     nwf_event_t *e = nwf_event(NWF_EV_SENT);
     e->len = len;
     e->error = nwf_errno(error);
@@ -525,7 +524,19 @@ void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
     if (cancel) nw_connection_cancel(h->connection); /* the cancel that waited for this send */
     nwf_handle_release(h);
   });
+}
+
+/* Sends `len` bytes, copied, as one message: bytes of a stream, or one datagram; `NWF_EV_SENT` once processed. */
+void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
+  dispatch_data_t data = dispatch_data_create(bytes, len, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+  nwf_send_in(h, data, len, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT);
   nw_release(data);
+}
+
+/* Ends a stream connection's sending side, after what was sent before: TCP's FIN, as `shutdown(SHUT_WR)` sends,
+ * the connection staying open for receiving. `NWF_EV_SENT`, with length 0, once processed. */
+void nwf_send_final(nwf_handle_t *h) {
+  nwf_send_in(h, NULL, 0, NW_CONNECTION_FINAL_MESSAGE_CONTEXT);
 }
 
 /* ---- Listeners ---- */

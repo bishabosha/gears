@@ -83,6 +83,7 @@ object NioOps
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
     new PooledRead(handle, NioOps.direct(pool), into)
   def close(handle: Handle): NioOp = new Close(handle)
+  def shutdownOutput(handle: Handle): NioOp = new ShutdownOutput(handle)
   def open(path: String, write: Boolean, into: Handle.Slot): NioOp = new OpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
@@ -163,6 +164,11 @@ final class OpenPipe(read: Handle.Slot, write: Handle.Slot) extends NioAtOnce wi
 /** Closes a handle (see `Ops.close`): at once, as `NioHandles.close` does. */
 final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
+}
+
+/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, as `SocketChannel.shutdownOutput` does. */
+final class ShutdownOutput(val handle: Handle) extends NioAtOnce {
+  def perform(): Unit = NioHandles.shutdownOutput(handle)
 }
 
 /** What to do with a handle once it is ready. `perform` runs a non-blocking operation on the handle's entry, which is

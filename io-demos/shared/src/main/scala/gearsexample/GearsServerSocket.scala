@@ -24,7 +24,9 @@ import higherlevel.HigherLevel
 object GearsServerSocket {
   private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
 
-  /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection. */
+  /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection gracefully, so that
+    * the client reads the whole reply before the end of the stream however the request ended.
+    */
   private def serve(io: Io[UnixStreams], client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
@@ -74,10 +76,9 @@ object GearsServerSocket {
       case e: IOException =>
         // One misbehaving client must not take the server down.
         println(s"Client socket $client failed: ${e.getMessage}")
-    } finally {
-      arena.close()
-      io.perform(io.backend.ops.close(client))
-    }
+    } finally
+      try HigherLevel.closeGracefully(client, arena.allocate(256))(using io)
+      finally arena.close()
   }
 
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))

@@ -97,6 +97,7 @@ object KqueueOps
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
     PooledRead(fd(handle), KqueueOps.native(pool), into)
   def close(handle: Handle): KqueueOp = new Close(fd(handle))
+  def shutdownOutput(handle: Handle): KqueueOp = new ShutdownOutput(fd(handle))
   def open(path: String, write: Boolean, into: Handle.Slot): KqueueOp = new OpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(fd(handle), buf, offset)
   def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(fd(handle), buf, offset)
@@ -219,6 +220,13 @@ final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command
 /** Closes a descriptor (see `Ops.close`): at once, as `KqueueHandles.close` does. */
 final class Close(val fd: Int) extends KqueueAtOnce {
   def perform(): Unit = KqueueHandles.closeDescriptor(fd)
+}
+
+/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, since the kernel sends what is queued,
+  * then the end of the stream, after the call returns.
+  */
+final class ShutdownOutput(val fd: Int) extends KqueueAtOnce {
+  def perform(): Unit = gears.async.io.internal.PosixSockets.shutdownOutput(fd)
 }
 
 /** What to do with a descriptor once kqueue reports it ready. `perform` runs a non-blocking operation on the reactor

@@ -280,6 +280,16 @@ object NioHandles {
 
   def close(handle: Handle): Unit = table.remove(handle).close()
 
+  /** Shuts a connected stream socket down for writing (see `SocketOps.shutdownOutput`). */
+  def shutdownOutput(handle: Handle): Unit = table(handle) match {
+    case entry: Selectable =>
+      entry.channel match {
+        case socket: SocketChannel if socket.isConnected => socket.shutdownOutput(): Unit
+        case _ => throw new IOException(s"Handle $handle is not a connected stream socket")
+      }
+    case _ => throw new IOException(s"Handle $handle is not a connected stream socket")
+  }
+
   /** Runs `setup` on `channel` and gives it a handle, closing it again if `setup` fails. */
   private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Handle =
     try {

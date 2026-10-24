@@ -80,6 +80,41 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("a stream shut down for writing sends what was written, then its end, and still reads") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val accepted = Handle.Slot()
+        val acceptDone = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptDone)
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        turnUntil(r)(acceptDone.finished && connected.finished)
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        val client = into.clear()
+        val server = accepted.clear()
+        try {
+          // The client's request, then its end: the server reads it to the end, as it would a closed peer's.
+          assertEquals(run(r, backend.ops.write(client, bytes("request"))), null)
+          assertEquals(run(r, backend.ops.shutdownOutput(client)), null)
+          val buf = allocate(32)
+          assertEquals(readToEnd(r, backend.ops.read(server, buf), buf), "request")
+          // The reply goes back on the half-closed connection, which the client still reads, to the server's end.
+          assertEquals(run(r, backend.ops.write(server, bytes("reply"))), null)
+          assertEquals(run(r, backend.ops.shutdownOutput(server)), null)
+          val reply = allocate(32)
+          assertEquals(readToEnd(r, backend.ops.read(client, reply), reply), "reply")
+          val late = run(r, backend.ops.write(client, bytes("late")))
+          assert(late.isInstanceOf[IOException], s"a write after shutting down: $late")
+        } finally {
+          close(r, server)
+          close(r, client)
+        }
+        val notConnected = run(r, backend.ops.shutdownOutput(listener))
+        assert(notConnected.isInstanceOf[IOException], s"shutting down a listener: $notConnected")
+      } finally close(r, listener)
+    }
+  }
+
   test("an IPv4 datagram goes to a bound socket, which learns its sender") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))

@@ -268,3 +268,19 @@ ring the submitting thread reads, with no second thread between the kernel and t
   already in use". The close op now registers its waiter and completes on the cancelled event, as a connection's
   does; descriptors and files still close at once, having no cancelled state. Seen in the futures suites' run of
   2026-10-23; the contract suite passed five runs in a row after.
+
+- **Done: a connection both sides have ended is read to its end.** `SocketOps.shutdownOutput` is a final send
+  (`NW_CONNECTION_FINAL_MESSAGE_CONTEXT`, `nwf_send_final`), TCP's FIN. Once both sides have sent theirs and the peer
+  closes, the framework moves the connection to `failed`, with POSIX `ENETDOWN`, while it still holds what the peer
+  sent and its end for receives to come: a log of the state handler and the receives showed the failed state, then a
+  receive with the final, complete content and no error. The handle took `failed` as the end of reading, so the
+  client lost the rest: in `HigherLevelChecks`' graceful close (a 256 KiB reply), it read 128 KiB and then failed with
+  "Network is down", and with the server closing outright it read all 256 KiB and failed where the end should be. A
+  stream that was ready now keeps reading after `failed`, which only fails its writes, until a receive brings the end
+  or fails itself; the check passes on both reactor backends, and on this one 60 runs in a row.
+- **Open: the back-pressure stream over a pipe hangs now and then.** `HigherLevelChecks`' "a stream of chunks
+  consumed as a gears channel, with back-pressure" waits for ever on four workers, all reactors idle, about once in
+  200 runs of it (repeated 30 to a process, 2026-10-24); first seen when the graceful-close check ran before it. It
+  hangs the same with this backend as it was before `shutdownOutput`, so it is not that change's. Pipes here are
+  descriptors waited on through a Dispatch source with pooled reads; a wake-up lost between the writer's close and
+  the reader's next pooled read is the first thing to look at.

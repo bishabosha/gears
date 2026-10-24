@@ -343,6 +343,15 @@ object PosixSockets {
   def withIPv6SocketAddr[A](host: String, port: Int)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A =
     Zone.acquire { implicit z => use(createIPv6SocketAddr(host, port), sizeOf[in.sockaddr_in6].toUInt) }
 
+  /** Shuts down `fd` for writing, leaving it open for reading (see `SocketOps.shutdownOutput`). */
+  def shutdownOutput(fd: Int): Unit = {
+    if (socket.shutdown(fd, socket.SHUT_WR) < 0) {
+      throw new IOException(
+        s"Failed to shut down socket for writing: ${cError()}"
+      )
+    }
+  }
+
   /** Closes `fd`. A descriptor a reactor may know is closed through `KqueueHandles.close`, which tells the reactors. */
   def close(fd: Int): Unit = {
     if (unistd.close(fd) < 0) {

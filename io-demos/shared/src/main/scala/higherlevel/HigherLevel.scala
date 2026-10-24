@@ -5,8 +5,10 @@ import gears.async.BufferedChannel
 import gears.async.Channel
 import gears.async.Future
 
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
 
 import gears.async.io.Backend
 import gears.async.io.BufferPool
@@ -92,6 +94,39 @@ object HigherLevel {
     val write = io.backend.ops.write(handle, buf)
     while buf.hasRemaining do io.perform(write)
   }
+
+  /** Shuts a connected stream down for writing: the peer reads what was written, then the end of the stream, and this
+    * side may still read (see `SocketOps.shutdownOutput`).
+    */
+  def shutdownOutput(handle: Handle)(using io: Io[IpSockets], async: Async): Unit =
+    io.perform(io.backend.ops.shutdownOutput(handle))
+
+  /** Closes a connected stream without resetting it: shuts it down for writing, so that the peer reads all that was
+    * written and then the end, reads into `scratch` and discards until the peer's end, at most `timeoutMillis`, and
+    * closes. Closing with bytes from the peer unread would reset the connection, and a reset can discard the reply the
+    * peer has not read yet. A peer that resets or never ends its side is closed on anyway.
+    */
+  def closeGracefully(handle: Handle, scratch: ByteBuffer, timeoutMillis: Int = 2000)(using
+      io: Io[IpSockets],
+      async: Async
+  ): Unit =
+    try {
+      shutdownOutput(handle)
+      val read = io.backend.ops.read(handle, scratch)
+      val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+      var open = true
+      while open do {
+        val left = ((deadline - System.nanoTime()) / 1_000_000L).toInt
+        if left <= 0 then open = false
+        else {
+          scratch.clear()
+          io.perform(read, left)
+          open = scratch.position() > 0 // a read that adds nothing is the peer's end
+        }
+      }
+    } catch {
+      case _: IOException | _: TimeoutException => () // reset, or never ended: closed on all the same
+    } finally io.perform(io.backend.ops.close(handle))
 
   /** Accepts one connection and returns it. */
   def accept(listener: Handle)(using io: Io[IpSockets], async: Async): Handle = {

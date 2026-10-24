@@ -82,6 +82,7 @@ object NWFrameworkOps
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
     new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
   def close(handle: Handle): NWFrameworkOp = new NWFrameworkClose(handle)
+  def shutdownOutput(handle: Handle): NWFrameworkOp = new NWFrameworkShutdownOutput(handle)
   def open(path: String, write: Boolean, into: Handle.Slot): NWFrameworkOp = new NWFrameworkOpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): NWFrameworkPositionalRead =
     new NWFrameworkPositionalRead(handle, buf, offset)
@@ -315,6 +316,18 @@ final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
       }
     if done then NWFrameworkHandles.remove(handle)
     done
+  }
+}
+
+/** Ends a connected stream's sending side (see `SocketOps.shutdownOutput`): at once, the end queued after the sends
+  * before it.
+  */
+final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Write
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+    h.shutdownOutput()
+    true
   }
 }
 

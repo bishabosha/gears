@@ -12,7 +12,8 @@ import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, collect the response until EOF, the
-  * response as the higher level's stream of chunks, read from the backend's own buffers.
+  * response as the higher level's stream of chunks, read from the backend's own buffers. The client shuts its side down
+  * once the request is out, so that the server sees where it ends.
   */
 object GearsSocket {
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
@@ -34,6 +35,7 @@ object GearsSocket {
             io.perform(write)
             println(s"Wrote ${buf.position() - before} bytes to socket.")
           }
+          HigherLevel.shutdownOutput(socket) // the request ends here, and the server's reply follows to its end
           // The response as a stream: a chunk at a time from the pool's buffers, until the server closes.
           val chunks = HigherLevel.chunks(socket, pool, backlog = 2)
           var next = chunks.read()

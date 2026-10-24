@@ -105,6 +105,15 @@ trait SocketOps[Op] extends Ops[Op] {
     */
   def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): Op
 
+  /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading:
+    * what was written before is still sent, then the end of the stream, which the peer reads as it would a close.
+    * Completes once the end is queued; writes after it fail. A server that closes once it has replied shuts down
+    * first and reads until the client's end before closing, since closing with bytes from the peer unread resets the
+    * connection, and a reset can discard the reply the peer has not read yet; a client shuts down once its request
+    * is out, so that the server sees where it ends. Fails if `handle` is not a connected stream socket.
+    */
+  def shutdownOutput(handle: Handle): Op
+
   /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same
     * family. Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use
     * or cannot be bound.

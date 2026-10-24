@@ -53,6 +53,7 @@ private[nwframework] final class NWFrameworkHandle(
   private var error = 0
   private var readError = 0
   private var writeError = 0
+  private var outputShut = false // the sending side was ended: writes fail
 
   // A stream's received bytes not yet taken, in C memory, and whether a receive is outstanding.
   private var stash: Ptr[Byte] = null
@@ -133,6 +134,13 @@ private[nwframework] final class NWFrameworkHandle(
         case Ready =>
           state = 1
           take(Connect)
+        case Failed if state == 1 && kind == NWFrameworkHandle.Stream =>
+          // A connection fails once both sides have ended their streams and the peer closed (ENETDOWN, seen after a
+          // shutdownOutput), while the framework still holds what the peer sent and its end, for receives to come:
+          // writes fail from here, and reads go on until a receive brings the end or fails itself.
+          error = e.error
+          if writeError == 0 then writeError = e.error
+          take(Write)
         case Failed =>
           state = 2
           error = e.error
@@ -405,7 +413,19 @@ private[nwframework] final class NWFrameworkHandle(
   def send(bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
     checkOpen()
     if writeError != 0 then throw failure("write", writeError)
+    if outputShut then throw new IOException("The connection was shut down for writing")
     sendOn(ptr, bytes, len, reactor, token)
+  }
+
+  /** Ends a connected stream's sending side (see `SocketOps.shutdownOutput`), after the sends before it. */
+  def shutdownOutput(): Unit = synchronized {
+    checkOpen()
+    if kind != NWFrameworkHandle.Stream || state != 1 then throw new IOException("Not a connected stream socket")
+    if writeError != 0 then throw failure("write", writeError)
+    if !outputShut then {
+      outputShut = true
+      NWFrameworkIo.nwf_send_final(ptr)
+    }
   }
 
   private def sendOn(on: NWFrameworkIo.Handle, bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Boolean = {
