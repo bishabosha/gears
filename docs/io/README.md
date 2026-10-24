@@ -53,26 +53,28 @@ only.
 ## A program
 
 ```scala
-def echo(client: Handle)(using Async, r: Io[IpSockets]): Unit = {
+def echo(client: Handle)(using Async, io: Io[IpSockets]): Unit = {
   val buf = ...
-  val read = r.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
-  val write = r.backend.ops.write(client, buf)
-  while { buf.clear(); r.perform(read); buf.position() > 0 } do {
+  val read = io.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
+  val write = io.backend.ops.write(client, buf)
+  while { buf.clear(); io.perform(read); buf.position() > 0 } do {
     buf.flip()
-    while buf.hasRemaining() do r.perform(write)
+    while buf.hasRemaining() do io.perform(write)
   }
 }
 
-ReactorFutures.run(using NioOnCaller) { r => ... echo(client)(using summon[Async], r) ... }
+ReactorFutures.run(using NioOnCaller) { ... echo(client) ... }
 ```
 
 `ReactorFutures.run` dispatches once by the backend's kind and returns what the program returns, as `Async.blocking`
 does; the run that takes `workers` and a `policy` exists only for a `ReactorBackend`. Inside, gears is gears:
 `Future`, `Async.group`, `sleep`, `withTimeout` and `Timer` work, the last three on the backend's timers, since the
 `Io` is the `AsyncOperations`; a `Submission` is a `Cancellable` linked to the group it was submitted in, so the
-scope's end cancels it and waits for its completion, as it does a `Future`. The `Io` is an explicit parameter
-where gears passes `Async` as `using`, because an op's type is path-dependent on it (`r.Op`), so `perform` has to be
-a method of `r`; time limits are an `Int` of milliseconds, the op's own unit.
+scope's end cancels it and waits for its completion, as it does a `Future`. The runner gives the program its `Io` as
+a context parameter, alongside `Async.Spawn`, which the program names where it uses it (`io ?=>`); code over a
+program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type is
+path-dependent on it (`io.Op`), so `perform` is a method of `io`. Time limits are an `Int` of milliseconds, the op's
+own unit.
 
 ## What the interface fixes, and what it leaves
 
@@ -92,7 +94,7 @@ can be written once over every backend.
 
 `higherlevel`, in `ioDemos`, is the API that wraps the lowest level: written over the interface's public contract
 alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
-`HigherLevel` has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifo`), `read`,
+`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifo`), `read`,
 `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
 with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
 ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the

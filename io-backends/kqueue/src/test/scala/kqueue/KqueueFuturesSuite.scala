@@ -13,7 +13,7 @@ import gears.async.io.testkit.ReadinessFuturesChecks
 abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with ReadinessFuturesChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

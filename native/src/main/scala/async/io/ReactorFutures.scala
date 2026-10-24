@@ -27,21 +27,21 @@ object ReactorFutures {
     * Native suspends futures on a pool's workers, which run reactors, so the backend must be a reactor backend. A
     * program's `Io` is not a `Backend`, so starting a run over one is refused when compiling.
     */
-  def run[T](using backend: Backend)(program: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")
     }
 
   /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s (see `ReactorPool`): the
-    * calling thread becomes the first. The program starts as a future, is given an `Io` over the backend on the pool,
-    * with which it performs its ops and which is its `AsyncOperations`; the workers run until it finishes, and what
-    * it returns is returned. `policy` says which tasks a worker out of work may take from another. A failure of the
-    * program is rethrown. With `GEARS_POOL_STATS=1`, the pool's counters are printed once its workers stop, and each
-    * reactor as it prints itself.
+    * calling thread becomes the first. The program starts as a future, is given an `Io` over the backend on the pool
+    * as a context parameter, with which it performs its ops and which is its `AsyncOperations`; the workers run until
+    * it finishes, and what it returns is returned. `policy` says which tasks a worker out of work may take from
+    * another. A failure of the program is rethrown. With `GEARS_POOL_STATS=1`, the pool's counters are printed once
+    * its workers stop, and each reactor as it prints itself.
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using backend: ReactorBackend)(
-      program: OnPool[backend.type] => (Async.Spawn, AsyncOperations) ?=> T
+      program: OnPool[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T
   ): T = {
     FileLimit.raised: Unit // as the JVM does, so that a server's sockets are not capped at a shell's 256
     val stats = sys.env.get("GEARS_POOL_STATS").contains("1")
@@ -51,7 +51,7 @@ object ReactorFutures {
       val io = Pools.bound(backend, pool)
       given AsyncOperations = io
       Async.blocking {
-        val main = Future(program(io)) // queued on the first worker: it starts with that worker's first round
+        val main = Future(program(using io)) // queued on the first worker: it starts with that worker's first round
         main.onComplete(Listener((_, _) => pool.stop()))
         pool.runFirstWorker()
         main.await // already complete, so this only rethrows a failure

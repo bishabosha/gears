@@ -42,16 +42,16 @@ trait ProgramSuite extends FunSuite {
   val backend: Backend & SocketBackend & PipeBackend & ResolveBackend
 
   /** Performs `op`, which opens a handle into `into`, and returns the handle. */
-  protected def opening(r: Io[backend.type], into: Handle.Slot, op: r.Op)(using Async): Handle = {
-    r.perform(op)
+  protected def opening(io: Io[backend.type], into: Handle.Slot, op: io.Op)(using Async): Handle = {
+    io.perform(op)
     into.clear()
   }
 
   /** Opens a pipe: its read end and its write end. */
-  protected def pipe(r: Io[backend.type])(using Async): (Handle, Handle) = {
+  protected def pipe(io: Io[backend.type])(using Async): (Handle, Handle) = {
     val read = Handle.Slot()
     val write = Handle.Slot()
-    r.perform(r.backend.ops.pipe(read, write))
+    io.perform(io.backend.ops.pipe(read, write))
     (read.clear(), write.clear())
   }
 
@@ -63,17 +63,17 @@ trait ProgramSuite extends FunSuite {
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
     * them, and on TCP at a free port of the loopback otherwise.
     */
-  protected def listenAndConnect(r: Io[backend.type], dir: java.nio.file.Path)(using
+  protected def listenAndConnect(io: Io[backend.type], dir: java.nio.file.Path)(using
       Async
-  ): (Handle, Connect) = r.backend match {
-    case unix: (gears.async.io.UnixStreams & r.backend.type) =>
+  ): (Handle, Connect) = io.backend match {
+    case unix: (gears.async.io.UnixStreams & io.backend.type) =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listening = Handle.Slot()
-      val listener = opening(r, listening, unix.ops.listen(address, listening))
+      val listener = opening(io, listening, unix.ops.listen(address, listening))
       val connect = new Connect {
         def apply()(using Async): Handle = {
           val into = Handle.Slot()
-          opening(r, into, unix.ops.connect(address, into))
+          opening(io, into, unix.ops.connect(address, into))
         }
       }
       (listener, connect)
@@ -86,11 +86,11 @@ trait ProgramSuite extends FunSuite {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
         val listening = Handle.Slot()
         try {
-          val listener = opening(r, listening, r.backend.ops.listen(address, listening))
+          val listener = opening(io, listening, io.backend.ops.listen(address, listening))
           val connect = new Connect {
             def apply()(using Async): Handle = {
               val into = Handle.Slot()
-              opening(r, into, r.backend.ops.connect(address, into))
+              opening(io, into, io.backend.ops.connect(address, into))
             }
           }
           found = (listener, connect)
@@ -104,10 +104,10 @@ trait ProgramSuite extends FunSuite {
   }
 
   /** Runs `body` as a program over `backend`, the platform's way, given the backend's `Io`, and returns its result. */
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T
 
   /** A port nothing listens on, found by listening on it with the backend and letting it go. */
-  protected def freePort(): Int = running { r =>
+  protected def freePort(): Int = running { io ?=>
     var port = -1
     val random = new java.util.Random()
     var attempts = 0
@@ -115,8 +115,8 @@ trait ProgramSuite extends FunSuite {
       val candidate = 20000 + random.nextInt(30000)
       val into = Handle.Slot()
       try {
-        val listener = opening(r, into, r.backend.ops.listen(IpAddress.IPv4("127.0.0.1", candidate), into))
-        r.perform(r.backend.ops.close(listener))
+        val listener = opening(io, into, io.backend.ops.listen(IpAddress.IPv4("127.0.0.1", candidate), into))
+        io.perform(io.backend.ops.close(listener))
         port = candidate
       } catch {
         case e: IOException =>

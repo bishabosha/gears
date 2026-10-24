@@ -12,7 +12,7 @@ import gears.async.io.nwframework.NWFrameworkBackend
 class KqueueHigherLevelSuite extends HigherLevelChecks {
   val backend: KqueueBackend.type = KqueueBackend
 
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers = 4)(using backend)(body)
 }
 
@@ -20,6 +20,6 @@ class KqueueHigherLevelSuite extends HigherLevelChecks {
 class NWFrameworkHigherLevelSuite extends HigherLevelChecks {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
 
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers = 4)(using backend)(body)
 }

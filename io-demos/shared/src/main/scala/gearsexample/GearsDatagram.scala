@@ -32,12 +32,12 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
-      ReactorFutures.run { r =>
-        val socket = HigherLevel.datagram(r, UnixAddress(localSock), UnixAddress(sock))
-        val ops = r.backend.ops
+      ReactorFutures.run { io ?=>
+        val socket = HigherLevel.datagram(UnixAddress(localSock), UnixAddress(sock))
+        val ops = io.backend.ops
         val receive = ops.receive(socket, response, Slot[UnixAddress]())
-        try exchange(r, sock, ops.send(socket, request), receive, request, response)
-        finally r.perform(ops.close(socket))
+        try exchange(io, sock, ops.send(socket, request), receive, request, response)
+        finally io.perform(ops.close(socket))
       }
     }
   }
@@ -47,22 +47,22 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
-      ReactorFutures.run { r =>
-        val socket = HigherLevel.datagram(r, null, address)
-        val ops = r.backend.ops
+      ReactorFutures.run { io ?=>
+        val socket = HigherLevel.datagram(null, address)
+        val ops = io.backend.ops
         val receive = ops.receive(socket, response, Slot[IpAddress]())
-        try exchange(r, address, ops.send(socket, request), receive, request, response)
-        finally r.perform(ops.close(socket))
+        try exchange(io, address, ops.send(socket, request), receive, request, response)
+        finally io.perform(ops.close(socket))
       }
     }
   }
 
   /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done. */
   private def exchange(
-      r: Io[Backend],
+      io: Io[Backend],
       remote: Any,
-      send: r.Op,
-      receive: r.Op,
+      send: io.Op,
+      receive: io.Op,
       request: ByteBuffer,
       response: ByteBuffer
   )(using Async): Unit = {
@@ -70,13 +70,13 @@ object GearsDatagram {
     // Scoped, so the exchange is cancelled and settled before the socket is closed.
     Async.group {
       val ping = Future {
-        r.perform(send) // completes once the whole packet has gone
+        io.perform(send) // completes once the whole packet has gone
         println(s"Sent datagram of ${request.limit()} bytes.")
-        r.perform(receive) // completes once a packet has arrived
+        io.perform(receive) // completes once a packet has arrived
         println(s"Received datagram of ${response.remaining()} bytes: `${text(response)}`")
       }
       // UDP has no delivery guarantee; make a missing reply visible in the demo.
-      val deadline = Future(r.perform(r.backend.ops.timer(5000)))
+      val deadline = Future(io.perform(io.backend.ops.timer(5000)))
       Async.select(
         ping.handle(_.get),
         deadline.handle(_ => throw new IOException("Timed out waiting for datagram socket readiness or a reply"))
@@ -90,12 +90,12 @@ object GearsDatagram {
   def serve(address: UnixAddress)(using UnixDatagramBackend): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
-      ReactorFutures.run { r =>
-        val socket = HigherLevel.datagram(r, address, null)
+      ReactorFutures.run { io ?=>
+        val socket = HigherLevel.datagram(address, null)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
-        val ops = r.backend.ops
-        try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
-        finally r.perform(ops.close(socket))
+        val ops = io.backend.ops
+        try echo(io, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
+        finally io.perform(ops.close(socket))
       }
     }
 
@@ -103,25 +103,25 @@ object GearsDatagram {
   def serve(address: IpAddress)(using SocketBackend): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
-      ReactorFutures.run { r =>
-        val socket = HigherLevel.datagram(r, address, null)
+      ReactorFutures.run { io ?=>
+        val socket = HigherLevel.datagram(address, null)
         val sender = Slot[IpAddress]()
-        val ops = r.backend.ops
-        try echo(r, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
-        finally r.perform(ops.close(socket))
+        val ops = io.backend.ops
+        try echo(io, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
+        finally io.perform(ops.close(socket))
       }
     }
 
   /** Receives packets with `receive`, one repeatable op, and echoes each, keeping it until the whole echo has gone,
     * with a new op per sender from `reply`.
     */
-  private def echo(r: Io[Backend], receive: r.Op, packet: ByteBuffer, reply: () => r.Op)(using Async): Unit = {
+  private def echo(io: Io[Backend], receive: io.Op, packet: ByteBuffer, reply: () => io.Op)(using Async): Unit = {
     println("Datagram socket is now waiting for messages.")
     while true do {
-      r.perform(receive)
+      io.perform(receive)
       val size = packet.remaining()
       println(s"Received datagram of $size bytes: `${text(packet)}`")
-      r.perform(reply())
+      io.perform(reply())
       println(s"Replied with datagram of $size bytes.")
     }
   }

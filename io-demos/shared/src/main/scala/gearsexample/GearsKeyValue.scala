@@ -60,7 +60,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      r: Io[UnixStreams],
+      io: Io[UnixStreams],
       fd: Handle,
       inbox: ByteBuffer,
       store: Store,
@@ -69,11 +69,11 @@ object GearsKeyValue {
       Async
   ): Unit = {
     val commands = new FrameParser
-    val readCommands = r.backend.ops.read(fd, inbox) // one repeatable op for the whole session
+    val readCommands = io.backend.ops.read(fd, inbox) // one repeatable op for the whole session
     var eof = false
     while !eof do {
       inbox.clear()
-      r.perform(readCommands)
+      io.perform(readCommands)
       if inbox.position() == 0 then eof = true // Nothing added: end of stream. Answer what has been parsed, then close.
       else {
         inbox.flip()
@@ -91,10 +91,10 @@ object GearsKeyValue {
   }
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
-  private def writeReplies(r: Io[UnixStreams], fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
+  private def writeReplies(io: Io[UnixStreams], fd: Handle, outbox: ByteBuffer, replies: BufferedChannel[Array[Byte]])(
       using Async
   ): Unit = {
-    val writeReplies = r.backend.ops.write(fd, outbox) // one repeatable op for the whole session
+    val writeReplies = io.backend.ops.write(fd, outbox) // one repeatable op for the whole session
     var done = false
     while !done do {
       val batch = replies.read().right.get
@@ -107,14 +107,14 @@ object GearsKeyValue {
           outbox.put(batch, offset, chunk)
           outbox.flip()
           offset += chunk
-          while outbox.hasRemaining() do r.perform(writeReplies)
+          while outbox.hasRemaining() do io.perform(writeReplies)
         }
       }
     }
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(r: Io[UnixStreams], fd: Handle, store: Store)(using Async): Unit = {
+  private def session(io: Io[UnixStreams], fd: Handle, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)
@@ -122,27 +122,27 @@ object GearsKeyValue {
       val replies = BufferedChannel[Array[Byte]](Backlog)
       Async.group {
         Seq(
-          Future(readCommands(r, fd, inbox, store, replies)),
-          Future(writeReplies(r, fd, outbox, replies))
+          Future(readCommands(io, fd, inbox, store, replies)),
+          Future(writeReplies(io, fd, outbox, replies))
         ).awaitAllOrCancel
       }
     } catch {
       case e: IOException => println(s"Client socket $fd failed: ${e.getMessage}")
     } finally {
       arena.close()
-      r.perform(r.backend.ops.close(fd))
+      io.perform(io.backend.ops.close(fd))
       println(s"Closed client socket: $fd")
     }
   }
 
   def serve(address: StreamAddress)(using UnixStreamBackend): Unit = {
     val store = new Store
-    ReactorFutures.run { r =>
-      val server = Sockets.listen(r, address)
+    ReactorFutures.run { io ?=>
+      val server = Sockets.listen(address)
       try {
         println("Key-value server is now listening for connections.")
-        Sockets.serve(r, server)(client => session(r, client, store))
-      } finally r.perform(r.backend.ops.close(server))
+        Sockets.serve(server)(client => session(io, client, store))
+      } finally io.perform(io.backend.ops.close(server))
     }
   }
 
@@ -155,29 +155,29 @@ object GearsKeyValue {
     BufferArena.scoped { arena =>
       val outbox = arena.allocate(BufferSize)
       val inbox = arena.allocate(BufferSize)
-      ReactorFutures.run { r =>
+      ReactorFutures.run { io ?=>
         println(s"connection in progress to: $address")
-        val socket = Sockets.connect(r, address)
+        val socket = Sockets.connect(address)
         try {
           val sender = Future {
-            val write = r.backend.ops.write(socket, outbox)
+            val write = io.backend.ops.write(socket, outbox)
             var sent = 0
             while sent < batch.length do {
               outbox.clear()
               while sent < batch.length && StreamProtocol.append(batch(sent), outbox) do sent += 1
               outbox.flip()
-              while outbox.hasRemaining() do r.perform(write)
+              while outbox.hasRemaining() do io.perform(write)
             }
             println(s"Pipelined ${batch.length} commands.")
           }
           val receiver = Future {
             val parser = new FrameParser
-            val read = r.backend.ops.read(socket, inbox)
+            val read = io.backend.ops.read(socket, inbox)
             var received = 0
             var lastReply = ""
             while received < batch.length do {
               inbox.clear()
-              r.perform(read)
+              io.perform(read)
               if inbox.position() == 0 then
                 throw new IOException(s"Server closed the connection after $received replies")
               inbox.flip()
@@ -192,7 +192,7 @@ object GearsKeyValue {
             println(s"Received $received replies; last reply: `$lastReply`")
           }
           Seq(sender, receiver).awaitAllOrCancel
-        } finally r.perform(r.backend.ops.close(socket))
+        } finally io.perform(io.backend.ops.close(socket))
       }
     }
   }

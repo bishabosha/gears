@@ -17,9 +17,9 @@ object GearsFileRead {
     BufferArena.scoped { arena =>
       val chunk = arena.allocate(1024)
       val contents = new ByteArrayOutputStream()
-      ReactorFutures.run { r =>
+      ReactorFutures.run { io ?=>
         println(s"attempt to open file $fifo")
-        val file = HigherLevel.openFifo(r, fifo, write = false)
+        val file = HigherLevel.openFifo(fifo, write = false)
         try {
           println(s"opened file: $file")
 
@@ -30,7 +30,7 @@ object GearsFileRead {
             var result: Boolean | Null = null
             while result == null do {
               chunk.clear()
-              val read = r.backend.ops.readNow(file, chunk)
+              val read = io.backend.ops.readNow(file, chunk)
               if read < 0 then result = true
               else if read == 0 then {
                 println("No more data available to read (EAGAIN or EWOULDBLOCK).")
@@ -45,18 +45,18 @@ object GearsFileRead {
           }
 
           // One repeatable op, performed again before each drain.
-          val readable = r.backend.ops.ready(file, Interest.Read)
+          val readable = io.backend.ops.ready(file, Interest.Read)
           println("Event registered for file read.")
           println("starting to poll...")
           while true do {
-            r.perform(readable) // completes once the FIFO is readable, at its end included
+            io.perform(readable) // completes once the FIFO is readable, at its end included
             if drain() then { // end of file: everything the writer sent is in `contents`
               println(s"End of file reached. Contents are ${contents.size} long.")
               println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
               contents.reset() // Start over for the next writer
             }
           }
-        } finally r.perform(r.backend.ops.close(file))
+        } finally io.perform(io.backend.ops.close(file))
       }
     }
   }
