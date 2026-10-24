@@ -142,6 +142,24 @@ can never be confused with a new one: it is the closed object, and an op on it f
   it may escape (see proposal 4).
 - **What it costs.** An allocation per open, which is small against the system call, and a reference to follow on each
   op, which replaces the table lookup NIO and Network.framework do today. kqueue pays both, having needed neither.
+  Against an opaque `Long` (proposals 1 and 2), estimated from what the code does today, not measured:
+
+  | | Opaque `Long` | Reference object |
+  | --- | --- | --- |
+  | Per open | nothing | one allocation of about 24 bytes (the descriptor or channel, a closed flag, the backend): a few ns, against an `accept` or `connect` of microseconds |
+  | Per op, NIO and Network.framework | `HandleTable` lookup: a volatile read, a bounds check, an array read | none: the handle is the entry |
+  | Per op, kqueue | none (the descriptor is in the handle) and a generation comparison | a field read, usually in cache; `DescriptorTable` stays, since events arrive by descriptor |
+  | Open and close, NIO and Network.framework | `HandleTable`'s lock to add and remove | no table |
+  | In generic code: `Future[Handle]`, `HigherLevel.pipe`'s `(Handle, Handle)`, `Option`, collections, `Slot[...]` | boxed to a `java.lang.Long` at every use; small `Int` descriptors hit the JVM's `Integer` cache today, a `Long` with a generation in its high bits never does | already a reference: no further allocation |
+  | Memory per holder | 8 bytes | a 4-byte compressed reference on the JVM, plus the one object |
+  | Garbage collection | none for the handle itself, but the boxes above | one object per connection, living as long as it: promoted on a long-lived server, cheap to collect for a short one |
+  | Scala.js, which compiles the interface | `Long` is emulated, its arithmetic and comparisons slower than an `Int`'s | an ordinary reference |
+
+  So the `Long` is cheaper only where a handle never enters generic code; once it does, it allocates per use where the
+  object allocated once per open. Either way the difference is nanoseconds against system calls of microseconds (the
+  bench's round trip is about 16 µs). `Handle.Opt` and `Handle.Slot`, unboxed today by their own special-casing,
+  would hold a reference. Measuring it needs a connection-churn scenario on the bench (open, one round trip, close),
+  run with numbers against objects: the per-op scenarios such as `pingpong` would show only kqueue's field read.
 
 ## Proposal 4: handles tied to a gears scope, enforced by capture checking
 
@@ -237,6 +255,7 @@ owns it (`close(consume h)`).
 | Handles at once | 2^20, enforced by the runner | unbounded | unbounded | as today |
 | Representation | opaque `Long` | opaque `Long` | a class, one per open | as today, tracked |
 | Per op | a comparison | a hash lookup | a field read | nothing |
+| Per open, and in generic code | nothing; a box per generic use | nothing; a box per generic use | one allocation; nothing more | as today |
 | kqueue | compares with `DescriptorTable` | maps id to descriptor | reads the descriptor from the handle | as today |
 | Forged or another backend's handle | read as one of its own | not found, or another's id | refused | as today |
 | Covers the low level (`Ops`) | yes | yes | yes | no |
@@ -255,7 +274,8 @@ Proposal 4 for programs, and one of proposals 1 to 3 under it:
   which kqueue cannot do; proposal 3 is the strongest, since it also refuses forged handles and another backend's,
   removes the table lookup on NIO and Network.framework, and gives capture checking a class to classify; proposal 2 sits
   between and buys its never-reused ids with a hash lookup. Which one is a measurement: the cost of an allocation per
-  open and a reference per op on kqueue, against a comparison per op.
+  open and a reference per op on kqueue, against a comparison per op and a box per generic use (see proposal 3's
+  costs).
 
 ## Open questions
 
