@@ -6,14 +6,13 @@ import gears.async.io.Backend
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.testkit.BufferArena
-import DemoIO.{FrameParser, StreamProtocol}
+import DemoIO.{FrameReader, StreamProtocol}
 import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
-/** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, and read the framed response, as the
-  * higher level's stream of chunks from the backend's own buffers, until the whole frame has arrived; a stream that
-  * ends first is a reply cut short, and an error. The client shuts its side down once the request is out, so that the
-  * server sees where it ends.
+/** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, and read the framed response exactly,
+  * through the same buffer (`FrameReader`); a stream that ends before the whole frame is a reply cut short, and an
+  * error. The client shuts its side down once the request is out, so that the server sees where it ends.
   */
 object GearsSocket {
   def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
@@ -24,7 +23,6 @@ object GearsSocket {
       ReactorFutures.run { io ?=>
         println(s"connection in progress to: $address")
         val socket = Sockets.connect(address)
-        val pool = io.backend.pool(bufferSize = 8192, buffers = 4)
         try {
           // One repeatable op, resubmitted until the request is out.
           val write = io.backend.ops.write(socket, buf)
@@ -35,26 +33,20 @@ object GearsSocket {
             println(s"Wrote ${buf.position() - before} bytes to socket.")
           }
           HigherLevel.shutdownOutput(socket) // the request ends here, and the server's reply follows to its end
-          // The response as a stream: a chunk at a time from the pool's buffers, until its frame is whole.
-          val parser = new FrameParser
-          val chunks = HigherLevel.chunks(socket, pool, backlog = 2)
+          // The response, read exactly: its header, then its body, through the same buffer.
+          val read = io.backend.ops.read(socket, buf)
+          val reader = new FrameReader(buf)
           var reply: String | Null = null
-          try
-            while reply == null do
-              chunks.read() match {
-                case Some(chunk) =>
-                  println(s"Read ${chunk.buffer.remaining()} bytes from socket.")
-                  parser.feed(chunk.buffer)
-                  chunk.release()
-                  reply = parser.next()
-                case None => throw new IOException("The server closed the connection before its whole reply")
-              }
-          finally chunks.close()
+          while reply == null do {
+            val before = buf.position()
+            io.perform(read)
+            if buf.position() == before then
+              throw new IOException("The server closed the connection before its whole reply")
+            println(s"Read ${buf.position() - before} bytes from socket.")
+            reply = reader.advance()
+          }
           println(s"Received message: `$reply`")
-        } finally {
-          io.perform(io.backend.ops.close(socket))
-          pool.close()
-        }
+        } finally io.perform(io.backend.ops.close(socket))
       }
     }
   }

@@ -3,7 +3,7 @@ package gearsexample
 import gears.async.Async
 import gears.async.Future
 
-import java.io.ByteArrayOutputStream
+import java.io.EOFException
 import java.io.IOException
 
 import gears.async.io.Io
@@ -13,7 +13,7 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
 import gears.async.io.testkit.BufferArena
-import DemoIO.{StreamProtocol, drainTo}
+import DemoIO.{FrameReader, InvalidFrame, StreamProtocol}
 import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
@@ -34,43 +34,21 @@ object GearsServerSocket {
       val read = io.backend.ops.read(client, buf)
       val write = io.backend.ops.write(client, buf)
 
-      /** Reads until the buffer's limit is reached; false at an unexpected EOF. */
-      def fill(): Boolean = {
-        var open = true
-        while open && buf.hasRemaining() do {
-          val before = buf.position()
-          io.perform(read)
-          open = buf.position() > before // a read that adds nothing is the end of the stream
-        }
-        if !open then println(s"Unexpected EOF from client socket $client.")
-        open
+      // The request, read exactly to its frame's end: whatever the client sent after it stays unread.
+      val reader = new FrameReader(buf)
+      var request: String | Null = null
+      while request == null do {
+        val before = buf.position()
+        io.perform(read)
+        if buf.position() == before then throw new EOFException("Unexpected EOF") // a read that adds nothing
+        request = reader.advance()
       }
-
-      buf.clear().limit(StreamProtocol.HeaderLength)
-      if fill() then {
-        val size = StreamProtocol.messageLength(buf)
-        if size < 0 || size > StreamProtocol.MaxMessageLength then
-          println(s"Invalid message size from client socket $client: $size")
-        else {
-          // Gather the body one buffer's worth at a time.
-          val body = new ByteArrayOutputStream()
-          var remaining = size
-          var open = true
-          while open && remaining > 0 do {
-            buf.clear().limit(math.min(remaining, buf.capacity()))
-            open = fill()
-            buf.flip()
-            remaining -= buf.remaining()
-            drainTo(buf, body)
-          }
-          if open then {
-            StreamProtocol.frame(Response, buf) // framed, so that the client knows when it has all of it
-            while buf.hasRemaining() do io.perform(write)
-          }
-        }
-      }
+      StreamProtocol.frame(Response, buf) // framed, so that the client knows when it has all of it
+      while buf.hasRemaining() do io.perform(write)
     } catch {
-      case e: IOException =>
+      case invalid: InvalidFrame => println(s"Invalid message size from client socket $client: ${invalid.length}")
+      case _: EOFException       => println(s"Unexpected EOF from client socket $client.")
+      case e: IOException        =>
         // One misbehaving client must not take the server down.
         println(s"Client socket $client failed: ${e.getMessage}")
     } finally

@@ -1,9 +1,7 @@
 package example
 
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
 import scala.scalanative.unsafe.Zone
 
 import gears.async.io.Completion
@@ -23,22 +21,20 @@ object KQueueExampleServerSocket {
   private val Response = "Just pinging back!\n"
 
   private enum State {
-    case ReadHeader, ReadMessage, SendResponse
+    case ReadRequest, SendResponse
   }
 
-  /** One accepted connection: reads a length-framed request, then replies with a framed response and closes. Owns a
-    * zone holding its single 8 KiB buffer; a body larger than that is read in chunks and gathered until complete. The
-    * zone closes with the connection.
+  /** One accepted connection: reads a length-framed request exactly (`FrameReader`), then replies with a framed
+    * response and closes. Owns a zone holding its single 8 KiB buffer, through which a body larger than that is read a
+    * buffer's worth at a time. The zone closes with the connection.
     */
   private final class Connection(r: KqueueReactor, val fd: Handle, server: Server)
       extends AutoCloseable
       with Completion[Command] {
-    private var state = State.ReadHeader
+    private var state = State.ReadRequest
     private val zone: Zone = Zone.open()
     private val buf: ByteBuffer = NativeBuffer.allocate(8192)(using zone)
-    private val body = new ByteArrayOutputStream()
-    private var bodyRemaining = 0
-    expect(StreamProtocol.HeaderLength)
+    private val reader = new FrameReader(buf)
 
     inline val KeepOpen = true
     inline val Close = false
@@ -81,32 +77,15 @@ object KQueueExampleServerSocket {
         println(s"Unexpected EOF from client socket $fd.")
         Close
       else
-        state match
-          case State.ReadHeader =>
-            if buf.hasRemaining() then KeepOpen // Wait for the rest of the header.
-            else
-              val size = StreamProtocol.messageLength(buf)
-              if size < 0 || size > StreamProtocol.MaxMessageLength then
-                println(s"Invalid message size from client socket $fd: $size")
-                Close
-              else
-                state = State.ReadMessage
-                bodyRemaining = size
-                readBody()
-                KeepOpen
-          case _ =>
-            // Gather whatever arrived and ask for the rest, one buffer's worth at a time.
-            buf.flip()
-            bodyRemaining -= buf.remaining()
-            drainTo(buf, body)
-            readBody()
-            KeepOpen
+        try
+          val request = reader.advance() // the buffer's limit stays at what is expected next
+          if request != null then prepareResponse(request)
+          KeepOpen
+        catch
+          case invalid: InvalidFrame =>
+            println(s"Invalid message size from client socket $fd: ${invalid.length}")
+            Close
     }
-
-    /** Expects the next chunk of the body, or responds once all of it has been gathered. */
-    private def readBody(): Unit =
-      if bodyRemaining == 0 then prepareResponse()
-      else expect(math.min(bodyRemaining, buf.capacity()))
 
     /** Handles writability. Returns false once the whole response has been sent. */
     def writeEvent(): Boolean = {
@@ -115,14 +94,11 @@ object KQueueExampleServerSocket {
       if buf.hasRemaining() then KeepOpen else Close
     }
 
-    private def prepareResponse(): Unit = {
-      println(s"message contents: `${body.toString(StandardCharsets.UTF_8)}`")
+    private def prepareResponse(request: String): Unit = {
+      println(s"message contents: `$request`")
       state = State.SendResponse
       StreamProtocol.frame(Response, buf) // framed, so that the client knows when it has all of it
     }
-
-    /** Empties the buffer and limits it to the `length` bytes the current state will read. */
-    private def expect(length: Int): Unit = buf.clear().limit(length)
 
     def close(): Unit =
       zone.close()

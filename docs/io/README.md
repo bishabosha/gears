@@ -98,8 +98,10 @@ alone, in a package outside `gears.async.io` so that it sees only what a program
 `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
 with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
 ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the
-demos open their sockets, pipes and FIFOs through it, the whois demo resolves and reads through it, the socket demo
-takes its response as a stream of chunks, and the key-value and server-socket demos accept through it.
+demos open their sockets, pipes and FIFOs through it, the whois demo resolves and reads through it, the key-value and
+server-socket demos accept through it, and the stream server closes through `closeGracefully`. The stream demos read
+their one frame each way with `FrameReader`, which limits each read to what the frame still needs, so `chunks`, whose
+reads fill whatever arrives, is exercised by `HigherLevelChecks` rather than by a demo.
 
 What the wrapper shows the interface costs it: a read's byte count is a buffer-position delta, and there are two slot
 types since a `Handle` is an unboxed `Int`, which are the mutability a higher level wraps; and a stream spawns a

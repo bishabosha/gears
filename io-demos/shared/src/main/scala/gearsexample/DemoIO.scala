@@ -1,6 +1,7 @@
 package gearsexample
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
@@ -63,7 +64,46 @@ object DemoIO {
     }
   }
 
-  /** Reassembles framed messages from a byte stream that arrives in arbitrary chunks. */
+  /** A frame whose header gives a length that is negative or above the most a reader takes. */
+  final class InvalidFrame(val length: Int) extends IOException(s"Invalid message size: $length")
+
+  /** Reads one framed message through `buf` by limiting each read to exactly what is still expected: the header, then
+    * the body, a buffer's worth at a time, so that nothing past the frame is ever read, and what follows it stays for
+    * the next reader or a graceful close. After each read into `buf`, which appends at its position, `advance` takes
+    * what the read brought and returns the message once it is whole, or null with `buf` limited to what is expected
+    * next; a header whose length is negative or above `max` fails at once, with `InvalidFrame`, before any of the body
+    * is read or room made for it.
+    */
+  final class FrameReader(buf: ByteBuffer, max: Int = StreamProtocol.MaxMessageLength) {
+    private var body: Array[Byte] | Null = null // once the header is in, room for the body
+    private var filled = 0
+    buf.clear().limit(StreamProtocol.HeaderLength)
+
+    def advance(): String | Null = {
+      if body == null then {
+        if buf.hasRemaining() then return null // the rest of the header
+        val length = StreamProtocol.messageLength(buf)
+        if length < 0 || length > max then throw new InvalidFrame(length)
+        body = new Array[Byte](length)
+      } else {
+        buf.flip()
+        val n = buf.remaining()
+        buf.get(body.nn, filled, n)
+        filled += n
+      }
+      val whole = body.nn
+      buf.clear()
+      if filled == whole.length then new String(whole, StandardCharsets.UTF_8)
+      else {
+        buf.limit(math.min(whole.length - filled, buf.capacity()))
+        null
+      }
+    }
+  }
+
+  /** Reassembles framed messages from a byte stream that arrives in arbitrary chunks, as a pipelined connection's do,
+    * many frames to a read: where one frame at a time is expected, `FrameReader` reads exactly it.
+    */
   final class FrameParser {
     private var pending = new Array[Byte](0)
 

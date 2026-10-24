@@ -21,7 +21,7 @@ import gears.async.io.kqueue.KqueueHandles
 object KQueueExampleIO {
 
   // Shared with the gears demos, which run on every platform.
-  export gearsexample.DemoIO.{FrameParser, StreamProtocol, drainTo, text}
+  export gearsexample.DemoIO.{FrameParser, FrameReader, InvalidFrame, StreamProtocol, drainTo, text}
 
   /** A connecting stream socket; the connection is verified before its first use. */
   final class ClientSock(val fd: Int) {

@@ -14,15 +14,16 @@ import KQueueExampleIO.*
 
 object KQueueExampleSocket {
 
-  /** Connects, sends one framed request, then reuses the same buffer to read the framed response until its frame is
-    * whole; a stream that ends first is a reply cut short. Built entirely from the library's commands.
+  /** Connects, sends one framed request, then reuses the same buffer to read the framed response exactly
+    * (`FrameReader`); a stream that ends before the whole frame is a reply cut short. Built entirely from the library's
+    * commands.
     */
   final class Exchange(r: KqueueReactor, fd: Int, message: String)(using Zone) extends Completion[Command] {
     private val buf = NativeBuffer.allocate(8192)
-    private val parser = new FrameParser
+    private var reader: FrameReader | Null = null // once the request is out
 
     private var written = 0 // how much of the request the buffer's position had reached before the latest write
-
+    private var before = 0 // the buffer's position before the latest read
 
     def start(): Unit = r.submit(Connect(fd), this)
 
@@ -35,20 +36,18 @@ object KQueueExampleSocket {
         written = buf.position()
         if buf.hasRemaining() then r.submit(write, this)
         else {
-          buf.clear() // The request is out; the buffer now collects the response.
+          reader = new FrameReader(buf) // The request is out; the buffer now reads the response, exactly.
           r.submit(ReadIntoBuffer(fd, buf), this)
         }
       case read: ReadIntoBuffer =>
-        if buf.position() == 0 then {
+        if buf.position() == before then {
           // Nothing added: end of stream, before the whole frame.
           println("The server closed the connection before its whole reply")
           r.stop()
         } else {
-          println(s"Read ${buf.position()} bytes from socket.")
-          buf.flip()
-          parser.feed(buf)
-          buf.clear() // Each chunk is copied out, so the buffer starts over.
-          val reply = parser.next()
+          println(s"Read ${buf.position() - before} bytes from socket.")
+          val reply = reader.nn.advance() // the buffer's limit stays at what is expected next
+          before = buf.position()
           if reply != null then {
             println(s"Received message: `$reply`")
             r.stop()
