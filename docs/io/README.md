@@ -106,3 +106,9 @@ reads fill whatever arrives, is exercised by `HigherLevelChecks` rather than by 
 What the wrapper shows the interface costs it: a read's byte count is a buffer-position delta, and there are two slot
 types since a `Handle` is an unboxed `Int`, which are the mutability a higher level wraps; and a stream spawns a
 future to feed its channel, as a `Future` is the gears way to turn a loop of ops into a channel.
+
+## Design notes
+
+- [`handles.md`](handles.md): handles outlive the I/O object they named, since numbers are reused; a generation in the
+  handle, checked as the program runs, and handles tied to gears scopes, enforced by capture checking.
+- [`files.md`](files.md): file I/O in the reactor, what macOS offers for it, and the shape the file ops take.
