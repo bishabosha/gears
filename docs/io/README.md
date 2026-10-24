@@ -110,5 +110,6 @@ future to feed its channel, as a `Future` is the gears way to turn a loop of ops
 ## Design notes
 
 - [`handles.md`](handles.md): handles outlive the I/O object they named, since numbers are reused; a generation in the
-  handle, checked as the program runs, and handles tied to gears scopes, enforced by capture checking.
+  handle, a number that only grows, or a reference object that cannot be forged, each checked as the program runs, and
+  handles tied to gears scopes, enforced by capture checking.
 - [`files.md`](files.md): file I/O in the reactor, what macOS offers for it, and the shape the file ops take.

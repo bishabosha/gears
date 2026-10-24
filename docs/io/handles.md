@@ -1,12 +1,13 @@
 # Handles that outlive their I/O object: a design note
 
-A `Handle` names an open socket, pipe, FIFO or file by a number, and the number is reused once its handle is closed.
-So a consumer still holding a closed handle can, without any error, reach whatever I/O object was opened under the
-number since. This note records the problem, what protects against it today and what does not, and two proposals:
-encoding a generation in the handle itself, checked as the program runs, or tying a handle to a gears scope that capture
-checking enforces when compiling. Written on 2026-10-24; the capture checking findings come from small programs
-compiled with Scala 3.9.0, `language.experimental.captureChecking` and `separationChecking`. Nothing in the
-interface has changed for it yet.
+A `Handle` names an open socket, pipe, FIFO or file by a number, and the number is reused once its handle is closed. So
+a consumer still holding a closed handle can, without any error, reach whatever I/O object was opened under the number
+since. This note records the problem, what protects against it today and what does not, and four proposals. Three change
+what a handle is, so that a stale one fails cleanly as the program runs: a generation encoded in the handle, a number
+that only grows and is never reused, or a reference to an object that cannot be forged. The fourth ties a handle to a
+gears scope that capture checking enforces when compiling. Written on 2026-10-24; the capture checking findings come
+from small programs compiled with Scala 3.9.0, `language.experimental.captureChecking` and `separationChecking`. Nothing
+in the interface has changed for it yet.
 
 ## The problem
 
@@ -65,7 +66,54 @@ for the same reason, and `DescriptorTable` already keeps one per descriptor for 
 - **What it does not.** It finds the mistake when the program runs, possibly in production, and only if the stale
   handle is used at all. It does not stop a future from holding a handle past its close.
 
-## Proposal 2: handles tied to a gears scope, enforced by capture checking
+## Proposal 2: a number that only grows, never reused
+
+Make a handle an id from a counter that only grows, a `Long`, so that no two I/O objects are ever given the same one.
+A closed handle's id is simply absent from the table afterwards, and a stale handle fails with "Not an open handle"
+however many objects were opened since.
+
+- **Representation.** `Handle` becomes an opaque `Long`, as in proposal 1. A 64-bit counter does not wrap: at a
+  billion opens a second it would take centuries.
+- **The table.** Ids are not dense, so the table can no longer be an array indexed by the handle: it becomes a map
+  from id to object, a concurrent hash map, or an array of slots whose entry also records the id it holds, which is
+  proposal 1 again under another name.
+- **Per backend.** kqueue's handles stop being descriptors: every op maps the id to its descriptor first, where today
+  the handle is the descriptor and costs nothing to resolve. NIO and Network.framework trade an array index for a hash
+  lookup.
+- **What it gives.** The same detection as proposal 1, and simpler to reason about: an id names one object for the life
+  of the process, with nothing to compare. A handle printed in a log means one thing.
+- **What it costs.** A hash lookup on every op, and on kqueue a lookup where there was none. The generation of
+  proposal 1 gets the same answer with an array index and one comparison; this is the version to prefer only if the
+  lookup measures as cheap, or if ids that are never reused matter for their own sake, as in logs and traces.
+
+## Proposal 3: a reference to an object, which cannot be forged
+
+Make a handle an object rather than a number: a final class the backend creates when it opens something, holding what
+the backend needs (the descriptor, the channel, the connection) and whether it is closed. A program can only get one
+from an op that opened it, so it cannot be forged from an `Int`, and a new open makes a new object, so a stale handle
+can never be confused with a new one: it is the closed object, and an op on it fails.
+
+- **Representation.** `Handle` becomes a class, allocated once per open. `Handle.Opt` and `Handle.Slot` hold a
+  reference, and `acceptAll`'s array is an array of references. Nothing is unboxed any more.
+- **No table lookup.** The op reaches the descriptor, channel or connection straight from the handle: NIO and
+  Network.framework no longer look an index up in `HandleTable`, which could go, and kqueue reads the descriptor from
+  a field.
+- **Forging and mixing.** Today `Handle.wrap` is `private[io]`, which keeps programs from making a handle from a
+  number, but a cast still can, and a handle of one backend passed to another is just a number, which the other reads
+  as one of its own. An object belongs to the backend that made it, so an op can refuse another backend's handle, and a
+  cast to it fails.
+- **Closing while in use.** A closed flag alone races with a use on another thread: kqueue could check the flag, the
+  close run and its descriptor number be reused, and then the use reach the new descriptor. The object can count the
+  ops using it and close the descriptor only once the last has left, as the JDK does for a channel a thread is blocked
+  in (`preClose`, a `dup2` onto a dead socket, then the real close when the last thread leaves). That is a cost every
+  proposal here would pay to make a close concurrent with use safe, not this one's alone.
+- **Capture checking.** An object can be a capability class (`caps.SharedCapability`, or an exclusive one), which an
+  opaque `Int` cannot: the backend could then say how a handle may be shared, by classifier, rather than only whether
+  it may escape (see proposal 4).
+- **What it costs.** An allocation per open, which is small against the system call, and a reference to follow on each
+  op, which replaces the table lookup NIO and Network.framework do today. kqueue pays both, having needed neither.
+
+## Proposal 4: handles tied to a gears scope, enforced by capture checking
 
 Make a handle impossible to use once its scope has closed it: the higher level opens a handle for a scope, the
 scope closes it only once every future that may use it has finished, and the compiler rejects any use outside the
@@ -150,14 +198,30 @@ be reused under anyone holding it. It does not cover the low level, where a prog
 nor code that switches the checking off; and a scope cannot close its handle early except in straight-line code that
 owns it (`close(consume h)`).
 
+## Comparison
+
+| | 1. Generation | 2. Number that only grows | 3. Reference object | 4. Scopes and capture checking |
+| --- | --- | --- | --- | --- |
+| A stale handle | fails as it is used | fails as it is used | fails as it is used | does not compile |
+| Representation | opaque `Long` | opaque `Long` | a class, one per open | as today, tracked |
+| Per op | a comparison | a hash lookup | a field read | nothing |
+| kqueue | compares with `DescriptorTable` | maps id to descriptor | reads the descriptor from the handle | as today |
+| Forged or another backend's handle | read as one of its own | not found, or another's id | refused | as today |
+| Covers the low level (`Ops`) | yes | yes | yes | no |
+| Changes gears | no | no | no | yes: spawners' capture sets |
+
 ## Recommendation
 
-The two are complementary rather than alternatives:
+Proposal 4 for programs, and one of proposals 1 to 3 under it:
 
-- **Proposal 2 for programs**, at the higher level, since it prevents the mistake when compiling, which is the safety
-  wanted; it is the larger change, starting with gears' spawners.
-- **Proposal 1 under it**, as a runtime backstop for the low level and for code outside the compiler's checks: a
-  stale handle then fails cleanly on every backend instead of reaching another device.
+- **Proposal 4 at the higher level**, since it prevents the mistake when compiling, which is the safety wanted; it is
+  the larger change, starting with gears' spawners.
+- **One runtime proposal under it**, as a backstop for the low level and for code outside the compiler's checks, so
+  that a stale handle fails cleanly on every backend instead of reaching another device. Proposal 1 is the cheapest
+  for kqueue, whose handles stay descriptors; proposal 3 is the strongest, since it also refuses forged handles and
+  another backend's, removes the table lookup on NIO and Network.framework, and gives capture checking a class to
+  classify; proposal 2 sits between and buys its never-reused ids with a hash lookup. Which one is a measurement:
+  the cost of an allocation per open and a reference per op on kqueue, against a comparison per op.
 
 ## Open questions
 
@@ -165,5 +229,9 @@ The two are complementary rather than alternatives:
   channels read with it; the first step is to try it on gears' own types in a branch.
 - How `Handle.Opt`, `Handle.Slot` and `acceptAll`'s array hold tracked handles: a slot that receives a fresh capability,
   and an array of them, need capture checking's support for collections of capabilities.
-- Whether proposal 1's `Long` is worth its cost before proposal 2 lands, or only once the low level is the only
+- Which runtime proposal, measured on the bench: the generation's comparison, the growing id's hash lookup, or the
+  reference object's allocation per open, on kqueue in particular, whose handles are free to resolve today.
+- Whether the runtime proposal is worth its cost before proposal 4 lands, or only once the low level is the only
   unchecked path left.
+- Whether a close concurrent with a use is made safe (a count of the ops using a handle, closing once the last leaves),
+  which any of proposals 1 to 3 needs to be airtight on kqueue, where the descriptor number is the kernel's to reuse.
