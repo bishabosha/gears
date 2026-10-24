@@ -78,14 +78,19 @@ class SocketDemoSuite extends DemoSuite {
   private def frame(payload: Array[Byte]): Array[Byte] =
     ByteBuffer.allocate(4 + payload.length).putInt(payload.length).put(payload).array()
 
-  private def readAll(channel: SocketChannel): String = {
+  /** Reads to the end of the stream, which must hold one whole frame and nothing more, and returns its payload. */
+  private def readReply(channel: SocketChannel): String = {
     val out = new ByteArrayOutputStream
     val buffer = ByteBuffer.allocate(4096)
     while (channel.read(buffer) != -1) {
       out.write(buffer.array(), 0, buffer.position())
       buffer.clear()
     }
-    out.toString(StandardCharsets.UTF_8)
+    val bytes = out.toByteArray
+    assert(bytes.length >= 4, s"a reply of ${bytes.length} bytes has no header")
+    val length = ByteBuffer.wrap(bytes).getInt(0)
+    assertEquals(bytes.length, 4 + length, "a reply is one whole frame")
+    new String(bytes, 4, length, StandardCharsets.UTF_8)
   }
 
   /** Serves one request, kills the server without letting it clean up, and listens on the same port again. The server
@@ -119,7 +124,7 @@ class SocketDemoSuite extends DemoSuite {
               Thread.sleep(30)
             }
           } else client.write(ByteBuffer.wrap(bytes))
-          assertEquals(readAll(client), Reply)
+          assertEquals(readReply(client), Reply)
         }
       }
       // Reject an invalid frame without losing the listening server.
@@ -145,7 +150,7 @@ class SocketDemoSuite extends DemoSuite {
       try {
         for ((client, i) <- clients.zipWithIndex)
           client.write(ByteBuffer.wrap(frame(utf8(s"concurrent client $i"))))
-        for (client <- clients) assertEquals(readAll(client), Reply)
+        for (client <- clients) assertEquals(readReply(client), Reply)
       } finally clients.foreach(_.close())
       assert(server.isAlive, server.output.takeRight(4096))
     }

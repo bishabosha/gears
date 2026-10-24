@@ -5,7 +5,6 @@ import gears.async.Future
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 
 import gears.async.io.Io
 import gears.async.io.Backend
@@ -22,10 +21,10 @@ import higherlevel.HigherLevel
   * state machine is now plain sequential code.
   */
 object GearsServerSocket {
-  private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
+  private val Response = "Just pinging back!\n"
 
-  /** Reads a length-framed request through one 8 KiB buffer, replies, and closes the connection gracefully, so that
-    * the client reads the whole reply before the end of the stream however the request ended.
+  /** Reads a length-framed request through one 8 KiB buffer, replies with a framed response, and closes the connection
+    * gracefully, so that the client reads the whole reply however the request ended.
     */
   private def serve(io: Io[UnixStreams], client: Handle)(using Async): Unit = {
     val arena = BufferArena.open()
@@ -65,9 +64,7 @@ object GearsServerSocket {
             drainTo(buf, body)
           }
           if open then {
-            buf.clear()
-            buf.put(Response)
-            buf.flip()
+            StreamProtocol.frame(Response, buf) // framed, so that the client knows when it has all of it
             while buf.hasRemaining() do io.perform(write)
           }
         }

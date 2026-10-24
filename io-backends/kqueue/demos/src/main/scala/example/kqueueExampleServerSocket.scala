@@ -20,15 +20,15 @@ import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleServerSocket {
-  private val Response = "Just pinging back!\n".getBytes(StandardCharsets.UTF_8)
+  private val Response = "Just pinging back!\n"
 
   private enum State {
     case ReadHeader, ReadMessage, SendResponse
   }
 
-  /** One accepted connection: reads a length-framed request, then replies and closes. Owns a zone holding its single 8
-    * KiB buffer; a body larger than that is read in chunks and gathered until complete. The zone closes with the
-    * connection.
+  /** One accepted connection: reads a length-framed request, then replies with a framed response and closes. Owns a
+    * zone holding its single 8 KiB buffer; a body larger than that is read in chunks and gathered until complete. The
+    * zone closes with the connection.
     */
   private final class Connection(r: KqueueReactor, val fd: Handle, server: Server)
       extends AutoCloseable
@@ -118,9 +118,7 @@ object KQueueExampleServerSocket {
     private def prepareResponse(): Unit = {
       println(s"message contents: `${body.toString(StandardCharsets.UTF_8)}`")
       state = State.SendResponse
-      buf.clear()
-      buf.put(Response)
-      buf.flip()
+      StreamProtocol.frame(Response, buf) // framed, so that the client knows when it has all of it
     }
 
     /** Empties the buffer and limits it to the `length` bytes the current state will read. */
