@@ -19,18 +19,16 @@ type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
-  /** A stream socket connected to `address`: on any backend for an IP address, and on one with Unix stream sockets
-    * for a Unix one, refused otherwise.
-    */
-  def connect(address: StreamAddress)(using io: Io[IpSockets], async: Async): Handle = address match {
+  /** A stream socket connected to `address`, of either family, on a backend with Unix stream sockets. */
+  def connect(address: StreamAddress)(using io: Io[UnixStreams], async: Async): Handle = address match {
+    case unix: UnixAddress => HigherLevel.connect(unix)
     case ip: IpAddress     => HigherLevel.connect(ip)
-    case unix: UnixAddress => HigherLevel.connect(unix)(using unixSockets(io, unix))
   }
 
-  /** A listener on `address`, listening, on the backends `connect` connects on. */
-  def listen(address: StreamAddress)(using io: Io[IpSockets], async: Async): Handle = address match {
+  /** A listener on `address`, of either family, listening, on a backend with Unix stream sockets. */
+  def listen(address: StreamAddress)(using io: Io[UnixStreams], async: Async): Handle = address match {
+    case unix: UnixAddress => HigherLevel.listen(unix)
     case ip: IpAddress     => HigherLevel.listen(ip)
-    case unix: UnixAddress => HigherLevel.listen(unix)(using unixSockets(io, unix))
   }
 
   /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A
@@ -63,15 +61,35 @@ object Sockets {
     }
   }
 
-  /** `io` as an `Io` over Unix stream sockets, if its backend has them. */
-  private def unixSockets(io: Io[IpSockets], address: UnixAddress): Io[UnixStreams] = io.backend match {
-    case _: UnixStreams => io.asInstanceOf[Io[UnixStreams]] // its backend is one, and `Io` is covariant in it
-    case b => throw new IllegalArgumentException(s"$b has no Unix domain sockets, so cannot use $address; use TCP")
-  }
-
   /** Removes a Unix socket file left behind, if `address` names one. */
   def removeFile(address: StreamAddress): Unit = address match {
     case UnixAddress(path) => Files.deleteIfExists(Paths.get(path)): Unit
     case _                 => ()
+  }
+}
+
+/** A stream address with the capability its sockets need, `B`: `IpSockets` for an IP address, `UnixStreams` for a Unix
+  * path, so that a program over a backend without Unix stream sockets cannot be given a Unix path. For code whose
+  * address is chosen when it runs, such as the bench's.
+  */
+sealed trait Endpoint[-B <: IpSockets] {
+  def address: StreamAddress
+
+  /** A stream socket connected to `address`. */
+  def connect()(using Io[B], Async): Handle
+
+  /** A listener on `address`, listening. */
+  def listen()(using Io[B], Async): Handle
+}
+
+object Endpoint {
+  final case class Ip(address: IpAddress) extends Endpoint[IpSockets] {
+    def connect()(using Io[IpSockets], Async): Handle = HigherLevel.connect(address)
+    def listen()(using Io[IpSockets], Async): Handle = HigherLevel.listen(address)
+  }
+
+  final case class Unix(address: UnixAddress) extends Endpoint[UnixStreams] {
+    def connect()(using Io[UnixStreams], Async): Handle = HigherLevel.connect(address)
+    def listen()(using Io[UnixStreams], Async): Handle = HigherLevel.listen(address)
   }
 }

@@ -2,6 +2,7 @@ package gearsexample
 
 import mainargs.{ParserForMethods, arg, main}
 import gears.async.io.IpAddress
+import gears.async.io.IpSockets
 import gears.async.io.UnixAddress
 import gears.async.io.kqueue.KqueueBackend
 import gears.async.io.TakePolicy
@@ -148,13 +149,15 @@ object Main {
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
       @arg(doc = "kqueue, or nwframework: Network.framework, which needs --tcp") backend: String = "kqueue"
   ): Unit = {
-    val address =
-      if tcp.value then IpAddress.IPv4(host, port)
-      else UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
-    withBackend(backend) { b =>
-      GearsBench.run(names, scale, connections, address, workers, takePolicy(policy), server = !noServer.value)(using b)
-    }
+    def run[B <: IpSockets](endpoint: Endpoint[B])(using B): Unit =
+      GearsBench.run(names, scale, connections, endpoint, workers, takePolicy(policy), server = !noServer.value)
+    if tcp.value then withBackend(backend)(b => run(Endpoint.Ip(IpAddress.IPv4(host, port)))(using b))
+    else
+      backend match { // only kqueue has Unix stream sockets
+        case "kqueue" => run(Endpoint.Unix(UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")))
+        case other    => throw new IllegalArgumentException(s"`$other` has no Unix domain sockets; use --tcp")
+      }
   }
   @main(name = "bench-serve", doc = "The bench's echo server alone, for a bench on another machine with --no-server")
   def benchServe(
@@ -165,7 +168,7 @@ object Main {
       @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
   ): Unit =
     withBackend(backend) { b =>
-      GearsBench.serveForever(IpAddress.IPv4(host, port), workers, takePolicy(policy))(using b)
+      GearsBench.serveForever(Endpoint.Ip(IpAddress.IPv4(host, port)), workers, takePolicy(policy))(using b)
     }
 
   private def takePolicy(policy: String): TakePolicy = TakePolicy.values
