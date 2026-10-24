@@ -52,9 +52,36 @@ count against the table's, and a stale handle fails with "Not an open handle" in
 number. It is the generational index of slot maps and arenas; Tokio packs a generation into its registration tokens
 for the same reason, and `DescriptorTable` already keeps one per descriptor for the pending case.
 
-- **Representation.** `Handle` becomes an opaque `Long`: the number in the low 32 bits, the generation in the high
-  32. Still unboxed. Packing both into an `Int` would leave too few bits for one of them: a generation of 8 bits wraps
+- **Representation.** `Handle` becomes an opaque `Long`: the number in the low 20 bits, the generation in the high
+  44. Still unboxed. Packing both into an `Int` would leave too few bits for one of them: a generation of 8 bits wraps
   after 256 closes of one number, which a busy server reaches in seconds.
+- **The generation wraps, so it needs most of the bits.** Closes fall on few numbers: kqueue's descriptors are the
+  lowest free, and `HandleTable` reuses the most recently freed first, so a server of short connections closes the
+  same handful of numbers over and over. A generation of `b` bits wraps after 2^b closes of one number:
+
+  | Closes of one number a second | 32 bits wrap after | 44 bits wrap after |
+  | --- | --- | --- |
+  | 10,000 | 5 days | 56 years |
+  | 100,000 | 12 hours | 5.6 years |
+  | 1,000,000 | 72 minutes | 200 days |
+
+  A wrap does not turn the check off: a stale handle passes only when its number has been closed an exact multiple of
+  2^b times since it was good. But that makes the check a likelihood rather than a guarantee, and a half split of the
+  `Long` (32 and 32) wraps within a day on a busy server. 44 bits outlast any run of one.
+- **The number then has 20 bits**, a million handles. That is Linux's default ceiling on a process's descriptors
+  (`fs.nr_open`) and the most the Native runner raises the open-file limit to when the hard limit is unlimited
+  (`FileLimit`), but not a bound the kernel keeps: with a finite hard limit `FileLimit` raises to it, whatever it is.
+  So the runner keeps the limit at or below 2^20, and an open given a descriptor above it fails, as `select` refuses a
+  descriptor past `FD_SETSIZE`. A 24-bit number, 16 million handles, would leave 40 bits, which wrap in four months
+  at 100,000 closes a second: too short.
+- **Or retire a number before it wraps,** as slot maps do: once its generation reaches the last value, the number is
+  never given out again. `HandleTable` can, since it chooses its numbers. kqueue cannot while a handle is the
+  descriptor, since the kernel chooses which number an open reuses; it would have to map handles to descriptors, which
+  is proposal 2's cost. Retiring is what makes the generation exact rather than very likely; with 44 bits it is
+  insurance against a server that runs for decades.
+- **Not to be confused with `DescriptorTable`'s generation**, 32 bits today, which only tells the events and ops of a
+  descriptor from just before a close apart from those just after it, a window of microseconds: wrapping is harmless
+  there.
 - **Per backend.** kqueue compares with `DescriptorTable`'s generation, which it reads already. `HandleTable` keeps a
   generation per entry, incremented by `remove`. Network.framework and NIO check it where they look the entry up.
 - **What changes around it.** `Handle.Opt` and `Handle.Slot` hold a `Long`; `acceptAll`'s `Array[Handle]` becomes an
@@ -64,7 +91,9 @@ for the same reason, and `DescriptorTable` already keeps one per descriptor for 
   device, and it fails on every backend the same way. It covers the low level (`Ops`, `perform`) as well as anything
   built on it, and code that switches off the compiler's checks.
 - **What it does not.** It finds the mistake when the program runs, possibly in production, and only if the stale
-  handle is used at all. It does not stop a future from holding a handle past its close.
+  handle is used at all. It does not stop a future from holding a handle past its close. And unless a number is
+  retired before it wraps, which kqueue cannot do, it finds it with a likelihood, if a very high one, rather than
+  always.
 
 ## Proposal 2: a number that only grows, never reused
 
@@ -72,8 +101,9 @@ Make a handle an id from a counter that only grows, a `Long`, so that no two I/O
 A closed handle's id is simply absent from the table afterwards, and a stale handle fails with "Not an open handle"
 however many objects were opened since.
 
-- **Representation.** `Handle` becomes an opaque `Long`, as in proposal 1. A 64-bit counter does not wrap: at a
-  billion opens a second it would take centuries.
+- **Representation.** `Handle` becomes an opaque `Long`, as in proposal 1, but all 64 bits are the id. A counter of
+  63 bits does not wrap: at a billion opens a second it would take three centuries. Unlike proposal 1's generation,
+  which counts the closes of one number, the counter counts every open of the process, and still never runs out.
 - **The table.** Ids are not dense, so the table can no longer be an array indexed by the handle: it becomes a map
   from id to object, a concurrent hash map, or an array of slots whose entry also records the id it holds, which is
   proposal 1 again under another name.
@@ -203,6 +233,8 @@ owns it (`close(consume h)`).
 | | 1. Generation | 2. Number that only grows | 3. Reference object | 4. Scopes and capture checking |
 | --- | --- | --- | --- | --- |
 | A stale handle | fails as it is used | fails as it is used | fails as it is used | does not compile |
+| Wraps around | after 2^44 closes of one number, unless retired | no (2^63 ids) | no | no |
+| Handles at once | 2^20, enforced by the runner | unbounded | unbounded | as today |
 | Representation | opaque `Long` | opaque `Long` | a class, one per open | as today, tracked |
 | Per op | a comparison | a hash lookup | a field read | nothing |
 | kqueue | compares with `DescriptorTable` | maps id to descriptor | reads the descriptor from the handle | as today |
@@ -217,11 +249,13 @@ Proposal 4 for programs, and one of proposals 1 to 3 under it:
 - **Proposal 4 at the higher level**, since it prevents the mistake when compiling, which is the safety wanted; it is
   the larger change, starting with gears' spawners.
 - **One runtime proposal under it**, as a backstop for the low level and for code outside the compiler's checks, so
-  that a stale handle fails cleanly on every backend instead of reaching another device. Proposal 1 is the cheapest
-  for kqueue, whose handles stay descriptors; proposal 3 is the strongest, since it also refuses forged handles and
-  another backend's, removes the table lookup on NIO and Network.framework, and gives capture checking a class to
-  classify; proposal 2 sits between and buys its never-reused ids with a hash lookup. Which one is a measurement:
-  the cost of an allocation per open and a reference per op on kqueue, against a comparison per op.
+  that a stale handle fails cleanly on every backend instead of reaching another device. Proposal 1 is the cheapest for
+  kqueue, whose handles stay descriptors, but it needs its bits split with care, 20 for the number and 44 for the
+  generation, and the open-file limit held to 2^20, and it is exact only where numbers are retired before they wrap,
+  which kqueue cannot do; proposal 3 is the strongest, since it also refuses forged handles and another backend's,
+  removes the table lookup on NIO and Network.framework, and gives capture checking a class to classify; proposal 2 sits
+  between and buys its never-reused ids with a hash lookup. Which one is a measurement: the cost of an allocation per
+  open and a reference per op on kqueue, against a comparison per op.
 
 ## Open questions
 
