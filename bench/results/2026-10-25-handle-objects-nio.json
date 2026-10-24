@@ -1,0 +1,289 @@
+{
+  "started": "2026-10-25T00:35:57+02:00",
+  "finished": "2026-10-25T00:38:19+02:00",
+  "load_average": {
+    "before": [
+      11.4873046875,
+      10.24609375,
+      8.11669921875
+    ],
+    "after": [
+      9.56298828125,
+      9.69482421875,
+      8.19873046875
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "connections,pingpong,pingpong-fresh-ops,pipelined,concurrent"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "reactors-numbers",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-before/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=reactors"
+      },
+      "median": {
+        "connections": 81.8,
+        "pingpong": 7.31,
+        "pingpong-fresh-ops": 7.25,
+        "pipelined": 0.53,
+        "concurrent": 2.17
+      },
+      "samples": {
+        "connections": [
+          83.35,
+          81.53,
+          81.27,
+          82.38,
+          81.69,
+          81.8,
+          82.35
+        ],
+        "pingpong": [
+          7.52,
+          7.23,
+          7.25,
+          7.36,
+          7.35,
+          7.14,
+          7.31
+        ],
+        "pingpong-fresh-ops": [
+          7.57,
+          7.16,
+          7.26,
+          7.23,
+          7.25,
+          7.13,
+          7.27
+        ],
+        "pipelined": [
+          0.54,
+          0.53,
+          0.51,
+          0.54,
+          0.51,
+          0.54,
+          0.52
+        ],
+        "concurrent": [
+          2.36,
+          2.17,
+          2.04,
+          2.29,
+          2.14,
+          2.16,
+          2.17
+        ]
+      }
+    },
+    {
+      "label": "reactors-objects",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-after/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=reactors"
+      },
+      "median": {
+        "connections": 81.73,
+        "pingpong": 7.12,
+        "pingpong-fresh-ops": 7.17,
+        "pipelined": 0.52,
+        "concurrent": 2.24
+      },
+      "samples": {
+        "connections": [
+          81.11,
+          78.76,
+          82.95,
+          81.17,
+          83.11,
+          81.73,
+          82.15
+        ],
+        "pingpong": [
+          7.15,
+          7.37,
+          7.12,
+          7.1,
+          7.07,
+          7.08,
+          7.13
+        ],
+        "pingpong-fresh-ops": [
+          7.19,
+          7.29,
+          7.13,
+          7.13,
+          7.01,
+          7.17,
+          7.39
+        ],
+        "pipelined": [
+          0.52,
+          0.51,
+          0.51,
+          0.52,
+          0.52,
+          0.53,
+          0.52
+        ],
+        "concurrent": [
+          2.11,
+          2.24,
+          2.32,
+          2.27,
+          2.24,
+          2.23,
+          2.62
+        ]
+      }
+    },
+    {
+      "label": "caller-numbers",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-before/nio-caller",
+      "benchmark": "gears",
+      "build": {
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=caller"
+      },
+      "median": {
+        "connections": 117.79,
+        "pingpong": 6.51,
+        "pingpong-fresh-ops": 6.44,
+        "pipelined": 2.28,
+        "concurrent": 8.03
+      },
+      "samples": {
+        "connections": [
+          117.81,
+          117.97,
+          116.2,
+          117.39,
+          118.25,
+          117.79,
+          116.88
+        ],
+        "pingpong": [
+          6.65,
+          6.53,
+          6.44,
+          6.48,
+          6.54,
+          6.51,
+          6.33
+        ],
+        "pingpong-fresh-ops": [
+          6.47,
+          6.44,
+          6.34,
+          6.51,
+          6.39,
+          6.39,
+          6.63
+        ],
+        "pipelined": [
+          2.28,
+          2.3,
+          2.28,
+          2.22,
+          2.8,
+          2.23,
+          2.25
+        ],
+        "concurrent": [
+          8.39,
+          8.03,
+          7.88,
+          7.96,
+          7.81,
+          8.08,
+          8.17
+        ]
+      }
+    },
+    {
+      "label": "caller-objects",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-after/nio-caller",
+      "benchmark": "gears",
+      "build": {
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=caller"
+      },
+      "median": {
+        "connections": 116.84,
+        "pingpong": 6.6,
+        "pingpong-fresh-ops": 6.48,
+        "pipelined": 2.3,
+        "concurrent": 8.09
+      },
+      "samples": {
+        "connections": [
+          115.71,
+          117.28,
+          118.09,
+          116.15,
+          116.38,
+          116.97,
+          116.84
+        ],
+        "pingpong": [
+          6.7,
+          6.63,
+          6.68,
+          6.6,
+          6.48,
+          6.46,
+          6.46
+        ],
+        "pingpong-fresh-ops": [
+          6.36,
+          6.48,
+          6.41,
+          6.3,
+          6.78,
+          6.48,
+          6.51
+        ],
+        "pipelined": [
+          2.28,
+          2.33,
+          2.21,
+          2.3,
+          2.76,
+          2.85,
+          2.26
+        ],
+        "concurrent": [
+          8.03,
+          8.31,
+          7.52,
+          8.09,
+          8.15,
+          7.82,
+          8.51
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

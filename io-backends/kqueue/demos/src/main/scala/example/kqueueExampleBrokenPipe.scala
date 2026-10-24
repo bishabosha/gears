@@ -3,7 +3,7 @@ package example
 import java.io.IOException
 import scala.scalanative.unsafe.Zone
 
-import gears.async.io.Handle
+import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.kqueue.KqueueHandles
 import gears.async.io.internal.NativeBuffer
 

@@ -7,8 +7,9 @@ class ReactorSuite extends FunSuite {
   /** A reactor that only records whether it was closed. */
   private final class ClosingReactor extends Reactor {
     type Op = AnyRef
+    type Handle = AnyRef
     var closed = false
-    def ops: Ops[Op] = throw new UnsupportedOperationException
+    def ops: Ops[Op, Handle] = throw new UnsupportedOperationException
     def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit = ()
     def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean = false
     def cancel(op: Op): Boolean = false
@@ -62,10 +63,11 @@ class ReactorSuite extends FunSuite {
     val reactor = new ClosingReactor
     given ReactorBackend = new ReactorBackend {
       type Op = AnyRef
-      def ops: Ops[Op] = throw new UnsupportedOperationException
+      type Handle = AnyRef
+      def ops: Ops[Op, Handle] = throw new UnsupportedOperationException
         def attachment(op: Op): AnyRef | Null = null
       def attach(op: Op, value: AnyRef | Null): Unit = ()
-      def open(): Reactor.Of[Op] = reactor
+      def open(): Reactor.Of[Op, Handle] = reactor
       def pool(bufferSize: Int, buffers: Int): BufferPool = throw new UnsupportedOperationException
     }
     Reactor.scoped(_ => ())
@@ -74,7 +76,7 @@ class ReactorSuite extends FunSuite {
 
   test("only ops marked Repeatable promise they can be resubmitted") {
     assertEquals(
-      compileErrors("def repeat(b: SocketBackend)(h: Handle): Repeatable = b.ops.accept(h, Handle.Slot())"),
+      compileErrors("def repeat(b: SocketBackend)(h: b.Handle): Repeatable = b.ops.accept(h, Slot[b.Handle]())"),
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
@@ -82,21 +84,27 @@ class ReactorSuite extends FunSuite {
   }
 
   test("sockets, files, pipes and name resolution are capabilities a backend has, not every backend") {
-    assert(compileErrors("def c(b: Backend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Handle.Slot())").nonEmpty)
-    assert(compileErrors("def l(b: Backend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Handle.Slot())").nonEmpty)
-    assert(compileErrors("def p(b: Backend) = b.ops.pipe(Handle.Slot(), Handle.Slot())").nonEmpty)
-    assert(compileErrors("def u(b: SocketBackend) = b.ops.connect(UnixAddress(\"p\"), Handle.Slot())").nonEmpty)
+    assert(compileErrors("def c(b: Backend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Handle]())").nonEmpty)
+    assert(compileErrors("def l(b: Backend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Slot[b.Handle]())").nonEmpty)
+    assert(compileErrors("def p(b: Backend) = b.ops.pipe(Slot[b.Handle](), Slot[b.Handle]())").nonEmpty)
+    assert(compileErrors("def u(b: SocketBackend) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Handle]())").nonEmpty)
     assert(compileErrors("def r(b: Backend) = b.ops.resolve(\"h\", Slot())").nonEmpty)
-    assert(compileErrors("def f(b: Backend) = b.ops.open(\"p\", false, Handle.Slot())").nonEmpty)
-    assertEquals(compileErrors("def c(b: SocketBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Handle.Slot())"), "")
-    assertEquals(compileErrors("def l(b: SocketBackend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Handle.Slot())"), "")
-    assertEquals(compileErrors("def u(b: UnixStreamBackend) = b.ops.connect(UnixAddress(\"p\"), Handle.Slot())"), "")
-    assertEquals(compileErrors("def u(b: UnixStreamBackend)(h: Handle) = b.ops.accept(h, Handle.Slot())"), "")
-    assertEquals(compileErrors("def p(b: PipeBackend) = b.ops.pipe(Handle.Slot(), Handle.Slot())"), "")
+    assert(compileErrors("def f(b: Backend) = b.ops.open(\"p\", false, Slot[b.Handle]())").nonEmpty)
+    assertEquals(
+      compileErrors("def c(b: SocketBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Handle]())"),
+      ""
+    )
+    assertEquals(
+      compileErrors("def l(b: SocketBackend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Slot[b.Handle]())"),
+      ""
+    )
+    assertEquals(compileErrors("def u(b: UnixStreamBackend) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Handle]())"), "")
+    assertEquals(compileErrors("def u(b: UnixStreamBackend)(h: b.Handle) = b.ops.accept(h, Slot[b.Handle]())"), "")
+    assertEquals(compileErrors("def p(b: PipeBackend) = b.ops.pipe(Slot[b.Handle](), Slot[b.Handle]())"), "")
     assertEquals(compileErrors("def r(b: ResolveBackend) = b.ops.resolve(\"h\", Slot())"), "")
-    assertEquals(compileErrors("def f(b: FileBackend) = b.ops.open(\"p\", false, Handle.Slot())"), "")
-    assertEquals(compileErrors("def s(b: FileBackend)(h: Handle): Repeatable = b.ops.read(h, null, 0L)"), "")
-    assertEquals(compileErrors("def t(b: Backend)(h: Handle): Repeatable = b.ops.read(h, null)"), "")
+    assertEquals(compileErrors("def f(b: FileBackend) = b.ops.open(\"p\", false, Slot[b.Handle]())"), "")
+    assertEquals(compileErrors("def s(b: FileBackend)(h: b.Handle): Repeatable = b.ops.read(h, null, 0L)"), "")
+    assertEquals(compileErrors("def t(b: Backend)(h: b.Handle): Repeatable = b.ops.read(h, null)"), "")
   }
 
   test("a reactor is a submitter with a loop; a submitter keeps its ops' attachments, a backend does not") {
@@ -109,14 +117,14 @@ class ReactorSuite extends FunSuite {
   }
 
   test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {
-    assert(compileErrors("def ready(b: Backend)(h: Handle) = b.ops.ready(h, Interest.Read)").nonEmpty)
-    assert(compileErrors("def now(b: Backend)(h: Handle) = b.ops.readNow(h, null)").nonEmpty)
+    assert(compileErrors("def ready(b: Backend)(h: b.Handle) = b.ops.ready(h, Interest.Read)").nonEmpty)
+    assert(compileErrors("def now(b: Backend)(h: b.Handle) = b.ops.readNow(h, null)").nonEmpty)
     assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
     assertEquals(
-      compileErrors("def ready(b: ReadinessBackend)(h: Handle): Repeatable = b.ops.ready(h, Interest.Read)"),
+      compileErrors("def ready(b: ReadinessBackend)(h: b.Handle): Repeatable = b.ops.ready(h, Interest.Read)"),
       ""
     )
-    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: Handle) = b.ops.readNow(h, null)"), "")
+    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: b.Handle) = b.ops.readNow(h, null)"), "")
     assertEquals(compileErrors("def block(b: BlockingBackend) = b.ops.blocking(() => ())"), "")
   }
 

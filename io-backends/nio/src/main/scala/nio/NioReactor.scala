@@ -28,8 +28,9 @@ import gears.async.io.internal.TimerHeap
 final class NioReactor private (selector: Selector) extends Reactor {
 
   type Op = NioOp
+  type Handle = NioCapabilities.Handle
 
-  def ops: Ops[Op] = NioOps
+  def ops: Ops[Op, Handle] = NioOps
 
 
   def attachment(op: Op): AnyRef | Null = op.attachment

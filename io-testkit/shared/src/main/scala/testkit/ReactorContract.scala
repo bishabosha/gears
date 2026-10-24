@@ -42,7 +42,10 @@ trait ReactorContract extends FunSuite {
   override def test(options: munit.TestOptions)(body: => Any)(using loc: munit.Location): Unit =
     super.test(if knownFailures(options.name) then options.fail else options)(body)
 
-  protected type R = Reactor.Of[backend.Op]
+  protected type R = Reactor.Of[backend.Op, backend.Handle]
+
+  /** The backend's handles. */
+  protected type Handle = backend.Handle
 
   protected def withReactor(body: R => Unit): Unit = {
     val reactor = backend.open()
@@ -68,7 +71,7 @@ trait ReactorContract extends FunSuite {
   protected def closeAlone(handle: Handle)(using munit.Location): Unit = withReactor(r => close(r, handle))
 
   /** Runs `op`, which opens a handle into `into`, on `r`, and returns the handle; throws the op's failure. */
-  protected def opened(r: R, into: Handle.Slot, op: backend.Op)(using munit.Location): Handle = {
+  protected def opened(r: R, into: Slot[Handle], op: backend.Op)(using munit.Location): Handle = {
     val failure = run(r, op)
     if failure != null then throw failure
     into.clear()
@@ -76,8 +79,8 @@ trait ReactorContract extends FunSuite {
 
   /** Opens a pipe through `r`, as the interface has it: its read end and its write end. */
   protected def pipe(r: R)(using munit.Location): (Handle, Handle) = {
-    val read = Handle.Slot()
-    val write = Handle.Slot()
+    val read = Slot[Handle]()
+    val write = Slot[Handle]()
     val failure = run(r, backend.ops.pipe(read, write))
     if failure != null then throw failure
     (read.clear(), write.clear())

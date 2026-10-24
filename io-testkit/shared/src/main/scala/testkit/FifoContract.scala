@@ -10,7 +10,7 @@ trait FifoContract extends FileContract {
 
   /** A FIFO from the `openFifo` op, whose failure is thrown. */
   protected def openFifo(r: R, path: String, write: Boolean)(using munit.Location): Handle = {
-    val into = Handle.Slot()
+    val into = Slot[Handle]()
     opened(r, into, backend.ops.openFifo(path, write, into))
   }
 
@@ -41,7 +41,7 @@ trait FifoContract extends FileContract {
       intercept[java.io.IOException](open(r, fifo, write = false))
       val file = dir.resolve("file")
       Files.write(file, "x".getBytes(StandardCharsets.UTF_8))
-      val into = Handle.Slot()
+      val into = Slot[Handle]()
       val failure = run(r, backend.ops.openFifo(file.toString, write = false, into))
       assert(failure.isInstanceOf[java.io.IOException], String.valueOf(failure))
       intercept[IllegalStateException](into.clear())

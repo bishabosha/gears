@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
 import gears.async.io.Completion
-import gears.async.io.Handle
+import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.NonBlocking
 
@@ -93,7 +93,7 @@ object SharedDescriptorCheck {
     /** Submits a read of `fd` on `d`, then writes a byte to `writeEnd`, unless it is -1, and waits for the read to
       * complete.
       */
-    def readOn(d: Driven, label: String, fd: Handle, writeEnd: Handle.Opt): Unit = {
+    def readOn(d: Driven, label: String, fd: Handle, writeEnd: Handle | Null): Unit = {
       val done = new CountDownLatch(1)
       d.onThread {
         val buf = NativeBuffer.allocate(64)(using zone)
@@ -108,7 +108,7 @@ object SharedDescriptorCheck {
           }
         )
       }
-      if writeEnd.nonEmpty then writeByte(writeEnd.get)
+      if writeEnd != null then writeByte(writeEnd)
       if !done.await(2, TimeUnit.SECONDS) then fail(s"$label never completed")
     }
 
@@ -117,32 +117,32 @@ object SharedDescriptorCheck {
 
     try {
       val (readEnd, writeEnd) = KqueueHandles.pipe()
-      readOn(a, "A's first read", readEnd, Handle.Opt(writeEnd))
-      readOn(b, "B's read after A", readEnd, Handle.Opt(writeEnd))
+      readOn(a, "A's first read", readEnd, writeEnd)
+      readOn(b, "B's read after A", readEnd, writeEnd)
       // A byte nobody reads at once: A's filter, still registered, reports it, and A, finding that B owns the
       // descriptor now, drops the filter. Then B reads it.
       writeByte(writeEnd)
       settle()
-      readOn(b, "B's read of the byte A saw", readEnd, Handle.Opt.empty)
+      readOn(b, "B's read of the byte A saw", readEnd, null)
       settle()
       val aTurns = a.turns.get()
       for i <- 1 to 5 do {
         writeByte(writeEnd) // waits unread for a moment, long enough for a filter of A's to report it
         settle()
-        readOn(b, s"B's read $i", readEnd, Handle.Opt.empty)
+        readOn(b, s"B's read $i", readEnd, null)
       }
       settle()
       val woke = a.turns.get() - aTurns
       if woke != 0 then fail(s"A woke $woke times for reads that B owns")
-      readOn(a, "A's read after B", readEnd, Handle.Opt(writeEnd))
+      readOn(a, "A's read after B", readEnd, writeEnd)
 
       b.onThread {
         KqueueHandles.close(readEnd)
         KqueueHandles.close(writeEnd)
       }
       val (newRead, newWrite) = KqueueHandles.pipe()
-      if newRead != readEnd then reuseChecked = false
-      readOn(a, "A's read of the reused descriptor", newRead, Handle.Opt(newWrite))
+      if KqueueHandles.descriptor(newRead) != KqueueHandles.descriptor(readEnd) then reuseChecked = false
+      readOn(a, "A's read of the reused descriptor", newRead, newWrite)
       KqueueHandles.close(newRead)
       KqueueHandles.close(newWrite)
     } finally {

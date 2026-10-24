@@ -32,6 +32,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * any kqueue reactor in turn (see `KqueueBackend`).
     */
   type Op = KqueueOp
+  type Handle = KqueueBackend.Handle
 
   def ops: KqueueOps.type = KqueueOps
 

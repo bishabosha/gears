@@ -6,7 +6,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-import gears.async.io.Handle
 import gears.async.io.Slot
 
 /** A blocking task run by `Blockers` off a reactor's thread, for a backend's blocking ops: `block` is the body, and
@@ -121,9 +120,6 @@ trait BlockingRun {
     * either happens entirely before the cancel or not at all.
     */
   protected final def publish[A <: AnyRef](into: Slot[A], value: A): Unit = unlessCancelled(into.set(value))
-
-  /** Writes `handle` into `into`, as the other `publish` writes a value. */
-  protected final def publish(into: Handle.Slot, handle: Handle): Unit = unlessCancelled(into.set(handle))
 
   /** Runs `write`, a write to the op's buffers or slots, unless the task has been cancelled, under the lock `interrupt`
     * takes: the write either happens entirely before the cancel or not at all. Returns whether it ran.

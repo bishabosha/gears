@@ -10,19 +10,19 @@ trait SocketContract extends ReactorContract {
 
   /** A listener on `address`, listening, from the `listen` op, whose failure is thrown. */
   protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Handle = {
-    val into = Handle.Slot()
+    val into = Slot[Handle]()
     opened(r, into, backend.ops.listen(address, into, reuseAddr))
   }
 
   /** A datagram socket from the `datagram` op, whose failure is thrown. */
   protected def datagram(r: R, local: IpAddress | Null, remote: IpAddress | Null)(using munit.Location): Handle = {
-    val into = Handle.Slot()
+    val into = Slot[Handle]()
     opened(r, into, backend.ops.datagram(local, remote, into))
   }
 
   /** Submits a `connect` op to `address` on `r`: what it reports, and the slot the socket is written into. */
-  protected def startConnect(r: R, address: IpAddress): (Outcome, Handle.Slot) = {
-    val into = Handle.Slot()
+  protected def startConnect(r: R, address: IpAddress): (Outcome, Slot[Handle]) = {
+    val into = Slot[Handle]()
     val connected = Outcome()
     r.submit(backend.ops.connect(address, into), connected)
     (connected, into)
@@ -49,7 +49,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
@@ -84,7 +84,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
@@ -147,7 +147,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
       try {
-        val into = Handle.Slot()
+        val into = Slot[Handle]()
         val failure = run(r, backend.ops.datagram(IpAddress.IPv4("127.0.0.1", port), null, into))
         assert(failure.isInstanceOf[IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())
@@ -171,7 +171,7 @@ trait SocketContract extends ReactorContract {
       withReactor { r =>
         val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
         try {
-          val accepted = Handle.Slot()
+          val accepted = Slot[Handle]()
           r.submit(backend.ops.accept(listener, accepted), Outcome())
           val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
           turnUntil(r)(connected.finished)
@@ -179,12 +179,12 @@ trait SocketContract extends ReactorContract {
           val client = into.clear()
           try {
             val server = {
-              var h = Handle.Opt.empty
+              var h: Handle | Null = null
               turnUntil(r) {
-                try { h = Handle.Opt(accepted.clear()); true }
+                try { h = accepted.clear(); true }
                 catch case _: IllegalStateException => false
               }
-              h.get
+              h.nn
             }
             try {
               r.submit(backend.ops.write(client, bytes("first")), Outcome())
@@ -216,7 +216,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
@@ -233,7 +233,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (taken, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val into = Handle.Slot()
+        val into = Slot[Handle]()
         val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), into, reuseAddr = false))
         assert(failure.isInstanceOf[IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())
@@ -293,7 +293,7 @@ trait SocketContract extends ReactorContract {
     withReactor { r =>
       val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))

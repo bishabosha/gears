@@ -5,7 +5,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 
-import gears.async.io.Handle
+import NioCapabilities.Handle
 import gears.async.io.Repeatable
 
 /** The file ops (see `FileOps`), each a blocking task on the blocker pool, since `FileChannel` blocks for the disk:
@@ -15,7 +15,7 @@ import gears.async.io.Repeatable
 /** Opens a regular file and publishes its handle (see `FileOps.open`). A cancel that arrives once the file is open
   * closes it again, since the handle never reaches the caller.
   */
-final class OpenFile(path: String, write: Boolean, into: Handle.Slot) extends NioBlocking {
+final class OpenFile(path: String, write: Boolean, into: Slot[Handle]) extends NioBlocking {
   def block(): Unit = {
     val handle = NioHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then NioHandles.close(handle)

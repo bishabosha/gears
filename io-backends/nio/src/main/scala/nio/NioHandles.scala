@@ -24,7 +24,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
-import gears.async.io.Handle
+import NioCapabilities.Handle
 import gears.async.io.IpAddress
 import gears.async.io.UnixAddress
 
@@ -193,7 +193,7 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
-/** NIO's handles: entries of one process-wide table of channels (`HandleTable`), opened by the ops (`NioOps`), which
+/** NIO's handles, each holding the entry of its channel (`NioCapabilities.Handle`), opened by the ops (`NioOps`), which
   * call the openers here.
   */
 object NioHandles {
@@ -203,13 +203,14 @@ object NioHandles {
     */
   private inline val Backlog = 4096
 
-  private val table = new gears.async.io.internal.HandleTable[Entry]
-
   /** Gives `entry` a handle. */
-  private[nio] def add(entry: Entry): Handle = table.add(entry)
+  private[nio] def add(entry: Entry): Handle = new Handle(entry)
 
   /** What `handle` names; throws if it is not open. */
-  private[nio] def entry(handle: Handle): Entry = table(handle)
+  private[nio] def entry(handle: Handle): Entry = {
+    if !handle.isOpen then throw new IOException(s"Not an open handle: $handle")
+    handle.entry
+  }
 
   /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
     * reactor.
@@ -278,10 +279,13 @@ object NioHandles {
     (source, sink)
   }
 
-  def close(handle: Handle): Unit = table.remove(handle).close()
+  def close(handle: Handle): Unit = {
+    if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
+    handle.entry.close()
+  }
 
   /** Shuts a connected stream socket down for writing (see `SocketOps.shutdownOutput`). */
-  def shutdownOutput(handle: Handle): Unit = table(handle) match {
+  def shutdownOutput(handle: Handle): Unit = entry(handle) match {
     case entry: Selectable =>
       entry.channel match {
         case socket: SocketChannel if socket.isConnected => socket.shutdownOutput(): Unit

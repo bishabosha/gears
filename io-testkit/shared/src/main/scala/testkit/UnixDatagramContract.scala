@@ -12,7 +12,7 @@ trait UnixDatagramContract extends SocketContract {
   protected def unixDatagram(r: R, local: UnixAddress | Null, remote: UnixAddress | Null)(using
       munit.Location
   ): Handle = {
-    val into = Handle.Slot()
+    val into = Slot[Handle]()
     opened(r, into, backend.ops.datagram(local, remote, into))
   }
 

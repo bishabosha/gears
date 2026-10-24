@@ -19,7 +19,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import munit.FunSuite
 
-import gears.async.io.Handle
 import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.Backend
@@ -41,16 +40,19 @@ trait ProgramSuite extends FunSuite {
   /** The backend under test: one with sockets, pipes and name resolution, which the checks use. */
   val backend: Backend & SocketBackend & PipeBackend & ResolveBackend
 
+  /** The backend's handles. */
+  protected type Handle = backend.Handle
+
   /** Performs `op`, which opens a handle into `into`, and returns the handle. */
-  protected def opening(io: Io[backend.type], into: Handle.Slot, op: io.Op)(using Async): Handle = {
+  protected def opening(io: Io[backend.type], into: Slot[Handle], op: io.Op)(using Async): Handle = {
     io.perform(op)
     into.clear()
   }
 
   /** Opens a pipe: its read end and its write end. */
   protected def pipe(io: Io[backend.type])(using Async): (Handle, Handle) = {
-    val read = Handle.Slot()
-    val write = Handle.Slot()
+    val read = Slot[Handle]()
+    val write = Slot[Handle]()
     io.perform(io.backend.ops.pipe(read, write))
     (read.clear(), write.clear())
   }
@@ -68,11 +70,11 @@ trait ProgramSuite extends FunSuite {
   ): (Handle, Connect) = io.backend match {
     case unix: (gears.async.io.UnixStreams & io.backend.type) =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
-      val listening = Handle.Slot()
+      val listening = Slot[Handle]()
       val listener = opening(io, listening, unix.ops.listen(address, listening))
       val connect = new Connect {
         def apply()(using Async): Handle = {
-          val into = Handle.Slot()
+          val into = Slot[Handle]()
           opening(io, into, unix.ops.connect(address, into))
         }
       }
@@ -84,12 +86,12 @@ trait ProgramSuite extends FunSuite {
       var found: (Handle, Connect) | Null = null
       while found == null do {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
-        val listening = Handle.Slot()
+        val listening = Slot[Handle]()
         try {
           val listener = opening(io, listening, io.backend.ops.listen(address, listening))
           val connect = new Connect {
             def apply()(using Async): Handle = {
-              val into = Handle.Slot()
+              val into = Slot[Handle]()
               opening(io, into, io.backend.ops.connect(address, into))
             }
           }
@@ -113,7 +115,7 @@ trait ProgramSuite extends FunSuite {
     var attempts = 0
     while port < 0 do {
       val candidate = 20000 + random.nextInt(30000)
-      val into = Handle.Slot()
+      val into = Slot[Handle]()
       try {
         val listener = opening(io, into, io.backend.ops.listen(IpAddress.IPv4("127.0.0.1", candidate), into))
         io.perform(io.backend.ops.close(listener))

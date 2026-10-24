@@ -1,0 +1,116 @@
+{
+  "started": "2026-10-25T00:40:35+02:00",
+  "finished": "2026-10-25T00:40:50+02:00",
+  "load_average": {
+    "before": [
+      5.4345703125,
+      7.921875,
+      7.6982421875
+    ],
+    "after": [
+      4.900390625,
+      7.6806640625,
+      7.61572265625
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--tcp",
+    "--scale",
+    "0.1",
+    "--scenarios",
+    "pingpong,pingpong-fresh-ops,concurrent"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "numbers",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-before@nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "subject": "the bench has a churn scenario: a connection per round trip, connect, one message each way and close, which costs what opening and closing cost, a handle per connection among it, where the other scenarios keep their connections",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T00:16:02+02:00"
+      },
+      "median": {
+        "pingpong": 91.73,
+        "pingpong-fresh-ops": 91.9,
+        "concurrent": 49.45
+      },
+      "samples": {
+        "pingpong": [
+          94.14,
+          91.26,
+          91.72,
+          91.73,
+          91.97
+        ],
+        "pingpong-fresh-ops": [
+          92.38,
+          92.15,
+          91.02,
+          90.83,
+          91.9
+        ],
+        "concurrent": [
+          49.45,
+          49.7,
+          49.49,
+          49.29,
+          49.25
+        ]
+      }
+    },
+    {
+      "label": "objects",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-after@nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "subject": "the bench has a churn scenario: a connection per round trip, connect, one message each way and close, which costs what opening and closing cost, a handle per connection among it, where the other scenarios keep their connections",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0616e135e831",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T00:27:55+02:00"
+      },
+      "median": {
+        "pingpong": 91.84,
+        "pingpong-fresh-ops": 90.89,
+        "concurrent": 49.58
+      },
+      "samples": {
+        "pingpong": [
+          91.84,
+          91.11,
+          93.95,
+          95.24,
+          90.81
+        ],
+        "pingpong-fresh-ops": [
+          90.89,
+          90.77,
+          91.83,
+          91.03,
+          90.14
+        ],
+        "concurrent": [
+          49.35,
+          49.58,
+          49.84,
+          49.5,
+          50.17
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

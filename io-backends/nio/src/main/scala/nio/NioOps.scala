@@ -19,7 +19,7 @@ import gears.async.io.BufferPool
 import gears.async.io.Received
 import gears.async.io.Completion
 import gears.async.io.FileOps
-import gears.async.io.Handle
+import NioCapabilities.Handle
 import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.Repeatable
@@ -53,26 +53,26 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps
-    extends UnixStreamOps[NioOp]
-    with PipeOps[NioOp]
-    with BlockingOps[NioOp]
-    with FileOps[NioOp]
-    with ResolveOps[NioOp] {
+    extends UnixStreamOps[NioOp, Handle]
+    with PipeOps[NioOp, Handle]
+    with BlockingOps[NioOp, Handle]
+    with FileOps[NioOp, Handle]
+    with ResolveOps[NioOp, Handle] {
   def read(handle: Handle, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Handle, buf: ByteBuffer): Write = new Write(handle, buf)
-  def accept(handle: Handle, into: Handle.Slot): Accept = new Accept(handle, into)
+  def accept(handle: Handle, into: Slot[Handle]): Accept = new Accept(handle, into)
   def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): AcceptAll = {
     require(max > 0, s"max must be positive, not $max")
     new AcceptAll(handle, into, max)
   }
-  def connect(address: IpAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
-  def connect(address: UnixAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
-  def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): NioOp =
+  def connect(address: IpAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
+  def connect(address: UnixAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
+  def listen(address: IpAddress, into: Slot[Handle], reuseAddr: Boolean = true): NioOp =
     new Listen(address, reuseAddr, into)
-  def listen(address: UnixAddress, into: Handle.Slot): NioOp = new Listen(address, reuseAddr = false, into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot): NioOp =
+  def listen(address: UnixAddress, into: Slot[Handle]): NioOp = new Listen(address, reuseAddr = false, into)
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Handle]): NioOp =
     new OpenDatagram(local, remote, into)
-  def pipe(read: Handle.Slot, write: Handle.Slot): NioOp = new OpenPipe(read, write)
+  def pipe(read: Slot[Handle], write: Slot[Handle]): NioOp = new OpenPipe(read, write)
   def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
   def send(handle: Handle, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
   def send(handle: Handle, buf: ByteBuffer): Send = new Send(handle, buf, null)
@@ -84,7 +84,7 @@ object NioOps
     new PooledRead(handle, NioOps.direct(pool), into)
   def close(handle: Handle): NioOp = new Close(handle)
   def shutdownOutput(handle: Handle): NioOp = new ShutdownOutput(handle)
-  def open(path: String, write: Boolean, into: Handle.Slot): NioOp = new OpenFile(path, write, into)
+  def open(path: String, write: Boolean, into: Slot[Handle]): NioOp = new OpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
   def sync(handle: Handle): FileSync = new FileSync(handle)
@@ -113,23 +113,23 @@ sealed trait Opens extends NioOp {
 /** An op that opens its handle at once, when submitted (see `NioAtOnce`), as NIO's listeners, datagram sockets and
   * pipes are.
   */
-sealed abstract class OpensAtOnce(into: Handle.Slot) extends NioAtOnce with Opens {
-  private var opened: Handle.Opt = Handle.Opt.empty
+sealed abstract class OpensAtOnce(into: Slot[Handle]) extends NioAtOnce with Opens {
+  private var opened: Handle | Null = null
   protected def open(): Handle
   def perform(): Unit = {
     val handle = open()
-    opened = Handle.Opt(handle)
+    opened = (handle)
     into.set(handle)
   }
-  def abandon(): Unit = if opened.nonEmpty then {
+  def abandon(): Unit = if opened != null then {
     into.clear(): Unit
-    NioHandles.close(opened.get)
-    opened = Handle.Opt.empty
+    NioHandles.close(opened.nn)
+    opened = null
   }
 }
 
 /** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
-final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Handle.Slot) extends OpensAtOnce(into) {
+final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Slot[Handle]) extends OpensAtOnce(into) {
   protected def open(): Handle = address match {
     case ip: IpAddress     => NioHandles.listen(ip, reuseAddr)
     case unix: UnixAddress => NioHandles.listen(unix)
@@ -137,13 +137,13 @@ final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Handle.Slot
 }
 
 /** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */
-final class OpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot)
+final class OpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Handle])
     extends OpensAtOnce(into) {
   protected def open(): Handle = NioHandles.datagram(local, remote)
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
-final class OpenPipe(read: Handle.Slot, write: Handle.Slot) extends NioAtOnce with Opens {
+final class OpenPipe(read: Slot[Handle], write: Slot[Handle]) extends NioAtOnce with Opens {
   private var ends: (Handle, Handle) | Null = null
   def perform(): Unit = {
     val (in, out) = NioHandles.pipe()
@@ -242,7 +242,7 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
 }
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
-final class Accept(val handle: Handle, into: Handle.Slot) extends Command {
+final class Accept(val handle: Handle, into: Slot[Handle]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = selectable(classOf[ServerSocketChannel], "Accepting").accept()
@@ -297,16 +297,16 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[Handle]], max: Int) e
   * a Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times
   * out first, the socket is closed and `into` left empty.
   */
-final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command with Opens {
-  private var socket: Handle.Opt = Handle.Opt.empty
+final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Command with Opens {
+  private var socket: Handle | Null = null
   private var connected = false
-  def handle: Handle = socket.get
+  def handle: Handle = socket.nn
   def interest: Interest = Interest.Write
   override def selectOps(channel: SelectableChannel): Int = SelectionKey.OP_CONNECT
 
   /** Opens the socket and starts connecting it, as the op is submitted or performed. */
   private[nio] def open(): Unit = {
-    socket = Handle.Opt(NioHandles.connectStream(address))
+    socket = (NioHandles.connectStream(address))
     connected = false
   }
 
@@ -323,15 +323,15 @@ final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command
       }
     if done then {
       connected = true
-      into.set(socket.get)
+      into.set(socket.nn)
     }
     done
   }
 
-  def abandon(): Unit = if socket.nonEmpty then {
+  def abandon(): Unit = if socket != null then {
     if connected then into.clear(): Unit
-    NioHandles.close(socket.get)
-    socket = Handle.Opt.empty
+    NioHandles.close(socket.nn)
+    socket = null
     connected = false
   }
 }

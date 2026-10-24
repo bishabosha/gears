@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
 import gears.async.io.Completion
-import gears.async.io.Handle
+import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.UnixAddress
 import gears.async.io.kqueue.KqueueHandles
 import gears.async.io.kqueue.KqueueOp

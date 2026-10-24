@@ -4,12 +4,11 @@ package internal
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicReferenceArray
 
-import gears.async.io.Handle
-
-/** A process-wide table of what a backend's handles name, for a backend whose I/O objects are not numbers, such as
-  * NIO's channels or Network.framework's connections: a handle is an index into it, so that, like a descriptor, it
-  * means the same on every thread. Numbers freed by `remove` are reused, lowest last freed first. Looking a handle up
-  * takes no lock; adding and removing take the table's.
+/** A process-wide table of a backend's I/O objects by number, for a backend whose foreign side refers to them by
+  * number, as Network.framework's C side tags each of its handles with one, so that an event it delivers finds its
+  * object without a lock. Handles themselves are objects (see `Backend.Handle`); the number is the backend's own.
+  * Numbers freed by `remove` are reused, lowest last freed first. Looking a number up takes no lock; adding and
+  * removing take the table's.
   */
 final class HandleTable[E <: AnyRef](initialCapacity: Int = 64) {
   private val lock = new Object
@@ -18,8 +17,8 @@ final class HandleTable[E <: AnyRef](initialCapacity: Int = 64) {
   private var freed = 0 // how many are on it
   private var next = 0 // the next number never used, guarded by `lock`
 
-  /** Gives `entry` a handle. */
-  def add(entry: E): Handle = lock.synchronized {
+  /** Gives `entry` a number. */
+  def add(entry: E): Int = lock.synchronized {
     val number =
       if freed > 0 then { freed -= 1; free(freed) }
       else { next += 1; next - 1 }
@@ -35,26 +34,24 @@ final class HandleTable[E <: AnyRef](initialCapacity: Int = 64) {
       current = grown
     }
     current.set(number, entry)
-    Handle.wrap(number)
+    number
   }
 
-  /** What `handle` names, or null if it is not open. */
-  def find(handle: Handle): E | Null = {
-    val number = Handle.unwrap(handle)
+  /** What `number` names, or null if nothing does. */
+  def find(number: Int): E | Null = {
     val current = table
     if number >= 0 && number < current.length() then current.get(number) else null
   }
 
-  /** What `handle` names; throws if it is not open. */
-  def apply(handle: Handle): E = {
-    val found = find(handle)
-    if found == null then throw new IOException(s"Not an open handle: $handle")
+  /** What `number` names; throws if nothing does. */
+  def apply(number: Int): E = {
+    val found = find(number)
+    if found == null then throw new IOException(s"Not an open handle: $number")
     found.nn
   }
 
-  /** Frees `handle` and returns what it named; throws if it is not open. */
-  def remove(handle: Handle): E = {
-    val number = Handle.unwrap(handle)
+  /** Frees `number` and returns what it named; throws if nothing does. */
+  def remove(number: Int): E = {
     val removed = lock.synchronized {
       val current = table
       val found = if number >= 0 && number < current.length() then current.get(number) else null
@@ -66,7 +63,7 @@ final class HandleTable[E <: AnyRef](initialCapacity: Int = 64) {
       }
       found
     }
-    if removed == null then throw new IOException(s"Not an open handle: $handle")
+    if removed == null then throw new IOException(s"Not an open handle: $number")
     removed.nn
   }
 }

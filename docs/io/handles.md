@@ -6,8 +6,9 @@ since. This note records the problem, what protects against it today and what do
 what a handle is, so that a stale one fails cleanly as the program runs: a generation encoded in the handle, a number
 that only grows and is never reused, or a reference to an object that cannot be forged. The fourth ties a handle to a
 gears scope that capture checking enforces when compiling. Written on 2026-10-24; the capture checking findings come
-from small programs compiled with Scala 3.9.0, `language.experimental.captureChecking` and `separationChecking`. Nothing
-in the interface has changed for it yet.
+from small programs compiled with Scala 3.9.0, `language.experimental.captureChecking` and `separationChecking`. On
+2026-10-25 proposal 3 was built: handles are objects of each backend's own class (see "Proposal 3, as built"); the
+sections before it describe the numbers handles were until then.
 
 ## The problem
 
@@ -161,6 +162,47 @@ can never be confused with a new one: it is the closed object, and an op on it f
   would hold a reference. Measuring it needs a connection-churn scenario on the bench (open, one round trip, close),
   run with numbers against objects: the per-op scenarios such as `pingpong` would show only kqueue's field read.
 
+## Proposal 3, as built on 2026-10-25
+
+`Backend` has an abstract `type Handle <: AnyRef`, as it has `type Op`, and the ops traits take it as a second type
+parameter (`Ops[Op, H]`, `SocketOps[Op, H]`, and the rest), so a handle's type is its backend's: `io.Handle` in a
+program, as `io.Op` is. Each backend implements it with a class of its own whose constructor is private to the
+backend's package: `KqueueBackend.Handle`, holding the descriptor; `NioCapabilities.Handle`, shared by NIO's two
+backends, holding the channel's entry; `NWFrameworkBackend.Handle`, holding its `NWFrameworkHandle`. Slots of handles
+are `Slot[H]`; `Handle.Slot`, `Handle.Opt` and the opaque `Handle` are gone. Each handle has a closed flag, so a second
+close fails without touching a descriptor whose number may be another's by then.
+
+- **Compile time.** A program can make a handle neither from a number nor from another object, nor take one's number,
+  and a handle of one backend does not type-check as another's (`SlotAccessSuite`). A method taking a handle takes
+  the `Io` first, since the handle's type is the `Io`'s (`def echo(using io: Io[IpSockets])(client: io.Handle)`), and
+  the bench's `Connect` became `Connect[H]`, built with the `Io` whose handles it returns.
+- **Runtime, NIO and Network.framework.** An op looks its handle's entry up when it is submitted or performed, and a
+  closed handle fails it with "Not an open handle", so a stale handle reaches nothing. `HandleTable` is gone from
+  NIO; Network.framework keeps it, keyed by an `Int` of its own, only for its C side, which tags each of its objects
+  with that number so that an event finds its object.
+- **Runtime, kqueue: not yet.** Its ops take the descriptor from the handle when they are built and do not check the
+  closed flag, so a stale handle still reaches whatever reuses its descriptor, as before. Checking the flag where the
+  op is built, or carrying the handle into the command and checking it at submission, would close it.
+
+Measured against the commit before (release builds; `bench/results/2026-10-25-handle-objects-*.json`), by alternating
+runs, the median of each, change from numbers to objects:
+
+| Scenario | kqueue, 7 runs | kqueue, 9 runs, order swapped | NIO reactors | NIO on the caller | Network.framework |
+| --- | --- | --- | --- | --- | --- |
+| `connections` (open, one round trip, close) | +0.8% | -1.9% | -0.1% | -0.8% | -0.3% |
+| `pingpong` | +4.6% | -1.4% | -2.6% | +1.4% | +0.1% |
+| `pingpong-fresh-ops` (ops built per message) | +8.9% | -1.3% | -1.1% | +0.6% | -1.1% |
+| `pipelined` | +5.8% | 0.0% | -1.9% | +0.9% | |
+| `concurrent` | +8.7% | -2.6% | +3.2% | +0.7% | +0.3% |
+| `timers` (no handles: a control) | +0.1% | -0.5% | | | |
+
+The first kqueue run's slowdowns were the build that ran second in each pair, under a load average of 7 to 11 (an
+indexer running): its slow runs were bimodal, its fastest equal to the other build's (`pingpong` 6.98 µs against 6.94),
+and with the order swapped the sign swapped too. On every backend the difference is within the runs' spread: an
+allocation per open and a field read per op do not show against system calls of microseconds, as estimated above.
+Network.framework ran over TCP at a tenth of the counts (`connections` at a fiftieth), since thousands of closed TCP
+connections in TIME_WAIT run the loopback out of ports ("Can't assign requested address").
+
 ## Proposal 4: handles tied to a gears scope, enforced by capture checking
 
 Make a handle impossible to use once its scope has closed it: the higher level opens a handle for a scope, the
@@ -263,29 +305,24 @@ owns it (`close(consume h)`).
 
 ## Recommendation
 
-Proposal 4 for programs, and one of proposals 1 to 3 under it:
+Proposal 4 for programs, and proposal 3, now built, under it:
 
 - **Proposal 4 at the higher level**, since it prevents the mistake when compiling, which is the safety wanted; it is
   the larger change, starting with gears' spawners.
-- **One runtime proposal under it**, as a backstop for the low level and for code outside the compiler's checks, so
-  that a stale handle fails cleanly on every backend instead of reaching another device. Proposal 1 is the cheapest for
-  kqueue, whose handles stay descriptors, but it needs its bits split with care, 20 for the number and 44 for the
-  generation, and the open-file limit held to 2^20, and it is exact only where numbers are retired before they wrap,
-  which kqueue cannot do; proposal 3 is the strongest, since it also refuses forged handles and another backend's,
-  removes the table lookup on NIO and Network.framework, and gives capture checking a class to classify; proposal 2 sits
-  between and buys its never-reused ids with a hash lookup. Which one is a measurement: the cost of an allocation per
-  open and a reference per op on kqueue, against a comparison per op and a box per generic use (see proposal 3's
-  costs).
+- **Proposal 3 under it**, as a backstop for the low level and for code outside the compiler's checks. It was chosen
+  over proposals 1 and 2 because it also refuses forged handles and another backend's when compiling, needs no bits
+  split between a number and a generation, cannot wrap, removes the table lookup on NIO, and gives capture checking a
+  class to classify; its cost, measured, is within noise on every backend. Kqueue still has to check the closed flag
+  for its ops (see "Proposal 3, as built").
 
 ## Open questions
 
 - Whether gears takes the invariant capture-set parameter on `Async.Spawn`, and how `Async.group`, `Future` and
   channels read with it; the first step is to try it on gears' own types in a branch.
-- How `Handle.Opt`, `Handle.Slot` and `acceptAll`'s array hold tracked handles: a slot that receives a fresh capability,
-  and an array of them, need capture checking's support for collections of capabilities.
-- Which runtime proposal, measured on the bench: the generation's comparison, the growing id's hash lookup, or the
-  reference object's allocation per open, on kqueue in particular, whose handles are free to resolve today.
-- Whether the runtime proposal is worth its cost before proposal 4 lands, or only once the low level is the only
-  unchecked path left.
+- How `Slot[H]` and `acceptAll`'s `Array[H]` hold tracked handles: a slot that receives a fresh capability, and an
+  array of them, need capture checking's support for collections of capabilities.
+- Where kqueue checks a handle's closed flag: where an op is built, which throws from a builder, or in the command at
+  submission, which would mean commands carry the handle rather than the descriptor that the plain demos build them
+  from.
 - Whether a close concurrent with a use is made safe (a count of the ops using a handle, closing once the last leaves),
-  which any of proposals 1 to 3 needs to be airtight on kqueue, where the descriptor number is the kernel's to reuse.
+  which proposal 3 needs to be airtight on kqueue, where the descriptor number is the kernel's to reuse.

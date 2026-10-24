@@ -8,7 +8,7 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
 import gears.async.io.Completion
-import gears.async.io.Handle
+import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.Interest
 import gears.async.io.kqueue.Accept
 import gears.async.io.kqueue.Command
@@ -139,7 +139,7 @@ object KQueueExampleKeyValue {
     private val store = new Store
     private var sessions: Map[Handle, Session] = Map.empty
 
-    private val accepted = Handle.Slot() // each accept writes its connection here
+    private val accepted = gears.async.io.Slot[Handle]() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 

@@ -78,7 +78,7 @@ private[io] object Pools {
       pinned: ReactorScheduler,
       timeoutMillis: Int
   )(using ac: Async): Unit = {
-    val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op]] // its reactor is one of `b`'s
+    val r = worker.reactor.asInstanceOf[Reactor.Of[b.Op, b.Handle]] // its reactor is one of `b`'s
     // An op performed again reuses its waiter, kept as its attachment (`Submitter.attachment`, which belongs to the op,
     // so any reactor of the backend reads it), so that performing it allocates nothing here, even when it last ran on
     // another worker. A waiter still in use (the op performed twice at once, which the reactor refuses) is left alone.
@@ -146,7 +146,7 @@ private[io] object Pools {
       try {
         val worker = scheduler.currentWorker
         val submission = new PoolSubmission(worker, op, completion)
-        worker.reactor.asInstanceOf[Reactor.Of[b.Op]].submit(op, submission, timeoutMillis) // one of `b`'s
+        worker.reactor.asInstanceOf[Reactor.Of[b.Op, b.Handle]].submit(op, submission, timeoutMillis) // one of `b`'s
         submission
       } finally scheduler.unpin()
     submission.link() // if the group is already cancelled, this cancels the op at once

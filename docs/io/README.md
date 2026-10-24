@@ -17,9 +17,11 @@ runners only on the JVM and Scala Native, which have threads to drive reactors w
 to the runtime: the runner, in the interface's package, starts it.
 
 What the build does not enforce: what the interface hides from programs it hides by package (`private[io]`:
-`CallerBackend.performHere`, `Slot.set`, `Handle.wrap`), which `gears.async.io.internal` and every backend's package
-are subpackages of. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside
-this repository would have to be written in a package under `gears.async.io` too.
+`CallerBackend.performHere`, `Slot.set`), which `gears.async.io.internal` and every backend's package are subpackages
+of. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside this repository
+would have to be written in a package under `gears.async.io` too. A handle is an object of its backend's own class
+(`Backend.Handle`, `KqueueBackend.Handle` and the others), whose constructor is private to the backend's package, so a
+program can neither forge one nor pass one backend's handle to another, whose `Handle` is a different type.
 
 ## The concepts, and why they are orthogonal
 
@@ -53,7 +55,7 @@ only.
 ## A program
 
 ```scala
-def echo(client: Handle)(using Async, io: Io[IpSockets]): Unit = {
+def echo(using io: Io[IpSockets])(client: io.Handle)(using Async): Unit = {
   val buf = ...
   val read = io.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
   val write = io.backend.ops.write(client, buf)
@@ -72,9 +74,10 @@ does; the run that takes `workers` and a `policy` exists only for a `ReactorBack
 `Io` is the `AsyncOperations`; a `Submission` is a `Cancellable` linked to the group it was submitted in, so the
 scope's end cancels it and waits for its completion, as it does a `Future`. The runner gives the program its `Io` as
 a context parameter, alongside `Async.Spawn`, which the program names where it uses it (`io ?=>`); code over a
-program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type is
-path-dependent on it (`io.Op`), so `perform` is a method of `io`. Time limits are an `Int` of milliseconds, the op's
-own unit.
+program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type and a
+handle's are path-dependent on it (`io.Op`, `io.Handle`), so `perform` is a method of `io`, and a method taking a
+handle takes the `Io` first (`def echo(using io: Io[IpSockets])(client: io.Handle)`). Time limits are an `Int` of
+milliseconds, the op's own unit.
 
 ## What the interface fixes, and what it leaves
 

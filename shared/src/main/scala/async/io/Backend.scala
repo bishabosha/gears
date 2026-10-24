@@ -26,8 +26,15 @@ trait Backend {
   /** What this performs. */
   type Op
 
+  /** Names an open file, socket, or other I/O object of this backend: an object of the backend's own class, which
+    * only the backend can make, so that a program cannot forge a handle, nor pass one backend's handle to another,
+    * whose `Handle` is a different type. A program gets one from an op that opened something, and closes it with
+    * `Ops.close`; the backend never closes it.
+    */
+  type Handle <: AnyRef
+
   /** Builds this backend's ops. */
-  def ops: Ops[Op]
+  def ops: Ops[Op, Handle]
 
   /** Opens a pool of `buffers` buffers of up to `bufferSize` bytes each, for the reads into buffers of the backend's
     * (`Ops.read` with a pool). Close it once nothing of it is held.
@@ -60,14 +67,14 @@ trait CallerBackend extends Backend {
 trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
   /** Opens a reactor that runs this backend's ops. Close it when done. */
-  def open(): Reactor.Of[Op]
+  def open(): Reactor.Of[Op, Handle]
 }
 
 /** IP sockets, stream and datagram (see `SocketOps`): an operating system's, or a host's, such as Node's; a browser
   * has none.
   */
 trait IpSockets extends Backend {
-  def ops: SocketOps[Op]
+  def ops: SocketOps[Op, Handle]
 }
 
 /** Regular files, opened, read, written and synced as ops (see `FileOps`): on a thread pool where the operating
@@ -75,24 +82,24 @@ trait IpSockets extends Backend {
   * does not, as io_uring's would.
   */
 trait Files extends Backend {
-  def ops: FileOps[Op]
+  def ops: FileOps[Op, Handle]
 }
 
 /** Host names resolved (see `ResolveOps`). */
 trait Resolving extends Backend {
-  def ops: ResolveOps[Op]
+  def ops: ResolveOps[Op, Handle]
 }
 
 /** Pipes (see `PipeOps`). */
 trait Pipes extends Backend {
-  def ops: PipeOps[Op]
+  def ops: PipeOps[Op, Handle]
 }
 
 /** Saying when a handle is ready, and using it without waiting (see `ReadinessOps`): over non-blocking descriptors
   * whose reactor is the only thread to touch them, such as kqueue's.
   */
 trait Readiness extends Backend {
-  def ops: ReadinessOps[Op]
+  def ops: ReadinessOps[Op, Handle]
 }
 
 /** Blocking code run as an op (see `BlockingOps`): where it may block, with the op's time limit and cancellation
@@ -101,22 +108,22 @@ trait Readiness extends Backend {
   * limit and the interrupt.
   */
 trait Blocking extends Backend {
-  def ops: BlockingOps[Op]
+  def ops: BlockingOps[Op, Handle]
 }
 
 /** Unix domain stream sockets (see `UnixStreamOps`), on which the socket ops run. */
 trait UnixStreams extends IpSockets {
-  def ops: UnixStreamOps[Op]
+  def ops: UnixStreamOps[Op, Handle]
 }
 
 /** Unix domain datagram sockets (see `UnixDatagramOps`). */
 trait UnixDatagrams extends IpSockets {
-  def ops: UnixDatagramOps[Op]
+  def ops: UnixDatagramOps[Op, Handle]
 }
 
 /** FIFOs waited on as pipes are (see `FifoOps`). */
 trait Fifos extends Backend {
-  def ops: FifoOps[Op]
+  def ops: FifoOps[Op, Handle]
 }
 
 /** A backend with IP sockets: what a program asks for, and the other aliases likewise. */

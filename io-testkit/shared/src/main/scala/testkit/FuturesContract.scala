@@ -19,7 +19,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import munit.FunSuite
 
-import gears.async.io.Handle
 import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.Backend
@@ -93,7 +92,7 @@ trait FuturesContract extends ProgramSuite {
       val (listener, connect) = listenAndConnect(io, dir)
       try {
         val server = Future {
-          val accepted = Handle.Slot()
+          val accepted = Slot[Handle]()
           val accept = io.backend.ops.accept(listener, accepted)
           val connections = (1 to clients).map { _ =>
             io.perform(accept)
@@ -269,7 +268,7 @@ trait FuturesContract extends ProgramSuite {
         val (listener, connect) = listenAndConnect(io, dir)
         val client = connect()
         try {
-          val accepted = Handle.Slot()
+          val accepted = Slot[Handle]()
           io.perform(io.backend.ops.accept(listener, accepted))
           val server = accepted.clear()
           try {
@@ -308,7 +307,7 @@ trait FuturesContract extends ProgramSuite {
   test("a connection refused after waiting for it fails perform") {
     val port = freePort() // nothing listens on it: one just given up
     val failure = running { io ?=>
-      val into = Handle.Slot()
+      val into = Slot[Handle]()
       try {
         io.perform(io.backend.ops.connect(IpAddress.IPv4("127.0.0.1", port), into))
         io.perform(io.backend.ops.close(into.clear()))

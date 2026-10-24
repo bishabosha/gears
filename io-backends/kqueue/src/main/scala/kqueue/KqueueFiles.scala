@@ -7,7 +7,7 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.Handle
+import KqueueBackend.Handle
 import gears.async.io.Repeatable
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.PosixErr.cError
@@ -20,7 +20,7 @@ import gears.async.io.internal.PosixErr.cError
 /** Opens a regular file and publishes its handle (see `FileOps.open`). A cancel that arrives once the file is open
   * closes it again, since the handle never reaches the caller.
   */
-final class OpenFile(path: String, write: Boolean, into: Handle.Slot) extends KqueueBlocking {
+final class OpenFile(path: String, write: Boolean, into: Slot[Handle]) extends KqueueBlocking {
   def block(): Unit = {
     val handle = KqueueHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then KqueueHandles.close(handle)

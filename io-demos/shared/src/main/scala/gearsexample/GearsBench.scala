@@ -19,7 +19,6 @@ import gears.async.io.IpSockets
 import gears.async.io.Blocking
 import gears.async.io.UnixAddress
 import gears.async.io.Completion
-import gears.async.io.Handle
 import gears.async.io.Received
 import gears.async.io.Slot
 import gears.async.io.Submission
@@ -55,12 +54,12 @@ object GearsBench {
   )
 
   /** Opens a connection to the echo server. */
-  trait Connect {
-    def apply()(using Async): Handle
+  trait Connect[H] {
+    def apply()(using Async): H
   }
 
   trait Client {
-    def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit
+    def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using Async.Spawn): Unit
   }
 
   val scenarios: Seq[Scenario] = Seq(
@@ -69,18 +68,10 @@ object GearsBench {
       "one message in flight: a resume and a readiness wait per message on each side",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pingPong(io, connect, count, deadline = false)
-      }
-    ),
-    Scenario(
-      "churn",
-      "a connection per round trip: connect, one message each way, close; the cost of opening and closing, and of a "
-        + "handle per connection",
-      10_000,
-      new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
-          churn(io, connect, count)
       }
     ),
     Scenario(
@@ -88,7 +79,9 @@ object GearsBench {
       "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pingPong(io, connect, count, deadline = false, freshOps = true)
       }
     ),
@@ -98,7 +91,9 @@ object GearsBench {
         + "over without a copy",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pingPong(io, connect, count, deadline = false, pooled = true)
       }
     ),
@@ -108,7 +103,9 @@ object GearsBench {
         + "at a size where they count",
       2_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pipelined(io, connect, count, messageSize = LargeMessage)
       }
     ),
@@ -117,7 +114,9 @@ object GearsBench {
       "as large, reading into the backend's pool, whose buffers fit one message too",
       2_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pipelined(io, connect, count, messageSize = LargeMessage, pooled = true)
       }
     ),
@@ -126,7 +125,9 @@ object GearsBench {
       "as pingpong, with a time limit on every op of the round trip, as a request with a timeout has",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pingPong(io, connect, count, deadline = true)
       }
     ),
@@ -135,7 +136,9 @@ object GearsBench {
       "many connections ping-ponging at once: many events and registrations per turn",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(io, connect, each, deadline = false))).awaitAll
         }
@@ -146,7 +149,9 @@ object GearsBench {
       "as concurrent, with a slice of computation after each round trip, in the connection's own future",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections)
             .map(_ => Future(pingPong(io, connect, each, deadline = false, work = Work.Inline)))
@@ -159,7 +164,9 @@ object GearsBench {
       "as concurrent-compute, with each slice in a future of its own, awaited before the next round trip",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit = {
           val each = math.max(1, count / connections)
           (1 to connections).map(_ => Future(pingPong(io, connect, each, deadline = false, work = Work.Offload))).awaitAll
         }
@@ -170,7 +177,9 @@ object GearsBench {
       "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
       20_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit = {
           var i = 0
           while i < count do {
             pingPong(io, connect, 1, deadline = false)
@@ -184,7 +193,9 @@ object GearsBench {
       "one connection, each message its own write while replies are read at the same time",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pipelined(io, connect, count)
       }
     ),
@@ -193,7 +204,9 @@ object GearsBench {
       "trivial blocking tasks one after another: a wake-up from a worker thread for each",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit = {
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit = {
           val b: Blocking & io.backend.type = blocking(io)
           var i = 0
           while i < count do {
@@ -209,7 +222,9 @@ object GearsBench {
       "a trivial blocking task and a round trip in turn on one connection: moving between blocking work and I/O",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           pingPong(io, connect, count, deadline = false, blockingFirst = true)
       },
       _.isInstanceOf[BlockingBackend]
@@ -219,7 +234,9 @@ object GearsBench {
       s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           timerStress(reactors(io), count)
       },
       _.isInstanceOf[ReactorBackend]
@@ -230,7 +247,9 @@ object GearsBench {
         + "the time between ticks, which rises if busy futures stop yielding",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           fairness(io, connect, count)
       }
     ),
@@ -241,7 +260,9 @@ object GearsBench {
         + "and -max: how late, in µs, the checker woke",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           starvation(io, connect, count, connections)
       }
     ),
@@ -251,7 +272,9 @@ object GearsBench {
         + "mixed-compute, the time per slice meanwhile",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using Async.Spawn): Unit =
+        def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
           mixed(io, connect, count)
       }
     )
@@ -332,7 +355,7 @@ object GearsBench {
     * done. Between slices it yields to the scheduler with `yieldNow`, so that the ping-pong continuations run in
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
-  private def mixed(io: Io[IpSockets], connect: Connect, count: Int)(using Async.Spawn): Unit = {
+  private def mixed(io: Io[IpSockets], connect: Connect[io.Handle], count: Int)(using Async.Spawn): Unit = {
     val pingPongDone = new java.util.concurrent.atomic.AtomicBoolean // read by the other future, maybe on another worker
     var slices = 0L
     val start = System.nanoTime()
@@ -361,7 +384,7 @@ object GearsBench {
     * lateness is how long the program takes to respond, whatever else it is doing. Reports the median, 99th
     * percentile and worst lateness, in µs, as `starvation-p50`, `-p99` and `-max`.
     */
-  private def starvation(io: Io[IpSockets], connect: Connect, count: Int, connections: Int)(using
+  private def starvation(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
       Async.Spawn
   ): Unit = {
     val done = new java.util.concurrent.atomic.AtomicBoolean // read by the other futures, maybe on other threads
@@ -400,30 +423,10 @@ object GearsBench {
     report("starvation-max", 1, at(1.0) / 1e9)
   }
 
-  /** Opens `count` connections one after another, each for one round trip of a message, and closes each. */
-  private def churn(io: Io[IpSockets], connect: Connect, count: Int)(using Async): Unit = {
-    val arena = BufferArena.open()
-    try {
-      val buf = arena.allocate(MessageSize)
-      var i = 0
-      while i < count do {
-        withConnection(io, connect) { fd =>
-          buf.clear()
-          while buf.hasRemaining() do io.perform(io.backend.ops.write(fd, buf))
-          buf.clear()
-          while buf.hasRemaining() do {
-            val before = buf.position()
-            io.perform(io.backend.ops.read(fd, buf))
-            if buf.position() == before then throw new IOException("The server closed the connection")
-          }
-        }
-        i += 1
-      }
-    } finally arena.close()
-  }
-
   /** Opens a connection with `connect`, runs `body` on it, and closes it. */
-  private def withConnection(io: Io[IpSockets], connect: Connect)(body: Handle => Unit)(using Async): Unit = {
+  private def withConnection(io: Io[IpSockets], connect: Connect[io.Handle])(body: io.Handle => Unit)(using
+      Async
+  ): Unit = {
     val fd = connect()
     try {
       body(fd)
@@ -442,7 +445,7 @@ object GearsBench {
     */
   private def pingPong(
       io: Io[IpSockets],
-      connect: Connect,
+      connect: Connect[io.Handle],
       count: Int,
       deadline: Boolean,
       freshOps: Boolean = false,
@@ -509,7 +512,7 @@ object GearsBench {
     */
   private def pipelined(
       io: Io[IpSockets],
-      connect: Connect,
+      connect: Connect[io.Handle],
       count: Int,
       messageSize: Int = MessageSize,
       pooled: Boolean = false
@@ -560,7 +563,7 @@ object GearsBench {
     * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations
     * rarely wait must still let it run.
     */
-  private def fairness(io: Io[IpSockets], connect: Connect, count: Int)(using Async.Spawn): Unit = {
+  private def fairness(io: Io[IpSockets], connect: Connect[io.Handle], count: Int)(using Async.Spawn): Unit = {
     val trafficDone = new java.util.concurrent.atomic.AtomicBoolean // read by the ticker, maybe on another worker
     var ticks = 0L
     val start = System.nanoTime()
@@ -578,7 +581,7 @@ object GearsBench {
   }
 
   /** Echoes everything a connection sends until it closes. */
-  private def echo(io: Io[IpSockets], client: Handle)(using Async): Unit = {
+  private def echo(io: Io[IpSockets], client: io.Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -683,7 +686,7 @@ object GearsBench {
     try {
       if server then startServer(endpoint, workers, policy)
       runOn(workers, policy) { io ?=>
-        val connect = new Connect { def apply()(using Async): Handle = endpoint.connect() }
+        val connect = new Connect[io.Handle] { def apply()(using Async): io.Handle = endpoint.connect() }
         // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
         // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
         if warmup then

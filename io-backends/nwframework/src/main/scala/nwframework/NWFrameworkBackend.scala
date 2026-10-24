@@ -26,7 +26,24 @@ object NWFrameworkBackend
     with Resolving
     with Pipes {
   type Op = NWFrameworkOp
+
+  /** An open I/O object, as this backend's ops name it: made only by the ops that open one, so that a program cannot
+    * forge a handle, and closed once, a second close failing.
+    */
+  final class Handle private[nwframework] (private[nwframework] val target: NWFrameworkHandle) {
+    @volatile private var open = true
+
+    /** Whether it has not been closed. */
+    private[nwframework] def isOpen: Boolean = open
+
+    /** Marks it closed; false if it already was. */
+    private[nwframework] def markClosed(): Boolean = synchronized {
+      val was = open
+      open = false
+      was
+    }
+  }
   def ops: NWFrameworkOps.type = NWFrameworkOps
   def pool(bufferSize: Int, buffers: Int): BufferPool = new gears.async.io.internal.NativePool(bufferSize, buffers)
-  def open(): Reactor.Of[Op] = NWFrameworkReactor.open()
+  def open(): Reactor.Of[Op, Handle] = NWFrameworkReactor.open()
 }

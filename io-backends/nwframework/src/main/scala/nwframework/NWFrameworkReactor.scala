@@ -33,6 +33,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
 
   /** Every NWFramework reactor runs the same kinds of op, so an op may go to any of them in turn (see `NWFrameworkBackend`). */
   type Op = NWFrameworkOp
+  type Handle = NWFrameworkBackend.Handle
 
   def ops: NWFrameworkOps.type = NWFrameworkOps
 

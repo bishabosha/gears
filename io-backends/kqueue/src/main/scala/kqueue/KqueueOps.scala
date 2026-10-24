@@ -8,7 +8,7 @@ import gears.async.io.BufferPool
 import gears.async.io.Received
 import gears.async.io.Completion
 import gears.async.io.FileOps
-import gears.async.io.Handle
+import KqueueBackend.Handle
 import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.ReadinessOps
@@ -48,37 +48,37 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `KqueueReactor` understands. */
 object KqueueOps
-    extends UnixStreamOps[KqueueOp]
-    with UnixDatagramOps[KqueueOp]
-    with PipeOps[KqueueOp]
-    with FifoOps[KqueueOp]
-    with ReadinessOps[KqueueOp]
-    with BlockingOps[KqueueOp]
-    with FileOps[KqueueOp]
-    with ResolveOps[KqueueOp] {
+    extends UnixStreamOps[KqueueOp, Handle]
+    with UnixDatagramOps[KqueueOp, Handle]
+    with PipeOps[KqueueOp, Handle]
+    with FifoOps[KqueueOp, Handle]
+    with ReadinessOps[KqueueOp, Handle]
+    with BlockingOps[KqueueOp, Handle]
+    with FileOps[KqueueOp, Handle]
+    with ResolveOps[KqueueOp, Handle] {
   def read(handle: Handle, buf: ByteBuffer): ReadIntoBuffer = ReadIntoBuffer(fd(handle), buf)
   def write(handle: Handle, buf: ByteBuffer): WriteFromBuffer = WriteFromBuffer(fd(handle), buf)
-  def accept(handle: Handle, into: Handle.Slot): Accept = Accept(fd(handle), into)
+  def accept(handle: Handle, into: Slot[Handle]): Accept = Accept(fd(handle), into)
   def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): AcceptAll = {
     require(max > 0, s"max must be positive, not $max")
     new AcceptAll(fd(handle), into, max)
   }
-  def connect(address: IpAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
-  def connect(address: UnixAddress, into: Handle.Slot): ConnectTo = new ConnectTo(address, into)
-  def listen(address: IpAddress, into: Handle.Slot, reuseAddr: Boolean = true): KqueueOp =
+  def connect(address: IpAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
+  def connect(address: UnixAddress, into: Slot[Handle]): ConnectTo = new ConnectTo(address, into)
+  def listen(address: IpAddress, into: Slot[Handle], reuseAddr: Boolean = true): KqueueOp =
     new Listen(address, reuseAddr, into)
-  def listen(address: UnixAddress, into: Handle.Slot): KqueueOp = new Listen(address, reuseAddr = false, into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Handle.Slot): KqueueOp = {
+  def listen(address: UnixAddress, into: Slot[Handle]): KqueueOp = new Listen(address, reuseAddr = false, into)
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Handle]): KqueueOp = {
     require(
       local == null || remote == null || local.ordinal == remote.ordinal,
       "Local and remote addresses must be of the same family"
     )
     new OpenDatagram(local, remote, into)
   }
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Handle.Slot): KqueueOp =
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[Handle]): KqueueOp =
     new OpenDatagram(local, remote, into)
-  def pipe(read: Handle.Slot, write: Handle.Slot): KqueueOp = new OpenPipe(read, write)
-  def openFifo(path: String, write: Boolean, into: Handle.Slot): KqueueOp = new OpenFifo(path, write, into)
+  def pipe(read: Slot[Handle], write: Slot[Handle]): KqueueOp = new OpenPipe(read, write)
+  def openFifo(path: String, write: Boolean, into: Slot[Handle]): KqueueOp = new OpenFifo(path, write, into)
   def readNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.read(fd(handle), buf)
   def writeNow(handle: Handle, buf: ByteBuffer): Int = NonBlocking.write(fd(handle), buf)
   def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
@@ -96,9 +96,9 @@ object KqueueOps
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): PooledRead =
     PooledRead(fd(handle), KqueueOps.native(pool), into)
-  def close(handle: Handle): KqueueOp = new Close(fd(handle))
+  def close(handle: Handle): KqueueOp = new Close(handle)
   def shutdownOutput(handle: Handle): KqueueOp = new ShutdownOutput(fd(handle))
-  def open(path: String, write: Boolean, into: Handle.Slot): KqueueOp = new OpenFile(path, write, into)
+  def open(path: String, write: Boolean, into: Slot[Handle]): KqueueOp = new OpenFile(path, write, into)
   def read(handle: Handle, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(fd(handle), buf, offset)
   def write(handle: Handle, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(fd(handle), buf, offset)
   def sync(handle: Handle): FileSync = new FileSync(fd(handle))
@@ -129,12 +129,12 @@ sealed trait Opens extends KqueueOp {
 /** An op that opens its handle at once, when submitted (see `KqueueAtOnce`), as kqueue's listeners, datagram sockets,
   * pipes and FIFOs are: `opened` is what it opened, written into `into` by the time the op completes.
   */
-sealed abstract class OpensAtOnce(into: Handle.Slot) extends KqueueAtOnce with Opens {
+sealed abstract class OpensAtOnce(into: Slot[Handle]) extends KqueueAtOnce with Opens {
   private var opened = -1
   protected def open(): Int
   def perform(): Unit = {
     opened = open()
-    into.set(Handle.wrap(opened))
+    into.set(KqueueHandles.handle(opened))
   }
   def abandon(): Unit = if opened >= 0 then {
     into.clear(): Unit
@@ -144,29 +144,29 @@ sealed abstract class OpensAtOnce(into: Handle.Slot) extends KqueueAtOnce with O
 }
 
 /** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
-final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Handle.Slot) extends OpensAtOnce(into) {
+final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Slot[Handle]) extends OpensAtOnce(into) {
   protected def open(): Int = KqueueHandles.listenStream(address, reuseAddr)
 }
 
 /** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */
-final class OpenDatagram(local: SocketAddress | Null, remote: SocketAddress | Null, into: Handle.Slot)
+final class OpenDatagram(local: SocketAddress | Null, remote: SocketAddress | Null, into: Slot[Handle])
     extends OpensAtOnce(into) {
   protected def open(): Int = KqueueHandles.datagramSocket(local, remote)
 }
 
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifo`). */
-final class OpenFifo(path: String, write: Boolean, into: Handle.Slot) extends OpensAtOnce(into) {
+final class OpenFifo(path: String, write: Boolean, into: Slot[Handle]) extends OpensAtOnce(into) {
   protected def open(): Int = KqueueHandles.fifoDescriptor(path, write)
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
-final class OpenPipe(read: Handle.Slot, write: Handle.Slot) extends KqueueAtOnce with Opens {
+final class OpenPipe(read: Slot[Handle], write: Slot[Handle]) extends KqueueAtOnce with Opens {
   private var ends: (Int, Int) | Null = null
   def perform(): Unit = {
     val (in, out) = KqueueHandles.pipeDescriptors()
     ends = (in, out)
-    read.set(Handle.wrap(in))
-    write.set(Handle.wrap(out))
+    read.set(KqueueHandles.handle(in))
+    write.set(KqueueHandles.handle(out))
   }
   def abandon(): Unit = if ends != null then {
     val (in, out) = ends.nn
@@ -183,7 +183,7 @@ final class OpenPipe(read: Handle.Slot, write: Handle.Slot) extends KqueueAtOnce
   * after writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is
   * closed and `into` left empty.
   */
-final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command with Opens {
+final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Command with Opens {
   private var socket = -1
   private var connected = false
   def fd: Int = socket
@@ -205,7 +205,7 @@ final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command
         throw t
     }
     connected = true
-    into.set(Handle.wrap(socket))
+    into.set(KqueueHandles.handle(socket))
     true
   }
 
@@ -217,9 +217,9 @@ final class ConnectTo(address: SocketAddress, into: Handle.Slot) extends Command
   }
 }
 
-/** Closes a descriptor (see `Ops.close`): at once, as `KqueueHandles.close` does. */
-final class Close(val fd: Int) extends KqueueAtOnce {
-  def perform(): Unit = KqueueHandles.closeDescriptor(fd)
+/** Closes a handle (see `Ops.close`): at once, as `KqueueHandles.close` does. */
+final class Close(val handle: Handle) extends KqueueAtOnce {
+  def perform(): Unit = KqueueHandles.close(handle)
 }
 
 /** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, since the kernel sends what is queued,

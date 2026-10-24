@@ -48,10 +48,13 @@ trait Submitter {
     */
   type Op
 
+  /** The handles its ops name, its backend's (see `Backend.Handle`). */
+  type Handle <: AnyRef
+
   /** Builds this submitter's ops, as its backend's `ops` does. Building an op does not touch the submitter, so `ops`
     * may be used from any thread.
     */
-  def ops: Ops[Op]
+  def ops: Ops[Op, Handle]
 
   /** Submits an op with the completion to run when it finishes, and no time limit (see the other `submit`). */
   final def submit[C <: Op](op: C, completion: Completion[C]): Unit = submit(op, completion, Backend.NoTimeout)
@@ -141,8 +144,10 @@ trait Reactor extends Submitter with AutoCloseable {
 
 object Reactor {
 
-  /** A reactor that runs ops of type `O`: one that a backend whose `Op` is `O` opened. */
-  type Of[O] = Reactor { type Op = O }
+  /** A reactor that runs ops of type `O` on handles of type `H`: one that a backend whose `Op` is `O` and whose
+    * `Handle` is `H` opened.
+    */
+  type Of[O, H <: AnyRef] = Reactor { type Op = O; type Handle = H }
 
   /** Opens reactors of kind `R`. Code written against the interface asks for one of these instead of naming an
     * implementation, and states what it needs of the reactor through `R`.

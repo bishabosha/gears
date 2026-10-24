@@ -15,7 +15,7 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.Handle
+import KqueueBackend.Handle
 import gears.async.io.IpAddress
 import gears.async.io.UnixAddress
 import gears.async.io.internal.DescriptorTable
@@ -59,10 +59,10 @@ object KqueueHandles {
   /** The handle of descriptor `fd`: for kqueue-specific code, whose handles are descriptors; the interface's handles
     * come from the openers below.
     */
-  def handle(fd: Int): Handle = Handle.wrap(fd)
+  def handle(fd: Int): Handle = new Handle(fd)
 
   /** The descriptor `handle` is, for kqueue-specific code. */
-  def descriptor(handle: Handle): Int = Handle.unwrap(handle)
+  def descriptor(handle: Handle): Int = handle.fd
 
   private def wrap(fd: Int): Handle = handle(fd)
   private[kqueue] def fd(handle: Handle): Int = descriptor(handle)
@@ -140,7 +140,10 @@ object KqueueHandles {
     * it fail and its slots are forgotten before the number is reused (see `Ops.close`). A handle must not be used
     * while it is being closed.
     */
-  def close(handle: Handle): Unit = closeDescriptor(fd(handle))
+  def close(handle: Handle): Unit = {
+    if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
+    closeDescriptor(handle.fd)
+  }
 
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {

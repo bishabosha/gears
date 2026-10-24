@@ -12,12 +12,33 @@ import gears.async.io.UnixStreams
 
 /** What NIO can do, for both its backends: IP and Unix stream sockets, regular files and name
   * resolution on the blocker pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK
-  * cannot wait on, nor readiness. Handles name entries of one process-wide table.
+  * cannot wait on, nor readiness. A handle holds the channel it names.
   */
 trait NioCapabilities extends Blocking with UnixStreams with Files with Resolving with Pipes {
   type Op = NioOp
+  type Handle = NioCapabilities.Handle
   def ops: NioOps.type = NioOps
   def pool(bufferSize: Int, buffers: Int): BufferPool = new DirectPool(bufferSize, buffers)
+}
+
+object NioCapabilities {
+
+  /** An open channel, as NIO's ops name it, shared by its two backends, which run the same ops: made only by the ops
+    * that open one, so that a program cannot forge a handle, and closed once, a second close failing.
+    */
+  final class Handle private[nio] (private[nio] val entry: Entry) {
+    @volatile private var open = true
+
+    /** Whether it has not been closed. */
+    private[nio] def isOpen: Boolean = open
+
+    /** Marks it closed; false if it already was. */
+    private[nio] def markClosed(): Boolean = synchronized {
+      val was = open
+      open = false
+      was
+    }
+  }
 }
 
 /** NIO's reactors, each over a `Selector` of its own. They all run the same ops, which keep no state of one reactor
@@ -26,5 +47,5 @@ trait NioCapabilities extends Blocking with UnixStreams with Files with Resolvin
   * handles performed on the calling thread.
   */
 object NioBackend extends ReactorBackend with NioCapabilities {
-  def open(): Reactor.Of[Op] = NioReactor.open()
+  def open(): Reactor.Of[Op, Handle] = NioReactor.open()
 }

@@ -10,13 +10,13 @@ trait UnixStreamContract extends SocketContract {
 
   /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
   protected def listen(r: R, address: UnixAddress)(using munit.Location): Handle = {
-    val into = Handle.Slot()
+    val into = Slot[Handle]()
     opened(r, into, backend.ops.listen(address, into))
   }
 
   /** Submits a `connect` op to a Unix socket path on `r`, as `startConnect` for an IP address. */
-  protected def startConnect(r: R, address: UnixAddress): (Outcome, Handle.Slot) = {
-    val into = Handle.Slot()
+  protected def startConnect(r: R, address: UnixAddress): (Outcome, Slot[Handle]) = {
+    val into = Slot[Handle]()
     val connected = Outcome()
     r.submit(backend.ops.connect(address, into), connected)
     (connected, into)
@@ -29,7 +29,7 @@ trait UnixStreamContract extends SocketContract {
       val listener = listen(r, address)
       try {
         val (connected, into) = startConnect(r, address)
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         turnUntil(r)(acceptDone.finished && connected.finished)
@@ -54,7 +54,7 @@ trait UnixStreamContract extends SocketContract {
       val address = UnixAddress(dir.resolve("echo.sock").toString)
       val listener = listen(r, address)
       try {
-        val accepted = Handle.Slot()
+        val accepted = Slot[Handle]()
         val acceptDone = Outcome()
         r.submit(backend.ops.accept(listener, accepted), acceptDone)
         val (connected, into) = startConnect(r, address)

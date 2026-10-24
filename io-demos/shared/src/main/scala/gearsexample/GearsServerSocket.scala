@@ -8,7 +8,6 @@ import java.io.IOException
 
 import gears.async.io.Io
 import gears.async.io.Backend
-import gears.async.io.Handle
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
@@ -26,7 +25,7 @@ object GearsServerSocket {
   /** Reads a length-framed request through one 8 KiB buffer, replies with a framed response, and closes the connection
     * gracefully, so that the client reads the whole reply however the request ended.
     */
-  private def serve(io: Io[UnixStreams], client: Handle)(using Async): Unit = {
+  private def serve(io: Io[UnixStreams], client: io.Handle)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -52,7 +51,7 @@ object GearsServerSocket {
         // One misbehaving client must not take the server down.
         println(s"Client socket $client failed: ${e.getMessage}")
     } finally
-      try HigherLevel.closeGracefully(client, arena.allocate(256))(using io)
+      try HigherLevel.closeGracefully(using io)(client, arena.allocate(256))
       finally arena.close()
   }
 

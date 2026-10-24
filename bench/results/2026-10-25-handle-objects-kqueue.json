@@ -1,0 +1,205 @@
+{
+  "started": "2026-10-25T00:28:13+02:00",
+  "finished": "2026-10-25T00:29:21+02:00",
+  "load_average": {
+    "before": [
+      11.40576171875,
+      10.19970703125,
+      7.623046875
+    ],
+    "after": [
+      7.04345703125,
+      9.26806640625,
+      7.48095703125
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "connections,pingpong,pingpong-fresh-ops,pipelined,concurrent,large,timers"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "numbers",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-before",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "subject": "the bench has a churn scenario: a connection per round trip, connect, one message each way and close, which costs what opening and closing cost, a handle per connection among it, where the other scenarios keep their connections",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T00:16:02+02:00"
+      },
+      "median": {
+        "connections": 26.92,
+        "pingpong": 7.16,
+        "pingpong-fresh-ops": 7.21,
+        "pipelined": 0.69,
+        "concurrent": 1.96,
+        "large": 88.26,
+        "timers": 14.86
+      },
+      "samples": {
+        "connections": [
+          27.44,
+          26.92,
+          27.28,
+          27.06,
+          26.59,
+          25.66,
+          24.91
+        ],
+        "pingpong": [
+          7.26,
+          7.14,
+          7.24,
+          7.23,
+          7.16,
+          6.94,
+          6.94
+        ],
+        "pingpong-fresh-ops": [
+          7.28,
+          7.19,
+          7.21,
+          7.33,
+          7.21,
+          7.02,
+          6.97
+        ],
+        "pipelined": [
+          0.71,
+          0.68,
+          0.71,
+          0.69,
+          0.68,
+          0.69,
+          0.68
+        ],
+        "concurrent": [
+          1.96,
+          1.92,
+          2.08,
+          1.96,
+          1.98,
+          1.91,
+          1.93
+        ],
+        "large": [
+          88.26,
+          88.37,
+          90.0,
+          88.55,
+          86.94,
+          85.46,
+          85.96
+        ],
+        "timers": [
+          14.92,
+          15.08,
+          14.86,
+          14.94,
+          14.86,
+          14.77,
+          14.82
+        ]
+      }
+    },
+    {
+      "label": "objects",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-after",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "c28d58d49471b8d6e57f1080e46d285581e7e791",
+        "subject": "the bench has a churn scenario: a connection per round trip, connect, one message each way and close, which costs what opening and closing cost, a handle per connection among it, where the other scenarios keep their connections",
+        "worktree_changes": true,
+        "worktree_changes_hash": "0616e135e831",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T00:27:55+02:00"
+      },
+      "median": {
+        "connections": 27.13,
+        "pingpong": 7.49,
+        "pingpong-fresh-ops": 7.85,
+        "pipelined": 0.73,
+        "concurrent": 2.13,
+        "large": 88.92,
+        "timers": 14.87
+      },
+      "samples": {
+        "connections": [
+          27.13,
+          26.44,
+          27.15,
+          29.0,
+          26.82,
+          26.27,
+          27.45
+        ],
+        "pingpong": [
+          8.12,
+          7.16,
+          7.22,
+          7.72,
+          7.49,
+          6.98,
+          8.69
+        ],
+        "pingpong-fresh-ops": [
+          8.14,
+          7.85,
+          7.12,
+          7.78,
+          7.95,
+          7.01,
+          8.63
+        ],
+        "pipelined": [
+          0.74,
+          0.73,
+          0.68,
+          0.75,
+          0.68,
+          0.69,
+          0.75
+        ],
+        "concurrent": [
+          1.95,
+          2.17,
+          1.96,
+          2.32,
+          1.94,
+          2.13,
+          2.45
+        ],
+        "large": [
+          87.54,
+          94.11,
+          88.92,
+          89.84,
+          87.66,
+          88.06,
+          102.57
+        ],
+        "timers": [
+          14.85,
+          14.92,
+          14.85,
+          14.88,
+          15.16,
+          14.81,
+          14.87
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

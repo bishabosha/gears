@@ -30,8 +30,8 @@ class NioOnCallerSuite extends FuturesContract {
     var outcome = ""
     Async.blocking {
       val io = OnCaller(NioOnCaller)
-      val read = Handle.Slot()
-      val write = Handle.Slot()
+      val read = Slot[io.Handle]()
+      val write = Slot[io.Handle]()
       io.perform(io.backend.ops.pipe(read, write)) // on this, a platform thread
       val (in, out) = (read.clear(), write.clear())
       val arena = BufferArena.open()

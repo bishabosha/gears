@@ -14,7 +14,7 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.Handle
+import NWFrameworkBackend.Handle
 import gears.async.io.IpAddress
 import gears.async.io.Received
 import gears.async.io.internal.Descriptors
@@ -27,7 +27,8 @@ private[nwframework] final class Datagram(val bytes: Array[Byte], val from: IpAd
 
 /** An open I/O object of the NWFramework backend and everything known about it: a Network.framework connection, listener
   * or datagram socket, or a descriptor, each with its C side (`NWFrameworkIo`); a regular file has only its descriptor,
-  * since its reads and writes never wait. The handle number is its index in `NWFrameworkHandles`' table.
+  * since its reads and writes never wait. Its number is its index in `NWFrameworkHandles`' table, which the C side
+  * carries, and the program's handle (`NWFrameworkBackend.Handle`) holds it.
   *
   * The C side only queues what the framework delivers; `drain` takes those events and applies them here: bytes
   * received go to the stash, datagrams to `packets`, accepted connections to `accepted`, the connection's state and
@@ -43,6 +44,9 @@ private[nwframework] final class NWFrameworkHandle(
 ) {
   def isFile: Boolean = kind == NWFrameworkHandle.File
   def isDescriptor: Boolean = kind == NWFrameworkHandle.Descriptor
+
+  /** Its index in `NWFrameworkHandles`' table, set as it is added. */
+  private[nwframework] var number = -1
 
   // Guarded by `this`, from here on.
   private var closed = false   // no more ops: closing, or closed
@@ -661,9 +665,10 @@ private[nwframework] object NWFrameworkHandle {
   val Prefetch: Boolean = !sys.env.get("ASYNCIO_NWFRAMEWORK_PREFETCH").contains("0")
 }
 
-/** The NWFramework backend's handles: indexes into a table of its I/O objects, since Network.framework's are not
-  * descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are descriptors, which
-  * Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there are none.
+/** The NWFramework backend's I/O objects, each numbered in a table whose number its C side carries, since
+  * Network.framework's are not descriptors. IP sockets are Network.framework's; pipes, FIFOs and regular files are
+  * descriptors, which Network.framework has nothing for. Unix domain sockets it has no public endpoint for, so there
+  * are none.
   */
 object NWFrameworkHandles {
 
@@ -671,21 +676,25 @@ object NWFrameworkHandles {
   private val table = new gears.async.io.internal.HandleTable[NWFrameworkHandle](256)
 
   private def add(handle: NWFrameworkHandle): Handle = {
-    val added = table.add(handle)
+    val number = table.add(handle)
+    handle.number = number
     // The C side's first field is the tag: the number, so that a reactor draining the handle finds it without a
     // lookup or a lock (`at`).
-    if handle.ptr != null then !handle.ptr.asInstanceOf[Ptr[Long]] = Handle.unwrap(added).toLong
-    added
+    if handle.ptr != null then !handle.ptr.asInstanceOf[Ptr[Long]] = number.toLong
+    new Handle(handle)
   }
 
   /** The handle's object, or an `IOException` if it is not open. */
-  private[nwframework] def get(handle: Handle): NWFrameworkHandle = table(handle)
+  private[nwframework] def get(handle: Handle): NWFrameworkHandle = {
+    if !handle.isOpen then throw new IOException(s"Not an open handle: $handle")
+    handle.target
+  }
 
   /** The handle whose C side is `ptr`, if still open: found by the number the C side carries, and checked against
     * it, since the number may have been reused since the handle closed.
     */
   private[nwframework] def at(ptr: NWFrameworkIo.Handle): NWFrameworkHandle | Null = {
-    val found = table.find(Handle.wrap((!ptr.asInstanceOf[Ptr[Long]]).toInt))
+    val found = table.find((!ptr.asInstanceOf[Ptr[Long]]).toInt)
     if found != null && found.ptr == ptr then found else null
   }
 
@@ -767,7 +776,10 @@ object NWFrameworkHandles {
   def close(handle: Handle): Unit = remove(handle).close()
 
   /** Takes `handle` out of the table, its number free for reuse at once, for closing; throws if it is not open. */
-  private[nwframework] def remove(handle: Handle): NWFrameworkHandle = table.remove(handle)
+  private[nwframework] def remove(handle: Handle): NWFrameworkHandle = {
+    if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
+    table.remove(handle.target.number)
+  }
 
   private[nwframework] def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))
 
