@@ -19,39 +19,18 @@ type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
-  /** A stream socket connected to `address`. */
-  @annotation.targetName("connectUnix")
-  def connect(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = address match {
-    case unix: UnixAddress => HigherLevel.connect(r, unix)
-    case ip: IpAddress     => HigherLevel.connect(r, ip)
-  }
-
-  /** A listener on `address`, listening. */
-  @annotation.targetName("listenUnix")
-  def listen(r: Io[UnixStreams], address: StreamAddress)(using Async): Handle = address match {
-    case unix: UnixAddress => HigherLevel.listen(r, unix)
-    case ip: IpAddress     => HigherLevel.listen(r, ip)
-  }
-
-  /** For code whose address is chosen when it runs, such as the bench's: on any backend for an IP address, and on one
-    * with Unix stream sockets for a Unix one, refused otherwise.
+  /** A stream socket connected to `address`: on any backend for an IP address, and on one with Unix stream sockets
+    * for a Unix one, refused otherwise.
     */
-  def connect(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = address match {
-    case ip: IpAddress     => HigherLevel.connect(r, ip)
-    case unix: UnixAddress =>
-      val into = Handle.Slot()
-      val sockets: UnixStreams & r.backend.type = unixSockets(r.backend, unix)
-      r.perform(sockets.ops.connect(unix, into))
-      into.clear()
+  def connect(address: StreamAddress)(using io: Io[IpSockets], async: Async): Handle = address match {
+    case ip: IpAddress     => HigherLevel.connect(ip)
+    case unix: UnixAddress => HigherLevel.connect(unix)(using unixSockets(io, unix))
   }
 
-  def listen(r: Io[IpSockets], address: StreamAddress)(using Async): Handle = address match {
-    case ip: IpAddress     => HigherLevel.listen(r, ip)
-    case unix: UnixAddress =>
-      val into = Handle.Slot()
-      val sockets: UnixStreams & r.backend.type = unixSockets(r.backend, unix)
-      r.perform(sockets.ops.listen(unix, into))
-      into.clear()
+  /** A listener on `address`, listening, on the backends `connect` connects on. */
+  def listen(address: StreamAddress)(using io: Io[IpSockets], async: Async): Handle = address match {
+    case ip: IpAddress     => HigherLevel.listen(ip)
+    case unix: UnixAddress => HigherLevel.listen(unix)(using unixSockets(io, unix))
   }
 
   /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A
@@ -60,30 +39,34 @@ object Sockets {
     * connection, taking all that are pending each time (`acceptAll`), so that a burst does not wait an op apiece behind
     * the connections already being served while the listen queue fills.
     */
-  def serve(r: Io[IpSockets], listener: Handle)(serve: Handle => Async.Spawn ?=> Unit)(using Async.Spawn): Unit = {
+  def serve(listener: Handle)(serve: Handle => Async.Spawn ?=> Unit)(using
+      io: Io[IpSockets],
+      spawn: Async.Spawn
+  ): Unit = {
     val accepted = gears.async.io.Slot[Array[Handle]]()
-    val accept = r.backend.ops.acceptAll(listener, accepted, max = 64)
+    val accept = io.backend.ops.acceptAll(listener, accepted, max = 64)
     var failing = false
     while true do {
       val clients =
         try {
-          r.perform(accept)
+          io.perform(accept)
           failing = false
           accepted.clear()
         } catch {
           case e: java.io.IOException =>
             if !failing then println(s"Accepting failed, and is tried again: ${e.getMessage}") // once per run of them
             failing = true
-            r.sleep(10)
+            io.sleep(10)
             Array.empty[Handle]
         }
       for client <- clients do Future(serve(client))
     }
   }
 
-  private def unixSockets(b: IpSockets, address: UnixAddress): UnixStreams & b.type = b match {
-    case unix: (UnixStreams & b.type) => unix
-    case _ => throw new IllegalArgumentException(s"$b has no Unix domain sockets, so cannot use $address; use TCP")
+  /** `io` as an `Io` over Unix stream sockets, if its backend has them. */
+  private def unixSockets(io: Io[IpSockets], address: UnixAddress): Io[UnixStreams] = io.backend match {
+    case _: UnixStreams => io.asInstanceOf[Io[UnixStreams]] // its backend is one, and `Io` is covariant in it
+    case b => throw new IllegalArgumentException(s"$b has no Unix domain sockets, so cannot use $address; use TCP")
   }
 
   /** Removes a Unix socket file left behind, if `address` names one. */

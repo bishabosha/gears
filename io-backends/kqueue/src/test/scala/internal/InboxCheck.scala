@@ -30,7 +30,7 @@ object InboxCheck {
     val ran = new AtomicLong
     val elsewhere = new AtomicLong
     var workers = Array.empty[ReactorWorker]
-    ReactorFutures.run(2) { r =>
+    ReactorFutures.run(2) { io ?=>
       val pool = summon[Async].scheduler match {
         case pool: ReactorPool => pool
         case other             => throw new IllegalStateException(s"not on a reactor pool: $other")

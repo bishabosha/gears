@@ -13,22 +13,22 @@ object GearsFileWrite {
     BufferArena.scoped { arena =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
       val buf = arena.allocate(math.max(bytes.length, 1))
-      ReactorFutures.run { r =>
+      ReactorFutures.run { io ?=>
         println(s"attempt to open file $fifo")
-        val file = HigherLevel.openFifo(r, fifo, write = true)
+        val file = HigherLevel.openFifo(fifo, write = true)
         try {
           println(s"opened file: $file")
           println("Event registered for file write.")
           println("starting to poll...")
-          val write = r.backend.ops.write(file, buf) // one repeatable op, resubmitted for every write
+          val write = io.backend.ops.write(file, buf) // one repeatable op, resubmitted for every write
           while true do {
             buf.clear()
             buf.put(bytes)
             buf.flip()
-            r.perform(write)
+            io.perform(write)
             println(s"actually wrote ${buf.position()} bytes") // the buffer was loaded at position 0
           }
-        } finally r.perform(r.backend.ops.close(file))
+        } finally io.perform(io.backend.ops.close(file))
       }
     }
   }

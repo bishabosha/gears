@@ -12,45 +12,45 @@ import gears.async.io.testkit.ProgramSuite
 trait HigherLevelChecks extends ProgramSuite {
 
   test("a higher level over perform: result-returning reads, accept and resolve") {
-    val outcome = running { r =>
-      val (in, out) = pipe(r)
+    val outcome = running { io ?=>
+      val (in, out) = pipe(io)
       try {
         val buf = arena.allocate(16)
         val writer = Future {
-          HigherLevel.writeAll(r, out, arena.of("wrapped".getBytes(StandardCharsets.UTF_8)))
-          r.perform(r.backend.ops.close(out))
+          HigherLevel.writeAll(out, arena.of("wrapped".getBytes(StandardCharsets.UTF_8)))
+          io.perform(io.backend.ops.close(out))
         }
-        val got = HigherLevel.read(r, in, buf)
+        val got = HigherLevel.read(in, buf)
         writer.await
-        val atEnd = HigherLevel.read(r, in, buf)
-        val resolved = HigherLevel.resolve(r, "localhost").nonEmpty
+        val atEnd = HigherLevel.read(in, buf)
+        val resolved = HigherLevel.resolve("localhost").nonEmpty
         s"$got ${text(buf)} $atEnd $resolved"
-      } finally r.perform(r.backend.ops.close(in))
+      } finally io.perform(io.backend.ops.close(in))
     }
     assertEquals(outcome, "7 wrapped 0 true")
   }
 
   test("a higher level over perform: a stream of chunks consumed as a gears channel, with back-pressure") {
     val total = 1 << 20
-    val received = running { r =>
-      val pool = r.backend.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
-      val (in, out) = pipe(r)
+    val received = running { io ?=>
+      val pool = io.backend.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
+      val (in, out) = pipe(io)
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
           var sent = 0
           while sent < total do {
             buf.clear().limit(math.min(8192, total - sent))
-            HigherLevel.writeAll(r, out, buf)
+            HigherLevel.writeAll(out, buf)
             sent += buf.limit()
           }
-          r.perform(r.backend.ops.close(out))
+          io.perform(io.backend.ops.close(out))
         }
-        val received = HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
+        val received = HigherLevel.drain(HigherLevel.chunks(in, pool, backlog = 2))
         writer.await
         received
       } finally {
-        r.perform(r.backend.ops.close(in))
+        io.perform(io.backend.ops.close(in))
         pool.close()
       }
     }
@@ -58,29 +58,29 @@ trait HigherLevelChecks extends ProgramSuite {
   }
 
   test("a higher level over perform: a stream closed early releases its chunks, and one that fails rethrows") {
-    val outcome = running { r =>
-      val pool = r.backend.pool(bufferSize = 1024, buffers = 4)
-      val (in, out) = pipe(r)
+    val outcome = running { io ?=>
+      val pool = io.backend.pool(bufferSize = 1024, buffers = 4)
+      val (in, out) = pipe(io)
       try {
-        HigherLevel.writeAll(r, out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8)))
-        val stream = HigherLevel.chunks(r, in, pool, backlog = 2)
+        HigherLevel.writeAll(out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8)))
+        val stream = HigherLevel.chunks(in, pool, backlog = 2)
         val first = stream.read().map { chunk =>
           val n = chunk.buffer.remaining()
           chunk.release()
           n
         }
-        r.perform(r.backend.ops.timer(20)) // lets the reader fill the window and the backlog
+        io.perform(io.backend.ops.timer(20)) // lets the reader fill the window and the backlog
         stream.close() // releases what was read ahead
         val freed = pool.available == pool.buffers
-        r.perform(r.backend.ops.close(in)) // the next stream's read fails on the closed handle
+        io.perform(io.backend.ops.close(in)) // the next stream's read fails on the closed handle
         val failed =
           try {
-            HigherLevel.drain(HigherLevel.chunks(r, in, pool, backlog = 2))
+            HigherLevel.drain(HigherLevel.chunks(in, pool, backlog = 2))
             false
           } catch case _: IOException => true
         s"${first.exists(_ > 0)} $freed $failed ${pool.available == pool.buffers}"
       } finally {
-        r.perform(r.backend.ops.close(out))
+        io.perform(io.backend.ops.close(out))
         pool.close()
       }
     }

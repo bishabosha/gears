@@ -21,21 +21,21 @@ object GearsSocket {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
       val response = new ByteArrayOutputStream()
-      ReactorFutures.run { r =>
+      ReactorFutures.run { io ?=>
         println(s"connection in progress to: $address")
-        val socket = Sockets.connect(r, address)
-        val pool = r.backend.pool(bufferSize = 8192, buffers = 4)
+        val socket = Sockets.connect(address)
+        val pool = io.backend.pool(bufferSize = 8192, buffers = 4)
         try {
           // One repeatable op, resubmitted until the request is out.
-          val write = r.backend.ops.write(socket, buf)
+          val write = io.backend.ops.write(socket, buf)
           StreamProtocol.frame("Hello from Scala Native KQueue Example!\n", buf)
           while buf.hasRemaining() do {
             val before = buf.position()
-            r.perform(write)
+            io.perform(write)
             println(s"Wrote ${buf.position() - before} bytes to socket.")
           }
           // The response as a stream: a chunk at a time from the pool's buffers, until the server closes.
-          val chunks = HigherLevel.chunks(r, socket, pool, backlog = 2)
+          val chunks = HigherLevel.chunks(socket, pool, backlog = 2)
           var next = chunks.read()
           while next.isDefined do {
             val chunk = next.get
@@ -46,7 +46,7 @@ object GearsSocket {
           }
           println(s"Received message: `${new String(response.toByteArray, StandardCharsets.UTF_8)}`")
         } finally {
-          r.perform(r.backend.ops.close(socket))
+          io.perform(io.backend.ops.close(socket))
           pool.close()
         }
       }

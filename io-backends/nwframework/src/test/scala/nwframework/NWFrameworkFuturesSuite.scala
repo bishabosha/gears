@@ -12,7 +12,7 @@ import gears.async.io.testkit.FuturesContract
 abstract class NWFrameworkFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
 
-  protected def running[T](body: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers)(using backend)(body)
 }
 

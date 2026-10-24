@@ -36,7 +36,7 @@ object ReactorFutures {
     * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` is not a
     * `Backend`, so starting a run over one is refused when compiling.
     */
-  def run[T](using backend: Backend)(program: Io[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T =
+  def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
       case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
       case caller: (CallerBackend & backend.type)    => onCaller(caller)(program)
@@ -45,12 +45,12 @@ object ReactorFutures {
 
   /** Runs `program` on a pool of `workers` workers driving reactors of `backend`'s, which carry the program's futures,
     * run until it finishes and are closed afterwards; `policy` says which tasks a worker out of work may take from
-    * another. The program is given an `Io` over the backend on the pool, and what it returns is returned; a failure
-    * of the program is rethrown.
+    * another. The program is given an `Io` over the backend on the pool, as a context parameter, and what it returns
+    * is returned; a failure of the program is rethrown.
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend
-  )(program: OnPool[backend.type] => (Async.Spawn, AsyncOperations) ?=> T): T = {
+  )(program: OnPool[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
     VirtualCarriers.check()
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))
@@ -63,7 +63,7 @@ object ReactorFutures {
       // Started from this thread, the first worker's, so the program's first continuation is queued there.
       factory
         .newThread { () =>
-          try outcome = Try(Async.blocking(program(io)))
+          try outcome = Try(Async.blocking(program(using io)))
           finally pool.stop()
         }
         .start()
@@ -73,12 +73,12 @@ object ReactorFutures {
   }
 
   /** Runs `program` on gears' own virtual threads, each op performed on the future's own thread. */
-  private def onCaller[T](b: CallerBackend)(program: Io[b.type] => (Async.Spawn, AsyncOperations) ?=> T): T = {
+  private def onCaller[T](b: CallerBackend)(program: Io[b.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     val io = OnCaller[b.type](b)
     given AsyncOperations = io
     // `Async.blocking` runs its body on the calling thread, which may be a platform thread; a future's is virtual.
-    Async.blocking(Future(program(io)).await)
+    Async.blocking(Future(program(using io)).await)
   }
 }
