@@ -1312,3 +1312,7 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   affected: the runtime's completion (`Pools.OpWaiter`) only resumes a task, and a program's code throws inside its
   future. `ReactorContract` checks it on every backend, with two timers due in one turn, the first's completion
   throwing, and with a failure left unhandled.
+- **Seen once, upstream: gears core's `ChannelBehavior` "ChannelMultiplexer multiplexes - all subscribers read the
+  same stream" hung on the JVM** (2026-10-25, `rootJVM/testFull`), in `Future.awaitAll` over a `Channel.read`, for
+  over half an hour, until the sbt server was killed; the same suite passed before and after. Not I/O code: a flake of
+  the core's own test, to know of before upstream's CI meets it.
