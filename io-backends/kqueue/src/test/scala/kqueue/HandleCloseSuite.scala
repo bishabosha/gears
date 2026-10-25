@@ -5,6 +5,7 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import scala.scalanative.posix.fcntl
 import scala.scalanative.unsafe.Zone
 
 import gears.async.io.internal.NativeBuffer
@@ -55,6 +56,39 @@ class HandleCloseSuite extends munit.FunSuite {
         }
       }
       assertEquals(leaked, 0L, s"bytes written through closed handles reached reused descriptors in $rounds rounds")
+    }
+  }
+
+  test("a close op while a use is in progress: closed at once in meaning, the descriptor once the use ends") {
+    Zone.acquire { implicit z =>
+      KqueueReactor.scoped() { r =>
+        val (in, out) = KqueueHandles.pipe()
+        val fd = KqueueHandles.descriptor(out)
+        val inUse = new CountDownLatch(1)
+        val end = new CountDownLatch(1)
+        val user = new Thread(() => KqueueHandles.using(out) { inUse.countDown(); end.await() })
+        user.start()
+        inUse.await()
+        @volatile var closed = false
+        r.submit(
+          KqueueOps.close(out),
+          new Completion[KqueueOp] {
+            def onComplete(op: KqueueOp): Unit = closed = true
+            override def onFailure(op: KqueueOp, failure: Throwable): Unit = fail(s"the close failed: $failure")
+          }
+        )
+        for _ <- 1 to 5 do r.runOnce(block = false) // the reactor turns while the close waits for the use
+        assert(!closed, "the close op completed while a use of the descriptor was in progress")
+        intercept[IOException](KqueueHandles.writeNow(out, NativeBuffer.allocate(1))) // closed in meaning already
+        assert(fcntl.fcntl(fd, fcntl.F_GETFD, 0) >= 0, "the descriptor was closed under a use")
+        end.countDown()
+        user.join() // the use ends, and with it the descriptor
+        assert(fcntl.fcntl(fd, fcntl.F_GETFD, 0) < 0, "the last use did not close the descriptor")
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while !closed && System.nanoTime() < deadline do r.runOnce(block = false)
+        assert(closed, "the close op never completed")
+        KqueueHandles.close(in)
+      }
     }
   }
 }

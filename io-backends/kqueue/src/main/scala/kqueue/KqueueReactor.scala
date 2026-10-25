@@ -210,6 +210,17 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
         timer.completion = pending
         schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+      case close: Close =>
+        // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
+        // until the last use ends and closes it.
+        close.reset()
+        close.reactor = this
+        close.completion = pending
+        if close.start() then { if finishNow then finished = true else ready.add(close) }
+        else {
+          pendingPromises += close
+          waits = true
+        }
       case promise: KqueuePromise =>
         promise match {
           case blocking: KqueueBlocking if blocking.cancelling != null =>

@@ -185,16 +185,24 @@ close fails without touching a descriptor whose number may be another's by then.
   blocker thread, `readNow` and `writeNow`. Taking it fails once the handle is closed, so a stale handle fails its op,
   whether built before the close or after, rather than reaching what reuses the descriptor. Kqueue's own code still
   builds commands on bare descriptors, unchecked, as before.
-- **A close concurrent with a use (kqueue).** The handle counts the uses in progress, in one atomic integer with its
-  closed flag. A close marks the handle closed first, so that no use starts after, then waits for those in progress,
-  a system call or a registration of microseconds, or a file op's disk read or write, before closing the descriptor,
-  so that its number is not reused under one of them. A use is held only around a system call, never while an op
-  waits for readiness, and ends before its completion runs, so that a close never waits for an op that it alone
-  would fail, nor for a completion on its own thread. `HandleCloseSuite` closes a pipe 200 times while a thread
-  writes through it and checks that nothing reaches the pipes opened at once after, which the kernel gives the same
-  numbers: it fails with the count taken out. NIO's channels and Network.framework's connections are objects the
-  runtime closes, with no number to reuse under a call in progress.
-
+- **A close concurrent with a use (kqueue), as Go closes.** The handle counts the uses in progress, in one atomic
+  integer with its closed flag, as Go's `fdMutex` does. A close marks the handle closed, counting itself a use while
+  it does, so that no use starts after, and removes a Unix path the socket bound; then, if no use is in progress, as
+  nearly always, it closes the descriptor there and then, and the close op completes as an at-once op does; and if
+  one is, it leaves the closing to the last use, which closes the descriptor on its own thread when it ends, a
+  reactor's or a blocker's, and completes the close op as a promise is completed from another thread. Nobody waits:
+  not the closing reactor, whatever the use in progress, a system call of microseconds or a file op's disk read.
+  The reactors are told, and fail the commands pending on the descriptor, once it is closed, as before: telling them
+  sooner, while a use is still in progress, could let that use register a filter the reactors then take for a
+  reused number's. A use is held only around a system call, never while an op waits for readiness, and ends before
+  its completion runs, so that a close never waits for an op that it alone would fail. `KqueueHandles.close`, for
+  kqueue's own code with no reactor, waits for the last use, as Go's `Close` does on a non-blocking descriptor.
+  `HandleCloseSuite` closes a pipe 200 times while a thread writes through it, checking that nothing reaches the
+  pipes opened at once after, which the kernel gives the same numbers (it fails with the count taken out), and
+  submits a close op while a use is in progress: the op stays pending while the reactor turns, the handle refusing
+  uses and the descriptor still open, until the use ends, closes the descriptor, and the op completes. NIO's channels
+  and Network.framework's connections are objects the runtime closes, with no number to reuse under a call in
+  progress.
 Measured against the commit before (release builds; `bench/results/2026-10-25-handle-objects-*.json`), by alternating
 runs, the median of each, change from numbers to objects:
 
@@ -211,6 +219,11 @@ The count of uses on kqueue, two atomic operations around each system call, meas
 (9 alternating runs, `bench/results/2026-10-25-handle-uses-kqueue.json`): `connections` +1.4%, `pingpong` +0.3%,
 `pingpong-fresh-ops` 0.0%, `pipelined` -2.8%, `concurrent` +1.0%, `timers` +0.1%; the fastest runs equal to a hundredth
 of a microsecond. Within the spread again.
+
+The Go-style close, against the close that spun on the reactor until the uses ended (9 alternating runs under a load
+average of 11 to 16, `bench/results/2026-10-25-handle-goclose-kqueue.json`): `connections` +2.1% at the median and
+its fastest run 3% faster, `pingpong` +0.5%, `pipelined` -1.4%, `concurrent` -6.5% at the median and its fastest
+equal, `timers` +0.3%. Within the spread: a close that finds no use in progress, nearly every close, does what it did.
 
 The first kqueue run's slowdowns were the build that ran second in each pair, under a load average of 7 to 11 (an
 indexer running): its slow runs were bimodal, its fastest equal to the other build's (`pingpong` 6.98 µs against 6.94),
@@ -336,6 +349,6 @@ Proposal 4 for programs, and proposal 3, now built, under it:
   channels read with it; the first step is to try it on gears' own types in a branch.
 - How `Slot[H]` and `acceptAll`'s `Array[H]` hold tracked handles: a slot that receives a fresh capability, and an
   array of them, need capture checking's support for collections of capabilities.
-- Whether a close should interrupt a file op reading or writing the disk on a blocker thread, which it now waits for,
-  as the JDK's `FileChannel` does not: by `dup2`ing a closed descriptor over it, as the JDK closes a socket a thread
-  is blocked in.
+- Whether a close should interrupt a file op reading or writing the disk on a blocker thread, which now delays only
+  the descriptor's close and the close op's completion, not the reactor: by `dup2`ing a closed descriptor over it,
+  as the JDK closes a socket a thread is blocked in.

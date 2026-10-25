@@ -223,9 +223,22 @@ final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Comman
   }
 }
 
-/** Closes a handle (see `Ops.close`): at once, as `KqueueHandles.close` does. */
-final class Close(val handle: Handle) extends KqueueAtOnce {
-  def perform(): Unit = KqueueHandles.close(handle)
+/** Closes a handle (see `Ops.close` and `KqueueBackend.Handle`): at once in meaning, and the descriptor itself at once
+  * too if no use of it is in progress, as nearly always, completing as an at-once op does; otherwise once the last
+  * use ends, on whose thread the descriptor is closed and this completed, as a promise is from another thread.
+  */
+final class Close(val handle: Handle) extends KqueuePromise {
+
+  /** Starts closing: true if that finished here, the descriptor closed or the close failed, its failure in
+    * `atOnceFailure`; false if the last use of the descriptor closes it, completing this.
+    */
+  private[kqueue] def start(): Boolean =
+    try KqueueHandles.closeHandle(handle, failure => if failure == null then signal() else fail(failure.nn))
+    catch {
+      case t: Throwable =>
+        atOnceFailure = t
+        true
+    }
 }
 
 /** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, since the kernel sends what is queued,

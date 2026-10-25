@@ -1,0 +1,185 @@
+{
+  "started": "2026-10-25T14:54:39+01:00",
+  "finished": "2026-10-25T14:55:58+01:00",
+  "load_average": {
+    "before": [
+      15.64404296875,
+      10.83837890625,
+      7.84033203125
+    ],
+    "after": [
+      11.0986328125,
+      10.521484375,
+      7.9853515625
+    ]
+  },
+  "runs": 9,
+  "bench_args": [
+    "--scenarios",
+    "connections,pingpong,pipelined,concurrent,timers"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "uses",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-uses",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "3eb22ec327537419f4d1f62460404e463e0d93d2",
+        "subject": "handles are objects of each backend's own class: Backend has an abstract type Handle, as it has type Op, the ops traits take it as a second type parameter, and a program names it io.Handle, so that a program can make a handle neither from a number nor from another object, and one backend's handle does not type-check as another's; KqueueBackend.Handle holds the descriptor, NioCapabilities.Handle (shared by NIO's two backends) the channel's entry, NWFrameworkBackend.Handle its NWFrameworkHandle, each made only in its backend's package and closed once, a second close failing without touching a descriptor whose number may be another's; NIO and Network.framework fail an op on a closed handle as it is submitted or performed, while kqueue, which takes the descriptor as the op is built, does not check yet; the opaque Handle, Handle.Slot and Handle.Opt are gone for Slot[H], NIO no longer has a handle table, and Network.framework keeps HandleTable, now keyed by an Int, only for its C side's tags; HigherLevel's methods that take a handle take their Io first, the bench's Connect is Connect[H], and the churn scenario added for this is dropped, since connections measured the same already; measured against the commit before on release builds, by alternating runs, every scenario on kqueue, NIO on both kinds and Network.framework is within the runs' spread (kqueue's first run's slowdowns followed run order, and reversed when it was swapped), recorded with the results in docs/io/handles.md",
+        "worktree_changes": true,
+        "worktree_changes_hash": "33247b30cec6",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T01:29:53+02:00"
+      },
+      "median": {
+        "connections": 27.56,
+        "pingpong": 7.5,
+        "pipelined": 0.72,
+        "concurrent": 2.31,
+        "timers": 15.23
+      },
+      "samples": {
+        "connections": [
+          28.07,
+          27.14,
+          28.36,
+          27.75,
+          27.01,
+          27.9,
+          26.73,
+          26.6,
+          27.56
+        ],
+        "pingpong": [
+          7.81,
+          7.4,
+          7.5,
+          7.86,
+          8.68,
+          8.73,
+          7.29,
+          7.25,
+          7.2
+        ],
+        "pipelined": [
+          0.71,
+          0.72,
+          0.73,
+          0.78,
+          0.86,
+          0.78,
+          0.69,
+          0.71,
+          0.71
+        ],
+        "concurrent": [
+          2.36,
+          2.31,
+          2.14,
+          2.39,
+          2.39,
+          2.6,
+          2.02,
+          2.06,
+          2.0
+        ],
+        "timers": [
+          15.4,
+          15.23,
+          15.14,
+          15.26,
+          15.68,
+          15.39,
+          15.11,
+          15.03,
+          15.06
+        ]
+      }
+    },
+    {
+      "label": "goclose",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-goclose",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "bf1af9455a125fe2a3e96de10763298aa9047126",
+        "subject": "kqueue fails an op on a closed handle, and a close waits for the uses of its descriptor in progress: a command built on a handle carries it, and every use of the descriptor (a command's system call and registration in the reactor, a file op's on its blocker thread, readNow, writeNow, shutdownOutput) takes the handle for its length, which fails once it is closed, so that a stale handle, whether its op was built before the close or after, no longer reaches what reuses the descriptor's number; the handle counts its uses in one atomic integer with its closed flag, and closing marks it closed, then waits for the uses in progress before closing the descriptor, so that the number is not reused under one of them; a use is held only around a system call, never while an op waits, and ends before its completion runs, so that a close never waits for an op it alone would fail; the reactor contract checks on every backend that an op on a closed handle fails, built before the close or after, that a second close fails, and that the pipe reusing its numbers gets nothing, and HandleCloseSuite closes a pipe 200 times while a thread writes through it, failing with the count taken out; measured against the commit before, every kqueue scenario is within the runs' spread",
+        "worktree_changes": true,
+        "worktree_changes_hash": "c1bcb6f8f475",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T14:54:37+01:00"
+      },
+      "median": {
+        "connections": 28.14,
+        "pingpong": 7.54,
+        "pipelined": 0.71,
+        "concurrent": 2.16,
+        "timers": 15.27
+      },
+      "samples": {
+        "connections": [
+          29.24,
+          26.61,
+          28.92,
+          28.14,
+          29.22,
+          30.22,
+          25.89,
+          26.57,
+          27.04
+        ],
+        "pingpong": [
+          8.57,
+          7.54,
+          7.48,
+          7.82,
+          7.83,
+          8.35,
+          7.53,
+          7.33,
+          7.21
+        ],
+        "pipelined": [
+          0.76,
+          0.7,
+          0.72,
+          0.71,
+          0.73,
+          0.76,
+          0.7,
+          0.69,
+          0.7
+        ],
+        "concurrent": [
+          2.35,
+          2.16,
+          2.24,
+          2.05,
+          2.62,
+          2.53,
+          2.04,
+          2.01,
+          2.07
+        ],
+        "timers": [
+          15.29,
+          15.27,
+          15.29,
+          15.23,
+          15.44,
+          15.24,
+          15.0,
+          15.1,
+          15.35
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

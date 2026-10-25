@@ -141,8 +141,39 @@ object KqueueHandles {
     * while it is being closed.
     */
   def close(handle: Handle): Unit = {
-    if !handle.closeUses() then throw notOpen(handle)
-    closeDescriptor(handle.fd)
+    val closed = new java.util.concurrent.CountDownLatch(1)
+    var failure: Throwable | Null = null
+    val here = closeHandle(handle, f => { failure = f; closed.countDown() })
+    if !here then {
+      closed.await() // for the last use of the descriptor to end, and close it
+      if failure != null then throw failure.nn
+    }
+  }
+
+  /** Closes `handle` the way `KqueueBackend.Handle` says: at once in meaning, a Unix path it bound removed at once too,
+    * so that a listener bound to the path right after is not removed later; the descriptor now if no use of it is in
+    * progress, returning true, and otherwise once the last ends, returning false, the descriptor then closed on that
+    * use's thread, which calls `later` with the close's failure, or null. Throws if the handle was already closed, or
+    * if closing the descriptor here fails.
+    */
+  private[kqueue] def closeHandle(handle: Handle, later: (Throwable | Null) => Unit): Boolean = {
+    val fd = handle.fd
+    val finish: Runnable = () =>
+      later(
+        try {
+          closeDescriptor(fd)
+          null
+        } catch case t: Throwable => t
+      )
+    handle.close(finish) match {
+      case KqueueBackend.Handle.AlreadyClosed => throw notOpen(handle)
+      case KqueueBackend.Handle.Idle =>
+        closeDescriptor(fd)
+        true
+      case _ =>
+        removeBoundPath(fd) // now, not when the descriptor closes
+        false
+    }
   }
 
   /** Runs `body` as a use of `handle`'s descriptor (see `KqueueBackend.Handle`); throws if the handle is closed. */
@@ -156,15 +187,27 @@ object KqueueHandles {
 
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {
-    val path = DescriptorTable.note(handle) match { // taken before closing, while the number is still ours
-      case note: SocketNote => note.boundPath
-      case _                => null
-    }
-    DescriptorTable.setNote(handle, null)
+    val path = takeBoundPath(handle) // taken before closing, while the number is still ours
     val generation = DescriptorTable.generation(DescriptorTable.get(handle))
     DescriptorTable.closing(handle)
     PosixSockets.close(handle)
     KqueueReactor.descriptorClosed(handle, generation)
+    if path != null then Zone.acquire { implicit z => PosixFileOps.safeUnlink(toCString(path, StandardCharsets.UTF_8)) }
+  }
+
+  /** The Unix path the socket `fd` bound, if any, forgotten as it is taken. */
+  private def takeBoundPath(fd: Int): String | Null = {
+    val path = DescriptorTable.note(fd) match {
+      case note: SocketNote => note.boundPath
+      case _                => null
+    }
+    DescriptorTable.setNote(fd, null)
+    path
+  }
+
+  /** Removes the Unix path the socket `fd` bound, if any, before the descriptor closes. */
+  private def removeBoundPath(fd: Int): Unit = {
+    val path = takeBoundPath(fd)
     if path != null then Zone.acquire { implicit z => PosixFileOps.safeUnlink(toCString(path, StandardCharsets.UTF_8)) }
   }
 
