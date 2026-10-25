@@ -216,8 +216,27 @@ object JdkBench {
   /** As `GearsBench`'s: `concurrent`'s round trips while a compute thread per core works in slices, yielding between
     * them, and a checker sleeps over and over, recording how late it wakes, as cats-effect's CPU starvation check does.
     */
+  /** How long `starvation` lets its compute threads run before stopping them if the round trips have not finished. */
+  private inline val StarvationLimitSeconds = 30
+
+  /** As `GearsBench`'s `starvation`. On JDK 27 a virtual thread that yields gets its carrier back while the carrier
+    * has nothing else queued locally, so one compute thread per core, yielding between slices, keeps every carrier,
+    * and the round trips' virtual threads, woken from outside the pool, never run: the scenario would not end. A
+    * watchdog on a platform thread stops the compute threads after `StarvationLimitSeconds` if the round trips have
+    * not finished, and says so; the lateness and the time reported then show the starvation as it was.
+    */
   private def starvation(address: SocketAddress, count: Int, connections: Int): Unit = {
     val done = new AtomicBoolean
+    val finished = new java.util.concurrent.CountDownLatch(1)
+    Thread.ofPlatform().daemon().start { () =>
+      if !finished.await(StarvationLimitSeconds, java.util.concurrent.TimeUnit.SECONDS) then {
+        System.err.println(
+          s"starvation: the round trips had not finished after $StarvationLimitSeconds s, the compute threads holding " +
+            "every carrier; they are stopped"
+        )
+        done.set(true)
+      }
+    }: Unit
     val interval = GearsBench.StarvationCheckMillis * 1_000_000L
     val late = scala.collection.mutable.ArrayBuffer.empty[Long]
     scoped { scope =>
@@ -240,6 +259,7 @@ object JdkBench {
           if result == 1L then sink = result
         }
       concurrent(address, count, connections, GearsBench.Work.NoWork)
+      finished.countDown()
       done.set(true)
     }
     val sorted = late.sorted
