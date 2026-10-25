@@ -140,8 +140,23 @@ class ReactorPool private[io] (val backend: ReactorBackend, size: Int, val polic
     (if worker != null then worker else workers(0)).schedule(delay, body)
   }
 
-  /** Runs the first worker, on the thread that started the pool, until the pool stops. */
-  private[io] def runFirstWorker(): Unit = workers(0).loop()
+  /** Runs the first worker, on the thread that started the pool, until the pool stops; then throws the pool's failure,
+    * if a broken reactor stopped it (see `fail`), since the program, its tasks stranded, will not finish.
+    */
+  private[io] def runFirstWorker(): Unit = {
+    workers(0).loop()
+    val failure = failed.get()
+    if failure != null then throw failure
+  }
+
+  // The error of the first worker whose reactor broke (see `ReactorWorker.turn`).
+  private val failed = new java.util.concurrent.atomic.AtomicReference[Throwable | Null](null)
+
+  /** Stops the pool because a worker's reactor is broken, with `failure` its error: `runFirstWorker` throws it. */
+  private[io] def fail(failure: Throwable): Unit = {
+    failed.compareAndSet(null, failure): Unit
+    stop()
+  }
 
   /** Starts the workers from `from` on, each on a thread of its own, where it opens its reactor, and returns once every
     * one of them is in `workers`: the array is complete, and published to every worker, before any task runs.

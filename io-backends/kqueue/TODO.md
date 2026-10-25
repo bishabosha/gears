@@ -1293,3 +1293,11 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   still throws. `LoopErrorSuite` registers a filter for a descriptor that is not open, from `submit` and from
   `trySubmit`; both fail before the change. No interrupted poll is tested: none can be provoked without a signal
   handler.
+- **Done: a worker survives a reactor turn that throws.** `ReactorWorker.turn` reports the error and goes on, as
+  `runTask` does for a task, where before the throw ended the worker's thread and stranded its tasks: what still
+  throws is a completion, or a reactor broken for good, kqueue's own errors now failing only their op. A reactor that
+  throws `BrokenTurns` (16) turns in a row is taken as broken: the worker fails the pool (`ReactorPool.fail`), which
+  stops it, and `runFirstWorker` throws the error, so the run fails with it rather than spinning or hanging.
+  `WorkerFailureSuite` (runtime, JVM and Native) checks both with a reactor that throws once, and one that always does.
+  Left as it is: a completion that throws in the middle of a turn still skips the rest of that turn, its other polled
+  events among them; the runtime's own completions (`Pools.OpWaiter`) do not throw.

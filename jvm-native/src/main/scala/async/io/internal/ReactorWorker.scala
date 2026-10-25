@@ -78,13 +78,28 @@ private[io] final class ReactorWorker(val pool: ReactorPool, val index: Int, val
     queued > 1 || queued == 1 && loneSpare
   }
 
-  /** A turn of this worker's reactor. */
+  /** A turn of this worker's reactor. One that throws is reported, and the worker goes on, as it does after a task that
+    * throws: what threw is a completion, or the reactor, which fails only an op for what it can (kqueue's errors, for
+    * one), and the worker's tasks and the reactor's other ops are still to be run. A reactor that throws turn after
+    * turn, `BrokenTurns` of them in a row, is broken: the worker fails the pool with its error (`ReactorPool.fail`),
+    * which stops it, rather than spinning, or ending its thread and stranding its tasks.
+    */
   private def turn(block: Boolean): Unit = {
     inTurn = true
-    try reactor.runOnce(block)
-    finally inTurn = false
+    try {
+      reactor.runOnce(block)
+      if failedTurns != 0 then failedTurns = 0
+    } catch {
+      case t: Throwable =>
+        failedTurns += 1
+        t.printStackTrace()
+        if failedTurns >= ReactorWorker.BrokenTurns then pool.fail(t)
+    } finally inTurn = false
     if !home.isEmpty && local.size == 1 then shareLone()
   }
+
+  // Turns in a row that threw (see `turn`). On this worker's thread only.
+  private var failedTurns = 0
 
   /** Runs `body` on this worker's thread: now if called there, or queued and the worker woken otherwise. */
   def sync(body: => Unit): Unit =
@@ -253,6 +268,9 @@ private[io] object ReactorWorker {
 
   /** How many tasks queued for a worker in particular it runs in each round, at most. */
   inline val InboxPerDrain = 256
+
+  /** How many turns of its reactor in a row may throw before a worker takes it as broken and fails the pool. */
+  inline val BrokenTurns = 16
 
   /** How many tasks from outside the pool a worker takes into each round, at most. */
   inline val InjectedPerDrain = 32
