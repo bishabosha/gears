@@ -1248,10 +1248,15 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   (release) and 0.57 on NIO's reactors. The rest of the gap to before is the submission's membership of its group
   (`Cancellable.link`, `CompletionGroup.add` and `drop`, a hash set under a lock, per timer), which is what lets a
   scope's end cancel its submissions; it costs twice what an unlinked submission did here.
-- **Done: the plain JDK's `starvation` has a time limit.** On JDK 27, `jdk-vthreads starvation` never finished (the
-  build of the morning too): a virtual thread that yields gets its carrier back while the carrier has nothing queued
-  locally, so one compute thread per core, yielding between slices, keeps every carrier and the round trips' virtual
-  threads, woken from outside the pool, never run; with two carriers more than cores it finishes in 3 s. `JdkBench`
-  stops the compute threads after 30 s if the round trips have not finished, and says so on stderr: it then reports
-  a worst lateness of 30 s and 310 µs a round trip, the starvation as it was. gears' yield puts a task at the back of
-  its worker's queue, so its `starvation` is unaffected.
+- **Done: the plain JDK's yields park.** On JDK 27, `jdk-vthreads starvation` never finished (the build of the
+  morning too): a virtual thread that yields gets its carrier back while the carrier has nothing queued locally, so
+  one compute thread per core, yielding between slices, kept every carrier and the round trips' virtual threads,
+  woken from outside the pool, never ran; with two carriers more than cores it finished in 3 s. A time limit that
+  stopped the compute threads after 30 s came first (`f2bdf7b`), and then the yield itself changed: `JdkBench`
+  yields with `LockSupport.parkNanos(1)` (`yieldTurn`), for `fairness`, `mixed` and `starvation`, which unmounts the
+  virtual thread and has the scheduler's timer wake it from outside the pool, behind the virtual threads already
+  woken, as gears' yield puts a task at the back of its worker's queue. `starvation` then finishes in 2 s: lateness
+  154 µs at the median, 388 at p99, 1.4 ms at worst, 11 µs a round trip. A parked yield costs a timer, about 11 µs
+  (`fairness-tick`, against 1 to 3 µs for `Thread.yield`). Kept on virtual threads rather than moving the compute
+  to a pool of platform threads, which the JDK recommends for CPU-bound work, so that it compares with gears' and
+  cats-effect's cooperative yields.

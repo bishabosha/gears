@@ -29,9 +29,17 @@ import GearsBench.report
   *
   * Where the reactor has no direct counterpart, the closest JDK one stands in: an op built anew is no different from
   * one kept (`pingpong-fresh-ops` is `pingpong`); a blocking op is a subtask forked and joined, so it too runs on
-  * another thread; a zero-length timer for `fairness` is `Thread.yield`, as is `yieldNow` for `mixed`.
+  * another thread; a zero-length timer for `fairness`, and the yields of `mixed` and `starvation`, are `yieldTurn`.
   */
 object JdkBench {
+
+  /** Gives up the virtual thread's turn to the threads waiting for a carrier, as gears' `yield` does: parking for a
+    * nanosecond unmounts it, and the scheduler's timer wakes it from outside the pool, so that it waits behind the
+    * virtual threads already woken, I/O among them. `Thread.yield` does not: on JDK 27 a virtual thread that yields
+    * gets its carrier back while the carrier has nothing queued locally, so threads that yield between slices of
+    * computation, one per core, kept every carrier, and `starvation`'s round trips never ran.
+    */
+  private def yieldTurn(): Unit = java.util.concurrent.locks.LockSupport.parkNanos(1)
 
   private val timers = {
     val executor = new ScheduledThreadPoolExecutor(1, Thread.ofPlatform().daemon().factory())
@@ -183,7 +191,7 @@ object JdkBench {
     scoped { scope =>
       scope.fork { () =>
         while !done.get() do {
-          Thread.`yield`()
+          yieldTurn()
           ticks += 1
         }
       }
@@ -202,7 +210,7 @@ object JdkBench {
         var result = 0L
         while !done.get() do {
           result += computeSlice(slices)
-          Thread.`yield`()
+          yieldTurn()
           slices += 1
         }
         sink = result
@@ -214,29 +222,11 @@ object JdkBench {
   }
 
   /** As `GearsBench`'s: `concurrent`'s round trips while a compute thread per core works in slices, yielding between
-    * them, and a checker sleeps over and over, recording how late it wakes, as cats-effect's CPU starvation check does.
-    */
-  /** How long `starvation` lets its compute threads run before stopping them if the round trips have not finished. */
-  private inline val StarvationLimitSeconds = 30
-
-  /** As `GearsBench`'s `starvation`. On JDK 27 a virtual thread that yields gets its carrier back while the carrier
-    * has nothing else queued locally, so one compute thread per core, yielding between slices, keeps every carrier,
-    * and the round trips' virtual threads, woken from outside the pool, never run: the scenario would not end. A
-    * watchdog on a platform thread stops the compute threads after `StarvationLimitSeconds` if the round trips have
-    * not finished, and says so; the lateness and the time reported then show the starvation as it was.
+    * them (`yieldTurn`), and a checker sleeps over and over, recording how late it wakes, as cats-effect's CPU
+    * starvation check does.
     */
   private def starvation(address: SocketAddress, count: Int, connections: Int): Unit = {
     val done = new AtomicBoolean
-    val finished = new java.util.concurrent.CountDownLatch(1)
-    Thread.ofPlatform().daemon().start { () =>
-      if !finished.await(StarvationLimitSeconds, java.util.concurrent.TimeUnit.SECONDS) then {
-        System.err.println(
-          s"starvation: the round trips had not finished after $StarvationLimitSeconds s, the compute threads holding " +
-            "every carrier; they are stopped"
-        )
-        done.set(true)
-      }
-    }: Unit
     val interval = GearsBench.StarvationCheckMillis * 1_000_000L
     val late = scala.collection.mutable.ArrayBuffer.empty[Long]
     scoped { scope =>
@@ -253,13 +243,12 @@ object JdkBench {
           var slice = core.toLong
           while !done.get() do {
             result += computeSlice(slice)
-            Thread.`yield`()
+            yieldTurn()
             slice += 1
           }
           if result == 1L then sink = result
         }
       concurrent(address, count, connections, GearsBench.Work.NoWork)
-      finished.countDown()
       done.set(true)
     }
     val sorted = late.sorted
