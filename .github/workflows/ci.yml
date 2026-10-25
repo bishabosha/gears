@@ -61,6 +61,44 @@ jobs:
       run: sbt 'rootNative/test; shutdown'
     - name: Stress Test with Lower Memory
       run: env GC_MAXIMUM_HEAP_SIZE=140M sbt 'rootNative/testOnly StressTest'
+  # The I/O projects that run anywhere: the NIO backend and the demos on the JVM. A newer JDK than the core's, for the
+  # virtual-thread carriers' internals and the plain JDK bench's StructuredTaskScope, as tested.
+  test-io-jvm:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: coursier/cache-action@v6
+    - uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 27
+    - uses: sbt/setup-sbt@v1
+    - name: Test
+      run: sbt 'ioNio/test; ioDemosJVM/test'
+  # The backends for macOS alone, kqueue and Network.framework, which neither build nor run on Linux, and what uses
+  # them: the demos on Scala Native, and the tests driving the demo executables.
+  test-io-macos:
+    strategy:
+      fail-fast: false
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: coursier/cache-action@v6
+    - uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 27
+    - uses: sbt/setup-sbt@v1
+    - name: Test
+      run: sbt 'rootNative/test; ioKqueue/test; ioNWFramework/test; ioDemosNative/test; ioDemosTests/test'
   test-js:
     strategy:
       fail-fast: false

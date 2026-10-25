@@ -13,7 +13,7 @@ import PosixErr.cError
 
 /** Opening the descriptors every POSIX backend's handles are: regular files, FIFOs and pipes, non-blocking. Writing to
   * a pipe or FIFO whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would end the process:
-  * on macOS those opened for writing get `F_SETNOSIGPIPE`.
+  * on macOS those opened for writing get `F_SETNOSIGPIPE`, and elsewhere the signal is ignored (`SigPipe`).
   */
 object Descriptors {
 
@@ -79,10 +79,12 @@ object Descriptors {
     */
   private inline val F_SETNOSIGPIPE = 73
 
-  /** Stops writes to `fd`, a pipe or FIFO's write end, from raising `SIGPIPE`. On macOS only: FreeBSD has no
-    * per-descriptor equivalent, so there such a write still raises the signal unless the application ignores it.
+  /** Stops writes to `fd`, a pipe or FIFO's write end, from raising `SIGPIPE`: on macOS with `F_SETNOSIGPIPE`;
+    * elsewhere, Linux and FreeBSD, which have no per-descriptor equivalent, by ignoring the signal for the process
+    * (`SigPipe`).
     */
   private def noSigPipe(fd: Int): Unit =
-    if LinktimeInfo.isMac then // a link-time condition, kept apart from the runtime one
+    if LinktimeInfo.isMac then { // a link-time condition, kept apart from the runtime one
       if fcntl.fcntl(fd, F_SETNOSIGPIPE, 1) < 0 then throw new IOException(s"Failed to set F_SETNOSIGPIPE: ${cError()}")
+    } else SigPipe.ignored: Unit
 }

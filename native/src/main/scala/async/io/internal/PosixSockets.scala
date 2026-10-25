@@ -55,14 +55,16 @@ object PosixSockets {
   private val SO_NOSIGPIPE: CInt = if (scala.scalanative.meta.LinktimeInfo.isFreeBSD) 0x0800 else 0x1022
 
   /** Makes writing to a socket whose peer has gone fail with `EPIPE` instead of raising `SIGPIPE`, which would end the
-    * whole process. Every socket created here gets it.
+    * whole process. Every socket created here gets it: on macOS and FreeBSD as the socket's own `SO_NOSIGPIPE`;
+    * elsewhere, Linux among them, which has no such option, by ignoring the signal for the process (`SigPipe`).
     */
-  def setNoSigPipe(fd: Int): Unit = {
-    val on = stackalloc[CInt]()
-    !on = 1
-    if (socket.setsockopt(fd, socket.SOL_SOCKET, SO_NOSIGPIPE, on.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0)
-      throw new IOException(s"Failed to set SO_NOSIGPIPE: ${cError()}")
-  }
+  def setNoSigPipe(fd: Int): Unit =
+    if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then {
+      val on = stackalloc[CInt]()
+      !on = 1
+      if (socket.setsockopt(fd, socket.SOL_SOCKET, SO_NOSIGPIPE, on.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0)
+        throw new IOException(s"Failed to set SO_NOSIGPIPE: ${cError()}")
+    } else SigPipe.ignored: Unit
 
   /** The `ioctl` request that sets or clears non-blocking mode, `_IOW('f', 126, int)` on macOS and FreeBSD. posixlib
     * does not define it.
