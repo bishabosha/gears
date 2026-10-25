@@ -178,7 +178,7 @@ private[io] object Pools {
 
     override def onCancel(op: O): Unit =
       try completion.onCancel(op)
-      finally finish(Failure(new CancellationException()))
+      finally finish(Failure(cancelled()))
 
     private def finish(result: Try[Unit]): Unit = {
       val waiting = synchronized {
@@ -236,6 +236,17 @@ private[io] object Pools {
 
   private val done = Success(())
 
+  /** The failure of an op its caller cancelled, without a stack trace: one would show the reactor's internals, not the
+    * caller's code, and capturing it is nearly all a cancel costs, which a program cancelling many ops at once, as a
+    * scope's end or a batch of timers does, pays for each (the bench's `timers`, half of whose 200,000 timers are
+    * cancelled, spent 95% of its time unwinding stacks).
+    */
+  private def cancelled(): CancellationException = new Cancelled
+
+  private final class Cancelled extends CancellationException("The op was cancelled") {
+    override def fillInStackTrace(): Throwable = this
+  }
+
   /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the
     * caller's cancellation group. It has at most one listener, the suspended caller. Kept as the op's attachment and
     * reset for each submission, so it, its state and its completion are allocated once per op. Each submission may be
@@ -274,7 +285,7 @@ private[io] object Pools {
     val completion: Completion[Any] = new Completion[Any] {
       def onComplete(op: Any): Unit = finish(done)
       override def onFailure(op: Any, failure: Throwable): Unit = finish(Failure(failure))
-      override def onCancel(op: Any): Unit = finish(Failure(new CancellationException()))
+      override def onCancel(op: Any): Unit = finish(Failure(cancelled()))
     }
 
     private def finish(outcome: Try[Unit]): Unit =
