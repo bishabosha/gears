@@ -1,0 +1,145 @@
+{
+  "started": "2026-10-25T17:45:56+01:00",
+  "finished": "2026-10-25T17:46:28+01:00",
+  "load_average": {
+    "before": [
+      10.388671875,
+      10.255859375,
+      7.73388671875
+    ],
+    "after": [
+      7.72705078125,
+      9.6240234375,
+      7.591796875
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "timers"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "futures",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-perform",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "subject": "OnPool.submit is gone, and Submission with it: a program performs ops and nothing else, ops in flight together being futures performing them (Future(io.perform(op))), raced, awaited and cancelled as futures are; only the bench's timers, the cancel demo and submit's own contract tests used it, and its submissions' membership of their group was half the cost of a timer; timers arms each timer by a future performing it, on either kind of backend now, the cancel demo's leftover task is a future the program's end cancels, and the futures contract checks, in submit's tests' place, that a future's op is cancelled when the group it was made in ends, which waits for it, and that a future's op races in select and stops when the future is cancelled, the stream left usable; Completion.ignore and the runtime's PoolSubmission are gone too, and the reactors' own Submitter.submit stays for backends and the runtime; an op as a passive Future of its own, performAsync, is noted as a direction",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T17:45:54+01:00"
+      },
+      "median": {
+        "timers": 20.73
+      },
+      "samples": {
+        "timers": [
+          20.79,
+          20.73,
+          20.81,
+          20.69,
+          20.77,
+          20.67,
+          20.64
+        ]
+      }
+    },
+    {
+      "label": "submit",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-fix",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "d1e6f66a51fe644d99cb9087fd47f5a51c3008b1",
+        "subject": "kqueue closes as Go does: a close marks the handle closed, counting itself a use while it does, so that no use starts after, and removes a Unix path the socket bound at once; then it closes the descriptor there and then if no use is in progress, as nearly always, the close op completing as an at-once op does, and otherwise leaves it to the last use, which closes the descriptor on its own thread as it ends and completes the close op as a promise, so that no reactor waits on a use in progress, a file op's disk read among them; the reactors are told once the descriptor is closed, as before, since telling them sooner could let a use still in progress register a filter they would take for a reused number's; KqueueHandles.close, for kqueue's own code with no reactor, waits for the last use; HandleCloseSuite checks that a close op submitted while a use is in progress stays pending while the reactor turns, the handle refusing uses and the descriptor still open, until the use ends and closes it; measured against the spinning close, within the runs' spread",
+        "worktree_changes": true,
+        "worktree_changes_hash": "7e7ed61c67ed",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T16:09:37+01:00"
+      },
+      "median": {
+        "timers": 0.41
+      },
+      "samples": {
+        "timers": [
+          0.41,
+          0.41,
+          0.41,
+          0.41,
+          0.4,
+          0.4,
+          0.4
+        ]
+      }
+    },
+    {
+      "label": "loop",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-perform@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "subject": "OnPool.submit is gone, and Submission with it: a program performs ops and nothing else, ops in flight together being futures performing them (Future(io.perform(op))), raced, awaited and cancelled as futures are; only the bench's timers, the cancel demo and submit's own contract tests used it, and its submissions' membership of their group was half the cost of a timer; timers arms each timer by a future performing it, on either kind of backend now, the cancel demo's leftover task is a future the program's end cancels, and the futures contract checks, in submit's tests' place, that a future's op is cancelled when the group it was made in ends, which waits for it, and that a future's op races in select and stops when the future is cancelled, the stream left usable; Completion.ignore and the runtime's PoolSubmission are gone too, and the reactors' own Submitter.submit stays for backends and the runtime; an op as a passive Future of its own, performAsync, is noted as a direction",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T17:45:54+01:00"
+      },
+      "median": {
+        "timers": 0.61
+      },
+      "samples": {
+        "timers": [
+          0.61,
+          0.61,
+          0.61,
+          0.63,
+          0.61,
+          0.62,
+          0.62
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-ce@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "d1e6f66a51fe644d99cb9087fd47f5a51c3008b1",
+        "subject": "kqueue closes as Go does: a close marks the handle closed, counting itself a use while it does, so that no use starts after, and removes a Unix path the socket bound at once; then it closes the descriptor there and then if no use is in progress, as nearly always, the close op completing as an at-once op does, and otherwise leaves it to the last use, which closes the descriptor on its own thread as it ends and completes the close op as a promise, so that no reactor waits on a use in progress, a file op's disk read among them; the reactors are told once the descriptor is closed, as before, since telling them sooner could let a use still in progress register a filter they would take for a reused number's; KqueueHandles.close, for kqueue's own code with no reactor, waits for the last use; HandleCloseSuite checks that a close op submitted while a use is in progress stays pending while the reactor turns, the handle refusing uses and the descriptor still open, until the use ends and closes it; measured against the spinning close, within the runs' spread",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T15:06:14+01:00"
+      },
+      "median": {
+        "timers": 1.13
+      },
+      "samples": {
+        "timers": [
+          1.13,
+          1.13,
+          1.13,
+          1.16,
+          1.12,
+          1.11,
+          1.15
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

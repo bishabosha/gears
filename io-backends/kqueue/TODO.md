@@ -1260,3 +1260,16 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   (`fairness-tick`, against 1 to 3 µs for `Thread.yield`). Kept on virtual threads rather than moving the compute
   to a pool of platform threads, which the JDK recommends for CPU-bound work, so that it compares with gears' and
   cats-effect's cooperative yields.
+- **Open, for another day: cancelling a gears `Future` is expensive on Scala Native.** Not a matter of the reactor's
+  design. With `OnPool.submit` gone (`290e06f`), `timers` arms each timer by a future performing it and cancels half
+  the futures, and costs 20.7 µs a timer on kqueue (release, 7 runs, all within 20.6–20.8), against 0.41 with
+  `submit`, 0.61 for the hand-written loop and 1.13 for cats-effect; on the JVM 1.83 µs on NIO's reactors (0.54 with
+  `submit`), 1.30 on the caller, against the plain JDK's 0.37 and cats-effect's 0.89
+  (`bench/results/2026-10-25-timers-native.json`, `-timers-jvm.json`). A profile of the native build is almost all
+  `libunwind`, through `scalanative_personality`: a cancelled future's `perform` throws its `CancellationException`
+  through the future's body, and on Scala Native a throw unwinds frame by frame through the DWARF tables, whatever
+  the exception; and gears' `RunnableFuture` replaces it with a `new CancellationException()`, capturing a stack for
+  each cancelled future. A stack-less one there took a debug build from 61.8 to 40.8 µs a timer (about a third); the
+  rest is the throw itself. Ways in, none tried: no stack in gears core's cancellation exceptions (`futures.scala`'s
+  `RunnableFuture` and `await`); and an op as a passive `Future` of its own (`performAsync`), completed with its
+  outcome rather than thrown out of a body, so that cancelling it throws nothing.

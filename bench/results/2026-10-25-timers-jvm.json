@@ -1,0 +1,155 @@
+{
+  "started": "2026-10-25T17:46:29+01:00",
+  "finished": "2026-10-25T17:47:03+01:00",
+  "load_average": {
+    "before": [
+      7.72705078125,
+      9.6240234375,
+      7.591796875
+    ],
+    "after": [
+      7.7197265625,
+      9.3603515625,
+      7.5732421875
+    ]
+  },
+  "runs": 7,
+  "bench_args": [
+    "--scenarios",
+    "timers"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "reactors-futures",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-perform/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=reactors"
+      },
+      "median": {
+        "timers": 1.83
+      },
+      "samples": {
+        "timers": [
+          1.84,
+          1.83,
+          1.83,
+          1.84,
+          1.82,
+          1.82,
+          1.8
+        ]
+      }
+    },
+    {
+      "label": "reactors-submit",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-park/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "f2bdf7b50a031c218f718928c6f3462f703d6c75",
+        "dirty": "true",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=reactors"
+      },
+      "median": {
+        "timers": 0.54
+      },
+      "samples": {
+        "timers": [
+          0.58,
+          0.51,
+          0.54,
+          0.49,
+          0.54,
+          0.51,
+          0.54
+        ]
+      }
+    },
+    {
+      "label": "caller-futures",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-perform/nio-caller",
+      "benchmark": "gears",
+      "build": {
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dasyncio.nio.backend=caller"
+      },
+      "median": {
+        "timers": 1.3
+      },
+      "samples": {
+        "timers": [
+          1.27,
+          1.31,
+          1.3,
+          1.28,
+          1.31,
+          1.47,
+          1.25
+        ]
+      }
+    },
+    {
+      "label": "jdk-vthreads",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-perform/jdk-vthreads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "jdk-bench",
+        "java_options": "--enable-preview"
+      },
+      "median": {
+        "timers": 0.37
+      },
+      "samples": {
+        "timers": [
+          0.37,
+          0.36,
+          0.36,
+          0.37,
+          0.36,
+          0.37,
+          0.39
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-perform/cats-effect@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "290e06fb6bf937e315387bcb82a578f18cd9da5d",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": ""
+      },
+      "median": {
+        "timers": 0.89
+      },
+      "samples": {
+        "timers": [
+          0.98,
+          0.8,
+          0.92,
+          0.68,
+          0.65,
+          0.89,
+          1.35
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
