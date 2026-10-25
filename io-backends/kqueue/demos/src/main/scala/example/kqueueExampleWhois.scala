@@ -82,7 +82,7 @@ object KQueueExampleWhois {
     KqueueReactor.scoped(maxEvents = 1) { r =>
       Zone.acquire { implicit z =>
         new Lookup(r, host, port, query).start()
-        r.run()
+        KQueueExampleIO.runFailingFast(r)
       }
     }
   }
@@ -103,7 +103,7 @@ object KQueueExampleWhois {
           r.stop()
         }
       )
-      r.run()
+      KQueueExampleIO.runFailingFast(r)
     }
   }
 }

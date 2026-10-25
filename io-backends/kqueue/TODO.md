@@ -1299,5 +1299,16 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   throws `BrokenTurns` (16) turns in a row is taken as broken: the worker fails the pool (`ReactorPool.fail`), which
   stops it, and `runFirstWorker` throws the error, so the run fails with it rather than spinning or hanging.
   `WorkerFailureSuite` (runtime, JVM and Native) checks both with a reactor that throws once, and one that always does.
-  Left as it is: a completion that throws in the middle of a turn still skips the rest of that turn, its other polled
-  events among them; the runtime's own completions (`Pools.OpWaiter`) do not throw.
+- **Done: a completion that throws is reported, and the turn goes on.** Before, a throw from a completion in the
+  middle of a turn skipped the rest of the turn: the other events of the same poll were lost, and a one-shot or
+  edge-triggered filter's event is not reported again, so the ops waiting on them hung. Now every call of a
+  completion, in the three backends, goes through `Reactor.deliverComplete`/`deliverFailure`/`deliverCancel`
+  (core), which catch what it throws and report it to the reactor's `reportFailure` (a settable function, by default
+  the stack trace to stderr) as a `CompletionFailed(op, cause)`, and the turn, `cancel` or `close` goes on. It is
+  never delivered again as the op's failure: the op had its outcome, and the throw is the completion's bug; this is
+  what Netty (log per listener), Vert.x (the context's `exceptionHandler`) and Scala's `ExecutionContext.reportFailure`
+  do, where Asio and the JDK's `AsynchronousChannelGroup` keep the other completions in a queue instead. A completion
+  that handles none of a failure, so the default `onFailure` threw it, is reported the same way. Programs are not
+  affected: the runtime's completion (`Pools.OpWaiter`) only resumes a task, and a program's code throws inside its
+  future. `ReactorContract` checks it on every backend, with two timers due in one turn, the first's completion
+  throwing, and with a failure left unhandled.

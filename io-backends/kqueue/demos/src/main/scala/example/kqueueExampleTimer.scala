@@ -28,7 +28,7 @@ object KQueueExampleTimer {
         r.submit(tick, ticker)
       }
       r.submit(tick, ticker)
-      r.run()
+      KQueueExampleIO.runFailingFast(r)
     }
   }
 }

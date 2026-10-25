@@ -250,7 +250,7 @@ object KQueueExampleKeyValue {
         println(s"connection in progress to: $address")
         Zone.acquire { implicit z =>
           new Pipeline(r, ClientSock(clientFd), batch).start()
-          r.run()
+          KQueueExampleIO.runFailingFast(r)
         }
       }
     }

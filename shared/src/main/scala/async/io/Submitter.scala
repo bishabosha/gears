@@ -12,7 +12,9 @@ trait Completion[-C] {
     */
   def onComplete(op: C): Unit
 
-  /** The op failed with an exception instead of finishing. By default the failure propagates out of `Reactor.run`. */
+  /** The op failed with an exception instead of finishing. By default the failure is thrown, which a reactor reports
+    * as it reports any completion that throws (`Reactor.reportFailure`).
+    */
   def onFailure(op: C, failure: Throwable): Unit = throw failure
 
   /** The op was cancelled before it finished, by `Submitter.cancel` or because the reactor closed. It runs on the
@@ -22,6 +24,14 @@ trait Completion[-C] {
     */
   def onCancel(op: C): Unit = ()
 }
+
+/** What a reactor reports when a completion throws, with the op whose completion it was and what it threw: an
+  * exception a completion lets out is a bug in the completion, not an outcome of the op, which had its outcome
+  * delivered. A completion that handles nothing of a failure, so the default `onFailure` threw it, is reported the
+  * same way.
+  */
+final class CompletionFailed(val op: Any, cause: Throwable)
+    extends RuntimeException(s"The completion of $op threw: $cause", cause)
 
 /** Where ops are submitted with completions, and whose thread runs the completions: a `Reactor`, whose loop the caller
   * drives, or, for a backend with no loop of its own, such as one over a JavaScript host, the host's loop. Apart from
@@ -100,9 +110,35 @@ object Submitter {
 }
 
 /** A single-threaded event loop: a `Submitter` whose loop the caller drives with `runOnce` or `run`. Every completion
-  * runs on the thread that drives the loop, and apart from `wakeup`, a reactor is only used from that thread.
+  * runs on the thread that drives the loop, and apart from `wakeup`, a reactor is only used from that thread. A
+  * completion that throws does not end the turn, nor escape `cancel` or `close`: the reactor catches it, as other
+  * loops do (Netty, Vert.x, `ExecutionContext.reportFailure`), delivers the rest, and reports it to `reportFailure`
+  * as a `CompletionFailed`; it is never delivered again as the op's failure, since the op did not fail. The other
+  * completions of the turn would otherwise be lost: a readiness event consumed by the poll is not reported again.
   */
 trait Reactor extends Submitter with AutoCloseable {
+
+  /** Where a completion that throws is reported (see `CompletionFailed`): by default, its stack trace to `System.err`.
+    * Set it from the thread that drives the loop.
+    */
+  var reportFailure: Throwable => Unit = Reactor.printFailure
+
+  /** Runs `completion.onComplete`, reporting what it throws instead of throwing it. For backends. */
+  protected final def deliverComplete[C <: Op](completion: Completion[C], op: C): Unit =
+    try completion.onComplete(op)
+    catch case t: Throwable => reportFailure(new CompletionFailed(op, t))
+
+  /** Runs `completion.onFailure`, reporting what it throws instead of throwing it: the failure itself, if the
+    * completion handles none, as the default does. For backends.
+    */
+  protected final def deliverFailure[C <: Op](completion: Completion[C], op: C, failure: Throwable): Unit =
+    try completion.onFailure(op, failure)
+    catch case t: Throwable => reportFailure(new CompletionFailed(op, t))
+
+  /** Runs `completion.onCancel`, reporting what it throws instead of throwing it. For backends. */
+  protected final def deliverCancel[C <: Op](completion: Completion[C], op: C): Unit =
+    try completion.onCancel(op)
+    catch case t: Throwable => reportFailure(new CompletionFailed(op, t))
 
   /** One turn of the loop: runs the completions of everything that is ready now, and returns. With `block`, if nothing
     * was ready it first waits until something is, or until `wakeup` is called. A scheduler drives the loop with this,
@@ -130,6 +166,9 @@ trait Reactor extends Submitter with AutoCloseable {
 }
 
 object Reactor {
+
+  /** The default `reportFailure`: the stack trace to `System.err`. */
+  val printFailure: Throwable => Unit = _.printStackTrace()
 
   /** A reactor that runs ops of type `O` on handles of type `H`: one that a backend whose `Op` is `O` and whose
     * `Handle` is `H` opened.

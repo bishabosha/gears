@@ -55,8 +55,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     completion
   }
 
-  private def complete(op: NWFrameworkOp): Unit = take(op).onComplete(op)
-  private def fail(op: NWFrameworkOp, failure: Throwable): Unit = take(op).onFailure(op, failure)
+  private def complete(op: NWFrameworkOp): Unit = deliverComplete(take(op), op)
+  private def fail(op: NWFrameworkOp, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
 
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
@@ -270,10 +270,10 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         blocking.cancelling = null
         blocking.cancelledBy = null
         cancellingBlockers -= blocking
-        if failure == null then cancelled.onCancel(blocking) else cancelled.onFailure(blocking, failure)
+        if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
       } else if completion != null then {
         val failure = blocking.failure
-        if failure != null then completion.onFailure(blocking, failure.nn) else completion.onComplete(blocking)
+        if failure != null then deliverFailure(completion, blocking, failure.nn) else deliverComplete(completion, blocking)
       }
       remaining -= 1
       blocking = if remaining > 0 then resolvedQueue.poll() else null
@@ -328,12 +328,12 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     op match {
       case opening: NWFrameworkOpening =>
         opening.abandon() // what it opened never reaches the caller
-        if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
+        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
       case blocking: NWFrameworkBlocking if blocking.interrupt() =>
         blocking.cancelling = completion
         blocking.cancelledBy = failure
         cancellingBlockers += blocking
-      case _ => if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
+      case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
     }
 
   private def detach(blocking: NWFrameworkBlocking): Completion[NWFrameworkOp] | Null = {
@@ -434,7 +434,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
           case opening: NWFrameworkOpening => opening.abandon() // what it opened never reaches the caller
           case _                           => ()
         }
-        completion.onCancel(op)
+        deliverCancel(completion, op)
       }
     }
 }

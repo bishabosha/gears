@@ -86,7 +86,7 @@ object KQueueExampleDatagramSocket {
       Zone.acquire { implicit z =>
         val ping = new Ping(r, fd, message)
         ping.start()
-        r.run()
+        KQueueExampleIO.runFailingFast(r)
       }
     }
   }

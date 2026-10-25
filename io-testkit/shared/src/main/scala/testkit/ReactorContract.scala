@@ -157,6 +157,36 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a completion that throws is reported, with its op, and the turn goes on to the other completions") {
+    withReactor { r =>
+      val reported = scala.collection.mutable.ArrayBuffer.empty[Throwable]
+      r.reportFailure = reported += _
+      val throwing = backend.ops.timer(0)
+      val outcome = Outcome()
+      r.submit(throwing, _ => throw new IllegalStateException("a bug in the completion"))
+      r.submit(backend.ops.timer(0), outcome) // due in the same turn, after the throwing one
+      turnUntil(r)(outcome.completed > 0)
+      assertEquals(reported.size, 1, reported.mkString)
+      reported.head match {
+        case failed: CompletionFailed =>
+          assert(failed.op.asInstanceOf[AnyRef] eq throwing.asInstanceOf[AnyRef])
+          assert(failed.getCause.isInstanceOf[IllegalStateException], failed.getCause)
+        case other => fail(s"reported $other")
+      }
+      // A completion that handles none of a failure: the default onFailure throws it, and that is reported the same way.
+      reported.clear()
+      val unhandled = backend.ops.timer(50)
+      r.submit(unhandled, _ => (), 0) // its time limit is up before it fires, so it fails with TimeoutException
+      turnUntil(r)(reported.nonEmpty)
+      reported.head match {
+        case failed: CompletionFailed =>
+          assert(failed.op.asInstanceOf[AnyRef] eq unhandled.asInstanceOf[AnyRef])
+          assert(failed.getCause.isInstanceOf[TimeoutException], failed.getCause)
+        case other => fail(s"reported $other")
+      }
+    }
+  }
+
   test("an op on a closed handle fails, and what reuses the handle's I/O object gets nothing of it") {
     withReactor { r =>
       val (in, out) = pipe(r)

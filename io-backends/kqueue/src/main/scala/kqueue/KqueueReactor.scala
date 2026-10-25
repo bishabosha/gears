@@ -47,8 +47,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     completion
   }
 
-  private def complete(op: KqueueOp): Unit = take(op).onComplete(op)
-  private def fail(op: KqueueOp, failure: Throwable): Unit = take(op).onFailure(op, failure)
+  private def complete(op: KqueueOp): Unit = deliverComplete(take(op), op)
+  private def fail(op: KqueueOp, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
 
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
@@ -473,11 +473,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           blocking.cancelling = null
           blocking.cancelledBy = null
           cancellingBlockers -= blocking
-          if failure == null then cancelled.onCancel(blocking) else cancelled.onFailure(blocking, failure)
+          if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
         case _ =>
           if completion != null then {
             val failure = promise.failure
-            if failure != null then completion.onFailure(promise, failure.nn) else completion.onComplete(promise)
+            if failure != null then deliverFailure(completion, promise, failure.nn) else deliverComplete(completion, promise)
           }
       }
       remaining -= 1
@@ -534,7 +534,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           case opens: Opens => opens.abandon() // what it opened never reaches the caller
           case _            => ()
         }
-        completion.onCancel(op)
+        deliverCancel(completion, op)
       }
     }
   }
@@ -601,12 +601,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     op match {
       case opens: Opens =>
         opens.abandon() // what it opened never reaches the caller
-        if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
+        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
       case blocking: KqueueBlocking if blocking.interrupt() =>
         blocking.cancelling = completion
         blocking.cancelledBy = failure
         cancellingBlockers += blocking
-      case _ => if failure == null then completion.onCancel(op) else completion.onFailure(op, failure)
+      case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
     }
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed

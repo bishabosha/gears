@@ -74,7 +74,7 @@ object KQueueExampleSocket {
         Zone.acquire { implicit z =>
           val exchange = Exchange(r, clientFd, "Hello from Scala Native KQueue Example!\n")
           exchange.start()
-          r.run()
+          KQueueExampleIO.runFailingFast(r)
         }
       }
     }

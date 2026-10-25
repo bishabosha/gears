@@ -154,7 +154,7 @@ object KQueueExampleCancel {
               r.stop()
             }
           )
-          r.run()
+          KQueueExampleIO.runFailingFast(r)
         }
       }
     }

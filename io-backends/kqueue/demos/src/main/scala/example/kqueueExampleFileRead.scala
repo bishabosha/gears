@@ -76,7 +76,7 @@ object KQueueExampleFileRead {
           reader.start()
           println("Event registered for file read.")
           println("starting to poll...")
-          r.run()
+          KQueueExampleIO.runFailingFast(r)
         }
       }
     }

@@ -20,6 +20,24 @@ import gears.async.io.kqueue.KqueueHandles
   */
 object KQueueExampleIO {
 
+  /** Runs `r` until it is stopped, or until a completion throws, which includes a failure no completion handled (the
+    * default `onFailure` throws it); the reactor reports that (`Reactor.reportFailure`) rather than throwing it, and
+    * these demos take any such failure as fatal: it stops the loop, and is thrown here.
+    */
+  def runFailingFast(r: gears.async.io.Reactor): Unit = {
+    var failure: Throwable | Null = null
+    r.reportFailure = t => {
+      if failure == null then failure = t
+      r.stop()
+    }
+    r.run()
+    failure match {
+      case null                                   => ()
+      case reported: gears.async.io.CompletionFailed => throw reported.getCause
+      case other                                  => throw other.nn
+    }
+  }
+
   // Shared with the gears demos, which run on every platform.
   export gearsexample.DemoIO.{FrameParser, FrameReader, InvalidFrame, StreamProtocol, drainTo, text}
 

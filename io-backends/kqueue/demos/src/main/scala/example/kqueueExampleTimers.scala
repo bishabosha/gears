@@ -40,7 +40,7 @@ object KQueueExampleTimers {
         )
       }
       for i <- 0 until count by 3 do r.cancel(timers(i))
-      r.run()
+      KQueueExampleIO.runFailingFast(r)
       println(s"timers fired: $fired of ${count - (count + 2) / 3}")
       println(s"timers fired in order: $inOrder")
       println(s"cancelled timers fired: $cancelledFired")

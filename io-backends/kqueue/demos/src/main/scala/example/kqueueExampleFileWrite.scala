@@ -41,7 +41,7 @@ object KQueueExampleFileWrite {
           writer.start()
           println("Event registered for file write.")
           println("starting to poll...")
-          r.run()
+          KQueueExampleIO.runFailingFast(r)
         }
       }
     }
