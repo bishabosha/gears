@@ -1273,3 +1273,23 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   rest is the throw itself. Ways in, none tried: no stack in gears core's cancellation exceptions (`futures.scala`'s
   `RunnableFuture` and `await`); and an op as a passive `Future` of its own (`performAsync`), completed with its
   outcome rather than thrown out of a body, so that cancelling it throws nothing.
+- **Done: errors in kqueue itself fail the op they are for, and the loop goes on.** Before, five failed only by
+  throwing, and a throw from `runOnce` ends the worker's thread (`ReactorWorker.turn` does not catch it), taking every
+  task on the worker with it:
+  - a filter kqueue refused to register for a command being submitted, such as with `EBADF` for a descriptor closed
+    behind the reactor's back: the throw escaped `submit` but left the command in its slot, so every later command on
+    that descriptor failed with "already pending";
+  - the same, for a command that found its descriptor not ready after all and waited again, from the loop: the throw
+    escaped `runOnce`;
+  - an `EV_ERROR` event in a poll: `runOnce` threw for any;
+  - a filter deletion failing other than with `ENOENT` or `EBADF`, for a cancelled command or a read filter left over
+    from another reactor: thrown from `cancel`, or from the loop;
+  - a poll interrupted by a signal, `EINTR`, which `kevent` returns rather than restarting: thrown from the loop.
+  Now a refused registration takes the command out of its slot and fails it, alone, as a command that failed when
+  submitted (`registrationFailure`), queued for the next turn, or thrown by `trySubmit`, which leaves it free to be
+  submitted again; an `EV_ERROR` event fails the command pending on that filter, and its slot forgets what it knew of
+  reading (`dispatchError`); a filter deletion is best effort, since a filter left over fires once and finds nothing;
+  and an interrupted poll reports no events. Only a poll failing otherwise, which means the kqueue itself is broken,
+  still throws. `LoopErrorSuite` registers a filter for a descriptor that is not open, from `submit` and from
+  `trySubmit`; both fail before the change. No interrupted poll is tested: none can be provoked without a signal
+  handler.

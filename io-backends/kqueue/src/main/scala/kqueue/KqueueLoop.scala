@@ -10,6 +10,7 @@ import scala.scalanative.libc.stdlib
 import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.time.timespec
 import scala.scalanative.posix.timeOps.*
+import scala.scalanative.posix.errno as posixErrno
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.USize
@@ -223,18 +224,22 @@ object KqueueLoop {
     }
   }
 
-  /** Deletes `fd`'s read or write filter. A filter that is already gone because `fd` was closed, reported as `ENOENT`
-    * or `EBADF`, is not an error: kqueue removes a descriptor's filters when it is closed.
+  /** Deletes `fd`'s read or write filter, as far as it can: returns whether it is gone. A filter that is already gone
+    * because `fd` was closed, reported as `ENOENT` or `EBADF`, counts as deleted, since kqueue removes a descriptor's
+    * filters when it is closed. Any other failure is returned rather than thrown, since a filter left over only reports
+    * an event the reactor drops.
     */
-  def deleteFileIfOpen(kq: Int, fd: Int, read: Boolean): Unit =
+  def deleteFileIfOpen(kq: Int, fd: Int, read: Boolean): Boolean = {
+    var deleted = true
     pollQueue(1) { events =>
       deleteFile(eventAt(events, 0), fd, read)
       if (Unblocked.kevent(kq, events, 1, null, 0, null) < 0) { // registers only, so it cannot block
-        val code = scala.scalanative.posix.errno.errno
-        if (code != scala.scalanative.posix.errno.ENOENT && code != scala.scalanative.posix.errno.EBADF)
-          throw new IOException(s"Failed to delete filter: ${cError()}")
+        val code = posixErrno.errno
+        deleted = code == posixErrno.ENOENT || code == posixErrno.EBADF
       }
     }
+    deleted
+  }
 
   def registerEvents(
       kq: Int,
@@ -268,12 +273,7 @@ object KqueueLoop {
       nEvents: Int
   ): Int = {
     val polledEvents = Unblocked.kevent(kq, null, 0, events, nEvents, zeroTimeout)
-    if (polledEvents < 0) {
-      throw new IOException(
-        s"Failed to poll events: ${cError()}"
-      )
-    }
-    polledEvents
+    polled(polledEvents)
   }
 
   def pollEventsForever(
@@ -282,12 +282,7 @@ object KqueueLoop {
       nEvents: Int
   ): Int = {
     val polledEvents = kevent.kevent(kq, null, 0, events, nEvents, null)
-    if (polledEvents < 0) {
-      throw new IOException(
-        s"Failed to poll events: ${cError()}"
-      )
-    }
-    polledEvents
+    polled(polledEvents)
   }
 
   /** Polls for up to the timeout, through posixlib's `@blocking` binding, since it may wait. */
@@ -302,13 +297,16 @@ object KqueueLoop {
     timeout.tv_sec = seconds
     timeout.tv_nsec = nanoseconds
     val polledEvents = kevent.kevent(kq, null, 0, events, nEvents, timeout)
-    if (polledEvents < 0) {
-      throw new IOException(
-        s"Failed to poll events: ${cError()}"
-      )
-    }
-    polledEvents
+    polled(polledEvents)
   }
+
+  /** The result of a poll: a signal interrupting it, `EINTR`, reports no events, so the loop turns and polls again;
+    * any other failure, of the kqueue itself, throws.
+    */
+  @alwaysinline private def polled(polledEvents: Int): Int =
+    if (polledEvents >= 0) polledEvents
+    else if (posixErrno.errno == posixErrno.EINTR) 0
+    else throw new IOException(s"Failed to poll events: ${cError()}")
 
   /** Opens a kqueue.
     */

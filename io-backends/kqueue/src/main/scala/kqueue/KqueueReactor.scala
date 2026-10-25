@@ -3,6 +3,7 @@ package kqueue
 
 import java.io.IOException
 import java.util.concurrent.TimeoutException
+import scala.scalanative.posix.string
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -193,15 +194,25 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
               if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
               else {
                 slot.read = command
-                waitToRead(command, slot)
-                waits = true
+                val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                if failed == null then waits = true
+                else {
+                  command.atOnceFailure = failed
+                  if finishNow then finished = true else ready.add(command)
+                }
               }
             } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
             else {
               slot.write = command
-              if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
-              else arm(command.fd, read = false)
-              waits = true
+              val failed = registrationFailure(command, slot, read = false)(
+                if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
+                else arm(command.fd, read = false)
+              )
+              if failed == null then waits = true
+              else {
+                command.atOnceFailure = failed
+                if finishNow then finished = true else ready.add(command)
+              }
             }
           } finally if handle != null then handle.release()
       case timer: KqueueTimer =>
@@ -298,6 +309,23 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if done && queue then ready.add(command)
     done
   }
+
+  /** Runs `register`, which registers the filter `command` waits on, from its `slot`, and returns its failure, or null.
+    * A registration that fails, such as with `EBADF` for a descriptor closed behind the reactor's back, takes the
+    * command out of its slot, so that the command fails alone, through its completion, and the loop goes on.
+    */
+  private inline def registrationFailure(command: Command, slot: Slot, read: Boolean)(inline register: Unit): Throwable | Null =
+    try {
+      register
+      null
+    } catch {
+      case t: Throwable =>
+        if read then {
+          slot.read = null
+          slot.readRegistered = false
+        } else slot.write = null
+        t
+    }
 
   /** Records what a read command's perform taught about its descriptor's read readiness. After one that finished, that
     * comes from what it took against what was `available`, when both are known, or else from the command's own guess.
@@ -583,9 +611,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed
     * the descriptor, kqueue removed the filter with it and reports `ENOENT` or `EBADF`; the op is cancelled all the
-    * same.
+    * same, as it is if the deletion fails otherwise: the filter left over fires once, finding no command, and
+    * `dispatch` drops its event.
     */
-  private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read)
+  private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
 
   /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
   private def detach(promise: KqueuePromise): Completion[KqueueOp] | Null = {
@@ -674,7 +703,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             if DescriptorTable.readOwner(entry) != id || DescriptorTable.generation(entry) != slot.generation then {
               // Another reactor reads the descriptor now, or its number was reused: this filter is left over. Drop it,
               // so this reactor no longer wakes for it; it is registered again if a read here needs it.
-              KqueueLoop.deleteFileIfOpen(kq, ident, read = true)
+              KqueueLoop.deleteFileIfOpen(kq, ident, read = true): Unit // if it stays, it is dropped again next time
               slot.forget()
               filtersDropped += 1
             } else { // kept for the next read submitted
@@ -709,14 +738,16 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
                     }
                   if !write then settleAfterRead(command, slot, done, failure != null, KqueueLoop.data(event).toLong)
                   if !done then {
-                    if write then {
-                      // Not ready after all: wait again, without the completion ever seeing it.
-                      slot.write = command
-                      arm(ident, read = false)
-                    } else {
-                      slot.read = command
-                      waitToRead(command, slot)
-                    }
+                    // Not ready after all: wait again, without the completion ever seeing it, unless waiting fails.
+                    val failed =
+                      if write then {
+                        slot.write = command
+                        registrationFailure(command, slot, read = false)(arm(ident, read = false))
+                      } else {
+                        slot.read = command
+                        registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                      }
+                    if failed != null then failure = failed
                   }
                 } finally if handle != null then handle.release()
               if failure != null then fail(command, failure.nn)
@@ -728,9 +759,34 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
   }
 
+  /** An event with `EV_ERROR`, whose data is the error number: the command pending on the descriptor's filter fails, and
+    * no other; the slot forgets what it knew of reading, so a later read registers its filter again. On the wake event
+    * or a timer, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
+    */
+  private def dispatchError(event: Event): Unit =
+    if KqueueLoop.isUserEvent(event) then wakePending.set(false)
+    else if KqueueLoop.isReadEvent(event) || isWriteEvent(event) then {
+      val ident = fileIdent(event)
+      val slot = if ident >= 0 && ident < slots.length then slots(ident) else null
+      if slot != null then {
+        val write = isWriteEvent(event)
+        val pending = if write then slot.write else slot.read
+        if write then slot.write = null
+        else {
+          slot.read = null
+          slot.forget()
+        }
+        if pending != null then {
+          val code = KqueueLoop.errno(event)
+          fail(pending, new IOException(s"kqueue reported an error on descriptor $ident: ${fromCString(string.strerror(code))}"))
+        }
+      }
+    }
+
   /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
     * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
-    * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. Error events throw.
+    * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. An error event fails the
+    * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
     */
   // The buffer polls fill, allocated once and freed by `close`, rather than on the stack every turn.
   private val events = KqueueLoop.allocateQueue(maxEvents)
@@ -752,8 +808,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     var i = 0
     while i < polled do {
       val event = events(i)
-      if KqueueLoop.isError(event) then throw new IOException(s"Event error: ${KqueueLoop.errno(event)}")
-      dispatch(event)
+      if KqueueLoop.isError(event) then dispatchError(event) else dispatch(event)
       i += 1
     }
     fireDueTimers()
