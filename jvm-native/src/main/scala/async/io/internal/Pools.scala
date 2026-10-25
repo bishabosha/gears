@@ -16,7 +16,6 @@ import gears.async.io.Completion
 import gears.async.io.OnPool
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
-import gears.async.io.Submission
 
 /** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `OnPool` a
   * program is given, over a scheduler of the pool's.
@@ -30,9 +29,6 @@ private[io] object Pools {
 
     def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
       performOnReactor(b, op, timeoutMillis, scheduler)
-
-    def submit(op: Op, completion: Completion[Op], timeoutMillis: Int)(using Async): Submission =
-      submitOn(b, op, completion, timeoutMillis, scheduler)
 
     /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if
       * the caller has been cancelled by the time it resumes. Cheaper than gears' own, which spawns a task.
@@ -128,94 +124,6 @@ private[io] object Pools {
         finally waiter.unlink()
       }
     } finally waiter.inUse = false
-  }
-
-  /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
-    * `scheduler`, the pool's, with a completion of the caller's own (see `OnPool.submit`). The submission is linked
-    * to the caller's group, and unlinks itself once the completion has run.
-    */
-  private[io] def submitOn(
-      b: ReactorBackend,
-      op: b.Op,
-      completion: Completion[b.Op],
-      timeoutMillis: Int,
-      scheduler: ReactorScheduler
-  )(using ac: Async): Submission = {
-    scheduler.pin() // as `performOnReactor` does, until the op is submitted on the worker found
-    val submission =
-      try {
-        val worker = scheduler.currentWorker
-        val submission = new PoolSubmission(worker, op, completion)
-        worker.reactor.asInstanceOf[Reactor.Of[b.Op, b.Handle]].submit(op, submission, timeoutMillis) // one of `b`'s
-        submission
-      } finally scheduler.unpin()
-    submission.link() // if the group is already cancelled, this cancels the op at once
-  }
-
-  /** `Submission` on a pool: the caller's completion wrapped, so that the submission completes itself as a source
-    * and leaves the caller's group once the op is done, and cancelled on the worker the op went to. The outcome and
-    * the listeners waiting for it share one lock, since a listener registers on the caller's thread while the
-    * completion runs on the reactor's.
-    */
-  private final class PoolSubmission[O](worker: ReactorWorker, op: O, completion: Completion[O])
-      extends Submission
-      with Completion[O] {
-    private var outcome: Try[Unit] | Null = null // guarded by `this`
-    private var listeners: List[Listener[Try[Unit]]] = Nil // guarded by `this`, until the outcome arrives
-
-    def cancel(): Unit =
-      if synchronized(outcome) == null then
-        if worker.isCurrent then cancelOn(worker, op)
-        else worker.sync(cancelOn(worker, op))
-
-    def onComplete(op: O): Unit =
-      try completion.onComplete(op)
-      finally finish(done)
-
-    override def onFailure(op: O, failure: Throwable): Unit =
-      try completion.onFailure(op, failure)
-      finally finish(Failure(failure))
-
-    override def onCancel(op: O): Unit =
-      try completion.onCancel(op)
-      finally finish(Failure(cancelled()))
-
-    private def finish(result: Try[Unit]): Unit = {
-      val waiting = synchronized {
-        outcome = result
-        val waiting = listeners
-        listeners = Nil
-        waiting
-      }
-      try waiting.foreach(_.completeNow(result, this))
-      finally unlink()
-    }
-
-    override def poll(): Option[Try[Unit]] = {
-      val result = synchronized(outcome)
-      if result == null then None else Some(result.nn)
-    }
-
-    def poll(k: Listener[Try[Unit]]): Boolean = {
-      val result = synchronized(outcome)
-      if result == null then false
-      else {
-        k.completeNow(result.nn, this)
-        true
-      }
-    }
-
-    def onComplete(k: Listener[Try[Unit]]): Unit = {
-      val result = synchronized {
-        if outcome == null then listeners = k :: listeners
-        outcome
-      }
-      if result != null then k.completeNow(result.nn, this)
-    }
-
-    def dropListener(k: Listener[Try[Unit]]): Unit = synchronized {
-      listeners = listeners.filterNot(_ eq k)
-    }
   }
 
   /** Cancels `op` on `worker`'s reactor, on its thread; the op was built by the backend whose reactor it is. */

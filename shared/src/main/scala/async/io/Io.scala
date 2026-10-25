@@ -55,50 +55,17 @@ trait Io[+B <: Backend] extends AsyncOperations {
 }
 
 /** An `Io` on a pool of workers driving a reactor backend's reactors: an op is submitted to the reactor of the worker
-  * running the caller, which suspends until the reactor finishes with it, and may also be submitted with a completion
-  * of the caller's own (`submit`). Cancelling the caller asks the reactor to cancel the op, and waits until it has.
-  * The pool itself is the runtime's, which implements this: it says only what a program may do on the pool, and
-  * `submit` and `yield` are its alone, so a program that uses them runs on reactor backends only.
+  * running the caller, which suspends until the reactor finishes with it. Cancelling the caller asks the reactor to
+  * cancel the op, and waits until it has. Ops in flight together are futures performing them
+  * (`Future(io.perform(op))`), each cancelled with its future. The pool itself is the runtime's, which implements
+  * this: it says only what a program may do on the pool, and `yield` is its alone.
   */
 trait OnPool[+B <: ReactorBackend] extends Io[B] {
-
-  /** Submits `op` to the reactor of the worker running the caller, with a completion of the caller's own instead of
-    * suspending: the completion runs on that worker's thread, which may not be the caller's by then, since a task may
-    * resume on another worker. With a time limit, which the reactor keeps (see `Submitter.submit`). The submission
-    * returned is a member of the caller's cancellation group, like a future spawned there: cancelling the group
-    * cancels the op, and the group's end waits for the completion, so a submission outlives the scope it was made in
-    * only if unlinked (`Cancellable.unlink`).
-    */
-  def submit(op: Op, completion: Completion[Op], timeoutMillis: Int)(using Async): Submission
-
-  /** Submits `op` with no completion of the caller's own: its outcome is the submission's, as a source. */
-  final def submit(op: Op)(using Async): Submission = submit(op, Completion.ignore, Backend.NoTimeout)
-
-  /** Submits `op` with no completion of the caller's own, and a time limit (see `Submitter.submit`). */
-  final def submit(op: Op, timeoutMillis: Int)(using Async): Submission = submit(op, Completion.ignore, timeoutMillis)
-
-  /** Submits `op` with a completion of the caller's own and no time limit. */
-  final def submit(op: Op, completion: Completion[Op])(using Async): Submission =
-    submit(op, completion, Backend.NoTimeout)
 
   /** Gives up the caller's turn the pool's way: its resume queued behind the tasks already queued on its worker, so
     * the futures sharing the worker run first, as a long computation should between slices.
     */
   override def `yield`()(using Async): Unit
-}
-
-/** An op submitted with `OnPool.submit`: a gears `Cancellable`, linked to the caller's group when submitted and
-  * unlinked once its completion has run, and a gears `Async.Source` of the op's outcome, completed once, after the
-  * completion: `Success` when the op finished, its failure, or a `CancellationException` when it was cancelled. As a
-  * source it composes as any other does: awaited, or raced with a channel or a timer in `Async.select`.
-  */
-trait Submission extends Cancellable with Async.Source[Try[Unit]] {
-
-  /** Asks the reactor the op went to to cancel it, from any thread; nothing if it has already finished. The
-    * completion's `onCancel` runs on that reactor's thread once the op is stopped, which is before this returns when
-    * called on that thread, and soon afterwards otherwise: the op is not free to submit again until it has run.
-    */
-  def cancel(): Unit
 }
 
 /** An `Io` on the calling thread, which may block: a caller backend's ops performed by the caller, so it may be

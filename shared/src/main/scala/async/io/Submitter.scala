@@ -23,19 +23,6 @@ trait Completion[-C] {
   def onCancel(op: C): Unit = ()
 }
 
-object Completion {
-
-  /** A completion that does nothing, failure included, for an op whose outcome is read another way, such as from the
-    * `Submission` a pool returns.
-    */
-  def ignore[C]: Completion[C] = Ignore
-
-  private object Ignore extends Completion[Any] {
-    def onComplete(op: Any): Unit = ()
-    override def onFailure(op: Any, failure: Throwable): Unit = ()
-  }
-}
-
 /** Where ops are submitted with completions, and whose thread runs the completions: a `Reactor`, whose loop the caller
   * drives, or, for a backend with no loop of its own, such as one over a JavaScript host, the host's loop. Apart from
   * what says otherwise, a submitter is used from its own thread only.

@@ -47,10 +47,13 @@ Three axes, chosen independently of one another:
 
 What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about
 sockets or files; an `Io` says nothing about sockets or files either, and reaches them only through its backend. The
-runtime is reached through one contract, `OnPool`, which says what a pool offers a program (`perform`, `submit`,
-`yield` on its backend's ops) and which `gears.async.io.internal.Pools.bound` implements. `submit` and `yield` are `OnPool`'s
-alone: a program written over `Io` runs on either kind, one that submits with its own completion on reactor backends
-only.
+runtime is reached through one contract, `OnPool`, which says what a pool offers a program (`perform` and `yield` on
+its backend's ops) and which `gears.async.io.internal.Pools.bound` implements; `yield` is `OnPool`'s alone. A program
+performs ops and nothing else: ops in flight together are futures performing them (`Future(io.perform(op))`), raced,
+awaited and cancelled as futures are. There was an `OnPool.submit`, an op started with a completion of the caller's
+own, until 2026-10-25: nothing but a bench and its own tests used it, and its submissions' membership of their group
+was half the cost of a timer. An op as a passive `Future` of its own, `performAsync`, without spawning one, is a
+direction to explore.
 
 ## A program
 
@@ -71,8 +74,8 @@ ReactorFutures.run(using NioOnCaller) { ... echo(client) ... }
 `ReactorFutures.run` dispatches once by the backend's kind and returns what the program returns, as `Async.blocking`
 does; the run that takes `workers` and a `policy` exists only for a `ReactorBackend`. Inside, gears is gears:
 `Future`, `Async.group`, `sleep`, `withTimeout` and `Timer` work, the last three on the backend's timers, since the
-`Io` is the `AsyncOperations`; a `Submission` is a `Cancellable` linked to the group it was submitted in, so the
-scope's end cancels it and waits for its completion, as it does a `Future`. The runner gives the program its `Io` as
+`Io` is the `AsyncOperations`; a future performing an op is cancelled with its group, and its op with it, which the
+group's end waits for. The runner gives the program its `Io` as
 a context parameter, alongside `Async.Spawn`, which the program names where it uses it (`io ?=>`); code over a
 program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type and a
 handle's are path-dependent on it (`io.Op`, `io.Handle`), so `perform` is a method of `io`, and a method taking a

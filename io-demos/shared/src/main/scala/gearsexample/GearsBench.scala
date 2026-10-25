@@ -18,13 +18,10 @@ import gears.async.io.SocketBackend
 import gears.async.io.IpSockets
 import gears.async.io.Blocking
 import gears.async.io.UnixAddress
-import gears.async.io.Completion
 import gears.async.io.Received
 import gears.async.io.Slot
-import gears.async.io.Submission
 import gears.async.io.testkit.BufferArena
 import gears.async.io.Io
-import gears.async.io.OnPool
 import gears.async.io.ReactorFutures
 import gears.async.io.TakePolicy
 
@@ -231,15 +228,15 @@ object GearsBench {
     ),
     Scenario(
       "timers",
-      s"timers armed $TimerBatch at a time, half firing at once and half cancelled: the cost of many pending timers",
+      s"timers armed $TimerBatch at a time, each by a future performing it, half firing at once and half cancelled: "
+        + "the cost of many pending timers",
       200_000,
       new Client {
         def apply(io: Io[IpSockets], connect: Connect[io.Handle], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
-          timerStress(reactors(io), count)
-      },
-      _.isInstanceOf[ReactorBackend]
+          timerStress(io, count)
+      }
     ),
     Scenario(
       "fairness",
@@ -290,12 +287,6 @@ object GearsBench {
     case _                                         => ReactorFutures.run(using backend)(program)
   }
 
-  /** `io` as the `Io` on a pool a scenario that runs only on one needs: still `io`, so its context serves. */
-  private def reactors(io: Io[Backend]): OnPool[ReactorBackend] & io.type = io match {
-    case reactors: (OnPool[ReactorBackend] & io.type) => reactors
-    case _                           => throw new IllegalArgumentException(s"$io has no reactors")
-  }
-
   /** `io`'s backend as one with blocking ops, which a scenario that runs only on one needs: still `io`'s, so `io`
     * performs its ops.
     */
@@ -307,26 +298,25 @@ object GearsBench {
   /** How many timers the `timers` scenario has pending at once. */
   inline val TimerBatch = 1000
 
-  /** Arms timers `TimerBatch` at a time: half for 0 ms, which fire, and half for a minute, which are cancelled once the
-    * others have fired. Each timer, armed and then fired or cancelled, is one operation.
+  /** Arms timers `TimerBatch` at a time, each by a future performing it: half for 0 ms, which fire, and half for a
+    * minute, whose futures are cancelled once the others' have finished. Each timer, armed and then fired or
+    * cancelled, is one operation.
     */
-  private def timerStress(io: OnPool[ReactorBackend], count: Int)(using Async): Unit = {
+  private def timerStress(io: Io[Backend], count: Int)(using Async.Spawn): Unit = {
     var done = 0
     while done < count do {
       val batch = math.min(TimerBatch, count - done)
-      val fired = new java.util.concurrent.atomic.AtomicInteger // counted on the worker the timers went to
-      val counter: Completion[io.Op] = _ => fired.incrementAndGet()
-      val toCancel = scala.collection.mutable.ArrayBuffer.empty[Submission]
+      val firing = scala.collection.mutable.ArrayBuffer.empty[Future[Unit]]
+      val cancelled = scala.collection.mutable.ArrayBuffer.empty[Future[Unit]]
       var i = 0
       while i < batch do {
-        if i % 2 == 0 then io.submit(io.backend.ops.timer(0), counter)
-        else toCancel += io.submit(io.backend.ops.timer(60_000), counter)
+        if i % 2 == 0 then firing += Future(io.perform(io.backend.ops.timer(0)))
+        else cancelled += Future(io.perform(io.backend.ops.timer(60_000)))
         i += 1
       }
-      val firing = (batch + 1) / 2
-      // Lets the loops turn until the short timers fire.
-      while fired.get() < firing do io.perform(io.backend.ops.timer(0))
-      toCancel.foreach(_.cancel())
+      firing.foreach(_.await)
+      cancelled.foreach(_.cancel())
+      cancelled.foreach(_.awaitResult)
       done += batch
     }
   }

@@ -12,7 +12,6 @@ import gears.async.io.BlockingBackend
 import gears.async.io.PipeBackend
 import gears.async.io.ReactorBackend
 import gears.async.io.ReadinessBackend
-import gears.async.io.Completion
 import gears.async.io.Interest
 import gears.async.io.Slot
 import gears.async.io.testkit.BufferArena
@@ -61,7 +60,7 @@ object GearsCancel {
 
   def run()(using ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the program ends
-    val leftoverNotified = new AtomicBoolean() // set by its completion's onCancel when the program's group is cancelled
+    val leftoverNotified = new AtomicBoolean() // set when the program's end cancels its future
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
     BufferArena.scoped { arena =>
       val buf = arena.allocate(64)
@@ -77,18 +76,19 @@ object GearsCancel {
             "blocking" -> Future(io.perform(blocking)),
             "timer" -> Future(io.perform(io.backend.ops.timer(300)))
           )
-          // Submitted straight to the reactor, with no future: the submission is a member of the program's group all
-          // the same, so the program's end cancels it, as it cancels the futures still running, and waits for it.
-          io.submit(
-            io.backend.ops.blocking(sleeper(10000, leftoverInterrupted)),
-            new Completion[io.Op] {
-              def onComplete(op: io.Op): Unit = println("unexpected completion of the leftover task")
-              override def onCancel(op: io.Op): Unit = {
+          // Left running, never awaited: the program's end cancels the future, as it cancels every future still
+          // running, and with it the op, and waits for it; `perform` throws once the task has stopped.
+          Future {
+            try {
+              io.perform(io.backend.ops.blocking(sleeper(10000, leftoverInterrupted)))
+              println("unexpected completion of the leftover task")
+            } catch {
+              case cancelled: CancellationException =>
                 leftoverNotified.set(true)
                 leftoverStopped.set(leftoverInterrupted.get())
-              }
+                throw cancelled
             }
-          )
+          }: Unit
           // Cancelled while it runs; it ignores the interrupt, so the future is rejected only once it has finished, and
           // the value it produces after the cancel must not reach its slot.
           val stubbornFinished = new AtomicBoolean()

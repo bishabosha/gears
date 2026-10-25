@@ -348,48 +348,41 @@ trait FuturesContract extends ProgramSuite {
     assert(failure.isInstanceOf[IOException], String.valueOf(failure))
   }
 
-  test("a submission is cancelled when the group it was made in ends, and the group waits for its completion") {
+  test("an op a future performs is cancelled when the group the future was made in ends, which waits for it") {
     val outcome = running { io ?=>
-      io match {
-        case p: gears.async.io.OnPool[backend.type] =>
-          val notified = new java.util.concurrent.atomic.AtomicBoolean
-          val started = System.nanoTime()
-          Async.group {
-            p.submit(p.backend.ops.timer(60_000), new gears.async.io.Completion[p.Op] {
-              def onComplete(op: p.Op): Unit = ()
-              override def onCancel(op: p.Op): Unit = notified.set(true)
-            })
-          } // ends with the timer pending: the submission is cancelled, and its onCancel has run by here
-          val waited = System.nanoTime() - started
-          s"${notified.get()} ${waited < 1_000_000_000L}"
-        case _ => "true true" // no submissions on a caller backend
-      }
+      var waiting: Future[Unit] | Null = null
+      val started = System.nanoTime()
+      Async.group {
+        waiting = Future(io.perform(io.backend.ops.timer(60_000)))
+      } // ends with the timer pending: the future is cancelled, and with it the op, before the group returns
+      val waited = System.nanoTime() - started
+      val cancelled = waiting.nn.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
+      s"$cancelled ${waited < 1_000_000_000L}"
     }
     assertEquals(outcome, "true true")
   }
 
-  test("a submission is a source: raced in select against a timer, and completed by its cancel") {
+  test("an op a future performs races in select, and cancelling the future stops it, the stream left usable") {
     val outcome = running { io ?=>
-      io match {
-        case p: gears.async.io.OnPool[backend.type] =>
-          val (in, out) = pipe(io)
-          try {
-            val buf = arena.allocate(16)
-            val read = p.submit(p.backend.ops.read(in, buf)) // pending: nothing is written
-            val timer = p.submit(p.backend.ops.timer(20))
-            val first = Async.select(timer.handle(_ => "timer"), read.handle(_ => "read"))
-            read.cancel()
-            val cancelled = read.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
-            val timed = timer.awaitResult.isSuccess
-            s"$first $cancelled $timed"
-          } finally {
-            p.perform(p.backend.ops.close(in))
-            p.perform(p.backend.ops.close(out))
-          }
-        case _ => "timer true true" // no submissions on a caller backend
+      val (in, out) = pipe(io)
+      try {
+        val buf = arena.allocate(16)
+        val read = Future(io.perform(io.backend.ops.read(in, buf))) // pending: nothing is written
+        val timer = Future(io.perform(io.backend.ops.timer(20)))
+        val first = Async.select(timer.handle(_ => "timer"), read.handle(_ => "read"))
+        read.cancel()
+        val cancelled = read.awaitResult.failed.toOption.exists(_.isInstanceOf[CancellationException])
+        // The cancelled read took nothing: what is written now is read in full.
+        io.perform(io.backend.ops.write(out, arena.of("after".getBytes(StandardCharsets.UTF_8))))
+        val again = arena.allocate(16)
+        io.perform(io.backend.ops.read(in, again))
+        s"$first $cancelled ${text(again)}"
+      } finally {
+        io.perform(io.backend.ops.close(in))
+        io.perform(io.backend.ops.close(out))
       }
     }
-    assertEquals(outcome, "timer true true")
+    assertEquals(outcome, "timer true after")
   }
 
   test("a failure of the program is rethrown") {
