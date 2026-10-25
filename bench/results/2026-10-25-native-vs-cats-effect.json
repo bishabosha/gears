@@ -1,0 +1,450 @@
+{
+  "started": "2026-10-25T17:12:00+01:00",
+  "finished": "2026-10-25T17:18:33+01:00",
+  "load_average": {
+    "before": [
+      5.2109375,
+      6.36376953125,
+      6.45849609375
+    ],
+    "after": [
+      3.4638671875,
+      4.7724609375,
+      5.66845703125
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "gears",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-fix",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "d1e6f66a51fe644d99cb9087fd47f5a51c3008b1",
+        "subject": "kqueue closes as Go does: a close marks the handle closed, counting itself a use while it does, so that no use starts after, and removes a Unix path the socket bound at once; then it closes the descriptor there and then if no use is in progress, as nearly always, the close op completing as an at-once op does, and otherwise leaves it to the last use, which closes the descriptor on its own thread as it ends and completes the close op as a promise, so that no reactor waits on a use in progress, a file op's disk read among them; the reactors are told once the descriptor is closed, as before, since telling them sooner could let a use still in progress register a filter they would take for a reused number's; KqueueHandles.close, for kqueue's own code with no reactor, waits for the last use; HandleCloseSuite checks that a close op submitted while a use is in progress stays pending while the reactor turns, the handle refusing uses and the descriptor still open, until the use ends and closes it; measured against the spinning close, within the runs' spread",
+        "worktree_changes": true,
+        "worktree_changes_hash": "7e7ed61c67ed",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T16:09:37+01:00"
+      },
+      "median": {
+        "pingpong": 7.28,
+        "pingpong-fresh-ops": 7.33,
+        "pingpong-pooled": 7.27,
+        "large": 93.04,
+        "large-pooled": 94.29,
+        "pingpong-deadline": 7.22,
+        "concurrent": 2.1,
+        "concurrent-compute": 6.82,
+        "concurrent-offload": 7.71,
+        "connections": 27.43,
+        "pipelined": 0.71,
+        "blocking": 5.87,
+        "blocking-io": 14.75,
+        "timers": 0.39,
+        "fairness-tick": 3.46,
+        "fairness": 1.73,
+        "starvation-p50": 64.58,
+        "starvation-p99": 456.83,
+        "starvation-max": 611.75,
+        "starvation": 4.29,
+        "mixed-compute": 30.84,
+        "mixed": 15.45
+      },
+      "samples": {
+        "pingpong": [
+          8.74,
+          7.25,
+          7.46,
+          7.28,
+          6.99
+        ],
+        "pingpong-fresh-ops": [
+          8.07,
+          7.33,
+          7.34,
+          7.27,
+          6.96
+        ],
+        "pingpong-pooled": [
+          7.67,
+          7.26,
+          7.45,
+          7.27,
+          6.97
+        ],
+        "large": [
+          97.46,
+          91.37,
+          97.34,
+          93.04,
+          87.14
+        ],
+        "large-pooled": [
+          96.81,
+          91.82,
+          98.19,
+          94.29,
+          88.85
+        ],
+        "pingpong-deadline": [
+          7.51,
+          7.2,
+          7.25,
+          7.22,
+          7.09
+        ],
+        "concurrent": [
+          2.43,
+          2.15,
+          2.1,
+          1.99,
+          1.94
+        ],
+        "concurrent-compute": [
+          7.41,
+          6.63,
+          7.0,
+          6.82,
+          6.62
+        ],
+        "concurrent-offload": [
+          8.55,
+          7.69,
+          7.71,
+          7.84,
+          7.43
+        ],
+        "connections": [
+          27.43,
+          27.3,
+          26.8,
+          27.52,
+          27.43
+        ],
+        "pipelined": [
+          0.74,
+          0.7,
+          0.7,
+          0.71,
+          0.75
+        ],
+        "blocking": [
+          6.15,
+          5.84,
+          5.79,
+          5.87,
+          7.85
+        ],
+        "blocking-io": [
+          15.05,
+          14.37,
+          14.14,
+          14.75,
+          19.03
+        ],
+        "timers": [
+          0.41,
+          0.39,
+          0.39,
+          0.39,
+          0.46
+        ],
+        "fairness-tick": [
+          3.97,
+          3.46,
+          3.35,
+          3.23,
+          3.48
+        ],
+        "fairness": [
+          1.99,
+          1.73,
+          1.67,
+          1.61,
+          1.74
+        ],
+        "starvation-p50": [
+          111.46,
+          64.58,
+          90.96,
+          64.54,
+          37.54
+        ],
+        "starvation-p99": [
+          467.58,
+          441.04,
+          456.83,
+          487.17,
+          335.17
+        ],
+        "starvation-max": [
+          678.58,
+          611.75,
+          522.42,
+          723.04,
+          470.58
+        ],
+        "starvation": [
+          4.49,
+          4.23,
+          4.4,
+          4.29,
+          4.06
+        ],
+        "mixed-compute": [
+          31.07,
+          30.84,
+          31.33,
+          30.75,
+          30.22
+        ],
+        "mixed": [
+          15.59,
+          15.45,
+          15.7,
+          15.4,
+          15.11
+        ]
+      }
+    },
+    {
+      "label": "loop",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-fix@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "d1e6f66a51fe644d99cb9087fd47f5a51c3008b1",
+        "subject": "kqueue closes as Go does: a close marks the handle closed, counting itself a use while it does, so that no use starts after, and removes a Unix path the socket bound at once; then it closes the descriptor there and then if no use is in progress, as nearly always, the close op completing as an at-once op does, and otherwise leaves it to the last use, which closes the descriptor on its own thread as it ends and completes the close op as a promise, so that no reactor waits on a use in progress, a file op's disk read among them; the reactors are told once the descriptor is closed, as before, since telling them sooner could let a use still in progress register a filter they would take for a reused number's; KqueueHandles.close, for kqueue's own code with no reactor, waits for the last use; HandleCloseSuite checks that a close op submitted while a use is in progress stays pending while the reactor turns, the handle refusing uses and the descriptor still open, until the use ends and closes it; measured against the spinning close, within the runs' spread",
+        "worktree_changes": true,
+        "worktree_changes_hash": "7e7ed61c67ed",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T16:09:37+01:00"
+      },
+      "median": {
+        "pingpong": 4.47,
+        "pingpong-deadline": 5.42,
+        "concurrent": 1.15,
+        "connections": 18.22,
+        "pipelined": 0.49,
+        "blocking": 3.33,
+        "blocking-io": 10.68,
+        "timers": 0.61
+      },
+      "samples": {
+        "pingpong": [
+          4.61,
+          4.38,
+          4.57,
+          4.47,
+          4.14
+        ],
+        "pingpong-deadline": [
+          5.49,
+          5.31,
+          5.63,
+          5.37,
+          5.42
+        ],
+        "concurrent": [
+          1.26,
+          1.15,
+          1.33,
+          1.13,
+          1.13
+        ],
+        "connections": [
+          18.77,
+          18.34,
+          18.12,
+          18.22,
+          17.43
+        ],
+        "pipelined": [
+          0.48,
+          0.49,
+          0.53,
+          0.51,
+          0.47
+        ],
+        "blocking": [
+          3.52,
+          3.3,
+          3.33,
+          3.43,
+          3.17
+        ],
+        "blocking-io": [
+          10.86,
+          10.68,
+          10.56,
+          10.93,
+          10.18
+        ],
+        "timers": [
+          0.62,
+          0.62,
+          0.61,
+          0.61,
+          0.59
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/native-ce@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "d1e6f66a51fe644d99cb9087fd47f5a51c3008b1",
+        "subject": "kqueue closes as Go does: a close marks the handle closed, counting itself a use while it does, so that no use starts after, and removes a Unix path the socket bound at once; then it closes the descriptor there and then if no use is in progress, as nearly always, the close op completing as an at-once op does, and otherwise leaves it to the last use, which closes the descriptor on its own thread as it ends and completes the close op as a promise, so that no reactor waits on a use in progress, a file op's disk read among them; the reactors are told once the descriptor is closed, as before, since telling them sooner could let a use still in progress register a filter they would take for a reused number's; KqueueHandles.close, for kqueue's own code with no reactor, waits for the last use; HandleCloseSuite checks that a close op submitted while a use is in progress stays pending while the reactor turns, the handle refusing uses and the descriptor still open, until the use ends and closes it; measured against the spinning close, within the runs' spread",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-25T15:06:14+01:00"
+      },
+      "median": {
+        "pingpong": 23.41,
+        "pingpong-deadline": 27.13,
+        "concurrent": 10.6,
+        "connections": 158.09,
+        "pipelined": 2.22,
+        "blocking": 0.07,
+        "blocking-io": 22.17,
+        "timers": 1.03,
+        "fairness-tick": 3.45,
+        "fairness": 2.35,
+        "starvation-p50": 910.46,
+        "starvation-p99": 3402.42,
+        "starvation-max": 3673.63,
+        "starvation": 13.88,
+        "mixed-compute": 19.36,
+        "mixed": 1179.68
+      },
+      "samples": {
+        "pingpong": [
+          23.79,
+          23.41,
+          23.3,
+          23.53,
+          22.24
+        ],
+        "pingpong-deadline": [
+          27.71,
+          27.28,
+          27.13,
+          26.96,
+          26.53
+        ],
+        "concurrent": [
+          10.75,
+          10.51,
+          10.89,
+          10.6,
+          9.8
+        ],
+        "connections": [
+          160.59,
+          159.85,
+          158.09,
+          157.96,
+          150.99
+        ],
+        "pipelined": [
+          2.25,
+          2.22,
+          2.2,
+          2.36,
+          2.14
+        ],
+        "blocking": [
+          0.07,
+          0.07,
+          0.07,
+          0.07,
+          0.07
+        ],
+        "blocking-io": [
+          22.17,
+          23.31,
+          23.26,
+          21.92,
+          21.49
+        ],
+        "timers": [
+          1.03,
+          1.03,
+          1.04,
+          1.02,
+          1.02
+        ],
+        "fairness-tick": [
+          3.62,
+          3.51,
+          3.41,
+          2.97,
+          3.45
+        ],
+        "fairness": [
+          2.39,
+          2.35,
+          2.29,
+          2.61,
+          2.28
+        ],
+        "starvation-p50": [
+          1073.46,
+          948.5,
+          901.38,
+          910.46,
+          887.96
+        ],
+        "starvation-p99": [
+          3606.96,
+          3529.75,
+          3300.17,
+          3402.42,
+          3159.71
+        ],
+        "starvation-max": [
+          3955.25,
+          3978.88,
+          3543.88,
+          3670.29,
+          3673.63
+        ],
+        "starvation": [
+          14.5,
+          14.08,
+          13.84,
+          13.88,
+          13.46
+        ],
+        "mixed-compute": [
+          19.42,
+          19.36,
+          19.35,
+          19.42,
+          19.24
+        ],
+        "mixed": [
+          1183.36,
+          1179.68,
+          1179.05,
+          1183.19,
+          1172.84
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
