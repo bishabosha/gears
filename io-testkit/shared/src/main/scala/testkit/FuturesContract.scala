@@ -165,6 +165,64 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(outcome, "true again")
   }
 
+  test("a read into a buffer with no room fails at once, reading nothing, on a pipe and on a stream socket") {
+
+    /** Reads into a full buffer before and after `send` writes, then reads what was sent; the time limits turn a read
+      * that never returns into a failure.
+      */
+    def check(io: Io[backend.type], in: Handle, send: String => Unit)(using Async): String = {
+      val full = arena.allocate(4)
+      full.position(full.limit())
+      val read = io.backend.ops.read(in, full)
+      def refused(): Boolean =
+        try {
+          io.perform(read, timeoutMillis = 2_000)
+          false
+        } catch case _: IllegalArgumentException => true
+      val before = refused()
+      send("hello")
+      val after = refused()
+      val buf = arena.allocate(16)
+      val readSome = io.backend.ops.read(in, buf)
+      while buf.position() < 5 do io.perform(readSome, timeoutMillis = 2_000)
+      s"$before $after ${full.position() == full.limit()} ${text(buf)}"
+    }
+    def writeAll(io: Io[backend.type], out: Handle)(message: String)(using Async): Unit = {
+      val buf = arena.of(message.getBytes(StandardCharsets.UTF_8))
+      val write = io.backend.ops.write(out, buf)
+      while buf.hasRemaining do io.perform(write)
+    }
+    val outcomes = withTempDir { dir =>
+      running { io ?=>
+        val onPipe = {
+          val (in, out) = pipe(io)
+          try check(io, in, writeAll(io, out))
+          finally {
+            io.perform(io.backend.ops.close(in))
+            io.perform(io.backend.ops.close(out))
+          }
+        }
+        val onSocket = {
+          val (listener, connect) = listenAndConnect(io, dir)
+          try {
+            val accepted = Slot[Handle]()
+            val accepting = Future(io.perform(io.backend.ops.accept(listener, accepted)))
+            val client = connect()
+            accepting.await
+            val server = accepted.clear()
+            try check(io, client, writeAll(io, server))
+            finally {
+              io.perform(io.backend.ops.close(client))
+              io.perform(io.backend.ops.close(server))
+            }
+          } finally io.perform(io.backend.ops.close(listener))
+        }
+        (onPipe, onSocket)
+      }
+    }
+    assertEquals(outcomes, ("true true true hello", "true true true hello"))
+  }
+
   test("performing a read with a time limit throws TimeoutException, and the read may then be performed again") {
     val outcome = running { io ?=>
       val (in, out) = pipe(io)

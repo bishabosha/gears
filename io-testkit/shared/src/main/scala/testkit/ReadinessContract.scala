@@ -27,6 +27,25 @@ trait ReadinessContract extends ReactorContract {
     }
   }
 
+  test("readNow into a buffer with no room throws, reading nothing; writeNow with nothing remaining returns 0") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        backend.ops.writeNow(out, bytes("kept"))
+        val full = allocate(4)
+        full.position(full.limit())
+        intercept[IllegalArgumentException](backend.ops.readNow(in, full))
+        val buf = allocate(16)
+        assertEquals(backend.ops.readNow(in, buf), 4)
+        assertEquals(text(buf), "kept", "the refused read took none of the bytes")
+        val empty = allocate(4)
+        empty.limit(0)
+        close(r, in) // a write of bytes would fail now; one of nothing touches nothing
+        assertEquals(backend.ops.writeNow(out, empty), 0)
+      } finally close(r, out)
+    }
+  }
+
   test("ready completes once the handle is ready, again at once while it still is, and waits once it is drained") {
     withReactor { r =>
       val (in, out) = pipe(r)

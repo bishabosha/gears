@@ -143,6 +143,48 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("datagram sends: to the peer alone and never empty when connected, empty ones when not, and no lost packets") {
+    withReactor { r =>
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val serverAddress = IpAddress.IPv4("127.0.0.1", port)
+      try {
+        val connected = datagram(r, null, serverAddress)
+        val unconnected = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        try {
+          def refused(failure: Throwable | Null)(using munit.Location): Unit =
+            assert(failure.isInstanceOf[IllegalArgumentException], String.valueOf(failure))
+
+          /** The next packet the server receives, as text. */
+          def received()(using munit.Location): String = {
+            val buf = allocate(16)
+            assertEquals(run(r, backend.ops.receive(server, buf, Slot[IpAddress]())), null)
+            val copy = new Array[Byte](buf.remaining())
+            buf.get(copy)
+            new String(copy, StandardCharsets.UTF_8)
+          }
+          val empty = allocate(4)
+          empty.limit(0)
+          refused(run(r, backend.ops.send(connected, empty)))
+          refused(run(r, backend.ops.send(connected, empty, serverAddress)))
+          refused(run(r, backend.ops.send(connected, bytes("elsewhere"), IpAddress.IPv4("127.0.0.1", port + 1))))
+          refused(run(r, backend.ops.send(unconnected, bytes("nowhere"))))
+          assertEquals(run(r, backend.ops.send(connected, bytes("to-peer"), serverAddress)), null)
+          assertEquals(received(), "to-peer")
+          assertEquals(run(r, backend.ops.send(unconnected, empty, serverAddress)), null)
+          assertEquals(received(), "", "an empty packet from a socket that is not connected")
+          assertEquals(run(r, backend.ops.send(connected, bytes("kept"))), null)
+          val none = allocate(4)
+          none.limit(0)
+          refused(run(r, backend.ops.receive(server, none.slice(), Slot[IpAddress]())))
+          assertEquals(received(), "kept", "the refused receive took no packet")
+        } finally {
+          close(r, connected)
+          close(r, unconnected)
+        }
+      } finally close(r, server)
+    }
+  }
+
   test("a datagram socket's op completes once it is bound, and fails, leaving its slot empty, on an address in use") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))

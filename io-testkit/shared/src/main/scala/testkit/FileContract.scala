@@ -75,6 +75,29 @@ trait FileContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  test("a read of a file into a buffer with no room fails, as a stream or at an offset, which it leaves where it was") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("digits.txt")
+        Files.write(path, "0123456789".getBytes(StandardCharsets.UTF_8))
+        val file = open(r, path, write = false)
+        try {
+          val buf = allocate(4)
+          buf.position(buf.limit())
+          val streamed = run(r, backend.ops.read(file, buf))
+          assert(streamed.isInstanceOf[IllegalArgumentException], String.valueOf(streamed))
+          val read = backend.ops.read(file, buf, offset = 2)
+          val positional = run(r, read)
+          assert(positional.isInstanceOf[IllegalArgumentException], String.valueOf(positional))
+          buf.clear()
+          assertEquals(run(r, read), null)
+          assertEquals(text(buf), "2345")
+        } finally close(r, file)
+      }
+    finally deleteAll(dir)
+  }
+
   test("a positional write lands at its offset, and sync completes") {
     val dir = tempDir()
     try
@@ -90,6 +113,25 @@ trait FileContract extends ReactorContract {
           assertEquals(run(r, sync), null) // repeatable
           assertEquals(Files.readString(path), "01ab456789")
         } finally close(r, file)
+      }
+    finally deleteAll(dir)
+  }
+
+  test("a positional write with nothing remaining completes, writing nothing, and fails once the file is closed") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("unchanged.txt")
+        Files.write(path, "0123".getBytes(StandardCharsets.UTF_8))
+        val file = open(r, path, write = true)
+        val empty = allocate(4)
+        empty.limit(0)
+        val write = backend.ops.write(file, empty, offset = 2)
+        try assertEquals(run(r, write), null)
+        finally close(r, file)
+        assertEquals(Files.readString(path), "0123")
+        val failure = run(r, write)
+        assert(failure.isInstanceOf[IOException], s"a closed file fails first: $failure")
       }
     finally deleteAll(dir)
   }

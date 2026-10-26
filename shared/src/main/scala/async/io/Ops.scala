@@ -48,11 +48,15 @@ trait Repeatable
 trait Ops[Op, H <: AnyRef] {
 
   /** Fills `buf`, which must have room. Completes once at least one byte has been read, or at end of stream, when
-    * nothing was added: compare the buffer's position before and after.
+    * nothing was added: compare the buffer's position before and after. A read into a buffer with no room fails with an
+    * `IllegalArgumentException` as it is submitted, reading nothing, since it could only add nothing, which means the
+    * end of the stream.
     */
   def read(handle: H, buf: ByteBuffer): Op & Repeatable
 
-  /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. */
+  /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. With
+    * nothing remaining, completes at once, writing nothing.
+    */
   def write(handle: H, buf: ByteBuffer): Op & Repeatable
 
   /** Completes once `milliseconds` have passed. */
@@ -121,17 +125,24 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     */
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[H]): Op
 
-  /** Receives one packet on an IP datagram socket into `buf`, which is left flipped for reading, and writes its sender
-    * into `from`, which must be empty. Completes once a packet has arrived; its size is `buf.remaining`, which may be 0.
+  /** Receives one packet on an IP datagram socket into `buf`, which is cleared first and left flipped for reading, and
+    * writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
+    * `buf.remaining`, the bytes beyond `buf`'s capacity being dropped. A buffer of no capacity fails the op with an
+    * `IllegalArgumentException`, receiving nothing, since it would drop a whole packet.
     */
   def receive(handle: H, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
   /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
-    * consuming `buf`.
+    * consuming `buf`; an empty `buf` sends an empty packet. On a connected socket, `to` must be its peer, and the
+    * packet goes as the other `send` sends it; any other address fails the op with an `IllegalArgumentException`,
+    * sending nothing, as the JDK does, whatever the system would do.
     */
   def send(handle: H, buf: ByteBuffer, to: IpAddress): Op & Repeatable
 
-  /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. */
+  /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. Fails
+    * with an `IllegalArgumentException`, sending nothing, on a socket that is not connected, or if `buf` is empty: no
+    * backend sends an empty packet on a connected socket, since the JDK cannot.
+    */
   def send(handle: H, buf: ByteBuffer): Op & Repeatable
 }
 
@@ -153,12 +164,14 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def open(path: String, write: Boolean, into: Slot[H]): Op
 
   /** Fills `buf` from the file at `offset`, as `Ops.read` fills it from a stream: completes once at least one byte has
-    * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced.
+    * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced; and
+    * fails, as it does, if `buf` has no room.
     */
   def read(handle: H, buf: ByteBuffer, offset: Long): Op & Repeatable
 
   /** Drains `buf` into the file at `offset`, as `Ops.write` drains it into a stream: completes once at least one byte
-    * has been written; resubmit while `buf` has bytes remaining, with the offset advanced.
+    * has been written, or, if nothing remains, without writing; resubmit while `buf` has bytes remaining, with the
+    * offset advanced.
     */
   def write(handle: H, buf: ByteBuffer, offset: Long): Op & Repeatable
 
@@ -187,11 +200,14 @@ trait ReadinessOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def ready(handle: H, interest: Interest): Op & Repeatable
 
   /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of stream.
-    * Not an op: it runs on the calling thread and returns.
+    * Throws `IllegalArgumentException` if `buf` has no room, as `Ops.read` fails. Not an op: it runs on the calling
+    * thread and returns.
     */
   def readNow(handle: H, buf: ByteBuffer): Int
 
-  /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits. Not an op. */
+  /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits; 0 if `buf` has nothing
+    * remaining, writing nothing. Not an op.
+    */
   def writeNow(handle: H, buf: ByteBuffer): Int
 }
 
@@ -256,4 +272,31 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
 
   /** Sends one packet on a Unix datagram socket, to `to`, as `send` does on an IP one. */
   def send(handle: H, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+}
+
+private[io] object Ops {
+
+  /** The failure of a read into `buf` when it has no room: such a read could only read nothing, which says the stream
+    * has ended, so it fails before anything is read or waited for.
+    */
+  def bufferFull(buf: ByteBuffer): IllegalArgumentException =
+    new IllegalArgumentException(s"The buffer is full, so a read into it can read nothing: $buf")
+
+  /** The failure of a receive into `buf` when it has no capacity, which would drop the whole packet. */
+  def noCapacity(buf: ByteBuffer): IllegalArgumentException =
+    new IllegalArgumentException(s"The buffer has no capacity, so a packet received into it would be dropped: $buf")
+
+  /** The failure of a send of an empty packet on a connected socket, where not every backend can send one (see
+    * `SocketOps.send`).
+    */
+  def emptyPacket(buf: ByteBuffer): IllegalArgumentException =
+    new IllegalArgumentException(s"The buffer is empty, and an empty packet is not sent on a connected socket: $buf")
+
+  /** The failure of a send to `to` on a socket connected to another `peer` (see `SocketOps.send`). */
+  def notThePeer(to: AnyRef, peer: AnyRef): IllegalArgumentException =
+    new IllegalArgumentException(s"The socket is connected to $peer, so it cannot send to $to")
+
+  /** The failure of a send with no address on a socket that is not connected (see `SocketOps.send`). */
+  def notConnected(): IllegalArgumentException =
+    new IllegalArgumentException("The datagram socket is not connected, so a packet needs an address")
 }

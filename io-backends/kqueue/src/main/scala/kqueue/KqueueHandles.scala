@@ -133,8 +133,12 @@ object KqueueHandles {
 
   private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()
 
-  def readNow(handle: Handle, buf: ByteBuffer): Int = using(handle)(NonBlocking.read(handle.fd, buf))
-  def writeNow(handle: Handle, buf: ByteBuffer): Int = using(handle)(NonBlocking.write(handle.fd, buf))
+  def readNow(handle: Handle, buf: ByteBuffer): Int = using(handle) {
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf) // reading nothing would say end of stream
+    NonBlocking.read(handle.fd, buf)
+  }
+  def writeNow(handle: Handle, buf: ByteBuffer): Int =
+    using(handle)(if buf.hasRemaining() then NonBlocking.write(handle.fd, buf) else 0)
 
   /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
     * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on it
@@ -253,6 +257,17 @@ object KqueueHandles {
       case IpAddress.IPv4(host, port) => PosixSockets.withIPv4SocketAddr(host, port)(use)
       case IpAddress.IPv6(host, port) => PosixSockets.withIPv6SocketAddr(host, port)(use)
     }
+
+  /** The peer `fd` is connected to, or null if it is not connected. */
+  private[kqueue] def peerOf(fd: Int): SocketAddress | Null = {
+    val storage = stackalloc[socket.sockaddr_storage]()
+    val length = stackalloc[socket.socklen_t]()
+    !length = sizeOf[socket.sockaddr_storage].toUInt
+    val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
+    if socket.getpeername(fd, address, length) == 0 then decode(address, !length)
+    else if scala.scalanative.posix.errno.errno == scala.scalanative.posix.errno.ENOTCONN then null
+    else throw new IOException(s"Failed to find the peer of descriptor $fd: ${cError()}")
+  }
 
   /** Decodes a socket address filled in by the kernel. An unnamed Unix socket has the empty path. */
   private[kqueue] def decode(addr: Ptr[socket.sockaddr], length: socket.socklen_t): SocketAddress = {

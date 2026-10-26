@@ -38,7 +38,9 @@ sealed abstract class FileTask(val handle: Handle) extends NioBlocking with Repe
   */
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long) extends FileTask(handle) {
   def block(): Unit = {
-    val read = channel.read(buf, offset) // advances the buffer's position itself; -1 at the end
+    val file = channel // a closed handle fails first
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    val read = file.read(buf, offset) // advances the buffer's position itself; -1 at the end
     if read > 0 then unlessCancelled(offset += read): Unit
   }
 }
@@ -48,7 +50,8 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
   */
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long) extends FileTask(handle) {
   def block(): Unit = {
-    val written = channel.write(buf, offset)
+    val file = channel // a closed handle fails first, with nothing to write too
+    val written = if buf.hasRemaining() then file.write(buf, offset) else 0
     if written > 0 then unlessCancelled(offset += written): Unit
   }
 }

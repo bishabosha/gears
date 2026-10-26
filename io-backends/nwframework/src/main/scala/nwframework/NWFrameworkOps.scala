@@ -124,12 +124,15 @@ sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean
 }
 
-/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
+/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream; fails if
+  * `buf` has no room, since a read of nothing would look like the end of the stream.
+  */
 final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
-    if h.isFile || h.isDescriptor then {
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    else if h.isFile || h.isDescriptor then {
       val read = NonBlocking.read(h.fd, buf) // -1 at EOF, which leaves the buffer as it was
       if read != 0 || h.isFile then true
       else h.armed(read = true, reactor, token)
@@ -342,7 +345,8 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
   private var sent = false // the bytes were handed over, and the handle tells once a send is processed
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
-    if h.isFile || h.isDescriptor then {
+    if !buf.hasRemaining() && !sent then true // nothing to write: done, with no system call
+    else if h.isFile || h.isDescriptor then {
       if NonBlocking.write(h.fd, buf) >= 0 || !buf.hasRemaining() || h.isFile then true
       else h.armed(read = false, reactor, token)
     } else if sent then {
@@ -379,6 +383,7 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[I
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+    if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the packet would be dropped
     buf.clear()
     val packet = h.receivePacket(reactor, token)
     if packet == null then false
@@ -403,9 +408,15 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress |
       h.sent()
     } else {
       val size = buf.remaining()
+      // As the JDK does (see `SocketOps.send`): on a connected socket, only to its peer, and no empty packet.
+      val connected = h.kind == NWFrameworkHandle.Datagram
+      if connected then {
+        if to != null && to != h.remote then throw gears.async.io.Ops.notThePeer(to.nn, h.remote.nn)
+        if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
+      } else if to == null then throw gears.async.io.Ops.notConnected()
       val bytes = NativeBuffer.atPosition(buf)
       val done =
-        if to == null then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
+        if connected then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
       buf.position(buf.limit()) // a datagram goes whole or not at all
       sent = !done
       done
@@ -486,7 +497,8 @@ sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFramewor
 final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends NWFrameworkFileTask(handle) {
   def block(): Unit = {
-    val descriptor = fd
+    val descriptor = fd // a closed handle fails first
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     val read = unistd.pread(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if read < 0 then throw new IOException(s"Failed to read descriptor $descriptor at $offset: ${cError()}")
     val n = read.toInt
@@ -501,7 +513,11 @@ final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private v
 final class NWFrameworkPositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends NWFrameworkFileTask(handle) {
   def block(): Unit = {
-    val descriptor = fd
+    val descriptor = fd // a closed handle fails first, with nothing to write too
+    if buf.hasRemaining() then writeAt(descriptor)
+  }
+
+  private def writeAt(descriptor: Int): Unit = {
     val written = unistd.pwrite(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if written < 0 then throw new IOException(s"Failed to write descriptor $descriptor at $offset: ${cError()}")
     val n = written.toInt

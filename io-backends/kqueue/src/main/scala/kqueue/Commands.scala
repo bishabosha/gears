@@ -20,9 +20,12 @@ import KqueueBackend.Handle
   * was not ready after all, so the reactor waits again without completing it.
   */
 
-/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
+/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream; refused if
+  * `buf` has no room, since a read of nothing would look like the end of the stream.
+  */
 final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
+  override def refusal: Throwable | Null = if buf.hasRemaining() then null else gears.async.io.Ops.bufferFull(buf)
   private var read = 0 // what the last perform returned: bytes, 0 for would-block, or -1 at EOF
   private var filled = false
   def perform(): Boolean = {
@@ -68,10 +71,12 @@ final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) ext
   override def edgeTriggered: Boolean = true
 }
 
-/** Drains `buf` between position and limit. Done once at least one byte has been written. */
+/** Drains `buf` between position and limit. Done once at least one byte has been written, or, with nothing remaining,
+  * at once, with no system call.
+  */
 final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Write
-  def perform(): Boolean = NonBlocking.write(fd, buf) >= 0 || !buf.hasRemaining()
+  def perform(): Boolean = !buf.hasRemaining() || NonBlocking.write(fd, buf) >= 0
 }
 
 /** Accepts one connection on a listening socket, writing its descriptor into `into`. Done once a connection has been
@@ -135,6 +140,7 @@ final case class Connect(fd: Int) extends Command {
   */
 final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress], unix: Boolean) extends Command {
   def interest: Interest = Interest.Read
+  override def refusal: Throwable | Null = if buf.capacity() > 0 then null else gears.async.io.Ops.noCapacity(buf)
   private var received = -1
   override def transferred: Int = received
   override def edgeTriggered: Boolean = true
@@ -158,13 +164,31 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
   }
 }
 
-/** Sends one packet, to `to` or to the connected peer when `to` is null, consuming `buf`. Done once it has gone. */
+/** Sends one packet, to `to` or to the connected peer when `to` is null, consuming `buf`. Done once it has gone. On a
+  * connected socket, `to` must be the peer, and the packet goes without an address, as the JDK sends it, since macOS
+  * refuses any address there (`EISCONN`) and Linux would send to another; an empty packet is refused there, since the
+  * JDK cannot send one (see `SocketOps.send`).
+  */
 final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) extends Command {
   def interest: Interest = Interest.Write
+
+  private def peer: SocketAddress | Null = {
+    val h = handle
+    if h != null then h.peer else KqueueHandles.peerOf(fd)
+  }
+
+  override def refusal: Throwable | Null = {
+    val connectedTo = peer // looked up once per handle
+    if connectedTo == null then (if to == null then gears.async.io.Ops.notConnected() else null)
+    else if to != null && to != connectedTo then gears.async.io.Ops.notThePeer(to, connectedTo)
+    else if !buf.hasRemaining() then gears.async.io.Ops.emptyPacket(buf)
+    else null
+  }
+
   def perform(): Boolean = {
     val size = buf.remaining()
     val sent =
-      if to == null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
+      if to == null || peer != null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
       else
         KqueueHandles.withSocketAddr(to) { (address, length) =>
           PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)

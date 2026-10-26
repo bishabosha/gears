@@ -269,6 +269,11 @@ trait Command extends KqueueOp with Repeatable {
     */
   def tryFirst: Boolean = true
 
+  /** Why the command cannot be performed as it stands, such as a read into a buffer with no room, or null: then it
+    * fails as it is submitted, before readiness is looked at, and is never performed.
+    */
+  def refusal: Throwable | Null = null
+
   /** After a perform that finished: how many bytes it took, or -1 when that is not a count of bytes. Against the bytes
     * a read event reported available, it tells whether the descriptor is still readable afterwards.
     */

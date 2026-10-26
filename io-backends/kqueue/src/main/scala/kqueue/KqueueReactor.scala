@@ -192,7 +192,11 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
             else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
             command.completion = pending
-            if read then {
+            val refusal = command.refusal
+            if refusal != null then {
+              command.atOnceFailure = refusal
+              if finishNow then finished = true else ready.add(command)
+            } else if read then {
               val attempt =
                 slot.readReadiness == KqueueReactor.Ready ||
                   (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)

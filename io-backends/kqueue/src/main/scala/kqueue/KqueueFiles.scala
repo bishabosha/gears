@@ -35,6 +35,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
     extends KqueueBlocking
     with Repeatable {
   def block(): Unit = KqueueHandles.using(handle) {
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     val fd = handle.fd
     val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
@@ -52,8 +53,11 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  def block(): Unit = KqueueHandles.using(handle) {
-    val fd = handle.fd
+  def block(): Unit = KqueueHandles.using(handle) { // a closed handle fails first, with nothing to write too
+    if buf.hasRemaining() then writeAt(handle.fd)
+  }
+
+  private def writeAt(fd: Int): Unit = {
     val written = unistd.pwrite(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if written < 0 then throw new IOException(s"Failed to write descriptor $fd at $offset: ${cError()}")
     val n = written.toInt

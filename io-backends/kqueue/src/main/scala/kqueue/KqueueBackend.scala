@@ -82,6 +82,21 @@ object KqueueBackend
       }
     }
 
+    // A socket's peer, looked up by `peer` the first time it is asked for.
+    @volatile private var peerLookedUp = false
+    @volatile private var peerAddress: SocketAddress | Null = null
+
+    /** The peer of a connected socket, or null if it is not connected, asked of the system once: a datagram socket is
+      * connected, if ever, as it is made, so the answer holds for as long as the handle is open.
+      */
+    private[kqueue] def peer: SocketAddress | Null = {
+      if !peerLookedUp then {
+        peerAddress = KqueueHandles.peerOf(fd)
+        peerLookedUp = true
+      }
+      peerAddress
+    }
+
     override def toString: String = s"Handle($fd)"
   }
 

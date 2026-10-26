@@ -206,10 +206,15 @@ abstract class Command extends NioOp with Repeatable {
   }
 }
 
-/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream. */
+/** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream; fails if
+  * `buf` has no room, where a channel's read returns 0, which would otherwise mean wait, for ever.
+  */
 final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
-  def perform(): Boolean = entry.nn.read(buf) != 0
+  def perform(): Boolean = {
+    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    entry.nn.read(buf) != 0
+  }
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`), as `Read` fills the caller's. */
@@ -240,7 +245,7 @@ final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received
 /** Drains `buf` between position and limit. Done once at least one byte has been written. */
 final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Write
-  def perform(): Boolean = entry.nn.write(buf) >= 0 || !buf.hasRemaining()
+  def perform(): Boolean = !buf.hasRemaining() || entry.nn.write(buf) >= 0
 }
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
@@ -343,6 +348,7 @@ final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Comman
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
+    if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the JDK would drop the whole packet
     buf.clear()
     val sender = selectable(classOf[DatagramChannel], "Receiving").receive(buf)
     if sender != null then {
@@ -360,12 +366,17 @@ final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) exte
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
     val size = buf.remaining()
-    // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it.
-    if target == null && size == 0 then
-      throw new java.io.IOException("The JDK cannot send an empty datagram on a connected socket")
-    val sent = if target != null then channel.send(buf, target) else channel.write(buf)
-    // A datagram goes whole or not at all; an empty one reports 0 bytes either way.
-    sent > 0 || size == 0
+    if channel.isConnected then {
+      val peer = channel.getRemoteAddress
+      if target != null && target != peer then throw gears.async.io.Ops.notThePeer(to.nn, NioHandles.ipAddress(peer))
+      // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
+      // so no backend sends an empty packet on a connected socket (see `SocketOps.send`).
+      if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
+      channel.write(buf) > 0 // a datagram goes whole or not at all
+    } else {
+      if target == null then throw gears.async.io.Ops.notConnected()
+      channel.send(buf, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes
+    }
   }
 }
 

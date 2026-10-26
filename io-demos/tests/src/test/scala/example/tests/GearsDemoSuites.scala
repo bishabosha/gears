@@ -65,14 +65,17 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   }
 }
 
+/** The gears demos on Scala Native. No gears backend sends an empty datagram on a connected socket, since the JDK's
+  * cannot (see `SocketOps.send`); empty packets to the server, from Java's own clients, are still echoed.
+  */
 class GearsSocketDemoSuite extends SocketDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")
+  override def sendsEmptyConnectedDatagrams: Boolean = false
 }
 
 /** The same gears demos on the JVM, over NIO: `NioOnCaller` (`backend` "caller"), or `NioBackend` on a reactor pool
-  * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets nor readiness, so neither do its demos, and the JDK
-  * cannot send an empty datagram on a connected socket. Empty packets to the server, from Java's own clients, are still
-  * echoed.
+  * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets nor readiness, so neither do its demos; and, as on
+  * Scala Native, no empty datagram on a connected socket.
   */
 trait OnJvm extends DemoSuite {
   def backend: String

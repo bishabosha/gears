@@ -249,6 +249,53 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a read into a buffer with no room fails at once, reading nothing, whether or not bytes are waiting") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        val full = allocate(4)
+        full.position(full.limit())
+        val read = backend.ops.read(in, full)
+        def refused(): Unit = {
+          val outcome = Outcome()
+          r.submit(read, outcome)
+          turnUntil(r)(outcome.finished)
+          assert(outcome.failure.isInstanceOf[IllegalArgumentException], String.valueOf(outcome.failure))
+        }
+        refused()
+        val sent = Outcome()
+        r.submit(backend.ops.write(out, bytes("hello")), sent)
+        turnUntil(r)(sent.finished)
+        refused()
+        assertEquals(full.position(), full.limit())
+        val buf = allocate(16)
+        val outcome = Outcome()
+        r.submit(backend.ops.read(in, buf), outcome)
+        turnUntil(r)(outcome.finished)
+        assertEquals(text(buf), "hello", "the refused reads took none of the bytes")
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    }
+  }
+
+  test("a write with nothing remaining completes, writing nothing, even with the reader gone, and fails once closed") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      val empty = allocate(4)
+      empty.limit(0)
+      val write = backend.ops.write(out, empty)
+      try {
+        close(r, in) // a write of bytes would fail now; one of nothing touches nothing
+        assertEquals(run(r, write), null)
+        assertEquals(run(r, write), null)
+      } finally close(r, out)
+      val failure = run(r, write)
+      assert(failure.isInstanceOf[java.io.IOException], s"a closed handle fails first: $failure")
+    }
+  }
+
   /** Submits `read` until it completes without adding bytes, returning what `buf` then holds. */
   protected def readToEnd(r: R, read: backend.Op, buf: ByteBuffer)(using munit.Location): String = {
     var atEnd = false
