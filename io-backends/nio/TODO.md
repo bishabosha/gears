@@ -7,7 +7,10 @@
 > the contract suites and `asyncio.testkit` are `gears.async.io.testkit` (`io-testkit`); `gears-demo` and `higherlevel`
 > are `io-demos`; `kqueue-demo` is `io-backends/kqueue/demos` (`ioKqueueDemos`, executable `iokqueuedemos`), its
 > tests `io-demos/tests` (`ioDemosTests`); and `kqueue-demo/bench` and `kqueue-demo/ce-bench` are `bench/` and
-> `bench/ce-bench`.
+> `bench/ce-bench`. Properties and environment variables were renamed with them: `asyncio.nio.backend` is
+> `gears.io.nio.backend`, `asyncio.gears.retriesHere` is `gears.io.nio.retries`, and `ASYNCIO_NWFRAMEWORK_*` are
+> `GEARS_IO_NWFRAMEWORK_*`; the others this log names (`asyncio.gears.carriers`, `asyncio.backend`,
+> `asyncio.vthread.yields`, `asyncio.gears.retryBelow`) went with the code they configured.
 
 `asyncio-jvm/nio` (sbt `jvmAsyncioNio`, package `asyncio.nio`) implements `asyncio.Backend` on the JVM, as
 `asyncio-native/loop` does with kqueue on Scala Native. `asyncio-jvm/gears` (sbt `jvmAsyncioGears`) is the JVM's

@@ -184,8 +184,8 @@ with the same commands: `ioDemosNative/run kv-serve --sock /tmp/gears-kv.sock` o
 `ioKqueueDemos/run gears kv-serve --sock /tmp/gears-kv.sock` through the kqueue demos'
 executable. The mirrors are written against the interface alone, so the same code runs on
 the JVM over NIO, with the commands NIO has the capabilities for: `ioDemosJVM/run kv-serve
---sock /tmp/gears-kv.sock`. With `-Dasyncio.gears.carriers=reactors` among its JVM options
-(`set ioDemosJVM / run / javaOptions += "-Dasyncio.gears.carriers=reactors"`), the futures are carried by
+--sock /tmp/gears-kv.sock`. With `-Dgears.io.nio.backend=reactors` among its JVM options
+(`set ioDemosJVM / run / javaOptions += "-Dgears.io.nio.backend=reactors"`), the futures are carried by
 the reactor pool instead of the JDK's virtual thread scheduler. Each step is an op performed
 with `Io.perform`, which suspends the caller until the op finishes, so the code reads
 sequentially; wrapping a call in a `Future` runs the op alongside other work. Reactors are

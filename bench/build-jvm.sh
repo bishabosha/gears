@@ -57,8 +57,8 @@ EOF
     commit "$commit" dirty "$dirty" jdk "$jdk" command "$3" java_options "$2" >"$output/$1.json"
 }
 opens="--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
-write nio-caller "$opens -Dasyncio.nio.backend=caller" bench
-write nio-reactors "$opens -Dasyncio.nio.backend=reactors" bench
+write nio-caller "$opens -Dgears.io.nio.backend=caller" bench
+write nio-reactors "$opens -Dgears.io.nio.backend=reactors" bench
 write jdk-vthreads "--enable-preview" jdk-bench
 write jdk-selector "--enable-preview" "jdk-bench --selector"
 write jdk-selector-here "--enable-preview" "jdk-bench --selector-here"

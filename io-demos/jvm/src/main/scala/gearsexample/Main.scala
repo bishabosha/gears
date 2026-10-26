@@ -18,15 +18,16 @@ import mainargs.{ParserForMethods, arg, main}
   * not compile here, and `move-bench` is kqueue's own.
   *
   * This is the edge, the one place that chooses NIO: `NioOnCaller`, with no reactor, each op performed on the future's
-  * own virtual thread; or, with `-Dasyncio.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor pool
-  * (see `gears.async.io.ReactorFutures`).
+  * own virtual thread; or, with `-Dgears.io.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor
+  * pool (see `gears.async.io.ReactorFutures`).
   */
 object Main {
   given (UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
-    sys.props.get("asyncio.nio.backend") match {
+    sys.props.get("gears.io.nio.backend") match {
       case Some("reactors")      => NioBackend
       case None | Some("caller") => NioOnCaller
-      case Some(other) => throw new IllegalArgumentException(s"asyncio.nio.backend is caller or reactors, not `$other`")
+      case Some(other)           =>
+        throw new IllegalArgumentException(s"gears.io.nio.backend is caller or reactors, not `$other`")
     }
 
   @main

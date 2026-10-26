@@ -151,7 +151,7 @@ lazy val ioDemos =
     .jvmSettings(
       run / fork := true,
       Test / fork := true,
-      // So that `-Dasyncio.gears.carriers=reactors` can carry the futures on the reactor pool (see `VirtualCarriers`).
+      // So that `-Dgears.io.nio.backend=reactors` can carry the futures on the reactor pool (see `VirtualCarriers`).
       run / javaOptions ++= Seq(
         "--add-opens=java.base/java.lang=ALL-UNNAMED",
         "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"

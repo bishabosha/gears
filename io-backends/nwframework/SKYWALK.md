@@ -74,7 +74,7 @@ with `whenReady` on channel descriptors falls out of it.
   backend. `read` and `write` sit on a TCP send and receive buffer in the backend. `accept` needs a listener flow and a
   child flow per completed handshake. `connect` is the SYN exchange; `listening` is the flow assignment completing;
   `close` sends FIN and deletes the flow once the state machine is done. `resolve` and `blocking` stay on the shared
-  blocker pool (`asyncio.Blockers`). The pooled `read(handle, pool, into)` can be zero copy: the slot's packet buffer
+  blocker pool (`gears.async.io.internal.Blockers`). The pooled `read(handle, pool, into)` can be zero copy: the slot's packet buffer
   goes out as the `Received`, and `release` frees the packet (`os_channel_packet_free`). A read into the caller's
   buffer costs one copy, as kqueue's `recv` does.
 - **Memory.** The arena is outside the collector; slots and packets are read and written through pointers, never

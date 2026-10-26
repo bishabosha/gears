@@ -462,10 +462,10 @@ object NWFrameworkReactor {
     new NWFrameworkReactor(spinChecks, maxDrained)
   }
 
-  /** How many times a reactor checks for events before parking, by default: `ASYNCIO_NWFRAMEWORK_SPIN` in the
+  /** How many times a reactor checks for events before parking, by default: `GEARS_IO_NWFRAMEWORK_SPIN` in the
     * environment, for measuring, else none.
     */
-  val DefaultSpinChecks: Int = sys.env.get("ASYNCIO_NWFRAMEWORK_SPIN").map(_.toInt).getOrElse(0)
+  val DefaultSpinChecks: Int = sys.env.get("GEARS_IO_NWFRAMEWORK_SPIN").map(_.toInt).getOrElse(0)
 
   /** A queue of tokens that allocates nothing per token: a ring of longs, grown when full. */
   private[nwframework] final class Tokens {

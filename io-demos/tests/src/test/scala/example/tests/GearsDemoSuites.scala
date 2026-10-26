@@ -86,7 +86,7 @@ trait OnJvm extends DemoSuite {
       Paths.get(sys.props("java.home"), "bin", "java").toString,
       "--add-opens=java.base/java.lang=ALL-UNNAMED",
       "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED",
-      s"-Dasyncio.nio.backend=$backend",
+      s"-Dgears.io.nio.backend=$backend",
       "-cp",
       classpath,
       "gearsexample.Main"

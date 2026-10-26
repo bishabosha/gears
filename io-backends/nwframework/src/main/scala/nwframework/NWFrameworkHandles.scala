@@ -662,15 +662,15 @@ private[nwframework] object NWFrameworkHandle {
   }
 
   /** How many bytes of sends a handle may have outstanding before a write waits for a completion: the pacing
-    * Network.framework asks for, as a kernel socket's send buffer paces writes. `ASYNCIO_NWFRAMEWORK_SEND_WINDOW` in
+    * Network.framework asks for, as a kernel socket's send buffer paces writes. `GEARS_IO_NWFRAMEWORK_SEND_WINDOW` in
     * the environment overrides it, in bytes; 0 makes every write wait for its send, for measuring.
     */
-  val SendWindow: Long = sys.env.get("ASYNCIO_NWFRAMEWORK_SEND_WINDOW").map(_.toLong).getOrElse(256L * 1024)
+  val SendWindow: Long = sys.env.get("GEARS_IO_NWFRAMEWORK_SEND_WINDOW").map(_.toLong).getOrElse(256L * 1024)
 
   /** Whether a read that took bytes issues the next receive at once, so that the next read finds its bytes waiting:
-    * `ASYNCIO_NWFRAMEWORK_PREFETCH=0` turns it off, for measuring.
+    * `GEARS_IO_NWFRAMEWORK_PREFETCH=0` turns it off, for measuring.
     */
-  val Prefetch: Boolean = !sys.env.get("ASYNCIO_NWFRAMEWORK_PREFETCH").contains("0")
+  val Prefetch: Boolean = !sys.env.get("GEARS_IO_NWFRAMEWORK_PREFETCH").contains("0")
 }
 
 /** The NWFramework backend's I/O objects, each numbered in a table whose number its C side carries, since

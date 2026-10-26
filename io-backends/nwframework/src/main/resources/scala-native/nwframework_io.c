@@ -106,7 +106,7 @@ struct nwf_handle {
 };
 
 
-/* ---- Tracing, for measuring: ASYNCIO_NWFRAMEWORK_TRACE=1 prints at exit how long events waited to be taken ---- */
+/* ---- Tracing, for measuring: GEARS_IO_NWFRAMEWORK_TRACE=1 prints at exit how long events waited to be taken ---- */
 #include <mach/mach_time.h>
 static int nwf_trace_on = -1;
 static double nwf_trace_ns_per_tick = 1.0;
@@ -127,7 +127,7 @@ static void nwf_trace_report(void) {
 }
 static int nwf_tracing(void) {
   if (nwf_trace_on < 0) {
-    const char *v = getenv("ASYNCIO_NWFRAMEWORK_TRACE");
+    const char *v = getenv("GEARS_IO_NWFRAMEWORK_TRACE");
     nwf_trace_on = v != NULL && strcmp(v, "0") != 0;
     if (nwf_trace_on) {
       mach_timebase_info_data_t tb;

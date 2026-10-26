@@ -7,7 +7,10 @@
 > the contract suites and `asyncio.testkit` are `gears.async.io.testkit` (`io-testkit`); `gears-demo` and `higherlevel`
 > are `io-demos`; `kqueue-demo` is `io-backends/kqueue/demos` (`ioKqueueDemos`, executable `iokqueuedemos`), its
 > tests `io-demos/tests` (`ioDemosTests`); and `kqueue-demo/bench` and `kqueue-demo/ce-bench` are `bench/` and
-> `bench/ce-bench`.
+> `bench/ce-bench`. Properties and environment variables were renamed with them: `asyncio.nio.backend` is
+> `gears.io.nio.backend`, `asyncio.gears.retriesHere` is `gears.io.nio.retries`, and `ASYNCIO_NWFRAMEWORK_*` are
+> `GEARS_IO_NWFRAMEWORK_*`; the others this log names (`asyncio.gears.carriers`, `asyncio.backend`,
+> `asyncio.vthread.yields`, `asyncio.gears.retryBelow`) went with the code they configured.
 
 `asyncio.nwframework.NWFrameworkBackend` runs `asyncio`'s ops over Apple's Network.framework, the user-space networking stack
 Apple offers instead of BSD sockets (see "SwiftNIO meets the same lock" in `asyncio/kqueue/TODO.md`), through its C

@@ -25,7 +25,7 @@ private[nio] object WaitsHere {
     * caller's own thread could (`NioOnCaller`).
     */
   lazy val timeouts: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { body =>
-    val thread = new Thread(body, "asyncio-nio-timeouts")
+    val thread = new Thread(body, "gears-io-nio-timeouts")
     thread.setDaemon(true)
     thread
   }

@@ -26,9 +26,9 @@ import java.util.concurrent.TimeoutException
 object NioOnCaller extends CallerBackend with NioCapabilities {
 
   /** How many times a command that would block is tried again after a yield, before it waits on its selector
-    * (`-Dasyncio.gears.retriesHere`).
+    * (`-Dgears.io.nio.retries`).
     */
-  val Retries: Int = sys.props.get("asyncio.gears.retriesHere").map(_.toInt).getOrElse(8)
+  val Retries: Int = sys.props.get("gears.io.nio.retries").map(_.toInt).getOrElse(8)
 
   /** Submissions of one command in a row that finished at once before the caller yields, so that a run of them gives up
     * the thread now and then, as a pool's fast path gives up its turn.

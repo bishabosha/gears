@@ -118,7 +118,7 @@ trait ReactorContract extends FunSuite {
     new String(out, StandardCharsets.UTF_8)
   }
 
-  protected def tempDir(): Path = Files.createTempDirectory("asyncio")
+  protected def tempDir(): Path = Files.createTempDirectory("gears-io")
 
   protected def deleteAll(dir: Path): Unit = {
     val entries = Files.list(dir)
