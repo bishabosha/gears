@@ -26,12 +26,30 @@ import datetime
 import json
 import os
 import pathlib
+import signal
 import statistics
 import subprocess
 import sys
 
 
-def run_once(path, bench_args, retries, crashes):
+HANGS = pathlib.Path(__file__).resolve().parent / "results" / "hangs"
+
+
+def dump_hung(pid, label):
+    """Dumps the threads of a run that is past its time: a JVM's with jcmd, virtual threads included, which jstack
+    leaves out; any other process's, a Scala Native build's, with macOS's `sample`. Returns where."""
+    HANGS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = HANGS / f"{label}-{stamp}.txt"
+    jvm = subprocess.run(["jcmd", str(pid), "VM.version"], capture_output=True, text=True).returncode == 0
+    if jvm:
+        subprocess.run(["jcmd", str(pid), "Thread.dump_to_file", "-overwrite", str(target)], capture_output=True)
+    else:
+        subprocess.run(["sample", str(pid), "3", "-file", str(target)], capture_output=True)
+    return target
+
+
+def run_once(path, bench_args, retries, crashes, timeout, label):
     if path.endswith("@raw"):
         command = [path[: -len("@raw")], "bench"]
     elif path.endswith("@nwframework"):
@@ -39,14 +57,25 @@ def run_once(path, bench_args, retries, crashes):
     else:
         command = [path, "gears", "bench"]
     for attempt in range(retries + 1):
-        result = subprocess.run([*command, *bench_args], capture_output=True, text=True, timeout=1800)
-        if result.returncode == 0:
+        # Its own session, so that a hung run's whole process group can be killed.
+        process = subprocess.Popen(
+            [*command, *bench_args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            failure = None if process.returncode == 0 else f"exited with {process.returncode}"
+        except subprocess.TimeoutExpired:
+            dump = dump_hung(process.pid, label)
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            failure = f"hung past {timeout} s; threads in {dump}"
+        if failure is None:
             break
-        crashes.append(f"{' '.join(command)} exited with {result.returncode}: {result.stderr.strip()[-300:]}")
+        crashes.append(f"{' '.join(command)} {failure}: {stderr.strip()[-300:]}")
         if attempt == retries:
-            sys.exit(f"{' '.join(command)} failed {retries + 1} times; last output:\n{result.stdout}{result.stderr}")
-        print(f"  failed with exit code {result.returncode}; retrying", file=sys.stderr)
-    output = result.stdout
+            sys.exit(f"{' '.join(command)} {failure}, {retries + 1} times; last output:\n{stdout}{stderr}")
+        print(f"  {failure}; retrying", file=sys.stderr)
+    output = stdout
     results = {}
     for line in output.splitlines():
         fields = line.split()
@@ -73,6 +102,13 @@ def main():
         "--retries", type=int, default=0, help="times to rerun a run that fails before giving up (default 0)"
     )
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="seconds a run may take before its threads are dumped to bench/results/hangs and it is killed, counting "
+        "as a failed run (default 600)",
+    )
+    parser.add_argument(
         "--save",
         action="store_true",
         help="write the results as JSON to bench/results/<date>-<labels>.json",
@@ -94,7 +130,7 @@ def main():
     for run in range(args.runs):
         for label, path in builds:
             print(f"run {run + 1}/{args.runs}: {label}", file=sys.stderr)
-            for scenario, us in run_once(path, bench_args, args.retries, crashes).items():
+            for scenario, us in run_once(path, bench_args, args.retries, crashes, args.timeout, label).items():
                 samples[label].setdefault(scenario, []).append(us)
 
     scenarios = list(dict.fromkeys(s for label, _ in builds for s in samples[label]))
