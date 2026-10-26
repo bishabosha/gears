@@ -133,9 +133,11 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def receive(handle: H, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
   /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
-    * consuming `buf`; an empty `buf` sends an empty packet. On a connected socket, `to` must be its peer, and the
-    * packet goes as the other `send` sends it; any other address fails the op with an `IllegalArgumentException`,
-    * sending nothing, as the JDK does, whatever the system would do.
+    * consuming `buf`; an empty `buf` sends an empty packet. Sent means handed to the system, not delivered: as anywhere
+    * in UDP, a packet may still be lost, and on NIO an empty one counts as sent even if the socket had no room for it
+    * then, since the JDK reports both as 0 bytes (as Netty does, the same as a loss). On a connected socket, `to` must
+    * be its peer, and the packet goes as the other `send` sends it; any other address fails the op with an
+    * `IllegalArgumentException`, sending nothing, as the JDK does, whatever the system would do.
     */
   def send(handle: H, buf: ByteBuffer, to: IpAddress): Op & Repeatable
 
