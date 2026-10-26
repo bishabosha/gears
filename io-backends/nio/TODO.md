@@ -965,3 +965,37 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     it costs: a test of a capability at run time is on the backend (`r.backend match { case b: (Blocking &
     r.backend.type) => r.perform(b.ops...) }`), and a val holding such a backend needs its type written, or the
     compiler loses that its `Op` is `r.Op`.
+
+35. [ ] **Tried and dropped (2026-10-26): retries that adapt, and an open hang.** `NioOnCaller` retries a command
+    that would block 8 times, yielding between, before it waits on its handle's own selector. Measured that day: over
+    TCP on macOS the 8 retries nearly double one connection's round trip (81 µs against 45 with none), while with 64
+    connections they halve it (`concurrent` 8.3 against 19); in Linux's loopback (Docker) they help one connection
+    too (17 against 74), since waking a thread there costs tens of µs, whoever wakes it: the JDK's own blocking
+    channels, which wait on its poller, are no faster than the handle's own selector (pingpong 56 against 49). With
+    `tc netem` delaying every packet by 50 µs or 500 µs, the count makes no difference (within 7%). Two policies were
+    tried behind `asyncio.gears.retryPolicy`, macOS, Unix sockets, median of 5, µs/op:
+
+    | | fixed 8 | fixed 0 | scaled | adaptive | reactors |
+    | --- | --- | --- | --- | --- | --- |
+    | pingpong | 6.65 | 6.51 | 8.34 | 6.48 | 7.20 |
+    | concurrent | 8.21 | 18.90 | 7.85 | 13.85 | 2.13 |
+    | concurrent-offload | 11.02 | 19.07 | 13.07 | 18.70 | 7.26 |
+    | pipelined | 2.27 | 1.39 | 2.58 | 2.18 | 0.49 |
+    | mixed | 7.20 | 10.34 | 10.06 | 6.99 | 17.01 |
+
+    `scaled` retried as many times as other commands were waiting (up to 32): level with fixed 8 under load, worse on
+    one connection, which then got about one retry. `adaptive` kept a budget per channel and direction, doubled past
+    where a retry caught the data and halved when none did: best on one connection, worse under load, where misses
+    halved it. Both dropped: behaviour that depends on measurements taken while running is harder to reason about and
+    to test, so the count stays fixed (as kqueue's `spinPolls` does), overridable with `asyncio.gears.retriesHere`.
+    A sweep of fixed counts (16 or 32 looked better overall than 8) is left to do.
+
+    **Open: one hang.** In that day's TCP comparison, the build with no retries hung once in about 60 runs of the
+    full scenario list, past `compare.py`'s 30-minute limit, with no dump; 40 runs of single scenarios and 10 more of
+    the full list did not hang again. Reviewing the wait path (`SelectorWait`, `Selectable.enterWait`/`exitWait`/
+    `close`, `SelectorPool`) found no race: a cancel or close against a wait starting is caught by the volatile
+    `cancelled`/`waitingOn` pair or by `select`'s pending wake-up, and readiness is level-triggered. The review found
+    instead gears' select/channel deadlock (kqueue TODO, lampepfl/gears#209), which the bench does not reach: it
+    awaits with `awaitAll`, not `select`. `compare.py` now dumps a run's threads, virtual ones included, when it
+    passes `--timeout`, so the next occurrence leaves a trace.
+

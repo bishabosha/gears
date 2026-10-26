@@ -1316,3 +1316,10 @@ A JVM client opening 10,000 connections at once to `sock4-serve` on kqueue saw m
   same stream" hung on the JVM** (2026-10-25, `rootJVM/testFull`), in `Future.awaitAll` over a `Channel.read`, for
   over half an hour, until the sbt server was killed; the same suite passed before and after. Not I/O code: a flake of
   the core's own test, to know of before upstream's CI meets it.
+  **Diagnosed (2026-10-26): a deadlock in upstream gears between `Async.select` and channels, not a flake**
+  (lampepfl/gears#209). Run alone under JUnit, `ChannelBehavior` hangs in about one run in four, on upstream `main`
+  (14 of 60) as on this branch (26 of 150), always in "ChannelMultiplexer multiple readers and writers". A race's
+  listener dropped itself from its other channels while still holding the select's `AwaitListener` lock, and a
+  channel takes that lock while holding its own. Fixed on the fork's `fix-select-deadlock` (e22c169), off upstream
+  `main`, for its own PR: the race completes before dropping, and a channel's `dropListener` never waits for the
+  channel's lock. Its new test hung 10 runs of 10 before and none of 30 after.
