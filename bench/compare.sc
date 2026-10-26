@@ -4,12 +4,12 @@
 
 /** Compares `iokqueuedemos gears bench` across builds of the demo executable.
   *
-  * Build the executables to compare with bench/build.sh, which links a commit in release-fast mode against the Scala
+  * Build the executables to compare with bench/build.sc, which links a commit in release-fast mode against the Scala
   * Native nightly (0.5.12's GC can crash multithreaded release builds), then compare them:
   *
   * {{{
-  * bench/build.sh HEAD~ /tmp/iokqueuedemos.before
-  * bench/build.sh HEAD /tmp/iokqueuedemos.after
+  * bench/build.sc HEAD~ /tmp/iokqueuedemos.before
+  * bench/build.sc HEAD /tmp/iokqueuedemos.after
   * bench/compare.sc before=/tmp/iokqueuedemos.before after=/tmp/iokqueuedemos.after raw=/tmp/iokqueuedemos.after@raw
   * }}}
   *
@@ -25,7 +25,7 @@
   * macOS's `sample`) before it is killed, and counts as a failed run, which `--retries` reruns.
   *
   * `--save` writes the results as JSON to bench/results/<date>-<labels>.json (ignored by git), and `--save-to FILE`
-  * to FILE: every run's numbers and the medians, each build's provenance from build.sh (the <executable>.json beside
+  * to FILE: every run's numbers and the medians, each build's provenance from build.sc (the <executable>.json beside
   * it), the arguments, the date, and the load average.
   *
   * Run it as an executable, or with `scala bench/compare.sc -- <arguments>`: it is a Scala CLI script.
@@ -127,7 +127,7 @@ def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable
     Files.deleteIfExists(out)
     Files.deleteIfExists(err)
 
-/** The build.sh record beside an executable, if there is one. */
+/** The build.sc record beside an executable, if there is one. */
 def provenance(path: String): ujson.Value =
   val record = Path.of(path.stripSuffix("@raw").stripSuffix("@nwframework") + ".json")
   if Files.exists(record) then ujson.read(Files.readString(record)) else ujson.Null

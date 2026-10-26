@@ -213,9 +213,9 @@ pipelining with a write per message; and blocking tasks completing on worker thr
 with no reactor, as a reference for what a hand-written loop costs.
 `bench/compare.sc before=<old executable> after=<new executable>` runs saved
 builds alternately and reports each scenario's median microseconds per operation and the
-change (add `raw=<executable>@raw` for the reference). The bench's scripts (`compare.sc`,
-`syscalls.sc`, `provenance.sc`) are Scala CLI scripts, run by the `scala` command of Scala 3.5 or later.
-`bench/build.sh <commit> <output>` builds an executable to compare: the commit
+change (add `raw=<executable>@raw` for the reference). The bench's scripts (`build.sc`,
+`build_jvm.sc`, `compare.sc`, `syscalls.sc`) are Scala CLI scripts, run by the `scala` command of Scala 3.5 or later.
+`bench/build.sc <commit> <output>` builds an executable to compare: the commit
 linked in release-fast mode against a Scala Native nightly, because 0.5.12's GC can crash
 multithreaded release builds of the gears demos (scala-native#5080). Setting
 `SCALA_NATIVE_NIGHTLY=1` when starting sbt builds against the nightly too; otherwise the

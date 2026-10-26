@@ -11,7 +11,8 @@
 > `gears.io.nio.backend`, `asyncio.gears.retriesHere` is `gears.io.nio.retries`, and `ASYNCIO_NWFRAMEWORK_*` are
 > `GEARS_IO_NWFRAMEWORK_*`; the others this log names (`asyncio.gears.carriers`, `asyncio.backend`,
 > `asyncio.vthread.yields`, `asyncio.gears.retryBelow`) went with the code they configured. `bench/compare.py` and
-> `bench/syscalls.py` are now the Scala CLI scripts `bench/compare.sc` and `bench/syscalls.sc`.
+> `bench/syscalls.py`, `bench/build.sh` and `bench/build-jvm.sh` are now the Scala CLI scripts `bench/compare.sc`,
+> `bench/syscalls.sc`, `bench/build.sc` and `bench/build_jvm.sc`.
 
 `asyncio-jvm/nio` (sbt `jvmAsyncioNio`, package `asyncio.nio`) implements `asyncio.Backend` on the JVM, as
 `asyncio-native/loop` does with kqueue on Scala Native. `asyncio-jvm/gears` (sbt `jvmAsyncioGears`) is the JVM's

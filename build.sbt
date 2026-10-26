@@ -193,7 +193,7 @@ lazy val ioKqueueDemos =
     .dependsOn(ioDemos.native)
 
 // The bench scenarios written with cats-effect and fs2, to compare against; see bench/compare.sc. The same code on
-// Scala Native (kqueue, through bench/build.sh) and on the JVM (its selector poller, through bench/build-jvm.sh).
+// Scala Native (kqueue, through bench/build.sc) and on the JVM (its selector poller, through bench/build_jvm.sc).
 lazy val ceBench =
   crossProject(JVMPlatform, NativePlatform)
     .crossType(CrossType.Full)

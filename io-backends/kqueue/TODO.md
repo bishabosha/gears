@@ -11,7 +11,8 @@
 > `gears.io.nio.backend`, `asyncio.gears.retriesHere` is `gears.io.nio.retries`, and `ASYNCIO_NWFRAMEWORK_*` are
 > `GEARS_IO_NWFRAMEWORK_*`; the others this log names (`asyncio.gears.carriers`, `asyncio.backend`,
 > `asyncio.vthread.yields`, `asyncio.gears.retryBelow`) went with the code they configured. `bench/compare.py` and
-> `bench/syscalls.py` are now the Scala CLI scripts `bench/compare.sc` and `bench/syscalls.sc`.
+> `bench/syscalls.py`, `bench/build.sh` and `bench/build-jvm.sh` are now the Scala CLI scripts `bench/compare.sc`,
+> `bench/syscalls.sc`, `bench/build.sc` and `bench/build_jvm.sc`.
 
 Most operations used to pay for a `kevent` call of their own, or a trip through the wake pipe, even when the work could
 be done right away on the reactor thread: a gears `perform(r, read)` that found data already waiting cost about 7
