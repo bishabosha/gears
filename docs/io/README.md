@@ -119,3 +119,16 @@ future to feed its channel, as a `Future` is the gears way to turn a loop of ops
   handle, a number that only grows, or a reference object that cannot be forged, each checked as the program runs, and
   handles tied to gears scopes, enforced by capture checking.
 - [`files.md`](files.md): file I/O in the reactor, what macOS offers for it, and the shape the file ops take.
+- [`interface-history.md`](interface-history.md): why the interface is this shape: each decision, the alternative it
+  replaced, and why.
+- [`runtime.md`](runtime.md): the pool the reactor backends run on: workers, run queues, take policies, tasks moving
+  between threads, fairness, failures, and what macOS's per-process locks mean for scaling.
+- [`kqueue.md`](kqueue.md): the kqueue backend on Scala Native: what each op costs in system calls, how it got there,
+  and how it compares with cats-effect.
+- [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend` on the pool: why each waits as it does, what
+  was measured, and what was tried and dropped.
+- [`nwframework.md`](nwframework.md): Network.framework as a reactor backend, an experiment kept as the reference for
+  a completion-based one, and Skywalk as a possible backend without Dispatch.
+- [`scala-native.md`](scala-native.md): costs only Scala Native can remove, the changes proposed to it, and the
+  workarounds meanwhile (the `setjmp` override, the `Unblocked` bindings).
+- [`bench.md`](bench.md): the bench scenarios, the scripts that build and compare builds, and how to measure well.
