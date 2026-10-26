@@ -12,6 +12,7 @@ import java.util.concurrent.TimeoutException
 import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
+import scala.util.control.NonFatal
 
 /** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is
   * completion-based: a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback.
@@ -104,6 +105,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       finishNow: Boolean,
       timeoutMillis: Int
   ): Boolean = {
+    if closed then throw new IllegalStateException(s"The reactor is closed: $op")
     var finished = false
     var waits = false
     op match {
@@ -128,7 +130,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
             command.target = NWFrameworkHandles.get(command.handle)
             true
           } catch {
-            case e: IOException =>
+            case NonFatal(e) => // an argument the opener refuses, too, fails the op, never escaping a half-made submit
               command.atOnceFailure = e
               false
           }
@@ -269,6 +271,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     while blocking != null do {
       val completion = blocking.completion
       blocking.completion = null
+      if blocking.heapIndex >= 0 then timers.remove(blocking) // its time limit ends with it
       pendingBlockers -= blocking
       if blocking.cancelling != null then {
         assert(completion == null, "a blocker awaiting its cancel was resubmitted")
@@ -351,6 +354,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
   private def detach(blocking: NWFrameworkBlocking): Completion[NWFrameworkOp] | Null = {
     val completion = blocking.completion
     blocking.completion = null
+    if blocking.heapIndex >= 0 then timers.remove(blocking) // its time limit ends with it
     pendingBlockers -= blocking
     completion
   }
@@ -407,10 +411,15 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
 
   def stop(): Unit = running = false
 
-  /** Cancels every pending op, waits for running blockers, and frees the C side. Handles stay open. */
+  /** Cancels every pending op, waits for running blockers, and frees the C side. Handles stay open. An op that had
+    * already finished, whose completion had not run yet, gets its outcome, not a cancel: what it read or opened is the
+    * caller's.
+    */
   def close(): Unit =
     if !closed then {
       val dropped = scala.collection.mutable.ArrayBuffer.empty[(NWFrameworkOp, Completion[NWFrameworkOp])]
+      val finished =
+        scala.collection.mutable.ArrayBuffer.empty[(NWFrameworkOp, Completion[NWFrameworkOp], Throwable | Null)]
       def drop(op: NWFrameworkOp): Unit = dropped += ((op, take(op)))
       for (_, command) <- waiting.toList do {
         withdraw(command)
@@ -418,8 +427,20 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       }
       waiting.clear()
       notifiedHere.clear()
-      while !timers.isEmpty do drop(timers.poll())
-      while !ready.isEmpty do drop(ready.poll().nn)
+      while !ready.isEmpty do { // finished, but their completions have not run
+        val op = ready.poll().nn
+        val failure = op.atOnceFailure
+        op.atOnceFailure = null
+        finished += ((op, take(op), failure))
+      }
+      var resolved = resolvedQueue.poll()
+      while resolved != null do { // finished on another thread; a cancelled blocker among them is settled below
+        if resolved.cancelling == null then {
+          val completion = detach(resolved)
+          if completion != null then finished += ((resolved, completion, resolved.failure))
+        }
+        resolved = resolvedQueue.poll()
+      }
       val running = scala.collection.mutable.ArrayBuffer.empty[NWFrameworkBlocking]
       for blocking <- pendingBlockers.toList do {
         val completion = detach(blocking)
@@ -435,6 +456,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         running += blocking
       }
       cancellingBlockers.clear()
+      // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
+      while !timers.isEmpty do drop(timers.poll())
       closed = true
       resolvedQueue.clear()
       notifiedElsewhere.clear()
@@ -442,6 +465,9 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       NWFrameworkIo.nwf_reactor_destroy(ptr)
       stdlib.free(drained.asInstanceOf[Ptr[Byte]])
       stdlib.free(event.asInstanceOf[Ptr[Byte]])
+      finished.foreach { (op, completion, failure) =>
+        if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
+      }
       dropped.foreach { (op, completion) =>
         op match {
           case opening: NWFrameworkOpening => opening.abandon() // what it opened never reaches the caller

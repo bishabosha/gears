@@ -147,6 +147,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
       finishNow: Boolean,
       timeoutMillis: Int
   ): Boolean = {
+    if closed then throw new IllegalStateException(s"The reactor is closed: $op")
     var finished = false
     var waits = false
     op match {
@@ -414,6 +415,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     while promise != null do {
       val completion = promise.completion
       promise.completion = null
+      if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
       pendingPromises -= promise
       promise match {
         case blocking: NioBlocking if blocking.cancelling != null =>
@@ -438,11 +440,13 @@ final class NioReactor private (selector: Selector) extends Reactor {
   }
 
   /** Cancels every pending op, interrupting blockers, then closes the selector. A blocker still running is waited for
-    * before its `onCancel`.
+    * before its `onCancel`. An op that had already finished, whose completion had not run yet, gets its outcome, not a
+    * cancel: what it read or opened is the caller's.
     */
   def close(): Unit =
     if !closed then {
       val dropped = scala.collection.mutable.ArrayBuffer.empty[(NioOp, Completion[NioOp])]
+      val finished = scala.collection.mutable.ArrayBuffer.empty[(NioOp, Completion[NioOp], Throwable | Null)]
       def drop(op: NioOp): Unit = dropped += ((op, take(op)))
       selector.keys().forEach { key =>
         val waiting = key.attachment().asInstanceOf[Waiting]
@@ -452,8 +456,22 @@ final class NioReactor private (selector: Selector) extends Reactor {
         waiting.write = null
       }
       while !again.isEmpty do drop(again.poll())
-      while !timers.isEmpty do drop(timers.poll())
-      while !ready.isEmpty do drop(ready.poll().nn) // finished, but their completions have not run
+      while !ready.isEmpty do { // finished, but their completions have not run
+        val op = ready.poll().nn
+        val failure = op.atOnceFailure
+        op.atOnceFailure = null
+        finished += ((op, take(op), failure))
+      }
+      var resolved = resolvedQueue.poll()
+      while resolved != null do { // finished on another thread; a cancelled blocker among them is settled below
+        resolved match {
+          case blocking: NioBlocking if blocking.cancelling != null => ()
+          case promise                                              =>
+            val completion = detach(promise)
+            if completion != null then finished += ((promise, completion, promise.failure))
+        }
+        resolved = resolvedQueue.poll()
+      }
       val running = scala.collection.mutable.ArrayBuffer.empty[NioBlocking]
       for promise <- pendingPromises.toList do {
         val completion = detach(promise)
@@ -472,6 +490,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
         running += blocking
       }
       cancellingBlockers.clear()
+      // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
+      while !timers.isEmpty do drop(timers.poll())
       resolvedQueue.clear()
       closedQueue.clear()
       waitingByEntry.clear()
@@ -480,6 +500,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
         selector.close() // deregisters every channel; the channels stay open
       }
       running.foreach(_.awaitEnd())
+      finished.foreach { (op, completion, failure) =>
+        if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
+      }
       dropped.foreach { (op, completion) =>
         op match {
           case opens: Opens => opens.abandon() // what it opened never reaches the caller
@@ -558,6 +581,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
   private def detach(promise: NioPromise): Completion[NioOp] | Null = {
     val completion = promise.completion
     promise.completion = null
+    if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
     pendingPromises -= promise
     completion
   }

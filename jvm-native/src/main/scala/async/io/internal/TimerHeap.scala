@@ -14,6 +14,7 @@ final class TimerHeap[T <: TimerHeap.Entry] {
   def peek: T = heap(0).nn.asInstanceOf[T]
 
   def add(timer: T): Unit = {
+    require(timer.heapIndex < 0, s"$timer is already in the heap")
     if size == heap.length then heap = java.util.Arrays.copyOf(heap, size * 2)
     place(timer, size)
     size += 1

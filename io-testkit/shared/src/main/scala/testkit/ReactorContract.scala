@@ -633,6 +633,60 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a blocking op with a time limit that finishes in time leaves no timer behind, and the reactor closes cleanly") {
+    val reactor = backend.open()
+    val ran = new java.util.concurrent.atomic.AtomicInteger
+    for submission <- 1 to 3 do {
+      val outcome = Outcome()
+      reactor.submit(backend.ops.blocking(() => ran.incrementAndGet(): Unit), outcome, timeoutMillis = 5_000)
+      turnUntil(reactor)(outcome.finished)
+      assertEquals(outcome.completed, 1, s"submission $submission: ${outcome.failure}")
+    }
+    assertEquals(ran.get(), 3)
+    reactor.close() // well before the limits are due, with nothing left of them in the reactor
+  }
+
+  test("closing a reactor waits for a running blocking op with a time limit, and cancels it once it has returned") {
+    val reactor = backend.open()
+    val started = new CountDownLatch(1)
+    val returned = new AtomicBoolean
+    val op = backend.ops.blocking { () =>
+      started.countDown()
+      try Thread.sleep(10_000)
+      catch case _: InterruptedException => ()
+      returned.set(true)
+    }
+    val outcome = Outcome()
+    reactor.submit(op, outcome, timeoutMillis = 60_000)
+    started.await()
+    reactor.close()
+    assertEquals(outcome.cancelled, 1)
+    assert(returned.get(), "onCancel ran before the body returned")
+  }
+
+  test("closing a reactor gives an op that already finished its outcome, not a cancel") {
+    val (in, out) = pipeAlone()
+    try {
+      withReactor(r => assertEquals(run(r, backend.ops.write(out, bytes("kept"))), null))
+      val reactor = backend.open()
+      val buf = allocate(16)
+      val read = Outcome()
+      reactor.submit(backend.ops.read(in, buf), read) // finishes as it is submitted, its completion left for a turn
+      reactor.close()
+      assertEquals((read.completed, read.cancelled), (1, 0))
+      assertEquals(text(buf), "kept")
+    } finally {
+      closeAlone(in)
+      closeAlone(out)
+    }
+  }
+
+  test("submitting to a closed reactor throws IllegalStateException") {
+    val reactor = backend.open()
+    reactor.close()
+    intercept[IllegalStateException](reactor.submit(backend.ops.timer(0), Outcome()))
+  }
+
   test("an op on a closed handle fails") {
     withReactor { r =>
       val (in, out) = pipe(r)

@@ -136,6 +136,31 @@ trait FileContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  test("a positional read with a time limit that finishes in time may be submitted again, and the reactor closes") {
+    val dir = tempDir()
+    try {
+      val path = dir.resolve("digits.txt")
+      Files.write(path, "0123456789".getBytes(StandardCharsets.UTF_8))
+      val reactor = backend.open()
+      val file = open(reactor, path, write = false)
+      try {
+        val buf = allocate(2)
+        val read = backend.ops.read(file, buf, offset = 0)
+        for expected <- Seq("01", "23", "45") do {
+          buf.clear()
+          val outcome = Outcome()
+          reactor.submit(read, outcome, timeoutMillis = 5_000)
+          turnUntil(reactor)(outcome.finished)
+          assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+          assertEquals(text(buf), expected)
+        }
+      } finally {
+        close(reactor, file)
+        reactor.close() // well before the limits are due, with nothing left of them in the reactor
+      }
+    } finally deleteAll(dir)
+  }
+
   test("a positional op on a closed file fails") {
     val dir = tempDir()
     try
