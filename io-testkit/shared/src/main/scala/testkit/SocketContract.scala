@@ -184,6 +184,30 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("a packet lost on a socket that is not connected fails no send, to its peer or another") {
+    withReactor { r =>
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      try {
+        // A port nothing listens on, which loopback answers with port unreachable.
+        val (gone, gonePort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+        close(r, gone)
+        val nowhere = IpAddress.IPv4("127.0.0.1", gonePort)
+        val unconnected = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        try {
+          for _ <- 1 to 3 do {
+            assertEquals(run(r, backend.ops.send(unconnected, bytes("lost"), nowhere)), null)
+            assertEquals(run(r, backend.ops.timer(20)), null) // for the unreachable to come back
+          }
+          assertEquals(run(r, backend.ops.send(unconnected, bytes("after"), IpAddress.IPv4("127.0.0.1", port))), null)
+          val buf = allocate(16)
+          assertEquals(run(r, backend.ops.receive(server, buf, Slot[IpAddress]())), null)
+          assertEquals(StandardCharsets.UTF_8.decode(buf).toString, "after")
+          assertEquals(run(r, backend.ops.send(unconnected, bytes("again"), nowhere)), null)
+        } finally close(r, unconnected)
+      } finally close(r, server)
+    }
+  }
+
   test("a packet larger than the receive buffer fills it, the rest dropped, and the next packet arrives whole") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
@@ -269,6 +293,94 @@ trait SocketContract extends ReactorContract {
             } finally close(r, server)
           } finally close(r, client)
         } finally close(r, listener)
+      }
+    finally pool.close()
+  }
+
+  /** Runs `body` with `count` connections over loopback, each as its client and server ends, closed afterwards. */
+  private def withConnections(r: R, count: Int)(body: Seq[(Connection, Connection)] => Unit): Unit = {
+    val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+    val pairs = scala.collection.mutable.ArrayBuffer.empty[(Connection, Connection)]
+    try {
+      for _ <- 1 to count do {
+        val accepted = Slot[Connection]()
+        val acceptedOutcome = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptedOutcome)
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        turnUntil(r)(connected.finished && acceptedOutcome.finished)
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        assertEquals(acceptedOutcome.completed, 1, String.valueOf(acceptedOutcome.failure))
+        pairs += ((into.clear(), accepted.clear()))
+      }
+      body(pairs.toSeq)
+    } finally {
+      for (client, server) <- pairs do {
+        close(r, client)
+        close(r, server)
+      }
+      close(r, listener)
+    }
+  }
+
+  /** A pooled read of `handle` run to its end: what it received, which the caller releases, or its failure. */
+  private def readPooled(r: R, handle: Readable, pool: BufferPool)(using munit.Location): Received | Throwable = {
+    val into = Slot[Received]()
+    val outcome = Outcome()
+    r.submit(backend.ops.read(handle, pool, into), outcome)
+    turnUntil(r)(outcome.finished)
+    if outcome.failure != null then outcome.failure.nn else into.clear()
+  }
+
+  test("a pooled read on a socket fails when the pool has no buffer free, and goes on once one is released") {
+    val pool = backend.pool(bufferSize = 16, buffers = 1)
+    try
+      withReactor { r =>
+        withConnections(r, 1) { case Seq((client, server)) =>
+          r.submit(backend.ops.write(client, bytes("one")), Outcome())
+          val held = readPooled(r, server, pool) match {
+            case received: Received => received
+            case failure: Throwable => fail("the first pooled read failed", failure)
+          }
+          assertEquals(textOf(held), "one")
+          val refused = Slot[Received]()
+          val refusedOutcome = Outcome()
+          r.submit(backend.ops.read(server, pool, refused), refusedOutcome)
+          r.submit(backend.ops.write(client, bytes("two")), Outcome())
+          turnUntil(r)(refusedOutcome.finished)
+          assert(refusedOutcome.failure.isInstanceOf[IOException], String.valueOf(refusedOutcome.failure))
+          held.release()
+          readPooled(r, server, pool) match {
+            case received: Received =>
+              assertEquals(textOf(received), "two", "the refused read left no read pending, and took nothing")
+              received.release()
+            case failure: Throwable => fail("the pooled read after the release failed", failure)
+          }
+        }
+      }
+    finally pool.close()
+  }
+
+  test("a pool's buffers go to the reads that take them: with a pool of two, two connections' reads hold both") {
+    val pool = backend.pool(bufferSize = 16, buffers = 2)
+    try
+      withReactor { r =>
+        withConnections(r, 2) { case Seq((client1, server1), (client2, server2)) =>
+          r.submit(backend.ops.write(client1, bytes("first")), Outcome())
+          r.submit(backend.ops.write(client2, bytes("second")), Outcome())
+          val held = readPooled(r, server1, pool) match {
+            case received: Received => received
+            case failure: Throwable => fail("the first connection's pooled read failed", failure)
+          }
+          readPooled(r, server2, pool) match {
+            case received: Received =>
+              assertEquals(textOf(received), "second")
+              received.release()
+            case failure: Throwable => fail("the second connection's read found no buffer free", failure)
+          }
+          assertEquals(textOf(held), "first")
+          held.release()
+          assertEquals(pool.available, 2, "no buffer is kept for reads not yet made")
+        }
       }
     finally pool.close()
   }

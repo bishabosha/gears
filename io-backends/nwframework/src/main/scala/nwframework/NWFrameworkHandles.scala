@@ -67,8 +67,9 @@ private[nwframework] final class NWFrameworkHandle(
   private var receiving = false
   private var eof = false
 
-  // A pooled read's receive outstanding into a buffer of the pool's, and one that completed, waiting to be taken by
-  // the next pooled read, or copied by a plain one (its position is what a plain read took).
+  // A waiting pooled read's receive outstanding into a buffer of the pool's, and one that completed, waiting to be
+  // taken by the next pooled read, or copied by a plain one (its position is what a plain read took): only once the
+  // read that took it was cancelled is that a read not yet made, the framework having the buffer until it completes.
   private var pooledSlot: NativePool#Slot | Null = null
   private var pooledReady: NativePool#Slot | Null = null
 
@@ -197,8 +198,9 @@ private[nwframework] final class NWFrameworkHandle(
           take(Read)
         }
       case Sent =>
+        // A packet a flow failed to send is lost, failing nothing: as a socket that is not connected never hears of
+        // its packets' fate on any system, so that one peer's port unreachable does not fail sends to another.
         sentBytes -= e.len
-        if e.error != 0 then writeError = e.error
         take(Write)
       case Failed | Cancelled if flow != null =>
         flows.remove(flowPtr.toLong)
@@ -382,8 +384,9 @@ private[nwframework] final class NWFrameworkHandle(
       slot
     } else if readError != 0 then throw failure("read", readError)
     else {
+      val slot = if receiving then null else takeFrom(pool) // before waiting, so that a refusal leaves no waiter
       await(Read, reactor, token)
-      if !receiving then receiveInto(takeFrom(pool))
+      if slot != null then receiveInto(slot.nn)
       null
     }
   }
@@ -394,14 +397,12 @@ private[nwframework] final class NWFrameworkHandle(
     slot.nn
   }
 
-  /** Keeps a receive outstanding into a buffer of `pool`'s, if it has one free, so that the next read finds its bytes
-    * waiting.
+  /** Keeps a receive outstanding into the stash, so that the next read finds its bytes waiting: not into a buffer of
+    * `pool`'s, which would hold one for a read not yet made, leaving a pool shared by many connections with none for
+    * the reads that are; the next pooled read copies them.
     */
   private def prefetchPooled(pool: NativePool): Unit =
-    if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 && pool.available > 0 then {
-      val slot = pool.take()
-      if slot != null then receiveInto(slot.nn)
-    }
+    if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 then receive(pool.bufferSize)
 
   private def receiveInto(slot: NativePool#Slot): Unit = {
     receiving = true

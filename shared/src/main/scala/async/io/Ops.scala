@@ -167,7 +167,9 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * if the socket had no room for it then, since the JDK reports both as 0 bytes (as Netty does, the same as a loss).
     * On a connected socket, `to` must be its peer, and the packet goes as the other `send` sends it, so an empty one
     * fails; any other address fails the op with an `IllegalArgumentException`, sending nothing, as the JDK does,
-    * whatever the system would do.
+    * whatever the system would do. On a socket that is not connected, a packet lost on the way, to a port nothing
+    * listens on say, fails neither this send nor a later one, to that peer or another, as no system tells such a socket
+    * of its packets' fate.
     */
   def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Op & Repeatable
 
