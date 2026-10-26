@@ -971,7 +971,7 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     r.backend.type) => r.perform(b.ops...) }`), and a val holding such a backend needs its type written, or the
     compiler loses that its `Op` is `r.Op`.
 
-35. [ ] **Tried and dropped (2026-10-26): retries that adapt, and an open hang.** `NioOnCaller` retries a command
+35. [x] **Tried and dropped (2026-10-26): retries that adapt, and a hang not seen again.** `NioOnCaller` retries a command
     that would block 8 times, yielding between, before it waits on its handle's own selector. Measured that day: over
     TCP on macOS the 8 retries nearly double one connection's round trip (81 µs against 45 with none), while with 64
     connections they halve it (`concurrent` 8.3 against 19); in Linux's loopback (Docker) they help one connection
@@ -1003,4 +1003,10 @@ two futures, clients and a server echoing over Unix sockets, cancelling a future
     instead gears' select/channel deadlock (kqueue TODO, lampepfl/gears#209), which the bench does not reach: it
     awaits with `awaitAll`, not `select`. `compare.py` now dumps a run's threads, virtual ones included, when it
     passes `--timeout`, so the next occurrence leaves a trace.
+
+    **Not seen again, and closed.** Hunted afterwards, every run with a thread dump past 300 s: the current code ran
+    the full TCP list 1,180 times without a hang (930 with no retries, in parallel on up to 8 workers at loads up to
+    89, and 250 with the default 8), and the build that hung, the one carrying the reverted experiment, 110 more times
+    without one either. Closed as a fluke; should it happen again during a comparison, `compare.sc --timeout` leaves
+    a dump.
 
