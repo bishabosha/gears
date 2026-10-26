@@ -76,6 +76,15 @@ lazy val root =
 
 val munit = "org.scalameta" %% "munit" % "1.3.6"
 
+// Settings of the I/O libraries published beside the core, under its organization and versions: the testkit, so that
+// a backend written elsewhere can check itself against the same contracts, and the backends but Network.framework's,
+// which stays an experiment (see its TODO).
+def ioLibrary(artifact: String) = Seq(
+  name := artifact,
+  publish / skip := false,
+  versionScheme := Some("early-semver")
+)
+
 // The contract suites every backend runs (`ReactorContract` and the capability contracts, `FuturesContract`), and
 // `BufferArena`, buffers allocated from an arena each platform provides: a Zone on Scala Native, foreign memory on
 // the JVM.
@@ -83,7 +92,8 @@ lazy val ioTestkit =
   crossProject(JVMPlatform, NativePlatform)
     .crossType(CrossType.Full)
     .in(file("io-testkit"))
-    .settings(publish / skip := true, libraryDependencies += munit)
+    .settings(ioLibrary("gears-io-testkit"), libraryDependencies += munit)
+    .jvmSettings(scalacOptions += "-release:21")
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
     .dependsOn(root)
 
@@ -92,7 +102,7 @@ lazy val ioKqueue =
   (project in file("io-backends/kqueue"))
     .enablePlugins(ScalaNativePlugin)
     .settings(
-      publish / skip := true,
+      ioLibrary("gears-io-kqueue"),
       libraryDependencies += munit % Test,
       testFrameworks += MUnitFramework,
       // Its tests run reactors on several threads.
@@ -121,7 +131,8 @@ lazy val ioNWFramework =
 lazy val ioNio =
   (project in file("io-backends/nio"))
     .settings(
-      publish / skip := true,
+      ioLibrary("gears-io-nio"),
+      scalacOptions += "-release:21",
       libraryDependencies += munit % Test,
       testFrameworks += MUnitFramework,
       Test / fork := true,

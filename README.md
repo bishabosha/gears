@@ -29,6 +29,14 @@ libraryDependencies += "ch.epfl.lamp" %% "gears" % "<version>"
 
 For cross-platform dependencies with sbt 1, use `%%%`.
 
+The I/O interface (`gears.async.io`) is part of `gears`; a backend to run it on is a library of its own, at the same
+version: `gears-io-nio` on the JVM, and `gears-io-kqueue` on Scala Native on macOS. `gears-io-testkit` holds the
+contract suites a backend is checked against, for a backend written elsewhere:
+```scala
+libraryDependencies += "ch.epfl.lamp" %% "gears-io-nio" % "<version>"
+libraryDependencies += "ch.epfl.lamp" %% "gears-io-testkit" % "<version>" % Test
+```
+
 With `mill`:
 ```scala
 def ivyDeps = Agg(
