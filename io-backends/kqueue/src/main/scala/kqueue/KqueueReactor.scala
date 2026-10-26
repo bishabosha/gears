@@ -19,13 +19,13 @@ import scala.scalanative.unsigned.*
   * submitted when its descriptor is known to be ready, or when readiness is not known yet and the command allows it;
   * otherwise, or when it would block, it waits for readiness and is performed on the loop thread. The reactor's own
   * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
-  * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
-  * be closed through `KqueueHandles.close`, from any thread, which tells every reactor (`closed`): the commands pending
-  * on the descriptor fail, and its slot is forgotten before the number is reused; timers, and the ops with a time
-  * limit, are kept in a heap on the loop thread, by deadline, and bound how long a poll blocks, so setting or
-  * cancelling one costs no syscall, and an op that times out is withdrawn as a cancelled one is, with `onFailure`
-  * instead of `onCancel`; `wakeup`, and blocking tasks finishing on other threads, wake the loop with a user event.
-  * Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
+  * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Handles must be
+  * closed through the backend, by the `close` op or `KqueueHandles.close`, from any thread, which tells every reactor
+  * (`closed`): the commands pending on the descriptor fail, and its slot is forgotten before the number is reused;
+  * timers, and the ops with a time limit, are kept in a heap on the loop thread, by deadline, and bound how long a poll
+  * blocks, so setting or cancelling one costs no syscall, and an op that times out is withdrawn as a cancelled one is,
+  * with `onFailure` instead of `onCancel`; `wakeup`, and blocking tasks finishing on other threads, wake the loop with
+  * a user event. Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) extends Reactor {
 
@@ -125,8 +125,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Distinguishes this reactor from the others sharing descriptors with it, in `DescriptorTable`. */
   private val id = KqueueReactor.nextId.incrementAndGet()
 
-  // Descriptors close on any thread (`KqueueHandles.close`): each close queues here, as the number with the generation
-  // that ended, and wakes a blocked poll, so that the commands pending on it fail (see `closed`).
+  // Descriptors close on any thread (`KqueueHandles.closeDescriptor`): each close queues here, as the number with the
+  // generation that ended, and wakes a blocked poll, so that the commands pending on it fail (see `closed`).
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
@@ -302,8 +302,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
-    * turn rather than run here, and this returns true; if it would block, this returns false. For a read, `slot`
-    * records what that taught about the descriptor's readiness.
+    * turn if `queue`, rather than run here, and this returns true; if it would block, this returns false. For a read,
+    * `slot` records what that taught about the descriptor's readiness.
     */
   private def performedAtOnce(command: Command, slot: Slot | Null, queue: Boolean): Boolean = {
     val done =
@@ -497,8 +497,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     any
   }
 
-  /** Cancels every pending promise, interrupting blockers, then closes the kqueue. The kqueue's own filters, timers,
-    * and wake event go with it. A blocker still running is waited for before its `onCancel`.
+  /** Cancels every pending promise, interrupting blockers, then closes the kqueue. The kqueue's own filters and wake
+    * event go with it. A blocker still running is waited for before its `onCancel`.
     */
   def close(): Unit = {
     if !closed then {
@@ -534,7 +534,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       closedQueue.clear()
       wakeLock.synchronized {
         closed = true
-        KqueueLoop.close(kq) // Its filters, timers, and wake event go with it.
+        KqueueLoop.close(kq) // Its filters and wake event go with it.
         KqueueLoop.freeQueue(events)
         KqueueReactor.all.remove(this)
       }
@@ -728,9 +728,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           if write then slot.write = null else slot.read = null
           pending.nn match {
             case command: Command =>
-              // A throwing command fails its own op; an exception thrown by the completion itself still escapes. The
-              // system call, and a registration again if it was not ready, are a use of the command's handle (see
-              // `Command.handle`), ended before the completion runs, which may close the handle.
+              // A throwing command fails its own op; an exception thrown by the completion itself is reported as a
+              // `CompletionFailed` (see `Reactor`), not as the op's failure. The system call, and a registration again
+              // if it was not ready, are a use of the command's handle (see `Command.handle`), ended before the
+              // completion runs, which may close the handle.
               val handle = command.handle
               var failure: Throwable | Null = null
               var done = true
@@ -772,7 +773,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
 
   /** An event with `EV_ERROR`, whose data is the error number: the command pending on the descriptor's filter fails,
     * and no other; the slot forgets what it knew of reading, so a later read registers its filter again. On the wake
-    * event or a timer, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
+    * event, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
     */
   private def dispatchError(event: Event): Unit =
     if KqueueLoop.isUserEvent(event) then wakePending.set(false)
@@ -797,14 +798,14 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       }
     }
 
+  // The buffer polls fill, allocated once and freed by `close`, rather than on the stack every turn.
+  private val events = KqueueLoop.allocateQueue(maxEvents)
+
   /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
     * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
     * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. An error event fails the
     * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
     */
-  // The buffer polls fill, allocated once and freed by `close`, rather than on the stack every turn.
-  private val events = KqueueLoop.allocateQueue(maxEvents)
-
   def runOnce(block: Boolean): Unit = {
     val delivered = deliverClosed() | deliverReady() | deliverResolved() // all three, without short-circuiting
     val polled =
@@ -888,7 +889,7 @@ object KqueueReactor {
   /** The last id given to a reactor (see `DescriptorTable`); ids start at 1, since 0 means no owner. */
   private val nextId = new java.util.concurrent.atomic.AtomicInteger(0)
 
-  /** The open reactors of the process, told of every descriptor closed (`KqueueHandles.close`). */
+  /** The open reactors of the process, told of every descriptor closed (`KqueueHandles.closeDescriptor`). */
   private val all = java.util.concurrent.ConcurrentHashMap.newKeySet[KqueueReactor]()
 
   /** Tells every open reactor that `fd`, whose generation was `generation`, has been closed (see `closed`). */

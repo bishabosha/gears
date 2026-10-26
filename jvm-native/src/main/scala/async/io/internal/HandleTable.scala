@@ -7,8 +7,8 @@ import java.util.concurrent.atomic.AtomicReferenceArray
 /** A process-wide table of a backend's I/O objects by number, for a backend whose foreign side refers to them by
   * number, as Network.framework's C side tags each of its handles with one, so that an event it delivers finds its
   * object without a lock. Handles themselves are objects (see `Backend.Handle`); the number is the backend's own.
-  * Numbers freed by `remove` are reused, lowest last freed first. Looking a number up takes no lock; adding and
-  * removing take the table's.
+  * Numbers freed by `remove` are reused, the last freed first. Looking a number up takes no lock; adding and removing
+  * take the table's.
   */
 final class HandleTable[E <: AnyRef](initialCapacity: Int = 64) {
   private val lock = new Object

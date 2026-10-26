@@ -7,13 +7,13 @@ import _root_.gears.async.AsyncOperations
 import _root_.gears.async.Cancellable
 
 /** What a program performs its ops with: where its backend's ops run. It has a backend (`backend`), whose ops, handles
-  * and capabilities are what the program uses, and adds only where they run: `perform`, and on a pool `submit` and
-  * `yield`. It is not a backend and has no ops of its own; its type names the backend it is over, so a program's helper
-  * asks for an `Io` over a backend with the capabilities it needs, `Io[SocketBackend]`, and one over a backend with
-  * more, `Io[SocketBackend & FileBackend]`, is one of those. The two kinds are `OnPool`, which the runtime implements
-  * and the platform's runner gives the program it starts, so that an op of a reactor backend is performed where there
-  * is a worker, and its reactor, to run it, and a backend alone performs nothing; and `OnCaller`, which anyone may
-  * make, since a caller backend's ops may be performed from any thread. A program's `Io` is lexical: a future it spawns
+  * and capabilities are what the program uses, and adds only where they run: `perform`, and on a pool `yield`. It is
+  * not a backend and has no ops of its own; its type names the backend it is over, so a program's helper asks for an
+  * `Io` over a backend with the capabilities it needs, `Io[SocketBackend]`, and one over a backend with more,
+  * `Io[SocketBackend & FileBackend]`, is one of those. The two kinds are `OnPool`, which the runtime implements and the
+  * platform's runner gives the program it starts, so that an op of a reactor backend is performed where there is a
+  * worker, and its reactor, to run it, and a backend alone performs nothing; and `OnCaller`, which anyone may make,
+  * since a caller backend's ops may be performed from any thread. A program's `Io` is lexical: a future it spawns
   * captures it, and runs where the program runs.
   *
   * It is also the program's gears `AsyncOperations`, given to it by the runner beside its `Async`: `sleep` is a timer

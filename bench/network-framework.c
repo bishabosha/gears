@@ -12,8 +12,8 @@
  *   /tmp/network-framework nw|tcp threads|procs N [round trips]
  *
  * Both disable Nagle's algorithm. Sampling a run shows which system calls Network.framework makes, and so whether it
- * uses the user-space stack (Skywalk channels, `__channel_sync`) or the kernel's sockets. See "SwiftNIO meets the same
- * lock" in io-backends/kqueue/TODO.md.
+ * uses the user-space stack (Skywalk channels, `__channel_sync`) or the kernel's sockets. See "macOS's per-process
+ * locks" in docs/io/runtime.md, and docs/io/nwframework.md.
  */
 #include <Network/Network.h>
 #include <arpa/inet.h>

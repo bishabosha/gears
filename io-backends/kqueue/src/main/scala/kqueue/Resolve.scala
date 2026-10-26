@@ -8,8 +8,8 @@ import gears.async.io.internal.PosixResolver
 import java.io.IOException
 
 /** Resolves a host name without blocking the reactor. There is no non-blocking `getaddrinfo`, so the lookup runs on the
-  * reactor's blocker pool, the way libuv and tokio do it. Completes after writing the addresses into `into`, or fails
-  * with an `IOException` carrying the resolver's error.
+  * blocker pool, the way libuv and tokio do it. Completes after writing the addresses into `into`, or fails with an
+  * `IOException` carrying the resolver's error.
   */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends KqueueBlocking {
   def block(): Unit = PosixResolver.lookup(host) match {

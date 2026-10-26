@@ -19,9 +19,9 @@ import java.util.concurrent.TimeoutException
   * parks until its time (`TimerWait`); a blocking op runs on the caller (`BlockingHere`), interrupted from a timer
   * thread if its time limit is up; an op done at once, such as a close, is done. Cancelling the caller ends the wait,
   * and the handle stays open. Nothing spins: busy waiting gave the best latency and starved the other futures, so it
-  * was dropped (see the NIO TODO, items 10 and 11). A time limit runs from the call: an op whose time runs out has done
-  * nothing and throws. Its `Io` is an `OnCaller` over it, which works from any `Async` context with no runner, and is
-  * what `ReactorFutures.run` hands the program. Nothing of the JDK beyond its public interface.
+  * was dropped (see "Tried and dropped" in docs/io/jvm.md). A time limit runs from the call: an op whose time runs out
+  * has done nothing and throws. Its `Io` is an `OnCaller` over it, which works from any `Async` context with no runner,
+  * and is what `ReactorFutures.run` hands the program. Nothing of the JDK beyond its public interface.
   */
 object NioOnCaller extends CallerBackend with NioCapabilities {
 
@@ -98,7 +98,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
               if !done && expired(deadline) then throw new TimeoutException(s"$command timed out")
             }
           }
-        case _ => // A regular file is always ready: tried again after each yield, as a reactor performs it again each turn.
+        case _ => // A regular file is always ready: tried again after each yield, as a reactor does each turn.
           while !done do {
             Thread.`yield`()
             checkCancelled()

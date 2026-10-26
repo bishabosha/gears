@@ -26,8 +26,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Stress tests for a reactor and its gears integration, to measure each change against. An echo server runs on one
   * reactor thread and the clients on another, so both sides go through the reactor; each scenario is timed on its own
-  * and stresses a different cost (see `io-backends/kqueue/TODO.md`). Every line it prints for a scenario starts with
-  * `bench:` so that `bench/compare.sc` can collect the results.
+  * and stresses a different cost (see `docs/io/bench.md`). Every line it prints for a scenario starts with `bench:` so
+  * that `bench/compare.sc` can collect the results.
   */
 object GearsBench {
 
@@ -345,7 +345,7 @@ object GearsBench {
   }
 
   /** Ping-pongs `count` messages while a compute future on the same reactor thread runs slices of work until they are
-    * done. Between slices it yields to the scheduler with `yieldNow`, so that the ping-pong continuations run in
+    * done. Between slices it yields to the scheduler with `io.yield`, so that the ping-pong continuations run in
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
   private def mixed(io: Io[IpSockets], connect: Connect[io.Handle], count: Int)(using Async.Spawn): Unit = {

@@ -25,8 +25,8 @@ import scala.util.Try
   * `TakePolicy`. That needs `--add-opens java.base/java.lang=ALL-UNNAMED`, since the JDK keeps both a virtual thread's
   * scheduler and its carrier to itself, and `--add-opens java.base/jdk.internal.vm=ALL-UNNAMED`, for the pin that keeps
   * a future on its worker while its op is submitted there (see `VirtualCarriers.pin`). A `CallerBackend`, such as
-  * `NioOnCaller`, the default, runs its program on gears' own virtual threads on the JDK's scheduler, each op performed
-  * on the future's own thread, and needs nothing of the JDK beyond its public interface.
+  * `NioOnCaller`, the JVM's caller backend, runs its program on gears' own virtual threads on the JDK's scheduler, each
+  * op performed on the future's own thread, and needs nothing of the JDK beyond its public interface.
   */
 object ReactorFutures {
 

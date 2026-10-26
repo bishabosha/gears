@@ -13,8 +13,8 @@ import java.util.concurrent.locks.LockSupport
 
 /** NIO's waits on the calling thread, for `NioOnCaller`: a command waits on its handle's own selector, a timer parks
   * until its time, and a blocking op runs on the caller. Nothing is interrupted and nothing spins; a cancel wakes the
-  * wait. Written for a backend with no reactor, since retired, whose way of waiting these are (see the NIO TODO, items
-  * 10 to 12 and 14).
+  * wait. They began as the way of waiting of `VThreadBackend`, a backend with no reactor since retired (see "Tried and
+  * dropped" in docs/io/jvm.md).
   */
 private[nio] object WaitsHere {
 

@@ -34,7 +34,7 @@ abstract class DemoSuite extends FunSuite {
   /** Whether the backend has readiness, which the cancel demo uses. */
   def hasReadiness: Boolean = true
 
-  /** Whether the backend has reactors, which the bench's `timers` scenario submits to. */
+  /** Whether the backend has reactors; only then do the bench checks look for the `timers` scenario. */
   def hasReactors: Boolean = true
   def hasUnixDatagrams: Boolean = true
 

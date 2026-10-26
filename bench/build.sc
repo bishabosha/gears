@@ -16,8 +16,8 @@
   * <output>.json, which compare.sc --save includes in its results.
   *
   * It links with conditional yieldpoints (SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0): on macOS, the trap-based ones that
-  * release builds use by default can deadlock a collection in multithreaded programs (see "The GC's signal blocking" in
-  * io-backends/kqueue/TODO.md), and they were slower here anyway. YIELDPOINTS=trap links with trap-based ones instead.
+  * release builds use by default can deadlock a collection in multithreaded programs (see "Conditional and trap-based yieldpoints"
+  * in docs/io/scala-native.md), and they were slower here anyway. YIELDPOINTS=trap links with trap-based ones instead.
   *
   * PROJECT=ceBench builds the cats-effect and fs2 version of the scenarios (bench/ce-bench) instead of ioKqueueDemos.
   */

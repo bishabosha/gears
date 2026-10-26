@@ -27,7 +27,7 @@ import gearsexample.GearsBench
   *   - one kqueue per thread;
   *   - each socket registered once for reads, level-triggered;
   *   - reads and writes called directly, with write interest registered, one-shot, only after a write would block;
-  *   - a deadline timer added and deleted with `kevent`, as the reactor does now;
+  *   - a deadline timer added and deleted with `kevent`, where the reactor keeps its own in a heap;
   *   - blocking tasks run on a worker thread that signals through a pipe.
   *
   * The scenario names, counts, and output match `GearsBench`, so `bench/compare.sc` can put them side by side.
@@ -447,7 +447,8 @@ object KQueueExampleBench {
       throw new IllegalArgumentException(s"Unknown scenario `$name`; try ${known.mkString(", ")}")
     // `mixed`, `fairness`, `starvation` and the compute variants of `concurrent` measure gears scheduling against
     // compute work, and `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written
-    // loop has a counterpart for.
+    // loop has a counterpart for; nor does it write `pingpong-pooled`, `large` and `large-pooled`, which measure the
+    // backend's pool and the copies of large reads.
     val gearsOnly =
       Set(
         "mixed",

@@ -90,7 +90,7 @@ object SharedDescriptorCheck {
       NonBlocking.write(KqueueHandles.fd(writeEnd), byte)
     }
 
-    /** Submits a read of `fd` on `d`, then writes a byte to `writeEnd`, unless it is -1, and waits for the read to
+    /** Submits a read of `fd` on `d`, then writes a byte to `writeEnd`, unless it is null, and waits for the read to
       * complete.
       */
     def readOn(d: Driven, label: String, fd: Handle, writeEnd: Handle | Null): Unit = {

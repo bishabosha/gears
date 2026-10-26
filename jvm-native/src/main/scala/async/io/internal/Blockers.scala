@@ -164,7 +164,7 @@ object Blockers {
   private val idle = new AtomicInteger(0)
   private val started = new AtomicInteger(0)
 
-  /** Runs `task` on the pool and settles it with the outcome, unless it is cancelled first. */
+  /** Runs `task` on the pool, unless it is cancelled first, and settles it either way (see `runAndSettle`). */
   def run(task: BlockingRun): Unit = if claim() then queue.put(task) else start(task)
 
   /** Claims an idle thread for a task, if there is one. */

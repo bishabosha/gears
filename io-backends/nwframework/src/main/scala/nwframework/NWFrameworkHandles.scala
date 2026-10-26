@@ -101,7 +101,8 @@ private[nwframework] final class NWFrameworkHandle(
     new IOException(s"$what failed: ${NWFrameworkHandles.errorText(if errno != 0 then errno else 5)}")
 
   /** Takes the C side's queued events and applies them, each under the lock, telling the waiters they finish. From the
-    * reactor attempting an op here, or draining this handle as its watcher. Nothing is taken once closed.
+    * reactor attempting an op here, or draining this handle as its watcher. Nothing is taken once the C side is
+    * released.
     */
   def drain(event: Ptr[NWFrameworkIo.Event]): Unit = synchronized {
     while !released && NWFrameworkIo.nwf_handle_next(ptr, event) != 0 do
@@ -286,7 +287,7 @@ private[nwframework] final class NWFrameworkHandle(
 
   /** The reactor the C side wakes for events, and for which kinds: that of an op waiting here, for what it waits for,
     * so that a send's completion, say, wakes nobody while no write waits; or none. Under the lock. (Keeping the reactor
-    * that last read as the watcher, so that a read registers no change, measured no gain: see the TODO.)
+    * that last read as the watcher, so that a read registers no change, measured no gain: see docs/io/nwframework.md.)
     */
   private def updateWatcher(): Unit = {
     val wanted: NWFrameworkReactor | Null =
@@ -312,9 +313,9 @@ private[nwframework] final class NWFrameworkHandle(
 
   private def checkOpen(): Unit = if closed then throw closedFailure
 
-  /** A stream read: takes up to `cap` stashed bytes into `into`, returning how many; 0 at the end of the stream; or
-    * false after registering the read waiter, with a receive outstanding. After taking bytes it keeps a receive
-    * outstanding, so that the next read finds its bytes waiting (`NWFrameworkHandle.Prefetch`).
+  /** A stream read: takes up to `cap` stashed bytes into `into`, returning how many; 0 at the end of the stream; or -1
+    * after registering the read waiter, with a receive outstanding. After taking bytes it keeps a receive outstanding,
+    * so that the next read finds its bytes waiting (`NWFrameworkHandle.Prefetch`).
     */
   def read(into: Ptr[Byte], cap: Int, reactor: NWFrameworkReactor, token: Long): Int = synchronized {
     checkOpen()
@@ -543,10 +544,6 @@ private[nwframework] final class NWFrameworkHandle(
     false
   }
 
-  /** Closes the handle, from any thread: the ops waiting on it are told, and fail on their reactors; the connection is
-    * cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
-    * connections not taken and flows go with it.
-    */
   /** The close op: begins closing, as `close` does, but the framework's cancellation is not waited for here: false,
     * with the close waiter registered, told once the cancelled state has come, when `closeDone` is true. For a
     * connection that is once its sends have gone; for a listener, or a bound datagram socket, once the framework has
@@ -620,6 +617,10 @@ private[nwframework] final class NWFrameworkHandle(
     flowsByPeer.clear()
   }
 
+  /** Closes the handle, from any thread: the ops waiting on it are told, and fail on their reactors; the connection is
+    * cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
+    * connections not taken and flows go with it.
+    */
   def close(): Unit =
     synchronized {
       if closed then return

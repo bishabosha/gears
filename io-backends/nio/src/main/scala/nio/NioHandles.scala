@@ -62,8 +62,8 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
   def registered(reactor: NioReactor): Unit = registrations.add(reactor): Unit
 
   // The channel's own selectors, one for each direction, on which callers off the pool wait (`SelectorWait`),
-  // taken from the pool on first use; the ops waiting on them; and whether the channel has been closed, after which none is taken, and the
-  // selectors go back to the pool once no op waits on them. Guarded by `this`.
+  // taken from the pool on first use; the ops waiting on them; and whether the channel has been closed, after which
+  // none is taken, and the selectors go back to the pool once no op waits on them. Guarded by `this`.
   private var reading: Selector | Null = null
   private var writing: Selector | Null = null
   private var waiters = 0
@@ -112,7 +112,7 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
   /** Closes the channel, and tells the reactors it is registered with, which wakes them: a registered channel's
     * descriptor is released only once each selector has seen its key cancelled, which one blocked with nothing else to
     * do would never get to, so the other end of a pipe or socket would never see it close; and the commands pending on
-    * it there fail, as `Handles.close` says. An op waiting on one of its own selectors is woken, to find the channel
+    * it there fail, as `Ops.close` says. An op waiting on one of its own selectors is woken, to find the channel
     * closed, and the selectors go back to the pool once none waits.
     */
   def close(): Unit = {
@@ -138,7 +138,7 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
     else throw new IOException(s"$op needs a ${kind.getSimpleName}, not $channel")
 }
 
-/** Selectors for `Selectable.selector` to reuse: on macOS, opening one makes a kqueue and a wake-up pipe, and closing
+/** Selectors for `Selectable.enterWait` to reuse: on macOS, opening one makes a kqueue and a wake-up pipe, and closing
   * it closes them, which a connection's ops would otherwise pay for on every connection.
   */
 private[nio] object SelectorPool {
@@ -183,19 +183,16 @@ private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
   def close(): Unit = channel.close()
 }
 
-/** NIO's handles: a process-wide table of the channels its ops name, indexed by handle, so that, like descriptors, a
-  * handle means the same on every reactor and thread. Numbers freed by `close` are reused.
-  *
-  * Sockets, listeners, datagram sockets and pipes are NIO's selectable channels in non-blocking mode, Unix stream
-  * sockets among them. A regular file is a `FileChannel`, which never waits. The JDK has neither Unix datagram channels
-  * nor a way to wait on a FIFO, so NIO has neither capability. Writing to a pipe or socket whose reader has gone fails
-  * with an `IOException`: the JVM ignores `SIGPIPE`.
-  */
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
 /** NIO's handles, each holding the entry of its channel (`NioCapabilities.Handle`), opened by the ops (`NioOps`), which
   * call the openers here.
+  *
+  * Sockets, listeners, datagram sockets and pipes are NIO's selectable channels in non-blocking mode, Unix stream
+  * sockets among them. A regular file is a `FileChannel`, which never waits. The JDK has neither Unix datagram channels
+  * nor a way to wait on a FIFO, so NIO has neither capability. Writing to a pipe or socket whose reader has gone fails
+  * with an `IOException`: the JVM ignores `SIGPIPE`.
   */
 object NioHandles {
 

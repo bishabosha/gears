@@ -22,8 +22,8 @@ import java.util.concurrent.TimeoutException
   * how long a select blocks; an op that times out is withdrawn as a cancelled one is, with `onFailure` instead of
   * `onCancel`. `wakeup`, and blocking tasks finishing, wake the selector.
   *
-  * The selector's keys belong to the channels: closing a handle cancels its keys, so a command pending on it never
-  * finishes, and is only cancelled, as with the kqueue backend.
+  * The selector's keys belong to the channels: closing a handle cancels its keys, and the commands pending on it here
+  * fail with a `ClosedChannelException` from the loop (`closed`), as `Ops.close` says and as on the kqueue backend.
   */
 final class NioReactor private (selector: Selector) extends Reactor {
 
@@ -297,8 +297,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
         catch case _: CancelledKeyException => () // its channel was closed meanwhile
     }
 
-  /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
-    * turn rather than run here, and this returns true; if it would block, this returns false.
+  /** Performs `command` before waiting for readiness. If it finishes, or fails, this returns true, its completion not
+    * run here but, with `queue`, queued for the next turn; if it would block, this returns false.
     */
   private def performedAtOnce(command: Command, queue: Boolean): Boolean = {
     val done =
@@ -585,10 +585,10 @@ final class NioReactor private (selector: Selector) extends Reactor {
     markChanged(key, waiting)
   }
 
-  /** Delivers commands that finished when submitted, resolved promises and regular files, selects once, performs what
-    * it found ready, fires due timers, then delivers promises resolved meanwhile. It blocks in the select only if asked
-    * to and nothing was delivered first, and skips the select after delivering something, except every
-    * `NioReactor.PollEvery` turns.
+  /** Delivers commands that finished when submitted, resolved promises and regular files, fails the commands pending on
+    * handles closed meanwhile, selects once, performs what it found ready, fires due timers, then delivers promises
+    * resolved meanwhile. It blocks in the select only if asked to and nothing was delivered first, and skips the select
+    * after delivering something, except every `NioReactor.PollEvery` turns.
     */
   def runOnce(block: Boolean): Unit = {
     val delivered = deliverReady() | deliverResolved() | deliverAgain() | deliverClosed()

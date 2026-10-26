@@ -57,7 +57,7 @@ object GearsDatagram {
     }
   }
 
-  /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done.
+  /** Sends `request` with `send`, then waits for the reply with `receive`, each performed once, within five seconds.
     */
   private def exchange(
       io: Io[Backend],

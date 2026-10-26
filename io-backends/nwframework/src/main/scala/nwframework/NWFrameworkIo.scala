@@ -7,8 +7,9 @@ import scala.scalanative.unsafe.*
 /** The C side of the backend, `nwframework_io.c` beside this project's resources: the blocks Network.framework and
   * Dispatch call, each a trampoline that queues an event on its handle and wakes the reactor watching it; the queue a
   * reactor parks on; and the framework calls themselves. Everything returns at once, except `nwf_reactor_wait`, which
-  * parks the reactor's thread, `nwf_listen`, which waits for the listener to be ready or to fail, and `nwf_cancel` of a
-  * listener, which waits for its cancelled state. What the events mean is `NWFrameworkHandle`'s business.
+  * parks the reactor's thread, `nwf_listen` and `nwf_datagram_bind`, which wait for the listener to be ready or to
+  * fail, and `nwf_cancel` of a listener, which waits for its cancelled state. What the events mean is
+  * `NWFrameworkHandle`'s business.
   */
 @extern
 private[nwframework] object NWFrameworkIo {

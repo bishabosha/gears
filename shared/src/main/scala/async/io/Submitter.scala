@@ -75,10 +75,12 @@ trait Submitter {
     */
   def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit
 
-  /** `op`'s attachment, as its backend's `attachment` returns it. */
+  /** `op`'s attachment: the caller's own data, kept with the op across submissions, so that any reactor of the backend
+    * returns it, and never used by the submitter itself.
+    */
   def attachment(op: Op): AnyRef | Null
 
-  /** Sets `op`'s attachment, as its backend's `attach` does. */
+  /** Sets `op`'s attachment (see `attachment`). */
   def attach(op: Op, value: AnyRef | Null): Unit
 
   /** `trySubmit` with no time limit. */

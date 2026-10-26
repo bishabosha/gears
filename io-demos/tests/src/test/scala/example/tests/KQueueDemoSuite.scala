@@ -63,7 +63,7 @@ class KQueueDemoSuite extends DemoSuite {
       "cancelled completions run: 0"
     ) ++ (
       // The plain demo's leftover is stopped by closing the reactor; the gears mirror's by the end of its program,
-      // whose group the submission belongs to.
+      // which cancels the future performing it.
       if (gearsMirrors)
         Seq("the program's end notified the leftover: true", "blocking interrupted by the program's end: true")
       else Seq("close notified the leftover: true", "blocking interrupted by close: true")
@@ -85,7 +85,7 @@ class KQueueDemoSuite extends DemoSuite {
         "connections",
         "pipelined",
         "blocking"
-      ) ++ (if (hasReactors) Seq("timers") else Nil) ++ gearsOnly // `timers` submits to a reactor
+      ) ++ (if (hasReactors) Seq("timers") else Nil) ++ gearsOnly // `timers` is looked for on a reactor backend only
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }

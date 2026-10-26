@@ -17,8 +17,8 @@
  *   /tmp/wakeup-contention <mode> threads|procs N [round trips]
  *
  * kevent takes the process's descriptor table lock to find its kqueue; mach_msg finds its port without a lock that
- * every thread of the task shares; os_sync_wait_on_address uses no descriptor or port at all. See "macOS serialises
- * descriptor system calls per process" in io-backends/kqueue/TODO.md.
+ * every thread of the task shares; os_sync_wait_on_address uses no descriptor or port at all. See "macOS's
+ * per-process locks" in docs/io/runtime.md.
  */
 #include <mach/mach.h>
 #include <os/os_sync_wait_on_address.h>

@@ -7,7 +7,7 @@
  *
  * Each turn the client writes `messages` messages of 64 bytes, the peer reads them all and echoes them, and the client
  * reads the echo. The counts are split by when they appear: after the client's writes, after the peer's read but
- * before its echo, and after the echo. See "Persistent write filters" in io-backends/kqueue/TODO.md.
+ * before its echo, and after the echo. See "Edge-triggered, persistent read filters" in docs/io/kqueue.md.
  */
 #include <arpa/inet.h>
 #include <fcntl.h>

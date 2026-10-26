@@ -28,16 +28,16 @@ import scala.scalanative.unsigned.*
 
 import KqueueBackend.Handle
 
-/** Kqueue's handles are POSIX file descriptors, opened non-blocking (see `Descriptors`). Descriptor numbers are
-  * process-wide, so the Unix paths bound by `listen` and `datagram` are remembered per descriptor and removed when it
-  * is closed. Writing to a handle whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would
-  * end the process: sockets get `SO_NOSIGPIPE`, and on macOS pipes and FIFOs opened for writing get `F_SETNOSIGPIPE`.
-  */
 /** Either kind of socket address, as the system calls take them. */
 private[kqueue] type SocketAddress = IpAddress | UnixAddress
 
-/** Opening, using and closing kqueue's handles directly, for kqueue-specific code such as its demos, which run with no
-  * reactor; the interface opens them with ops (`KqueueOps`), which call the openers here.
+/** Opening, using and closing kqueue's handles directly, for kqueue-specific code such as its demos, which open them
+  * outside any reactor; the interface opens them with ops (`KqueueOps`), which call the openers here.
+  *
+  * Kqueue's handles are POSIX file descriptors, opened non-blocking (see `Descriptors`). Descriptor numbers are
+  * process-wide, so the Unix paths bound by `listen` and `datagram` are remembered per descriptor and removed when it
+  * is closed. Writing to a handle whose reader has gone fails with `EPIPE` rather than raising `SIGPIPE`, which would
+  * end the process: sockets get `SO_NOSIGPIPE`, and on macOS pipes and FIFOs opened for writing get `F_SETNOSIGPIPE`.
   */
 object KqueueHandles {
 
@@ -140,10 +140,11 @@ object KqueueHandles {
   def writeNow(handle: Handle, buf: ByteBuffer): Int =
     using(handle)(if buf.hasRemaining() then NonBlocking.write(handle.fd, buf) else 0)
 
-  /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
-    * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on it
-    * fail and its slots are forgotten before the number is reused (see `Ops.close`). A handle must not be used while it
-    * is being closed.
+  /** Closes `handle`, from any thread, as `closeHandle` does, waiting, if a use of its descriptor is in progress, for
+    * the last use to close it, and throwing what that close threw. Closing the descriptor ends its generation in
+    * `DescriptorTable` first, while the number is still its, and tells every open reactor afterwards, with the
+    * generation that ended, so that the commands pending on it fail and its slots are forgotten before the number is
+    * reused (see `Ops.close` and `closeDescriptor`).
     */
   def close(handle: Handle): Unit = {
     val closed = new java.util.concurrent.CountDownLatch(1)

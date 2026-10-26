@@ -217,7 +217,7 @@ final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
   }
 }
 
-/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`), as `Read` fills the caller's. */
+/** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
 final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
@@ -242,7 +242,9 @@ final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received
   }
 }
 
-/** Drains `buf` between position and limit. Done once at least one byte has been written. */
+/** Drains `buf` between position and limit. Done once at least one byte has been written, or at once, with no system
+  * call, if `buf` has none.
+  */
 final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Write
   def perform(): Boolean = !buf.hasRemaining() || entry.nn.write(buf) >= 0
@@ -359,7 +361,9 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) 
   }
 }
 
-/** Sends `buf` as one packet, to `to` or to the connected peer when `to` is null, consuming it. */
+/** Sends `buf` as one packet, consuming it: on a connected socket to its peer, which `to`, if given, must be, and never
+  * an empty one; on an unconnected socket to `to`, without which it fails.
+  */
 final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends Command {
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)

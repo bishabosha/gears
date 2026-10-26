@@ -1,4 +1,4 @@
-// What the bench's build scripts (build.sc, build-jvm.sc) share: running commands, and the provenance record each
+// What the bench's build scripts (build.sc, build_jvm.sc) share: running commands, and the provenance record each
 // writes beside an executable, which compare.sc saves with its results.
 
 import java.nio.file.{Files, Path}

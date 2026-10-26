@@ -16,8 +16,8 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
-/** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `OnPool` a
-  * program is given, over a scheduler of the pool's.
+/** How an `OnPool` performs its ops on the pool: the same on every platform. `bound` is the `OnPool` a program is
+  * given, over a scheduler of the pool's.
   */
 private[io] object Pools {
 
@@ -157,7 +157,7 @@ private[io] object Pools {
   /** An op's submissions, one at a time, each as a source that its completion completes once and as a member of the
     * caller's cancellation group. It has at most one listener, the suspended caller. Kept as the op's attachment and
     * reset for each submission, so it, its state and its completion are allocated once per op. Each submission may be
-    * on a different worker; `scheduler` is the current one's.
+    * on a different worker; `worker` is the current one's.
     */
   private final class OpWaiter(first: ReactorWorker, op: Any) extends Async.Source[Try[Unit]] with Cancellable {
 

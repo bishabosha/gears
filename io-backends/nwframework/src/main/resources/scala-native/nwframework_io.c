@@ -1,16 +1,17 @@
-/* The C side of `gears.async.io.nwframework`: only what Scala Native cannot do itself. Network.framework and Dispatch deliver
- * everything as blocks, which Scala Native cannot build, on Dispatch's threads, which it cannot run managed code on. So
- * each block here is a trampoline: it copies its arguments into an event, queues the event on the handle it is for,
- * and wakes the reactor watching that handle. The reactor's thread, a Scala thread, drains the handles with events
- * (`nwf_reactor_drain`), takes their events (`nwf_handle_next`), and does everything else in Scala: what the bytes mean,
- * who waits for them, what to issue next. The one wait here, `nwf_reactor_wait`, parks that thread until a handle has
- * events or `nwf_reactor_wake` is called.
+/* The C side of `gears.async.io.nwframework`: only what Scala Native cannot do itself. Network.framework and
+ * Dispatch deliver everything as blocks, which Scala Native cannot build, on Dispatch's threads, which it cannot run
+ * managed code on. So each block here is a trampoline: it copies its arguments into an event, queues the event on the
+ * handle it is for, and wakes the reactor watching that handle. The reactor's thread, a Scala thread, drains the
+ * handles with events (`nwf_reactor_drain`), takes their events (`nwf_handle_next`), and does everything else in
+ * Scala: what the bytes mean, who waits for them, what to issue next. The reactor's one wait, `nwf_reactor_wait`,
+ * parks that thread until a handle has events or `nwf_reactor_wake` is called.
  *
  * A handle (`nwf_handle`) is a connection, a listener, a flow of a bound datagram socket (whose events go to the bound
  * socket), or a descriptor with its Dispatch sources. It is freed once the Scala side has released it and the
  * framework has delivered its last callback, the cancelled state, or the last source's cancellation handler, which
- * also closes a descriptor. `nwf_listen` waits for the listener to be ready or to fail, and `nwf_cancel` of a listener
- * for its cancelled state, so that listening fails where it is called and a closed listener's port is free at once.
+ * also closes a descriptor. `nwf_listen` and `nwf_datagram_bind` wait for the listener to be ready or to fail, and
+ * `nwf_cancel` of a listener for its cancelled state, so that listening fails where it is called and a closed
+ * listener's port is free at once.
  */
 #ifdef __APPLE__
 
@@ -56,7 +57,7 @@ typedef struct nwf_event {
   int final;      /* its context is the stream's final one, so `complete` means the end of the stream */
   size_t len;     /* bytes received, or sent */
   void *data;     /* unused */
-  void *map;      /* unused */
+  void *map;      /* the caller's buffer `bytes` points into (`nwf_receive_into`), which is not freed; else NULL */
   uint8_t *bytes; /* the received bytes, `len` of them, copied in the callback; freed by `nwf_event_done` */
   nwf_handle_t *flow;    /* the flow of a bound datagram socket the event is for, else NULL */
   nwf_handle_t *accepted;

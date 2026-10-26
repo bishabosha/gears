@@ -11,8 +11,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /** Checks that tasks queued for a worker in particular (`ReactorWorker.sync`: cancelling an op on its reactor, arming
-  * or cancelling a timer there) run on that worker's thread, whatever other workers take, (see `InboxSuite`). They call
-  * a reactor that only its own thread may use.
+  * or cancelling a timer there) run on that worker's thread, whatever other workers take (see `ReactorPoolSuite`). They
+  * call a reactor that only its own thread may use.
   *
   * On a pool of two workers, each round has another thread queue a task for the worker running the program, while the
   * program keeps that worker busy; the program then yields, so the queued task and the program's resume wait for the

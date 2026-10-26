@@ -739,7 +739,7 @@ trait ReactorContract extends FunSuite {
     finally pool.close()
   }
 
-  // ---- Listening and closing as ops
+  // ---- Closing as an op
 
   test("a close op completes once the handle is closed, and fails the op pending on it") {
     withReactor { r =>

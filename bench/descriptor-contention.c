@@ -28,7 +28,7 @@
  *
  * On macOS, every descriptor call takes the process's descriptor table lock twice, and setting the signal mask takes
  * the process lock, so with threads the time per call grows with N, and with processes it does not; on Linux neither
- * does. See "macOS serialises descriptor system calls per process" in io-backends/kqueue/TODO.md.
+ * does. See "macOS's per-process locks" in docs/io/runtime.md.
  */
 #include <fcntl.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)

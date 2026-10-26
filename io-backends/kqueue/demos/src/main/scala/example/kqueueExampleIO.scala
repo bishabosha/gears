@@ -53,7 +53,7 @@ object KQueueExampleIO {
     }
   }
 
-  // Non-blocking I/O, now provided by the loop project under the names the demos used.
+  // Non-blocking I/O, now provided by gears' Native core (`NonBlocking`) under the names the demos used.
   export gears.async.io.internal.NonBlocking.{EOF, accept as nioAccept, read as nioReadBytes, write as nioWriteBytes}
 
   /** A non-blocking pipe, closed after `use`. */

@@ -40,7 +40,9 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[kqueue] var completion: Completion[KqueueOp] | Null = null
 
-  /** For a command that failed as soon as it was submitted: its failure, until its completion runs. */
+  /** For an op that failed as soon as it was submitted, or a command whose descriptor was closed while it waited: its
+    * failure, until its completion runs.
+    */
   private[kqueue] var atOnceFailure: Throwable | Null = null
 
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
@@ -313,7 +315,8 @@ final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable 
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
-  * thread. `KqueueBlocking`, the only kind, completes itself from the blocker pool.
+  * thread. `KqueueBlocking` completes itself from the blocker pool, and `Close`, when it cannot close at once, from the
+  * thread of the descriptor's last use.
   */
 sealed abstract class KqueuePromise extends KqueueOp {
   // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.

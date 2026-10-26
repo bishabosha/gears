@@ -106,11 +106,11 @@ object NWFrameworkOps
 sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
   def handle: Handle
 
-  /** What the command waits for (`NWFrameworkHandle.Read`, `Write` or `Connect`). */
+  /** What the command waits for (`NWFrameworkHandle.Read`, `Write`, `Connect` or `Close`). */
   def kind: Int
 
   /** The current submission's token, and the handle it resolved to when submitted, kept for its attempts since the
-    * number may be closed and reused meanwhile. Loop thread only.
+    * handle may be closed meanwhile. Loop thread only.
     */
   private[nwframework] var token = 0L
   private[nwframework] var target: NWFrameworkHandle | Null = null
@@ -143,8 +143,8 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
     }
 }
 
-/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): a descriptor is read into one as into
-  * the caller's buffer; a connection receives straight into one.
+/** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): a descriptor is read into one as into the
+  * caller's buffer; a connection receives straight into one.
   */
 final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
     extends NWFrameworkCommand {
@@ -236,7 +236,7 @@ sealed abstract class NWFrameworkOpening(into: Slot[Handle]) extends NWFramework
   /** Writes what was opened into the caller's slots. */
   protected def deliver(handle: Handle): Unit = into.set(handle)
 
-  /** Empties the caller's slots, once delivered, and closes what was opened. */
+  /** Empties the caller's slots, once delivered. */
   protected def undeliver(): Unit = into.clear(): Unit
 
   private[nwframework] def abandon(): Unit = if opened != null then {
@@ -338,7 +338,8 @@ final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCom
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what
   * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window, and
-  * otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`).
+  * otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`). With nothing remaining, done
+  * at once, with no system call.
   */
 final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
@@ -397,7 +398,9 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[I
   }
 }
 
-/** Sends `buf` as one datagram, to `to` or to the connected peer when `to` is null, consuming `buf`. */
+/** Sends `buf` as one datagram, consuming it: on a connected socket to its peer, which `to`, if given, must be, and
+  * never an empty one; on an unconnected socket to `to`, without which it fails.
+  */
 final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false

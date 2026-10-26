@@ -16,8 +16,8 @@ final class FactoryVThreadSupport[S <: Scheduler](factory: ThreadFactory) extend
 
   /** Where a boundary's body leaves its result each time it suspends or finishes. Results are counted, so a caller
     * waiting for the next one waits for a result newer than the one it saw before resuming, rather than for one not yet
-    * cleared: under `VThreadSupport`'s clear-then-wait, a `resumeAsync` clearing the result before a waiting `resume`
-    * had looked left that `resume` waiting on, woken by every later suspension of the body for nothing.
+    * cleared: with the clear-then-wait `VThreadSupport` once had, a `resumeAsync` clearing the result before a waiting
+    * `resume` had looked left that `resume` waiting on, woken by every later suspension of the body for nothing.
     */
   private[async] final class FactoryLabel[R]():
     private var result: Option[R] = None

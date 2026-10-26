@@ -78,7 +78,7 @@ val munit = "org.scalameta" %% "munit" % "1.3.6"
 
 // Settings of the I/O libraries published beside the core, under its organization and versions: the testkit, so that
 // a backend written elsewhere can check itself against the same contracts, and the backends but Network.framework's,
-// which stays an experiment (see its TODO).
+// which stays an experiment (see docs/io/nwframework.md).
 def ioLibrary(artifact: String) = Seq(
   name := artifact,
   publish / skip := false,
@@ -112,7 +112,7 @@ lazy val ioKqueue =
     .dependsOn(root.native, ioTestkit.native % Test)
 
 // The Network.framework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and
-// FIFOs, with their C side in its resources (see io-backends/nwframework/TODO.md). macOS only; every executable that
+// FIFOs, with their C side in its resources (see docs/io/nwframework.md). macOS only; every executable that
 // links it needs Network.framework.
 val networkFramework: Seq[String] =
   if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil

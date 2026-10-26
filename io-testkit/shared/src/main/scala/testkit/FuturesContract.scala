@@ -32,9 +32,10 @@ import munit.FunSuite
 
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
-  * `running`, which starts a program the platform's way (`ReactorFutures.run`); NIO's does so in each carrier mode and
-  * on one and several reactors, kqueue's on a pool of one and of several workers, Darwin's likewise. The checks with
-  * stream sockets use Unix ones on a backend that has them, and TCP on the loopback otherwise.
+  * `running`, which starts a program the platform's way (`ReactorFutures.run`); NIO's does so over `NioOnCaller`, with
+  * no reactor, and over `NioBackend` on a pool of one and of several workers, kqueue's on a pool of one and of several
+  * workers, Darwin's likewise. The checks with stream sockets use Unix ones on a backend that has them, and TCP on the
+  * loopback otherwise.
   */
 trait FuturesContract extends ProgramSuite {
 

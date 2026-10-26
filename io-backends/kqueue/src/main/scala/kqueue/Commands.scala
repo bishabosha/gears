@@ -38,8 +38,8 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   override def edgeTriggered: Boolean = true
 }
 
-/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): as `ReadIntoBuffer`, into a buffer
-  * taken when the descriptor is ready, and given back if it was not after all, or if the read fails.
+/** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): as `ReadIntoBuffer`, into a buffer taken when
+  * the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
 final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
   def interest: Interest = Interest.Read
@@ -79,7 +79,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   def perform(): Boolean = !buf.hasRemaining() || NonBlocking.write(fd, buf) >= 0
 }
 
-/** Accepts one connection on a listening socket, writing its descriptor into `into`. Done once a connection has been
+/** Accepts one connection on a listening socket, writing its handle into `into`. Done once a connection has been
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
 final case class Accept(fd: Int, into: Slot[Handle]) extends Command {
@@ -94,7 +94,7 @@ final case class Accept(fd: Int, into: Slot[Handle]) extends Command {
     1 // one connection, against the pending connections a listening socket's event reports
 }
 
-/** Accepts the connections pending on a listening socket, at most `max`, writing their descriptors into `into` (see
+/** Accepts the connections pending on a listening socket, at most `max`, writing their handles into `into` (see
   * `SocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val fd: Int, into: Slot[Array[Handle]], max: Int) extends Command {

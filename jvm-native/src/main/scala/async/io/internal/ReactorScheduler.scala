@@ -17,8 +17,8 @@ private[io] trait ReactorScheduler extends Scheduler {
     */
   def currentWorker: ReactorWorker
 
-  /** Keeps the caller on the thread `currentWorker` names until `unpin`, so that an op found a worker is submitted on
-    * that worker's thread: nothing to do where a caller cannot change thread, as on Scala Native; on the JVM, a virtual
+  /** Keeps the caller on the thread `currentWorker` names until `unpin`, so that an op is submitted on the thread of
+    * the worker it found: nothing to do where a caller cannot change thread, as on Scala Native; on the JVM, a virtual
     * thread carried by a worker is pinned to it (see `VirtualCarriers.pin`).
     */
   def pin(): Unit = ()

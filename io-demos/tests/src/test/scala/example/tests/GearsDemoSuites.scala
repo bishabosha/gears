@@ -22,7 +22,7 @@ trait GearsBenchCheck extends KQueueDemoSuite {
         "fairness-tick",
         "mixed",
         "mixed-compute"
-      ) ++ (if (hasReactors) Seq("timers") else Nil) // `timers` submits to a reactor, which only a reactor backend has
+      ) ++ (if (hasReactors) Seq("timers") else Nil) // `timers` is looked for on a reactor backend only
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
     assert(!output.contains("Exception"), output)
