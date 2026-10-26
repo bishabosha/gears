@@ -127,8 +127,10 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Receives one packet on an IP datagram socket into `buf`, which is cleared first and left flipped for reading, and
     * writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
-    * `buf.remaining`, the bytes beyond `buf`'s capacity being dropped. A buffer of no capacity fails the op with an
-    * `IllegalArgumentException`, receiving nothing, since it would drop a whole packet.
+    * `buf.remaining`, the bytes beyond `buf`'s capacity being dropped, silently, as every system's `recvfrom` and the
+    * JDK drop them: a protocol over datagrams fixes the largest packet it sends, and a receiver gives a buffer that
+    * holds it. A buffer of no capacity fails the op with an `IllegalArgumentException`, receiving nothing, since it
+    * would drop a whole packet.
     */
   def receive(handle: H, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 

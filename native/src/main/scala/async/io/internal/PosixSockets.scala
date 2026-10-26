@@ -257,7 +257,7 @@ object PosixSockets {
 
   /** Receive one packet and its sender. Returns -1 if a non-blocking socket has no packet ready; zero is a valid empty
     * datagram, not EOF. Initialize senderLength to the capacity of sender before each call. A packet larger than
-    * capacity is consumed and reported as an error.
+    * capacity fills it, the rest being dropped, and the count returned is the bytes that fitted.
     */
   def receiveDatagram(
       fd: Int,
@@ -286,9 +286,8 @@ object PosixSockets {
       if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK) -1
       else throw new IOException(s"Failed to receive datagram: ${cError()}")
     } else {
-      if ((msg.msg_flags & socket.MSG_TRUNC) != 0) {
-        throw new IOException(s"Datagram exceeds buffer capacity of $capacity bytes")
-      }
+      // A packet larger than the buffer fills it, the rest being dropped (MSG_TRUNC), as `recvfrom`, the JDK and
+      // Network.framework drop it: the packet is consumed either way, so failing would only lose what fitted.
       !senderLength = msg.msg_namelen
       read.toInt
     }

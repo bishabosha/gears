@@ -185,6 +185,28 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("a packet larger than the receive buffer fills it, the rest dropped, and the next packet arrives whole") {
+    withReactor { r =>
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      try {
+        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        try {
+          assertEquals(run(r, backend.ops.send(client, bytes("0123456789abcdef"))), null)
+          assertEquals(run(r, backend.ops.send(client, bytes("next"))), null)
+          def received(capacity: Int)(using munit.Location): String = {
+            val buf = allocate(capacity)
+            assertEquals(run(r, backend.ops.receive(server, buf, Slot[IpAddress]())), null)
+            val copy = new Array[Byte](buf.remaining())
+            buf.get(copy)
+            new String(copy, StandardCharsets.UTF_8)
+          }
+          assertEquals(received(4), "0123", "the bytes that fitted, the rest dropped")
+          assertEquals(received(16), "next", "the next packet, whole")
+        } finally close(r, client)
+      } finally close(r, server)
+    }
+  }
+
   test("a datagram socket's op completes once it is bound, and fails, leaving its slot empty, on an address in use") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
