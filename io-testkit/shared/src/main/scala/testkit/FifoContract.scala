@@ -41,6 +41,29 @@ trait FifoContract extends FileContract {
       }
     finally deleteAll(dir)
   }
+  test("a read waiting on a FIFO when its writer closes completes at the end of the stream") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val fifo = dir.resolve("fifo")
+        assertEquals(new ProcessBuilder("mkfifo", fifo.toString).start().waitFor(), 0)
+        val reader = openFifoForReading(r, fifo.toString)
+        try {
+          val writer = openFifoForWriting(r, fifo.toString)
+          val buf = allocate(16)
+          val read = Outcome()
+          r.submit(backend.ops.read(reader, buf), read)
+          for _ <- 1 to 5 do r.runOnce(block = false)
+          assert(!read.finished, "the read finished with the writer open and nothing written")
+          closeAlone(writer)
+          turnUntil(r)(read.finished)
+          assertEquals(read.completed, 1, String.valueOf(read.failure))
+          assertEquals(buf.position(), 0, "at the end of the stream, nothing read")
+        } finally closeAlone(reader)
+      }
+    finally deleteAll(dir)
+  }
+
   test("open refuses a FIFO, and openFifoForReading a regular file") {
     val dir = tempDir()
     try

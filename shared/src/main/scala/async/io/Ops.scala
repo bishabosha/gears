@@ -191,20 +191,26 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   * read and write at the position the handle carries, as a stream, for code that treats a file as one.
   *
   * Cancellation follows `BlockingOps.blocking`: an op not yet started is skipped, one running finishes on its thread
-  * with its result discarded, and `onCancel` runs once the thread has stopped touching the buffer.
+  * with its result discarded, and `onCancel` runs once the thread has stopped touching the buffer. A close that comes
+  * while an op on the file is in its system call waits for it: the op completes, as the call did, or, on the JDK, which
+  * fails a call on a channel closed under it, fails with an `IOException`; the close completes after, so the descriptor
+  * is never reused under the op.
   */
 trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Opens the regular file at `path` for reading, or for writing with `write`, and completes after writing its handle
-    * into `into`, which must be empty; anything but a regular file is refused, failing the op with an `IOException`, as
-    * a path that cannot be opened does. A cancel that arrives before the write leaves `into` empty and the file closed;
-    * one after it is too late, and the op completes (see `BlockingOps.blocking`).
+    * into `into`, which must be empty: a file that exists, which opening for writing neither creates nor truncates.
+    * Anything but a regular file is refused, failing the op with an `IOException`, as a path that cannot be opened
+    * does; a path with a NUL in it is refused as the op is built, with an `IllegalArgumentException`. A cancel that
+    * arrives before the write leaves `into` empty and the file closed; one after it is too late, and the op completes
+    * (see `BlockingOps.blocking`).
     */
   def open(path: String, write: Boolean, into: Slot[File]): Op
 
   /** Fills `buf` from the file at `offset`, as `Ops.read` fills it from a stream: completes once at least one byte has
     * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced; and
-    * fails, as it does, if `buf` has no room.
+    * fails, as it does, if `buf` has no room. A negative `offset` is refused as the op is built, with an
+    * `IllegalArgumentException`, as it is for `write`.
     */
   def read(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
@@ -214,16 +220,21 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
     */
   def write(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
-  /** Completes once the file's written bytes have reached the device, as `fsync` does. */
+  /** Completes once the file's written bytes, and its metadata, have been handed to the device, as `fsync` does: a
+    * drive may hold them in its own cache a while longer (on macOS, `F_FULLFSYNC` would flush that), so this is the
+    * system's promise, not one against losing power.
+    */
   def sync(handle: File): Op & Repeatable
 }
 
 /** Name resolution, for a backend that has it (see `ResolveBackend`). */
 trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form,
-    * into `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. A cancel that
-    * arrives before the write leaves `into` empty; one after it is too late, and the op completes.
+  /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form
+    * (an IPv6 one as `inet_ntop` writes it), into `into`, which must be empty; fails with an `IOException` if the name
+    * cannot be resolved, or has no IPv4 or IPv6 address. An empty name, or one with a NUL in it, is refused as the op
+    * is built, with an `IllegalArgumentException`. A cancel that arrives before the write leaves `into` empty; one
+    * after it is too late, and the op completes.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
@@ -326,6 +337,31 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
 }
 
 private[io] object Ops {
+
+  /** Checks a path an op names: a NUL would end it early as a C string, so the op would act on another path. */
+  def checkPath(path: String): Unit =
+    if path.indexOf('\u0000') >= 0 then
+      throw new IllegalArgumentException(s"The path has a NUL in it: ${path.replace("\u0000", "\\0")}")
+
+  /** Checks a host name to resolve: an empty one names nothing (the JDK would take it for the loopback address), and a
+    * NUL would end it early.
+    */
+  def checkHost(host: String): Unit = {
+    if host.isEmpty then throw new IllegalArgumentException("An empty host name names no host")
+    if host.indexOf('\u0000') >= 0 then
+      throw new IllegalArgumentException(s"The host name has a NUL in it: ${host.replace("\u0000", "\\0")}")
+  }
+
+  /** Checks a file offset: a negative one names no byte of the file. */
+  def checkOffset(offset: Long): Unit =
+    if offset < 0 then throw new IllegalArgumentException(s"A file offset must not be negative: $offset")
+
+  /** `addresses` resolved for `host`, failing if there are none: a name with no IPv4 or IPv6 address cannot be
+    * connected to, which the caller learns here rather than from an empty list.
+    */
+  def resolved(host: String, addresses: List[ResolvedAddress]): List[ResolvedAddress] =
+    if addresses.isEmpty then throw new java.io.IOException(s"Failed to resolve $host: it has no IPv4 or IPv6 address")
+    else addresses
 
   /** The failure of an op submitted with a slot that still holds a value (see `Slot`), before it does anything: what it
     * opened, accepted or received would have nowhere to go, an opened handle leaking; null if `slots` are all empty.

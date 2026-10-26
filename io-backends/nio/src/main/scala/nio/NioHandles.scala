@@ -178,9 +178,27 @@ private[nio] object SelectorPool {
   * to the file.
   */
 private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
-  def read(buf: ByteBuffer): Int = channel.read(buf)
-  def write(buf: ByteBuffer): Int = channel.write(buf)
+  def read(buf: ByteBuffer): Int = RegularFile.failing(channel.read(buf))
+  def write(buf: ByteBuffer): Int = RegularFile.failing(channel.write(buf))
+  def read(buf: ByteBuffer, offset: Long): Int = RegularFile.failing(channel.read(buf, offset))
+  def write(buf: ByteBuffer, offset: Long): Int = RegularFile.failing(channel.write(buf, offset))
+  def force(): Unit = RegularFile.failing(channel.force(true)) // the metadata too, as fsync syncs it
   def close(): Unit = channel.close()
+}
+
+private[nio] object RegularFile {
+
+  /** Runs a `FileChannel` call with its unchecked failures as the `IOException` the Native backends' `EBADF` gives:
+    * reading a file opened for writing, or writing one opened for reading.
+    */
+  inline def failing[A](inline call: A): A =
+    try call
+    catch {
+      case _: java.nio.channels.NonReadableChannelException =>
+        throw new IOException("Failed to read: the file was opened for writing")
+      case _: java.nio.channels.NonWritableChannelException =>
+        throw new IOException("Failed to write: the file was opened for reading")
+    }
 }
 
 /** Either kind of socket address. */

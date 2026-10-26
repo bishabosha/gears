@@ -148,7 +148,7 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     else if h.isFile || h.isDescriptor then {
-      val read = NonBlocking.read(h.fd, buf) // -1 at EOF, which leaves the buffer as it was
+      val read = h.using(NonBlocking.read(_, buf)) // -1 at EOF, which leaves the buffer as it was
       if read != 0 || h.isFile then true
       else h.armed(read = true, reactor, token)
     } else {
@@ -172,7 +172,7 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
       if slot == null then throw new IOException("The pool has no buffer free")
       val buffer = slot.nn.buffer
       val read =
-        try NonBlocking.read(h.fd, buffer) // -1 at EOF, which leaves the buffer as it was
+        try h.using(NonBlocking.read(_, buffer)) // -1 at EOF, which leaves the buffer as it was
         catch {
           case failure: Throwable =>
             slot.nn.release() // a failed read holds nothing
@@ -300,6 +300,7 @@ final class NWFrameworkOpenDatagram(
   */
 final class NWFrameworkOpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kindOf: Handle => K)
     extends NWFrameworkOpening(into, kindOf) {
+  gears.async.io.Ops.checkPath(path)
   protected def make(): Handle = NWFrameworkHandles.openFifo(path, write)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = true
 }
@@ -376,7 +377,7 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
     if !buf.hasRemaining() && !sent then true // nothing to write: done, with no system call
     else if h.isFile || h.isDescriptor then {
-      if NonBlocking.write(h.fd, buf) >= 0 || !buf.hasRemaining() || h.isFile then true
+      if h.using(NonBlocking.write(_, buf)) >= 0 || !buf.hasRemaining() || h.isFile then true
       else h.armed(read = false, reactor, token)
     } else if sent then {
       sent = false
@@ -498,9 +499,10 @@ final class NWFrameworkBlockingResultTask[A <: AnyRef](body: () => A, into: Slot
   * resolver of its own, only connections by host name.
   */
 final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) extends NWFrameworkBlocking {
+  gears.async.io.Ops.checkHost(host)
   override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = PosixResolver.lookup(host) match {
-    case Right(addresses) => publish(into, addresses)
+    case Right(addresses) => publish(into, gears.async.io.Ops.resolved(host, addresses))
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
   }
 }
@@ -510,6 +512,7 @@ final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) 
   */
 final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[NWFrameworkKinds.File])
     extends NWFrameworkBlocking {
+  gears.async.io.Ops.checkPath(path)
   override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     val handle = NWFrameworkHandles.openFile(path, write)
@@ -518,13 +521,14 @@ final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[NWFrame
 }
 
 /** A file op on the blocker pool, on the descriptor of a regular file: the handle is resolved when the task runs, so
-  * that one closed meanwhile fails the op.
+  * that one closed meanwhile fails the op, and its descriptor held open while the op uses it, so that a close meanwhile
+  * waits for it rather than letting the number be reused under it.
   */
 sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFrameworkBlocking with Repeatable {
-  protected def fd: Int = {
+  protected def usingFd[A](body: Int => A): A = {
     val h = NWFrameworkHandles.get(handle)
     if !h.isFile then throw new IOException(s"Handle $handle is not a regular file")
-    h.fd
+    h.using(body)
   }
 }
 
@@ -533,8 +537,8 @@ sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFramewor
   */
 final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends NWFrameworkFileTask(handle) {
-  def block(): Unit = {
-    val descriptor = fd // a closed handle fails first
+  gears.async.io.Ops.checkOffset(offset)
+  def block(): Unit = usingFd { descriptor => // a closed handle fails first
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     val read = unistd.pread(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if read < 0 then throw new IOException(s"Failed to read descriptor $descriptor at $offset: ${cError()}")
@@ -542,15 +546,15 @@ final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private v
     unlessCancelled {
       NativeBuffer.advance(buf, n)
       offset += n
-    }
+    }: Unit
   }
 }
 
 /** A write at an offset (see `FileOps.write`): `pwrite` at the op's offset, which each completion advances. */
 final class NWFrameworkPositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends NWFrameworkFileTask(handle) {
-  def block(): Unit = {
-    val descriptor = fd // a closed handle fails first, with nothing to write too
+  gears.async.io.Ops.checkOffset(offset)
+  def block(): Unit = usingFd { descriptor => // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(descriptor)
   }
 
@@ -567,8 +571,7 @@ final class NWFrameworkPositionalWrite(handle: Handle, buf: ByteBuffer, private 
 
 /** `fsync` (see `FileOps.sync`). */
 final class NWFrameworkFileSync(handle: Handle) extends NWFrameworkFileTask(handle) {
-  def block(): Unit = {
-    val descriptor = fd
+  def block(): Unit = usingFd { descriptor =>
     if unistd.fsync(descriptor) < 0 then throw new IOException(s"Failed to sync descriptor $descriptor: ${cError()}")
   }
 }

@@ -501,23 +501,26 @@ final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extend
 
 /** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
+  gears.async.io.Ops.checkHost(host)
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = publish(into, Resolve.addresses(host))
 }
 
 private[nio] object Resolve {
 
-  /** `host`'s addresses, in numeric form, looked up with `InetAddress`, which blocks. */
+  /** `host`'s addresses, in numeric form, looked up with `InetAddress`, which blocks: an IPv6 one as `inet_ntop` writes
+    * it (`IpText`), where the JDK writes every group in full, and without a scope, as the Native backends give it.
+    */
   def addresses(host: String): List[ResolvedAddress] = {
     val addresses =
       try InetAddress.getAllByName(host).toList
       catch case e: IOException => throw new IOException(s"Failed to resolve $host: ${e.getMessage}", e)
-    addresses.map {
-      case v4: Inet4Address => ResolvedAddress(AddressFamily.IPv4, v4.getHostAddress)
-      case v6               =>
-        val text = v6.getHostAddress
-        val scope = text.indexOf('%')
-        ResolvedAddress(AddressFamily.IPv6, if scope < 0 then text else text.substring(0, scope))
-    }
+    gears.async.io.Ops.resolved(
+      host,
+      addresses.map {
+        case v4: Inet4Address => ResolvedAddress(AddressFamily.IPv4, v4.getHostAddress)
+        case v6               => ResolvedAddress(AddressFamily.IPv6, gears.async.io.IpText.ipv6(v6.getAddress))
+      }
+    )
   }
 }

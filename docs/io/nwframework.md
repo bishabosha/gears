@@ -248,6 +248,8 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
   descriptors waited on through a Dispatch source with pooled reads; a wake-up lost between the writer's close and the
   reader's next pooled read is the first thing to look at. Open.
 - **The slim build's 10 µs over the state-in-C one** is open, at the handle's monitor (above).
+- **A read waiting on a FIFO when its writer closes waits for ever**, as on kqueue, whose filter Dispatch's read source
+  is: see [`kqueue.md`](kqueue.md), "What is open".
 
 ## Skywalk as a backend without Dispatch: a design note, not built
 

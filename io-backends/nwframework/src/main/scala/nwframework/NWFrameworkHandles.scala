@@ -97,6 +97,53 @@ private[nwframework] final class NWFrameworkHandle(
   private var connectToken = 0L
   private var watcher: NWFrameworkReactor | Null = null
 
+  // A pipe's, FIFO's or file's uses of its descriptor in progress (`using`), and the close that waits for the last of
+  // them to end: a descriptor closed while a use is in its system call may be reused meanwhile, by another open, whose
+  // bytes the use would then read or overwrite, so it closes once the last use has ended, as kqueue's does.
+  private var uses = 0
+  private var deferredClose: (() => Unit) | Null = null
+
+  /** Runs `body` with the descriptor, which stays open until it returns; throws if the handle is closed. */
+  inline def using[A](inline body: Int => A): A = {
+    val descriptor = begin()
+    try body(descriptor)
+    finally end()
+  }
+
+  private def begin(): Int = synchronized {
+    checkOpen()
+    uses += 1
+    fd
+  }
+
+  private def end(): Unit = synchronized {
+    uses -= 1
+    if uses == 0 && deferredClose != null then {
+      val close = deferredClose.nn
+      deferredClose = null
+      close()
+    }
+  }
+
+  /** Closes the descriptor of a pipe, FIFO or file, by `closeNow`, once no use of it is in progress: true if now. */
+  private def closeDescriptor(closeNow: () => Unit): Boolean =
+    if uses == 0 then {
+      closeNow()
+      true
+    } else {
+      deferredClose = closeNow
+      false
+    }
+
+  /** A file's descriptor closed, telling the close op waiting for it. Under the lock. */
+  private def closeFile(): Unit = {
+    unistd.close(fd)
+    released = true
+    val reactor = closeReactor
+    closeReactor = null
+    if reactor != null then reactor.nn.notified(closeToken)
+  }
+
   private def closedFailure = new IOException("The handle was closed")
   private def failure(what: String, errno: Int) =
     new IOException(s"$what failed: ${NWFrameworkHandles.errorText(if errno != 0 then errno else 5)}")
@@ -549,7 +596,8 @@ private[nwframework] final class NWFrameworkHandle(
     * with the close waiter registered, told once the cancelled state has come, when `closeDone` is true. For a
     * connection that is once its sends have gone; for a listener, or a bound datagram socket, once the framework has
     * let its port go, so that a port whose listener's close op has completed can be listened on again at once, which
-    * completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once: true.
+    * completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once, true,
+    * unless a use of it is in its system call: then once that ends, the close waiter told.
     */
   def closeAsync(reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
     if closed then throw closedFailure
@@ -557,14 +605,21 @@ private[nwframework] final class NWFrameworkHandle(
     take(Connect)
     take(Read)
     take(Write)
-    if ptr == null then {
-      unistd.close(fd)
-      released = true
-      true
-    } else if kind == NWFrameworkHandle.Descriptor || kind == NWFrameworkHandle.File then {
-      NWFrameworkIo.nwf_cancel_async(ptr) // its sources' cancellation closes the descriptor; no state to wait for
-      finishClose()
-      true
+    if ptr == null || kind == NWFrameworkHandle.Descriptor then {
+      // A file closes its descriptor; a pipe's or FIFO's sources' cancellation closes it, with no state to wait for.
+      // Either waits for a use of the descriptor in its system call to end.
+      val now = closeDescriptor(() =>
+        if ptr == null then closeFile()
+        else {
+          NWFrameworkIo.nwf_cancel_async(ptr)
+          finishClose()
+        }
+      )
+      if !now then { // told once the last use ends
+        closeReactor = reactor
+        closeToken = token
+      }
+      now
     } else {
       if kind == NWFrameworkHandle.Listener || kind == NWFrameworkHandle.BoundDatagram then cancelChildren()
       closeReactor = reactor
@@ -630,14 +685,19 @@ private[nwframework] final class NWFrameworkHandle(
       take(Read)
       take(Write)
       watcher = null
-      if ptr != null then {
+      if ptr == null then closeDescriptor(() => closeFile()): Unit
+      else {
         NWFrameworkIo.nwf_handle_watch(ptr, null, 0)
         cancelChildren()
-        NWFrameworkIo.nwf_cancel(ptr)
-        finishClose()
-      } else {
-        unistd.close(fd)
-        released = true
+        if kind == NWFrameworkHandle.Descriptor then
+          closeDescriptor(() => {
+            NWFrameworkIo.nwf_cancel(ptr)
+            finishClose()
+          }): Unit
+        else {
+          NWFrameworkIo.nwf_cancel(ptr)
+          finishClose()
+        }
       }
     }
 }

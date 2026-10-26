@@ -57,6 +57,38 @@ class NioOnCallerSuite extends FuturesContract {
     }
     assertEquals(outcome, "no runner")
   }
+
+  test("an interrupt the caller's thread already had neither fails nor closes a file it reads, and is kept") {
+    given VThreadSupport.type = VThreadSupport
+    given VThreadScheduler.type = VThreadScheduler
+    val path = java.nio.file.Files.createTempFile("gears-io", ".txt")
+    java.nio.file.Files.writeString(path, "file")
+    var read = ""
+    var kept = false
+    try
+      Async.blocking {
+        val io = OnCaller(NioOnCaller)
+        val into = Slot[io.File]()
+        io.perform(io.backend.ops.open(path.toString, write = false, into))
+        val file = into.clear()
+        val arena = BufferArena.open()
+        try {
+          val buf = arena.allocate(16)
+          Thread.currentThread().interrupt() // a JDK FileChannel used with it set closes
+          io.perform(io.backend.ops.read(file, buf, 0))
+          kept = Thread.interrupted()
+          buf.flip()
+          read = StandardCharsets.UTF_8.decode(buf).toString
+          io.perform(io.backend.ops.read(file, arena.allocate(16), 0)) // the file is still open
+        } finally {
+          io.perform(io.backend.ops.close(file))
+          arena.close()
+        }
+      }
+    finally java.nio.file.Files.delete(path)
+    assertEquals(read, "file")
+    assert(kept, "the interrupt was lost")
+  }
 }
 
 /** `FuturesContract` over `NioBackend`: futures carried by a pool of `workers` workers driving its reactors. */

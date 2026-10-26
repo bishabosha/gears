@@ -32,6 +32,12 @@ trait BlockingRun {
     */
   protected def settled(failure: Throwable | Null): Unit
 
+  /** Whether a cancel interrupts the thread running `block`: not for a task whose interruption would do harm, such as
+    * one on a JDK `FileChannel`, which an interrupt closes; such a task runs to its end, its result discarded unless
+    * already written, as a native call's is.
+    */
+  protected def interruptible: Boolean = true
+
   // Guarded by `this`: the thread running `block`, whether the task was cancelled, and whether `block` has returned.
   private var runner: Thread | Null = null
   private var cancelled = false
@@ -103,9 +109,14 @@ trait BlockingRun {
     * was interrupted meanwhile, its result unpublished; otherwise what it threw, if anything, is rethrown.
     */
   def runHere(): Unit = {
-    if !runBlock() || synchronized(cancelled) then throw new CancellationException()
-    val failure = thrown
-    if failure != null then throw failure
+    // An interrupt the thread already had is not a cancel of this task: kept aside, so that it neither ends `block` at
+    // once nor closes a `FileChannel` it uses, and restored after.
+    val interruptedBefore = Thread.interrupted()
+    try {
+      if !runBlock() || synchronized(cancelled) then throw new CancellationException()
+      val failure = thrown
+      if failure != null then throw failure
+    } finally if interruptedBefore then Thread.currentThread().interrupt()
   }
 
   /** Marks the task cancelled and interrupts its thread if it is running. Returns true if the pool still holds it,
@@ -117,7 +128,7 @@ trait BlockingRun {
   def interrupt(): Boolean = synchronized {
     cancelled = true
     val running = runner
-    if running != null then running.interrupt()
+    if running != null && interruptible then running.interrupt()
     !ended
   }
 

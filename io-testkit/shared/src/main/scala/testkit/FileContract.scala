@@ -98,6 +98,52 @@ trait FileContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  test("open for writing neither creates nor truncates, and a file is read or written only as it was opened") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val missing = dir.resolve("missing.txt")
+        val into = Slot[File]()
+        val failure = run(r, backend.ops.open(missing.toString, write = true, into))
+        assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+        assert(!Files.exists(missing), "open for writing created the file")
+        val path = dir.resolve("kept.txt")
+        Files.write(path, "kept".getBytes(StandardCharsets.UTF_8))
+        val writable = open(r, path, write = true)
+        try {
+          for op <- List(backend.ops.read(writable, allocate(8), 0), backend.ops.read(writable, allocate(8))) do {
+            val failure = run(r, op)
+            assert(failure.isInstanceOf[IOException], s"a read of a file opened for writing: $failure")
+          }
+        } finally close(r, writable)
+        val readable = open(r, path, write = false)
+        try {
+          for op <- List(backend.ops.write(readable, bytes("x"), 0), backend.ops.write(readable, bytes("x"))) do {
+            val failure = run(r, op)
+            assert(failure.isInstanceOf[IOException], s"a write of a file opened for reading: $failure")
+          }
+        } finally close(r, readable)
+        assertEquals(Files.readString(path), "kept")
+      }
+    finally deleteAll(dir)
+  }
+
+  test("a negative offset, or a path with a NUL, is refused as the op is built") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("file.txt")
+        Files.write(path, "x".getBytes(StandardCharsets.UTF_8))
+        val file = open(r, path, write = true)
+        try {
+          intercept[IllegalArgumentException](backend.ops.read(file, allocate(8), -1))
+          intercept[IllegalArgumentException](backend.ops.write(file, bytes("x"), -1))
+        } finally close(r, file)
+        intercept[IllegalArgumentException](backend.ops.open(s"$path\u0000.txt", write = false, Slot[File]()))
+      }
+    finally deleteAll(dir)
+  }
+
   test("a positional write lands at its offset, and sync completes") {
     val dir = tempDir()
     try

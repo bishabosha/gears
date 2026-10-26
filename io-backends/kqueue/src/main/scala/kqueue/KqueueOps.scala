@@ -191,6 +191,7 @@ final class OpenDatagram[K <: Handle](
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`). */
 final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kind: Handle => K)
     extends OpensAtOnce(into, kind) {
+  gears.async.io.Ops.checkPath(path)
   protected def open(): Int = KqueueHandles.fifoDescriptor(path, write)
 }
 

@@ -12,9 +12,10 @@ import java.io.IOException
   * `IOException` carrying the resolver's error.
   */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends KqueueBlocking {
+  gears.async.io.Ops.checkHost(host)
   override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = PosixResolver.lookup(host) match {
-    case Right(addresses) => publish(into, addresses) // not if cancelled during the lookup
+    case Right(addresses) => publish(into, gears.async.io.Ops.resolved(host, addresses)) // not if cancelled meanwhile
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
   }
 }

@@ -17,4 +17,17 @@ trait ResolveContract extends ReactorContract {
     }
   }
 
+  test("resolve writes an IPv6 address as inet_ntop does, and refuses an empty name or one with a NUL as it is built") {
+    withReactor { r =>
+      for numeric <- List("::1", "0:0:0:0:0:0:0:1", "2001:DB8:0:0:1:0:0:1") do {
+        val into = Slot[List[ResolvedAddress]]()
+        assertEquals(run(r, backend.ops.resolve(numeric, into)), null)
+        val expected = if numeric == "2001:DB8:0:0:1:0:0:1" then "2001:db8::1:0:0:1" else "::1"
+        assertEquals(into.clear(), List(ResolvedAddress(AddressFamily.IPv6, expected)), numeric)
+      }
+      intercept[IllegalArgumentException](backend.ops.resolve("", Slot[List[ResolvedAddress]]()))
+      intercept[IllegalArgumentException](backend.ops.resolve("local\u0000host", Slot[List[ResolvedAddress]]()))
+    }
+  }
+
 }

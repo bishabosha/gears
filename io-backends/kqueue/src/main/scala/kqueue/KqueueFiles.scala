@@ -22,6 +22,7 @@ import KqueueBackend.Handle
   * closes it again, since the handle never reaches the caller.
   */
 final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File]) extends KqueueBlocking {
+  gears.async.io.Ops.checkPath(path)
   override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     val handle = KqueueHandles.openFile(path, write)
@@ -35,6 +36,7 @@ final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File])
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
+  gears.async.io.Ops.checkOffset(offset)
   def block(): Unit = KqueueHandles.using(handle) {
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     val fd = handle.fd
@@ -54,6 +56,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
+  gears.async.io.Ops.checkOffset(offset)
   def block(): Unit = KqueueHandles.using(handle) { // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(handle.fd)
   }
