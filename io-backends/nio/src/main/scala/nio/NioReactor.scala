@@ -1,11 +1,6 @@
 package gears.async.io
 package nio
 
-import java.nio.channels.CancelledKeyException
-import java.nio.channels.SelectionKey
-import java.nio.channels.Selector
-import java.util.concurrent.TimeoutException
-
 import gears.async.io.Completion
 import gears.async.io.Interest
 import gears.async.io.Ops
@@ -13,14 +8,19 @@ import gears.async.io.Reactor
 import gears.async.io.Repeatable
 import gears.async.io.internal.TimerHeap
 
+import java.nio.channels.CancelledKeyException
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
+import java.util.concurrent.TimeoutException
+
 /** The NIO implementation of `Reactor`, for ops built by `NioOps`, over a `Selector`. A command is performed as soon as
   * it is submitted when it allows that; otherwise, or when it would block, it waits for readiness and is performed on
   * the loop thread. A selectable channel waits on its key in this reactor's selector, whose interest ops follow the
   * commands pending on it, brought up to date once per turn, before the select, so a read finishing and the next one
-  * submitted from its completion change nothing. A regular file is always ready, so a command on it that is not done
-  * is performed again next turn. Timers, and the ops with a time limit, are kept in a heap on the loop thread and
-  * bound how long a select blocks; an op that times out is withdrawn as a cancelled one is, with `onFailure` instead
-  * of `onCancel`. `wakeup`, and blocking tasks finishing, wake the selector.
+  * submitted from its completion change nothing. A regular file is always ready, so a command on it that is not done is
+  * performed again next turn. Timers, and the ops with a time limit, are kept in a heap on the loop thread and bound
+  * how long a select blocks; an op that times out is withdrawn as a cancelled one is, with `onFailure` instead of
+  * `onCancel`. `wakeup`, and blocking tasks finishing, wake the selector.
   *
   * The selector's keys belong to the channels: closing a handle cancels its keys, so a command pending on it never
   * finishes, and is only cancelled, as with the kqueue backend.
@@ -32,11 +32,11 @@ final class NioReactor private (selector: Selector) extends Reactor {
 
   def ops: Ops[Op, Handle] = NioOps
 
-
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
-  /** What waits on one channel's key in this selector: a command for each direction, and the interest ops each wants. */
+  /** What waits on one channel's key in this selector: a command for each direction, and the interest ops each wants.
+    */
   private final class Waiting {
     var read: Command | Null = null
     var write: Command | Null = null
@@ -45,8 +45,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
     var dirty = false // queued in `changed`
   }
 
-  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may
-    * then submit the op again.
+  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may then
+    * submit the op again.
     */
   private def take(op: NioOp): Completion[NioOp] = {
     val completion = op.completion.nn
@@ -122,9 +122,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
   def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
     submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
-  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure
-    * as an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns
-    * false.
+  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure as
+    * an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns false.
     */
   private def opened(connect: ConnectTo, pending: Completion[NioOp], finishNow: Boolean): Boolean =
     try {
@@ -142,7 +141,12 @@ final class NioReactor private (selector: Selector) extends Reactor {
     * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
     * limit, goes into the timer heap to time out when it is due.
     */
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
+  private def submitOrFinish[C <: Op](
+      op: C,
+      completion: Completion[C],
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
     var finished = false
     var waits = false
     op match {
@@ -154,7 +158,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     val pending = completion.asInstanceOf[Completion[NioOp]] // only ever called with `op`, which is a C
     op match {
       case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command =>
+      case command: Command                                           =>
         // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
         var failure: java.io.IOException | Null = null
         val entry =
@@ -217,7 +221,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
         timer.completion = pending
         schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
       case blocking: NioBlocking =>
-        if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
+        if blocking.cancelling != null then
+          throw new IllegalStateException(s"$op is still running after being cancelled")
         blocking.reset() // a `Repeatable` promise's previous outcome
         blocking.reactor = this
         blocking.completion = pending
@@ -244,8 +249,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
     finished
   }
 
-  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
-    * time out then (see `fireDueTimers`).
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
+    * out then (see `fireDueTimers`).
     */
   private def schedule(op: NioOp, milliseconds: Int): Unit = {
     op.deadline = System.nanoTime() + milliseconds * 1_000_000L
@@ -254,7 +259,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
     timers.add(op)
   }
 
-  /** `command`'s key in this selector for `s`'s channel, registering the channel with no interest ops the first time. */
+  /** `command`'s key in this selector for `s`'s channel, registering the channel with no interest ops the first time.
+    */
   private def keyFor(command: Command, s: Selectable): SelectionKey = {
     val cached = command.key
     if cached != null && (cached.selector() eq selector) && (cached.channel() eq s.channel) && cached.isValid then
@@ -356,8 +362,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
-  /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from
-    * the loop, with `ClosedChannelException`, as `Ops.close` says.
+  /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from the
+    * loop, with `ClosedChannelException`, as `Ops.close` says.
     */
   private[nio] def closed(entry: Selectable): Unit =
     if !closed then {
@@ -421,7 +427,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
         case _ =>
           if completion != null then {
             val failure = promise.failure
-            if failure != null then deliverFailure(completion, promise, failure) else deliverComplete(completion, promise)
+            if failure != null then deliverFailure(completion, promise, failure)
+            else deliverComplete(completion, promise)
           }
       }
       remaining -= 1
@@ -578,9 +585,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
     markChanged(key, waiting)
   }
 
-  /** Delivers commands that finished when submitted, resolved promises and regular files, selects once,
-    * performs what it found ready, fires due timers, then delivers promises resolved meanwhile. It blocks in the select
-    * only if asked to and nothing was delivered first, and skips the select after delivering something, except every
+  /** Delivers commands that finished when submitted, resolved promises and regular files, selects once, performs what
+    * it found ready, fires due timers, then delivers promises resolved meanwhile. It blocks in the select only if asked
+    * to and nothing was delivered first, and skips the select after delivering something, except every
     * `NioReactor.PollEvery` turns.
     */
   def runOnce(block: Boolean): Unit = {
@@ -637,8 +644,9 @@ final class NioReactor private (selector: Selector) extends Reactor {
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
         timers.poll() match {
-          case timer: NioTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
-          case op              => timedOut(op)
+          case timer: NioTimer =>
+            if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op => timedOut(op)
         }
     }
 

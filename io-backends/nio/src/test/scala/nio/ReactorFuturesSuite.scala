@@ -1,21 +1,20 @@
 package gears.async.io
 package nio
 
-import gears.async.io.Io
-import gears.async.io.OnCaller
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
-
-import java.nio.charset.StandardCharsets
-
+import gears.async.io.Io
+import gears.async.io.OnCaller
+import gears.async.io.internal.ReactorScheduler
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
 import gears.async.io.testkit.BufferArena
 import gears.async.io.testkit.FuturesContract
-import gears.async.io.internal.ReactorScheduler
+
+import java.nio.charset.StandardCharsets
 
 /** `FuturesContract` over `NioOnCaller`: gears' own virtual threads, each op performed on its own thread. */
 class NioOnCallerSuite extends FuturesContract {

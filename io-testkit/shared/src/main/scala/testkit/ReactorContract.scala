@@ -9,14 +9,15 @@ import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+
 import munit.FunSuite
 
-/** What every backend's reactors must do, as `Reactor` and `Ops` describe it, checked through the interface
-  * alone, so that code written against it runs the same on any backend. A backend's suite extends this, and the
-  * contracts of the capabilities its backend has (`SocketContract`, `FileContract`, `ResolveContract`,
-  * `ReadinessContract`, `UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with the backend; buffers come
-  * from the platform's `BufferArena`. Each check drives one reactor, or two, from the test's thread, and uses handles
-  * only through ops, since a backend need not have readiness. The streams here are pipes, the simplest a backend has.
+/** What every backend's reactors must do, as `Reactor` and `Ops` describe it, checked through the interface alone, so
+  * that code written against it runs the same on any backend. A backend's suite extends this, and the contracts of the
+  * capabilities its backend has (`SocketContract`, `FileContract`, `ResolveContract`, `ReadinessContract`,
+  * `UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with the backend; buffers come from the platform's
+  * `BufferArena`. Each check drives one reactor, or two, from the test's thread, and uses handles only through ops,
+  * since a backend need not have readiness. The streams here are pipes, the simplest a backend has.
   */
 trait ReactorContract extends FunSuite {
 
@@ -415,7 +416,10 @@ trait ReactorContract extends FunSuite {
       val into = Slot[String]()
       val reactorThread = Thread.currentThread()
       val outcome = Outcome()
-      r.submit(backend.ops.blocking(() => if Thread.currentThread() eq reactorThread then "same" else "other", into), outcome)
+      r.submit(
+        backend.ops.blocking(() => if Thread.currentThread() eq reactorThread then "same" else "other", into),
+        outcome
+      )
       turnUntil(r)(outcome.finished)
       assertEquals(outcome.completed, 1)
       assertEquals(into.clear(), "other")
@@ -606,80 +610,86 @@ trait ReactorContract extends FunSuite {
 
   test("a pooled read fills a buffer of the pool's, which release gives back") {
     val pool = backend.pool(bufferSize = 64, buffers = 2)
-    try withReactor { r =>
-      val (in, out) = pipe(r)
-      try {
-        val into = Slot[Received]()
-        val outcome = Outcome()
-        r.submit(backend.ops.read(in, pool, into), outcome)
-        for _ <- 1 to 3 do r.runOnce(block = false)
-        assertEquals(outcome.completed, 0)
-        r.submit(backend.ops.write(out, bytes("pooled")), Outcome())
-        turnUntil(r)(outcome.finished)
-        assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
-        val received = into.clear()
-        assertEquals(received.buffer.position(), 0)
-        assertEquals(textOf(received), "pooled")
-        assertEquals(pool.available, 1)
-        received.release()
-        assertEquals(pool.available, 2)
-      } finally {
-        close(r, in)
-        close(r, out)
+    try
+      withReactor { r =>
+        val (in, out) = pipe(r)
+        try {
+          val into = Slot[Received]()
+          val outcome = Outcome()
+          r.submit(backend.ops.read(in, pool, into), outcome)
+          for _ <- 1 to 3 do r.runOnce(block = false)
+          assertEquals(outcome.completed, 0)
+          r.submit(backend.ops.write(out, bytes("pooled")), Outcome())
+          turnUntil(r)(outcome.finished)
+          assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+          val received = into.clear()
+          assertEquals(received.buffer.position(), 0)
+          assertEquals(textOf(received), "pooled")
+          assertEquals(pool.available, 1)
+          received.release()
+          assertEquals(pool.available, 2)
+        } finally {
+          close(r, in)
+          close(r, out)
+        }
       }
-    } finally pool.close()
+    finally pool.close()
   }
 
   test("a pooled read at the end of the stream completes with an empty buffer") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try withReactor { r =>
-      val (in, out) = pipe(r)
-      try {
-        close(r, out)
-        val into = Slot[Received]()
-        val outcome = Outcome()
-        r.submit(backend.ops.read(in, pool, into), outcome)
-        turnUntil(r)(outcome.finished)
-        assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
-        val received = into.clear()
-        assertEquals(received.buffer.remaining(), 0)
-        received.release()
-      } finally close(r, in)
-    } finally pool.close()
+    try
+      withReactor { r =>
+        val (in, out) = pipe(r)
+        try {
+          close(r, out)
+          val into = Slot[Received]()
+          val outcome = Outcome()
+          r.submit(backend.ops.read(in, pool, into), outcome)
+          turnUntil(r)(outcome.finished)
+          assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+          val received = into.clear()
+          assertEquals(received.buffer.remaining(), 0)
+          received.release()
+        } finally close(r, in)
+      }
+    finally pool.close()
   }
 
   test("a pooled read fails when the pool has no buffer free, and goes on once one is released") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try withReactor { r =>
-      val (in, out) = pipe(r)
-      try {
-        r.submit(backend.ops.write(out, bytes("one")), Outcome())
-        val first = Slot[Received]()
-        val got = Outcome()
-        r.submit(backend.ops.read(in, pool, first), got)
-        turnUntil(r)(got.finished)
-        assertEquals(got.completed, 1, String.valueOf(got.failure))
-        val held = first.clear()
-        assertEquals(pool.available, 0)
-        r.submit(backend.ops.write(out, bytes("two")), Outcome())
-        val second = Slot[Received]()
-        val refused = Outcome()
-        r.submit(backend.ops.read(in, pool, second), refused)
-        turnUntil(r)(refused.finished)
-        assert(refused.failure.isInstanceOf[IOException], String.valueOf(refused.failure))
-        held.release()
-        val again = Outcome()
-        r.submit(backend.ops.read(in, pool, second), again)
-        turnUntil(r)(again.finished)
-        assertEquals(again.completed, 1, String.valueOf(again.failure))
-        val received = second.clear()
-        assertEquals(textOf(received), "two")
-        received.release()
-      } finally {
-        close(r, in)
-        close(r, out)
+    try
+      withReactor { r =>
+        val (in, out) = pipe(r)
+        try {
+          r.submit(backend.ops.write(out, bytes("one")), Outcome())
+          val first = Slot[Received]()
+          val got = Outcome()
+          r.submit(backend.ops.read(in, pool, first), got)
+          turnUntil(r)(got.finished)
+          assertEquals(got.completed, 1, String.valueOf(got.failure))
+          val held = first.clear()
+          assertEquals(pool.available, 0)
+          r.submit(backend.ops.write(out, bytes("two")), Outcome())
+          val second = Slot[Received]()
+          val refused = Outcome()
+          r.submit(backend.ops.read(in, pool, second), refused)
+          turnUntil(r)(refused.finished)
+          assert(refused.failure.isInstanceOf[IOException], String.valueOf(refused.failure))
+          held.release()
+          val again = Outcome()
+          r.submit(backend.ops.read(in, pool, second), again)
+          turnUntil(r)(again.finished)
+          assertEquals(again.completed, 1, String.valueOf(again.failure))
+          val received = second.clear()
+          assertEquals(textOf(received), "two")
+          received.release()
+        } finally {
+          close(r, in)
+          close(r, out)
+        }
       }
-    } finally pool.close()
+    finally pool.close()
   }
 
   // ---- Listening and closing as ops

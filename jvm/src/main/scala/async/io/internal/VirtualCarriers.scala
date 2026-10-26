@@ -2,6 +2,7 @@ package gears.async.io
 package internal
 
 import gears.async.Cancellable
+import gears.async.io.ReactorBackend
 
 import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
@@ -9,8 +10,6 @@ import java.lang.invoke.MethodType
 import java.util.concurrent.Executor
 import java.util.concurrent.ThreadFactory
 import scala.concurrent.duration.FiniteDuration
-
-import gears.async.io.ReactorBackend
 
 /** Virtual threads carried by a `ReactorPool`'s workers, through what the JDK keeps to itself: a virtual thread builder
   * that takes the executor to run its threads on, the carrier of the running virtual thread, and the pin that keeps a

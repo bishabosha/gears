@@ -3,8 +3,8 @@ package internal
 
 import munit.FunSuite
 
-/** A reactor turn that throws does not end its worker: one that throws now and then is reported and the worker goes
-  * on, and one that throws every turn fails the pool, which stops, its run throwing the reactor's error.
+/** A reactor turn that throws does not end its worker: one that throws now and then is reported and the worker goes on,
+  * and one that throws every turn fails the pool, which stops, its run throwing the reactor's error.
   */
 class WorkerFailureSuite extends FunSuite {
 

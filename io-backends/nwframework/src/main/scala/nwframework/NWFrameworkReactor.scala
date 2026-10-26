@@ -1,42 +1,43 @@
 package gears.async.io
 package nwframework
 
-import java.io.IOException
-import java.util.concurrent.TimeoutException
-import scala.scalanative.libc.stdlib
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.*
-
 import gears.async.io.Completion
 import gears.async.io.Reactor
 import gears.async.io.Repeatable
 import gears.async.io.internal.Blockers
 import gears.async.io.internal.TimerHeap
 
-/** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is completion-based:
-  * a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback. The C side
-  * (`nwframework_io.c`) queues what the callbacks deliver as events on the handle, and wakes the reactor watching the
-  * handle; this reactor's thread drains the handles with events each turn, and parks between turns, so that every
-  * completion runs here, as `Reactor` promises. The handle (`NWFrameworkHandle`) applies the events and tells the op
-  * waiting for them, which is attempted again; an op is attempted when submitted, so a read of bytes already
-  * received, an accept of a connection already accepted, or a connect of a connection already ready finishes at
+import java.io.IOException
+import java.util.concurrent.TimeoutException
+import scala.scalanative.libc.stdlib
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
+
+/** A `Reactor` over Apple's Network.framework, for ops built by `NWFrameworkOps`. Network.framework is
+  * completion-based: a receive or send is issued and its outcome arrives later, on a Dispatch thread, as a callback.
+  * The C side (`nwframework_io.c`) queues what the callbacks deliver as events on the handle, and wakes the reactor
+  * watching the handle; this reactor's thread drains the handles with events each turn, and parks between turns, so
+  * that every completion runs here, as `Reactor` promises. The handle (`NWFrameworkHandle`) applies the events and
+  * tells the op waiting for them, which is attempted again; an op is attempted when submitted, so a read of bytes
+  * already received, an accept of a connection already accepted, or a connect of a connection already ready finishes at
   * once.
   *
   * A receive once issued cannot be withdrawn, so cancelling a read leaves its receive outstanding, and what it brings
-  * waits on the handle for the next read; a write copies its bytes when submitted, so cancelling it leaves the
-  * caller's buffer alone, the bytes already with the stack. Timers, and the ops with a time limit, are kept in a heap
-  * here, and bound how long the thread parks; an op that times out is withdrawn as a cancelled one is, with
-  * `onFailure` instead of `onCancel`. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a
-  * handle, from any thread, tells the reactors waiting on it, so the ops pending on it fail there (`Ops.close`).
+  * waits on the handle for the next read; a write copies its bytes when submitted, so cancelling it leaves the caller's
+  * buffer alone, the bytes already with the stack. Timers, and the ops with a time limit, are kept in a heap here, and
+  * bound how long the thread parks; an op that times out is withdrawn as a cancelled one is, with `onFailure` instead
+  * of `onCancel`. Blocking ops run on the shared blocker pool, which wakes the thread. Closing a handle, from any
+  * thread, tells the reactors waiting on it, so the ops pending on it fail there (`Ops.close`).
   */
 final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extends Reactor {
 
-  /** Every NWFramework reactor runs the same kinds of op, so an op may go to any of them in turn (see `NWFrameworkBackend`). */
+  /** Every NWFramework reactor runs the same kinds of op, so an op may go to any of them in turn (see
+    * `NWFrameworkBackend`).
+    */
   type Op = NWFrameworkOp
   type Handle = NWFrameworkBackend.Handle
 
   def ops: NWFrameworkOps.type = NWFrameworkOps
-
 
   /** The C side's list of handles with events for this reactor, and the condition its thread parks on. */
   private[nwframework] val ptr: NWFrameworkIo.Reactor = NWFrameworkIo.nwf_reactor_create()
@@ -97,11 +98,16 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     submitOrFinish(op, completion, finishNow = true, timeoutMillis)
 
   /** Submits `op`; an op left waiting, with a time limit, goes into the timer heap to time out when it is due. */
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
+  private def submitOrFinish[C <: Op](
+      op: C,
+      completion: Completion[C],
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
     var finished = false
     var waits = false
     op match {
-      case _: Repeatable => ()
+      case _: Repeatable      => ()
       case one: NWFrameworkOp =>
         if one.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
     }
@@ -139,7 +145,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         timer.completion = pending
         schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
       case blocking: NWFrameworkBlocking =>
-        if blocking.cancelling != null then throw new IllegalStateException(s"$op is still running after being cancelled")
+        if blocking.cancelling != null then
+          throw new IllegalStateException(s"$op is still running after being cancelled")
         blocking.reactor = this
         blocking.completion = pending
         pendingBlockers += blocking
@@ -160,8 +167,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     finished
   }
 
-  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
-    * time out then (see `fireDueTimers`).
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
+    * out then (see `fireDueTimers`).
     */
   private def schedule(op: NWFrameworkOp, milliseconds: Int): Unit = {
     op.deadline = System.nanoTime() + milliseconds * 1_000_000L
@@ -273,7 +280,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
       } else if completion != null then {
         val failure = blocking.failure
-        if failure != null then deliverFailure(completion, blocking, failure.nn) else deliverComplete(completion, blocking)
+        if failure != null then deliverFailure(completion, blocking, failure.nn)
+        else deliverComplete(completion, blocking)
       }
       remaining -= 1
       blocking = if remaining > 0 then resolvedQueue.poll() else null
@@ -286,7 +294,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     command match {
       case write: NWFrameworkWrite => write.reset()
       case send: NWFrameworkSend   => send.reset()
-      case _                  => ()
+      case _                       => ()
     }
   }
 
@@ -324,7 +332,11 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
   /** Runs the completion of an op `withdrawOp` took out: `onCancel`, or `onFailure` with `failure` for one that timed
     * out; for a blocking task that was running, from the loop once `block` has returned.
     */
-  private def settleWithdrawn(op: NWFrameworkOp, completion: Completion[NWFrameworkOp], failure: Throwable | Null): Unit =
+  private def settleWithdrawn(
+      op: NWFrameworkOp,
+      completion: Completion[NWFrameworkOp],
+      failure: Throwable | Null
+  ): Unit =
     op match {
       case opening: NWFrameworkOpening =>
         opening.abandon() // what it opened never reaches the caller
@@ -381,8 +393,9 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
         timers.poll() match {
-          case timer: NWFrameworkTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
-          case op                      => timedOut(op)
+          case timer: NWFrameworkTimer =>
+            if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op => timedOut(op)
         }
     }
 

@@ -3,12 +3,12 @@ package gears.async.io
 import _root_.gears.async.Async
 
 /** A way of doing I/O: the ops it can perform, the handles they name, and the pools its reads fill. How an op is
-  * performed is its kind's: a reactor backend submits its ops with completions on reactors it opens
-  * (`ReactorBackend`), and a program over it runs on a pool of workers driving them; a caller backend does each op
-  * itself on the calling thread, as NIO's `NioOnCaller` does with non-blocking channels from a thread that may block
-  * (`CallerBackend`). Ops of another backend are a different type. Building an op or using a handle performs nothing,
-  * so either may be done from any thread, and a backend performs nothing itself: a program performs its ops with an
-  * `Io` over the backend (`Io.backend`), which says where they run.
+  * performed is its kind's: a reactor backend submits its ops with completions on reactors it opens (`ReactorBackend`),
+  * and a program over it runs on a pool of workers driving them; a caller backend does each op itself on the calling
+  * thread, as NIO's `NioOnCaller` does with non-blocking channels from a thread that may block (`CallerBackend`). Ops
+  * of another backend are a different type. Building an op or using a handle performs nothing, so either may be done
+  * from any thread, and a backend performs nothing itself: a program performs its ops with an `Io` over the backend
+  * (`Io.backend`), which says where they run.
   *
   * What every backend has is here: streams, read and written, into the caller's buffers or into buffers of the
   * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes
@@ -26,10 +26,10 @@ trait Backend {
   /** What this performs. */
   type Op
 
-  /** Names an open file, socket, or other I/O object of this backend: an object of the backend's own class, which
-    * only the backend can make, so that a program cannot forge a handle, nor pass one backend's handle to another,
-    * whose `Handle` is a different type. A program gets one from an op that opened something, and closes it with
-    * `Ops.close`; the backend never closes it.
+  /** Names an open file, socket, or other I/O object of this backend: an object of the backend's own class, which only
+    * the backend can make, so that a program cannot forge a handle, nor pass one backend's handle to another, whose
+    * `Handle` is a different type. A program gets one from an op that opened something, and closes it with `Ops.close`;
+    * the backend never closes it.
     */
   type Handle <: AnyRef
 
@@ -61,8 +61,8 @@ trait CallerBackend extends Backend {
 /** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
   * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
-  * over this backend runs on a pool of workers driving its reactors, started by the platform's runner, and performs
-  * its ops with the `OnPool` the runner gives it, which submits each to the reactor of the worker running the caller.
+  * over this backend runs on a pool of workers driving its reactors, started by the platform's runner, and performs its
+  * ops with the `OnPool` the runner gives it, which submits each to the reactor of the worker running the caller.
   */
 trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
@@ -70,16 +70,16 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   def open(): Reactor.Of[Op, Handle]
 }
 
-/** IP sockets, stream and datagram (see `SocketOps`): an operating system's, or a host's, such as Node's; a browser
-  * has none.
+/** IP sockets, stream and datagram (see `SocketOps`): an operating system's, or a host's, such as Node's; a browser has
+  * none.
   */
 trait IpSockets extends Backend {
   def ops: SocketOps[Op, Handle]
 }
 
 /** Regular files, opened, read, written and synced as ops (see `FileOps`): on a thread pool where the operating
-  * system's file I/O blocks, as kqueue's, NIO's and Network.framework's do, asynchronously at the device where it
-  * does not, as io_uring's would.
+  * system's file I/O blocks, as kqueue's, NIO's and Network.framework's do, asynchronously at the device where it does
+  * not, as io_uring's would.
   */
 trait Files extends Backend {
   def ops: FileOps[Op, Handle]
@@ -104,8 +104,8 @@ trait Readiness extends Backend {
 
 /** Blocking code run as an op (see `BlockingOps`): where it may block, with the op's time limit and cancellation
   * interrupting it, the same whichever the kind. On a reactor backend that is off the reactors' threads, which keeps
-  * them free; on a caller backend it is the calling thread, which may block anyway, so there the op adds only the
-  * limit and the interrupt.
+  * them free; on a caller backend it is the calling thread, which may block anyway, so there the op adds only the limit
+  * and the interrupt.
   */
 trait Blocking extends Backend {
   def ops: BlockingOps[Op, Handle]

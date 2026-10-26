@@ -36,8 +36,8 @@ trait Repeatable
 
 /** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles, values of its
   * `Handle` type, `H` here (see `Backend.Handle`): reads and writes of a stream, timers, and closing. Buffers are used
-  * between position and limit, and belong to the backend while the op is being performed: on a reactor, from
-  * submission until the op's completion.
+  * between position and limit, and belong to the backend while the op is being performed: on a reactor, from submission
+  * until the op's completion.
   *
   * Handles are opened by ops too, each kind by the capability that has it (`SocketOps.connect`, `PipeOps.pipe`,
   * `FileOps.open` and the rest), since opening may wait, for a connection, a bind or the disk, and some environments
@@ -89,8 +89,8 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Accepts the connections pending on a listening socket, as `accept` does one: completes once at least one has been
     * accepted, after writing them, at most `max`, into `into`, which must be empty. A server under a burst of
-    * connections takes them in one op each time the listener is ready rather than one op apiece, which keeps its
-    * listen queue from filling, and the kernel from resetting what arrives meanwhile, while its other work runs.
+    * connections takes them in one op each time the listener is ready rather than one op apiece, which keeps its listen
+    * queue from filling, and the kernel from resetting what arrives meanwhile, while its other work runs.
     */
   def acceptAll(handle: H, into: Slot[Array[H]], max: Int): Op & Repeatable
 
@@ -99,25 +99,25 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     */
   def connect(address: IpAddress, into: Slot[H]): Op
 
-  /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`,
-    * which must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be
-    * bound while connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not
-    * wait for them to expire.
+  /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`, which
+    * must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be bound while
+    * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for them
+    * to expire.
     */
   def listen(address: IpAddress, into: Slot[H], reuseAddr: Boolean = true): Op
 
-  /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading:
-    * what was written before is still sent, then the end of the stream, which the peer reads as it would a close.
-    * Completes once the end is queued; writes after it fail. A server that closes once it has replied shuts down
-    * first and reads until the client's end before closing, since closing with bytes from the peer unread resets the
-    * connection, and a reset can discard the reply the peer has not read yet; a client shuts down once its request
-    * is out, so that the server sees where it ends. Fails if `handle` is not a connected stream socket.
+  /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading: what
+    * was written before is still sent, then the end of the stream, which the peer reads as it would a close. Completes
+    * once the end is queued; writes after it fail. A server that closes once it has replied shuts down first and reads
+    * until the client's end before closing, since closing with bytes from the peer unread resets the connection, and a
+    * reset can discard the reply the peer has not read yet; a client shuts down once its request is out, so that the
+    * server sees where it ends. Fails if `handle` is not a connected stream socket.
     */
   def shutdownOutput(handle: H): Op
 
-  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same
-    * family. Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use
-    * or cannot be bound.
+  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family.
+    * Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use or
+    * cannot be bound.
     */
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[H]): Op
 
@@ -186,8 +186,8 @@ trait ReadinessOps[Op, H <: AnyRef] extends Ops[Op, H] {
     */
   def ready(handle: H, interest: Interest): Op & Repeatable
 
-  /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of
-    * stream. Not an op: it runs on the calling thread and returns.
+  /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of stream.
+    * Not an op: it runs on the calling thread and returns.
     */
   def readNow(handle: H, buf: ByteBuffer): Int
 
@@ -198,8 +198,8 @@ trait ReadinessOps[Op, H <: AnyRef] extends Ops[Op, H] {
 /** The ops of pipes, for a backend that has them (see `PipeBackend`); `read` and `write` run on either end. */
 trait PipeOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Opens a pipe. Completes after writing its read end into `read` and its write end into `write`, which must both
-    * be empty; one that fails or is cancelled leaves both empty and neither end open.
+  /** Opens a pipe. Completes after writing its read end into `read` and its write end into `write`, which must both be
+    * empty; one that fails or is cancelled leaves both empty and neither end open.
     */
   def pipe(read: Slot[H], write: Slot[H]): Op
 }
@@ -213,14 +213,15 @@ trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def openFifo(path: String, write: Boolean, into: Slot[H]): Op
 }
 
-/** The ops of Unix domain stream sockets, which the ops of IP stream sockets (`accept`, `read`, `write`) also run on. */
+/** The ops of Unix domain stream sockets, which the ops of IP stream sockets (`accept`, `read`, `write`) also run on.
+  */
 trait UnixStreamOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`, as the other `connect` does to an IP address. */
   def connect(address: UnixAddress, into: Slot[H]): Op
 
-  /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket
-    * file already there.
+  /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket file
+    * already there.
     */
   def listen(address: UnixAddress, into: Slot[H]): Op
 }

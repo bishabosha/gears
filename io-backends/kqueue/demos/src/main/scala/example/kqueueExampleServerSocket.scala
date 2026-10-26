@@ -1,20 +1,21 @@
 package example
 
+import gears.async.io.Completion
+import gears.async.io.Interest
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Transport
+import gears.async.io.kqueue.Accept
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.KqueueBackend.Handle
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.scalanative.unsafe.Zone
 
-import gears.async.io.Completion
-import gears.async.io.kqueue.KqueueBackend.Handle
-import gears.async.io.Interest
-import gears.async.io.kqueue.Accept
-import gears.async.io.kqueue.Command
-import gears.async.io.kqueue.KqueueHandles
-import gears.async.io.kqueue.KqueueOps
-import gears.async.io.kqueue.KqueueReactor
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.PosixSockets
-import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 object KQueueExampleServerSocket {

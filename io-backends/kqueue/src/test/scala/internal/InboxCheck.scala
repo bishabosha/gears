@@ -5,12 +5,10 @@ import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.Future.awaitAll
+import gears.async.io.ReactorBackend
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-
-import gears.async.io.ReactorBackend
-
 
 /** Checks that tasks queued for a worker in particular (`ReactorWorker.sync`: cancelling an op on its reactor, arming
   * or cancelling a timer there) run on that worker's thread, whatever other workers take, (see `InboxSuite`). They call

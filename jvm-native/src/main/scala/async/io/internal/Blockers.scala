@@ -1,12 +1,12 @@
 package gears.async.io
 package internal
 
+import gears.async.io.Slot
+
 import java.util.concurrent.CancellationException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-
-import gears.async.io.Slot
 
 /** A blocking task run by `Blockers` off a reactor's thread, for a backend's blocking ops: `block` is the body, and
   * `settled` tells the backend it has returned. Cancelling it skips `block` if it has not started, and interrupts the

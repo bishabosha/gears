@@ -1,13 +1,14 @@
 package gearsexample
 
-import java.io.IOException
-
 import gears.async.io.Backend
+import gears.async.io.ReactorFutures
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.testkit.BufferArena
+
+import java.io.IOException
+
 import DemoIO.{FrameReader, StreamProtocol}
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleSocket`: connect, send one framed request, and read the framed response exactly,

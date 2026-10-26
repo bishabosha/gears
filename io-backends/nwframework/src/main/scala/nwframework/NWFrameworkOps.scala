@@ -1,33 +1,34 @@
 package gears.async.io
 package nwframework
 
-import java.io.IOException
-import java.nio.ByteBuffer
-
 import gears.async.io.BlockingOps
 import gears.async.io.BufferPool
-import gears.async.io.Received
 import gears.async.io.Completion
+import gears.async.io.FifoOps
 import gears.async.io.FileOps
-import NWFrameworkBackend.Handle
 import gears.async.io.IpAddress
+import gears.async.io.PipeOps
+import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
-import gears.async.io.FifoOps
-import gears.async.io.PipeOps
-import gears.async.io.SocketOps
 import gears.async.io.Slot
+import gears.async.io.SocketOps
 import gears.async.io.internal.BlockingRun
-import gears.async.io.internal.NativePool
 import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking
 import gears.async.io.internal.PosixErr.cError
 import gears.async.io.internal.PosixResolver
 import gears.async.io.internal.TimerHeap
+
+import java.io.IOException
+import java.nio.ByteBuffer
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
+
+import NWFrameworkBackend.Handle
 
 /** Everything `NWFrameworkReactor` can run: its `Op` member type. */
 sealed trait NWFrameworkOp extends TimerHeap.Entry {
@@ -77,7 +78,8 @@ object NWFrameworkOps
   def send(handle: Handle, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
   def timer(milliseconds: Int): NWFrameworkTimer = new NWFrameworkTimer(milliseconds)
   def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)
-  def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking = new NWFrameworkBlockingResultTask(body, into)
+  def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking =
+    new NWFrameworkBlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): NWFrameworkOp = new NWFrameworkResolve(host, into)
   def read(handle: Handle, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
     new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
@@ -97,9 +99,9 @@ object NWFrameworkOps
 }
 
 /** An op on a handle. `attempt` tries to finish it on the reactor's thread, after the handle has taken in what the
-  * framework delivered: true once done, with its results in the caller's buffers and slots; false when it has to
-  * wait, registered on the handle with the reactor and the submission's token, so that the handle tells the reactor
-  * to attempt again; a failure is thrown. Commands are `Repeatable`: attempting again is always meaningful.
+  * framework delivered: true once done, with its results in the caller's buffers and slots; false when it has to wait,
+  * registered on the handle with the reactor and the submission's token, so that the handle tells the reactor to
+  * attempt again; a failure is thrown. Commands are `Repeatable`: attempting again is always meaningful.
   */
 sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
   def handle: Handle
@@ -138,8 +140,8 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
     }
 }
 
-/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): a descriptor is read into one as
-  * into the caller's buffer; a connection receives straight into one.
+/** Fills a buffer of `pool`'s, writing it into `into` (see `PooledReadOps.read`): a descriptor is read into one as into
+  * the caller's buffer; a connection receives straight into one.
   */
 final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
     extends NWFrameworkCommand {
@@ -189,11 +191,11 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[Handle]], 
   }
 }
 
-/** A command that opens the handle it waits on, and writes it into a slot (see `Ops`): `open` makes the handle when
-  * the command is submitted, starting what Network.framework does asynchronously, a connection or a listener, and
-  * the command then waits for it to be ready (`ready`). Done once it is, after writing the handle into `into`; if it
-  * fails, or the submission is cancelled first, by `cancel`, a time limit or the reactor closing, `abandon` closes the
-  * handle and leaves `into` empty.
+/** A command that opens the handle it waits on, and writes it into a slot (see `Ops`): `open` makes the handle when the
+  * command is submitted, starting what Network.framework does asynchronously, a connection or a listener, and the
+  * command then waits for it to be ready (`ready`). Done once it is, after writing the handle into `into`; if it fails,
+  * or the submission is cancelled first, by `cancel`, a time limit or the reactor closing, `abandon` closes the handle
+  * and leaves `into` empty.
   */
 sealed abstract class NWFrameworkOpening(into: Slot[Handle]) extends NWFrameworkCommand {
   private var opened: Handle | Null = null
@@ -299,9 +301,9 @@ final class NWFrameworkOpenPipe(read: Slot[Handle], write: Slot[Handle]) extends
   }
 }
 
-/** Closes a handle, completing once it is closed (see `Ops.close`): a connection's cancellation is waited
-  * for, and the number is taken back once the op is done, so that the reactor still finds the handle for the
-  * cancelled state meanwhile; ops submitted on it meanwhile fail as closed.
+/** Closes a handle, completing once it is closed (see `Ops.close`): a connection's cancellation is waited for, and the
+  * number is taken back once the op is done, so that the reactor still finds the handle for the cancelled state
+  * meanwhile; ops submitted on it meanwhile fail as closed.
   */
 final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Close
@@ -332,8 +334,8 @@ final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCom
 }
 
 /** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what
-  * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window,
-  * and otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`).
+  * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window, and
+  * otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`).
   */
 final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
@@ -402,7 +404,8 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress |
     } else {
       val size = buf.remaining()
       val bytes = NativeBuffer.atPosition(buf)
-      val done = if to == null then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
+      val done =
+        if to == null then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
       buf.position(buf.limit()) // a datagram goes whole or not at all
       sent = !done
       done
@@ -456,8 +459,8 @@ final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) 
   }
 }
 
-/** Opens a regular file on the blocker pool and publishes its handle (see `FileOps.open`). A cancel that arrives
-  * once the file is open closes it again, since the handle never reaches the caller.
+/** Opens a regular file on the blocker pool and publishes its handle (see `FileOps.open`). A cancel that arrives once
+  * the file is open closes it again, since the handle never reaches the caller.
   */
 final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[Handle]) extends NWFrameworkBlocking {
   def block(): Unit = {
@@ -477,8 +480,8 @@ sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFramewor
   }
 }
 
-/** A read at an offset (see `FileOps.read`): `pread` through posixlib's `@blocking` binding, at the op's offset,
-  * which each completion advances by the bytes read.
+/** A read at an offset (see `FileOps.read`): `pread` through posixlib's `@blocking` binding, at the op's offset, which
+  * each completion advances by the bytes read.
   */
 final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends NWFrameworkFileTask(handle) {

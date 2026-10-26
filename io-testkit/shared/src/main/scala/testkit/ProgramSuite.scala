@@ -1,27 +1,15 @@
 package gears.async.io
 package testkit
 
-import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
-import gears.async.Future
 import gears.async.AsyncOperations.sleep
+import gears.async.Future
 import gears.async.Future.awaitAll
-import gears.async.withTimeout
-
-import scala.concurrent.duration.*
-
-import java.io.IOException
-import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.util.concurrent.CancellationException
-import java.util.concurrent.TimeoutException
-import munit.FunSuite
-
-import gears.async.io.Interest
-import gears.async.io.IpAddress
 import gears.async.io.Backend
+import gears.async.io.Interest
+import gears.async.io.Io
+import gears.async.io.IpAddress
 import gears.async.io.PipeBackend
 import gears.async.io.ResolveBackend
 import gears.async.io.ResolvedAddress
@@ -30,6 +18,17 @@ import gears.async.io.SocketBackend
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.testkit.BufferArena
+import gears.async.withTimeout
+
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
+import scala.concurrent.duration.*
+
+import munit.FunSuite
 
 /** A suite of programs over one backend: the backend under test, `running`, which starts a program over it the
   * platform's way (`ReactorFutures.run`), and what the checks share, buffers from an arena and a listener to connect
@@ -62,8 +61,8 @@ trait ProgramSuite extends FunSuite {
     def apply()(using Async): Handle
   }
 
-  /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has
-    * them, and on TCP at a free port of the loopback otherwise.
+  /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has them,
+    * and on TCP at a free port of the loopback otherwise.
     */
   protected def listenAndConnect(io: Io[backend.type], dir: java.nio.file.Path)(using
       Async
@@ -140,10 +139,11 @@ trait ProgramSuite extends FunSuite {
   protected def withTempDir[T](body: java.nio.file.Path => T): T = {
     val dir = Files.createTempDirectory("gears")
     try body(dir)
-    finally if Files.exists(dir) then {
-      Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
-      Files.deleteIfExists(dir): Unit
-    }
+    finally
+      if Files.exists(dir) then {
+        Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
+        Files.deleteIfExists(dir): Unit
+      }
   }
 
   protected def text(buf: ByteBuffer): String = {

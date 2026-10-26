@@ -1,5 +1,11 @@
 package cebench
 
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.util.concurrent.CountDownLatch
+import scala.concurrent.duration.*
+
 import cats.effect.IO
 import cats.effect.Ref
 import cats.effect.unsafe.IORuntime
@@ -19,16 +25,10 @@ import mainargs.ParserForMethods
 import mainargs.arg
 import mainargs.main
 
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Paths
-import java.util.concurrent.CountDownLatch
-import scala.concurrent.duration.*
-
 /** The scenarios of `GearsBench` written with cats-effect and fs2, to compare against: the same echo server, message
   * size, operation counts and result lines, so `bench/compare.py` reads them alike (pass the executable as
-  * `<label>=<path>@raw`, since it runs as `cebench bench`). As in `GearsBench`, the echo server runs on a runtime of its
-  * own and the clients on another, each with one worker thread, polling its own kqueue, unless `--workers` says
+  * `<label>=<path>@raw`, since it runs as `cebench bench`). As in `GearsBench`, the echo server runs on a runtime of
+  * its own and the clients on another, each with one worker thread, polling its own kqueue, unless `--workers` says
   * otherwise. `pingpong-fresh-ops` has no counterpart: fs2 builds no op values to reuse. On the JVM the workers poll a
   * `Selector` each instead, for TCP only: fs2 does Unix sockets there as blocking calls on the blocking pool.
   * `--warmup` runs every scenario first at a fifth of its count, as `GearsBench` does.
@@ -187,10 +187,10 @@ object CeBench {
       _ <- IO(report("mixed-compute", math.max(sliced, 1L), (end - start).toNanos / 1e9))
     } yield ()
 
-  /** As `GearsBench`'s: `concurrent`'s round trips while a compute fiber per core works in slices, ceding between
-    * them, and a checker sleeps 1 ms over and over, recording how late it wakes, as cats-effect's own CPU starvation
-    * check does (`CpuStarvationCheck`, which sleeps a second). Reports the median, 99th percentile and worst lateness,
-    * in µs, as `starvation-p50`, `-p99` and `-max`.
+  /** As `GearsBench`'s: `concurrent`'s round trips while a compute fiber per core works in slices, ceding between them,
+    * and a checker sleeps 1 ms over and over, recording how late it wakes, as cats-effect's own CPU starvation check
+    * does (`CpuStarvationCheck`, which sleeps a second). Reports the median, 99th percentile and worst lateness, in µs,
+    * as `starvation-p50`, `-p99` and `-max`.
     */
   private def starvation(address: GenSocketAddress, count: Int, connections: Int): IO[Unit] = {
     val interval = 1.millis
@@ -280,7 +280,9 @@ object CeBench {
           this.scenarios
             .find(_.name == name)
             .getOrElse(
-              throw new IllegalArgumentException(s"Unknown scenario `$name`; try ${this.scenarios.map(_.name).mkString(", ")}")
+              throw new IllegalArgumentException(
+                s"Unknown scenario `$name`; try ${this.scenarios.map(_.name).mkString(", ")}"
+              )
             )
         )
     val unixPath = s"/tmp/ce-bench-${System.nanoTime() % 1_000_000}.sock"

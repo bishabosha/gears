@@ -195,11 +195,11 @@ object Future:
       end AwaitListener
 
       /** Awaits `src` where nothing can cancel the wait, in the `Unlinked` group: with no lock, since no cancellation
-        * can race the completion, and no group to link to. A completion resumes the suspension through the
-        * scheduler, as `AwaitListener` does: on a support that hands the input to the suspended thread directly, no
-        * task is scheduled. One that comes while the listener is being added, from a source that completes it at
-        * once, such as a yield's, is scheduled as a task instead, so the caller suspends first and resumes from the
-        * back of the scheduler's queue.
+        * can race the completion, and no group to link to. A completion resumes the suspension through the scheduler,
+        * as `AwaitListener` does: on a support that hands the input to the suspended thread directly, no task is
+        * scheduled. One that comes while the listener is being added, from a source that completes it at once, such as
+        * a yield's, is scheduled as a task instead, so the caller suspends first and resumes from the back of the
+        * scheduler's queue.
         */
       private class UnlinkedAwaitListener[T](src: Async.Source[T])
           extends Function[ac.support.Suspension[T, Unit], Unit],

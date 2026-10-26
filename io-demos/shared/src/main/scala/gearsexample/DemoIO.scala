@@ -1,11 +1,11 @@
 package gearsexample
 
+import gears.async.io.Slot
+
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-
-import gears.async.io.Slot
 
 /** What the demos share on every platform: decoding buffers, the stream demos' framing, and reading a slot. */
 object DemoIO {

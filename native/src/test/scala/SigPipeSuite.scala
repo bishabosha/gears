@@ -9,8 +9,8 @@ import scala.scalanative.unsafe.Zone
 import Sockets.Flavor
 import Sockets.Transport
 
-/** Writing to a pipe or socket whose reader has gone fails with `EPIPE`, rather than raising `SIGPIPE`, which would
-  * end the test process: on macOS through each descriptor's own setting, on Linux by ignoring the signal (`SigPipe`).
+/** Writing to a pipe or socket whose reader has gone fails with `EPIPE`, rather than raising `SIGPIPE`, which would end
+  * the test process: on macOS through each descriptor's own setting, on Linux by ignoring the signal (`SigPipe`).
   */
 class SigPipeSuite extends munit.FunSuite {
 

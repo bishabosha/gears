@@ -4,34 +4,33 @@ import gears.async.Async
 import gears.async.BufferedChannel
 import gears.async.Channel
 import gears.async.Future
+import gears.async.io.Backend
+import gears.async.io.BufferPool
+import gears.async.io.Fifos
+import gears.async.io.Io
+import gears.async.io.IpAddress
+import gears.async.io.IpSockets
+import gears.async.io.Pipes
+import gears.async.io.Received
+import gears.async.io.ResolvedAddress
+import gears.async.io.Resolving
+import gears.async.io.Slot
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagrams
+import gears.async.io.UnixStreams
 
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 
-import gears.async.io.Backend
-import gears.async.io.BufferPool
-import gears.async.io.Fifos
-import gears.async.io.Io
-import gears.async.io.IpAddress
-import gears.async.io.Pipes
-import gears.async.io.UnixAddress
-import gears.async.io.UnixDatagrams
-import gears.async.io.UnixStreams
-import gears.async.io.Received
-import gears.async.io.Resolving
-import gears.async.io.ResolvedAddress
-import gears.async.io.Slot
-import gears.async.io.IpSockets
-
-/** The higher level the interface is meant to be wrapped by, written over `Io` alone: result-returning methods that
-  * own the op and the slot the caller would otherwise reuse, and a stream of chunks over a repeatable pooled read,
-  * consumed as a gears channel. Nothing here touches a backend, a kind or the runtime, and being outside the
-  * `gears.async.io` package it could not: it sees the interface's public contract only, and its module depends on the
-  * interface alone. It runs as it is on every backend (`HigherLevelChecks` runs on each, as part of the contract's
-  * suites), which is what the lowest level is for; the demos use it where a result or a stream reads better than
-  * the op. Every method takes the `Io` as a context parameter, `io`.
+/** The higher level the interface is meant to be wrapped by, written over `Io` alone: result-returning methods that own
+  * the op and the slot the caller would otherwise reuse, and a stream of chunks over a repeatable pooled read, consumed
+  * as a gears channel. Nothing here touches a backend, a kind or the runtime, and being outside the `gears.async.io`
+  * package it could not: it sees the interface's public contract only, and its module depends on the interface alone.
+  * It runs as it is on every backend (`HigherLevelChecks` runs on each, as part of the contract's suites), which is
+  * what the lowest level is for; the demos use it where a result or a stream reads better than the op. Every method
+  * takes the `Io` as a context parameter, `io`.
   */
 object HigherLevel {
 
@@ -105,7 +104,9 @@ object HigherLevel {
     * closes. Closing with bytes from the peer unread would reset the connection, and a reset can discard the reply the
     * peer has not read yet. A peer that resets or never ends its side is closed on anyway.
     */
-  def closeGracefully(using io: Io[IpSockets])(handle: io.Handle, scratch: ByteBuffer, timeoutMillis: Int = 2000)(using
+  def closeGracefully(using
+      io: Io[IpSockets]
+  )(handle: io.Handle, scratch: ByteBuffer, timeoutMillis: Int = 2000)(using
       Async
   ): Unit =
     try {
@@ -141,15 +142,15 @@ object HigherLevel {
   }
 
   /** A stream of chunks, each a `Received` the consumer releases: `read` gives the next, or `None` at the end of the
-    * stream, and throws the read's failure if it ended with one; `close` stops the stream early and releases the
-    * chunks read ahead and not yet taken, so the pool may be closed afterwards. The channel is never closed, since a
-    * closed gears channel drops what it still holds: the end of the stream is a `None` sent after the last chunk.
+    * stream, and throws the read's failure if it ended with one; `close` stops the stream early and releases the chunks
+    * read ahead and not yet taken, so the pool may be closed afterwards. The channel is never closed, since a closed
+    * gears channel drops what it still holds: the end of the stream is a `None` sent after the last chunk.
     */
   final class Chunks private[HigherLevel] (channel: Channel[Option[Received]], reader: Future[Unit]) {
 
     def read()(using Async): Option[Received] = channel.read() match {
       case Right(Some(chunk)) => Some(chunk)
-      case Right(None) =>
+      case Right(None)        =>
         reader.await // rethrows the failure that ended the stream, if one did
         None
       case Left(Channel.Closed) => None // never closed; for the compiler
@@ -170,9 +171,9 @@ object HigherLevel {
   /** The bytes of `handle` as `Chunks`: a future reads into the pool's buffers with one repeatable op and sends each
     * chunk on a channel of `backlog` chunks, which is the back-pressure: the reader holds at most `backlog` chunks in
     * the channel, one it is sending and one its read is filling, so the pool needs `backlog + 2` buffers, and the
-    * consumer's unreleased chunks come out of the rest. Cancelling the group cancels the read, as it would any
-    * future's op; a chunk in the reader's hands when it is cancelled, one a `send` did not deliver, is released by
-    * the reader itself.
+    * consumer's unreleased chunks come out of the rest. Cancelling the group cancels the read, as it would any future's
+    * op; a chunk in the reader's hands when it is cancelled, one a `send` did not deliver, is released by the reader
+    * itself.
     */
   def chunks(using io: Io[Backend])(handle: io.Handle, pool: BufferPool, backlog: Int)(using Async.Spawn): Chunks = {
     require(pool.buffers >= backlog + 2, s"a backlog of $backlog needs a pool of ${backlog + 2} buffers")
@@ -198,7 +199,7 @@ object HigherLevel {
         channel.send(None)
       } catch {
         case cancelled: CancellationException => throw cancelled // the consumer is closing, and drains the channel
-        case failure: Throwable =>
+        case failure: Throwable               =>
           channel.send(None) // so that the consumer's next read finds the end, and the failure from `reader`
           throw failure
       } finally if inHand != null then inHand.release()

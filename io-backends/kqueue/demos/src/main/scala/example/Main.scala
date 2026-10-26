@@ -145,9 +145,7 @@ object Main {
       s"release: ${scalanative.meta.LinktimeInfo.releaseMode}"
     ).productIterator.foreach(println)
   }
-  @main(doc =
-    "The gears bench scenarios against KqueueLoop directly, with no reactor; see bench/compare.py"
-  )
+  @main(doc = "The gears bench scenarios against KqueueLoop directly, with no reactor; see bench/compare.py")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,

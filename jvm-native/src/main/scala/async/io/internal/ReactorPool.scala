@@ -2,14 +2,13 @@ package gears.async.io
 package internal
 
 import gears.async.Cancellable
+import gears.async.io.ReactorBackend
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import scala.concurrent.duration.FiniteDuration
 
-import gears.async.io.ReactorBackend
-
-/** The thread of a pool's worker, for every worker but one started by `ReactorPool.run`, whose first worker runs on
-  * the thread that started the pool. It holds its worker, so that finding the worker running the caller takes no
+/** The thread of a pool's worker, for every worker but one started by `ReactorPool.run`, whose first worker runs on the
+  * thread that started the pool. It holds its worker, so that finding the worker running the caller takes no
   * thread-local lookup beyond the current thread. A daemon: a program that ends without stopping its pool is not kept
   * alive by it.
   */
@@ -32,10 +31,10 @@ private[io] final class ReactorWorkerThread(
 }
 
 /** A gears scheduler over a pool of workers, each a thread driving a reactor of `backend`'s (see `ReactorWorker`).
-  * Futures inherit their parent's scheduler, so a program started by `ReactorPool.run`, and everything it spawns,
-  * runs on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from
-  * outside the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the
-  * thread that called `run`.
+  * Futures inherit their parent's scheduler, so a program started by `ReactorPool.run`, and everything it spawns, runs
+  * on the pool. A task queued on a worker runs there unless another worker, out of work, takes it; queued from outside
+  * the pool, it goes to a shared queue, which every worker takes from. With one worker, everything runs on the thread
+  * that called `run`.
   */
 class ReactorPool private[io] (val backend: ReactorBackend, size: Int, val policy: TakePolicy)
     extends ReactorScheduler {
@@ -65,8 +64,8 @@ class ReactorPool private[io] (val backend: ReactorBackend, size: Int, val polic
   /** The thread the caller runs on, as the pool knows its workers: on the JVM, a virtual thread's carrier. */
   protected def callerThread(): Thread = Thread.currentThread()
 
-  /** The worker running the caller, if it is one of this pool's: for the pool's own queueing, which the JDK may ask
-    * for from a thread of its own (see `CarriedPool`).
+  /** The worker running the caller, if it is one of this pool's: for the pool's own queueing, which the JDK may ask for
+    * from a thread of its own (see `CarriedPool`).
     */
   private def workerOrNull: ReactorWorker | Null =
     callerThread() match {
@@ -183,11 +182,11 @@ class ReactorPool private[io] (val backend: ReactorBackend, size: Int, val polic
 
 object ReactorPool {
 
-  /** Runs a pool of `workers` workers, each with a reactor of `backend`'s: the calling thread becomes the first, and the
-    * others get threads of their own, each opening its reactor there. `drive` then runs on the calling thread: it starts
-    * the program, runs the first worker (`runFirstWorker`) until the program finishes and stops the pool, returns the
-    * program's result and rethrows its failure. Each reactor is closed afterwards, on its own thread, then `stopped`
-    * is called with the pool. `newPool` builds the pool, for a platform whose workers are found another way.
+  /** Runs a pool of `workers` workers, each with a reactor of `backend`'s: the calling thread becomes the first, and
+    * the others get threads of their own, each opening its reactor there. `drive` then runs on the calling thread: it
+    * starts the program, runs the first worker (`runFirstWorker`) until the program finishes and stops the pool,
+    * returns the program's result and rethrows its failure. Each reactor is closed afterwards, on its own thread, then
+    * `stopped` is called with the pool. `newPool` builds the pool, for a platform whose workers are found another way.
     */
   def run[T](
       backend: ReactorBackend,

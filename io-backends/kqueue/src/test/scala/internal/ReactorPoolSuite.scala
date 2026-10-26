@@ -1,9 +1,10 @@
 package gears.async.io
 package internal
 
-import munit.FunSuite
 import gears.async.io.ReactorBackend
 import gears.async.io.kqueue.KqueueBackend
+
+import munit.FunSuite
 
 /** Checks of the pool's parts under contention, each across several threads. */
 class ReactorPoolSuite extends FunSuite {

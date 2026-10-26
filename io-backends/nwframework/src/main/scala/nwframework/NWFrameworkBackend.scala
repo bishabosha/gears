@@ -5,11 +5,11 @@ import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Files
+import gears.async.io.IpSockets
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
 import gears.async.io.Resolving
-import gears.async.io.IpSockets
 
 /** Reactors over Apple's Network.framework, for IP sockets, and Dispatch, for pipes and FIFOs (see
   * `NWFrameworkReactor`), with IP sockets, regular files and name resolution on the shared blocker pool, pipes,

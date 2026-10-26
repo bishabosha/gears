@@ -2,21 +2,21 @@ package gearsexample
 
 import gears.async.Future
 import gears.async.Future.Promise
+import gears.async.io.BlockingBackend
+import gears.async.io.Interest
+import gears.async.io.PipeBackend
+import gears.async.io.ReactorBackend
+import gears.async.io.ReactorFutures
+import gears.async.io.ReadinessBackend
+import gears.async.io.Slot
+import gears.async.io.testkit.BufferArena
 
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Failure
 
-import gears.async.io.BlockingBackend
-import gears.async.io.PipeBackend
-import gears.async.io.ReactorBackend
-import gears.async.io.ReadinessBackend
-import gears.async.io.Interest
-import gears.async.io.Slot
-import gears.async.io.testkit.BufferArena
 import DemoIO.text
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleCancel`. Cancellation is just `Future.cancel()`: the bridge asks the reactor to

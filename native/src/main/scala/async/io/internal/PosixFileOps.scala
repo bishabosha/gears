@@ -1,13 +1,14 @@
 package gears.async.io
 package internal
 
+import java.io.IOException
+import scala.scalanative.posix.errno
+import scala.scalanative.posix.string
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
-import java.io.IOException
-import scala.scalanative.posix.errno
+
 import PosixErr.cError
-import scala.scalanative.posix.string
 
 object PosixFileOps {
   def safeUnlink(path: CString): Unit = {
@@ -23,7 +24,8 @@ object PosixFileOps {
     val maximum = maxBufferSize
     assert(x >= 0, "Size must be non-negative")
     val x0 = x.toCSize
-    if (x0 > maximum) maximum else {
+    if (x0 > maximum) maximum
+    else {
       var n = 1.toCSize
       while (n < x0) n <<= 1
       n

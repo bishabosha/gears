@@ -1,40 +1,38 @@
 package gears.async.io
 
-import gears.async.io.internal.*
-
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.FactoryVThreadSupport
 import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
-
-import scala.util.Try
-
 import gears.async.io.Backend
-import gears.async.io.Io
 import gears.async.io.CallerBackend
+import gears.async.io.Io
 import gears.async.io.OnCaller
 import gears.async.io.OnPool
 import gears.async.io.ReactorBackend
+import gears.async.io.internal.*
 
-/** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program
-  * over a backend and gives it an `Io` over it, which performs its ops and is its `AsyncOperations`, so that code
-  * calling `perform` is the same here as on Scala Native. The backend's kind says how its futures are carried. A
+import scala.util.Try
+
+/** Gears futures on the JVM, always virtual threads, so that suspending one blocks only it: `run` starts a program over
+  * a backend and gives it an `Io` over it, which performs its ops and is its `AsyncOperations`, so that code calling
+  * `perform` is the same here as on Scala Native. The backend's kind says how its futures are carried. A
   * `ReactorBackend`, such as `NioBackend`, runs its program on a `ReactorPool` whose workers carry the virtual threads
   * and drive the reactors, as gears' futures are on Scala Native: an op goes to the reactor of the worker carrying its
   * future, which may finish it at once, and its completion resumes the future on that worker, under the pool's
   * `TakePolicy`. That needs `--add-opens java.base/java.lang=ALL-UNNAMED`, since the JDK keeps both a virtual thread's
   * scheduler and its carrier to itself, and `--add-opens java.base/jdk.internal.vm=ALL-UNNAMED`, for the pin that keeps
   * a future on its worker while its op is submitted there (see `VirtualCarriers.pin`). A `CallerBackend`, such as
-  * `NioOnCaller`, the default, runs its program on gears' own virtual threads on the JDK's scheduler, each op
-  * performed on the future's own thread, and needs nothing of the JDK beyond its public interface.
+  * `NioOnCaller`, the default, runs its program on gears' own virtual threads on the JDK's scheduler, each op performed
+  * on the future's own thread, and needs nothing of the JDK beyond its public interface.
   */
 object ReactorFutures {
 
   /** Runs `program` over `backend`, whichever its kind, and returns what it returns: on a pool of one worker for a
-    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` is not a
-    * `Backend`, so starting a run over one is refused when compiling.
+    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` is not
+    * a `Backend`, so starting a run over one is refused when compiling.
     */
   def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
@@ -45,8 +43,8 @@ object ReactorFutures {
 
   /** Runs `program` on a pool of `workers` workers driving reactors of `backend`'s, which carry the program's futures,
     * run until it finishes and are closed afterwards; `policy` says which tasks a worker out of work may take from
-    * another. The program is given an `Io` over the backend on the pool, as a context parameter, and what it returns
-    * is returned; a failure of the program is rethrown.
+    * another. The program is given an `Io` over the backend on the pool, as a context parameter, and what it returns is
+    * returned; a failure of the program is rethrown.
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend

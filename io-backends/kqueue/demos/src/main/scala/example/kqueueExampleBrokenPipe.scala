@@ -1,11 +1,11 @@
 package example
 
-import java.io.IOException
-import scala.scalanative.unsafe.Zone
-
+import gears.async.io.internal.NativeBuffer
 import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.kqueue.KqueueHandles
-import gears.async.io.internal.NativeBuffer
+
+import java.io.IOException
+import scala.scalanative.unsafe.Zone
 
 /** Writes to a pipe and to a FIFO, opened through `KqueueHandles`, after their readers have closed: each write must
   * fail with "Broken pipe", rather than raise `SIGPIPE` and end the process.

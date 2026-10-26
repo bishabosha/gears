@@ -1,12 +1,6 @@
 package gears.async.io
 package kqueue
 
-import java.nio.ByteBuffer
-import scala.scalanative.posix.sys.socket
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.*
-
-import KqueueBackend.Handle
 import gears.async.io.Interest
 import gears.async.io.Received
 import gears.async.io.Slot
@@ -14,6 +8,13 @@ import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking
 import gears.async.io.internal.PosixSockets
+
+import java.nio.ByteBuffer
+import scala.scalanative.posix.sys.socket
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
+
+import KqueueBackend.Handle
 
 /** The kqueue commands behind `KqueueOps`. `perform` returns true once the op is done, and false when the descriptor
   * was not ready after all, so the reactor waits again without completing it.
@@ -114,7 +115,8 @@ final class AcceptAll(val fd: Int, into: Slot[Array[Handle]], max: Int) extends 
     if count > 0 then into.set(Array.tabulate(count)(i => KqueueHandles.handle(clients(i))))
     count > 0
   }
-  override def transferred: Int = count // connections, against the pending connections a listening socket's event reports
+  override def transferred: Int =
+    count // connections, against the pending connections a listening socket's event reports
 }
 
 /** Waits for a non-blocking connect to finish and checks its outcome. Done once connected; throws if it failed. */

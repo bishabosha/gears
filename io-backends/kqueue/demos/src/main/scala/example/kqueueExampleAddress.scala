@@ -1,8 +1,5 @@
 package example
 
-import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.*
-
 import gears.async.io.internal.Bracket
 import gears.async.io.internal.Bracket.FileOperation
 import gears.async.io.internal.PosixFileOps
@@ -10,6 +7,9 @@ import gears.async.io.internal.PosixSockets
 import gears.async.io.internal.Sockets.Flavor
 import gears.async.io.internal.Sockets.Transport
 import gears.async.io.kqueue.KqueueHandles
+
+import java.nio.charset.StandardCharsets
+import scala.scalanative.unsafe.*
 
 enum KQueueExampleAddress {
   case Unix(sock: String)

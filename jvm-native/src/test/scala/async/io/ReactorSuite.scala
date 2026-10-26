@@ -55,7 +55,8 @@ class ReactorSuite extends FunSuite {
       ),
       ""
     )
-    val errors = compileErrors("def cross(a: ReactorBackend, b: ReactorBackend): Unit = b.open().submit(a.ops.timer(1), _ => ())")
+    val errors =
+      compileErrors("def cross(a: ReactorBackend, b: ReactorBackend): Unit = b.open().submit(a.ops.timer(1), _ => ())")
     assert(errors.contains("a.Op"), errors)
   }
 
@@ -65,7 +66,7 @@ class ReactorSuite extends FunSuite {
       type Op = AnyRef
       type Handle = AnyRef
       def ops: Ops[Op, Handle] = throw new UnsupportedOperationException
-        def attachment(op: Op): AnyRef | Null = null
+      def attachment(op: Op): AnyRef | Null = null
       def attach(op: Op, value: AnyRef | Null): Unit = ()
       def open(): Reactor.Of[Op, Handle] = reactor
       def pool(bufferSize: Int, buffers: Int): BufferPool = throw new UnsupportedOperationException

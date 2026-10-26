@@ -12,8 +12,8 @@ trait Completion[-C] {
     */
   def onComplete(op: C): Unit
 
-  /** The op failed with an exception instead of finishing. By default the failure is thrown, which a reactor reports
-    * as it reports any completion that throws (`Reactor.reportFailure`).
+  /** The op failed with an exception instead of finishing. By default the failure is thrown, which a reactor reports as
+    * it reports any completion that throws (`Reactor.reportFailure`).
     */
   def onFailure(op: C, failure: Throwable): Unit = throw failure
 
@@ -25,10 +25,9 @@ trait Completion[-C] {
   def onCancel(op: C): Unit = ()
 }
 
-/** What a reactor reports when a completion throws, with the op whose completion it was and what it threw: an
-  * exception a completion lets out is a bug in the completion, not an outcome of the op, which had its outcome
-  * delivered. A completion that handles nothing of a failure, so the default `onFailure` threw it, is reported the
-  * same way.
+/** What a reactor reports when a completion throws, with the op whose completion it was and what it threw: an exception
+  * a completion lets out is a bug in the completion, not an outcome of the op, which had its outcome delivered. A
+  * completion that handles nothing of a failure, so the default `onFailure` threw it, is reported the same way.
   */
 final class CompletionFailed(val op: Any, cause: Throwable)
     extends RuntimeException(s"The completion of $op threw: $cause", cause)
@@ -56,23 +55,23 @@ trait Submitter {
   /** Submits an op with the completion to run when it finishes, and no time limit (see the other `submit`). */
   final def submit[C <: Op](op: C, completion: Completion[C]): Unit = submit(op, completion, Backend.NoTimeout)
 
-  /** Submits an op with the completion to run when it finishes, and how long it may take. An op marked `Repeatable`
-    * may be submitted again once its previous submission has completed, failed, or been cancelled; any other op may be
+  /** Submits an op with the completion to run when it finishes, and how long it may take. An op marked `Repeatable` may
+    * be submitted again once its previous submission has completed, failed, or been cancelled; any other op may be
     * submitted only once. No op may be pending twice at the same time. An op may finish during `submit`, such as a read
-    * of data already waiting, but its completion never runs inside `submit`: it runs from a later turn of the loop.
-    * Nor need the op be issued to the I/O facility inside `submit`: a submitter may hold the ops submitted in a turn
-    * and issue them together at the turn's end, as io_uring's submission queue or Network.framework's batches invite,
-    * so long as `trySubmit` issues at once and a turn issues everything before it blocks.
+    * of data already waiting, but its completion never runs inside `submit`: it runs from a later turn of the loop. Nor
+    * need the op be issued to the I/O facility inside `submit`: a submitter may hold the ops submitted in a turn and
+    * issue them together at the turn's end, as io_uring's submission queue or Network.framework's batches invite, so
+    * long as `trySubmit` issues at once and a turn issues everything before it blocks.
     *
     * Unless `timeoutMillis` is negative (`Backend.NoTimeout`), an op not finished that many milliseconds after its
     * submission is stopped, as `cancel` stops it, and fails with `java.util.concurrent.TimeoutException`: its
     * completion gets `onFailure` with that, from the loop, once the submitter has stopped using its buffers and slots,
     * which for an op running elsewhere, such as a blocking op that has to be interrupted, is later. An op that waits
-    * for its handle to be ready before it touches anything, as the reads and writes of a readiness-based submitter
-    * do, has then done nothing: its buffer is as it was and its handle as usable as before, so a read that timed out
-    * is a wait that gave up, not a connection lost. This is how a read is given a timeout: no timer to race it
-    * against, and no cancel to confirm. A timer whose own time is longer times out the same way. Zero gives the op
-    * until the turn after its submission, as a timer of no time has.
+    * for its handle to be ready before it touches anything, as the reads and writes of a readiness-based submitter do,
+    * has then done nothing: its buffer is as it was and its handle as usable as before, so a read that timed out is a
+    * wait that gave up, not a connection lost. This is how a read is given a timeout: no timer to race it against, and
+    * no cancel to confirm. A timer whose own time is longer times out the same way. Zero gives the op until the turn
+    * after its submission, as a timer of no time has.
     */
   def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit
 
@@ -111,9 +110,9 @@ object Submitter {
 
 /** A single-threaded event loop: a `Submitter` whose loop the caller drives with `runOnce` or `run`. Every completion
   * runs on the thread that drives the loop, and apart from `wakeup`, a reactor is only used from that thread. A
-  * completion that throws does not end the turn, nor escape `cancel` or `close`: the reactor catches it, as other
-  * loops do (Netty, Vert.x, `ExecutionContext.reportFailure`), delivers the rest, and reports it to `reportFailure`
-  * as a `CompletionFailed`; it is never delivered again as the op's failure, since the op did not fail. The other
+  * completion that throws does not end the turn, nor escape `cancel` or `close`: the reactor catches it, as other loops
+  * do (Netty, Vert.x, `ExecutionContext.reportFailure`), delivers the rest, and reports it to `reportFailure` as a
+  * `CompletionFailed`; it is never delivered again as the op's failure, since the op did not fail. The other
   * completions of the turn would otherwise be lost: a readiness event consumed by the poll is not reported again.
   */
 trait Reactor extends Submitter with AutoCloseable {

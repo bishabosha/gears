@@ -1,22 +1,23 @@
 package example
 
-import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
-
 import gears.async.io.AddressFamily
 import gears.async.io.Completion
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Transport
 import gears.async.io.kqueue.Connect
+import gears.async.io.kqueue.KqueueHandles
 import gears.async.io.kqueue.KqueueOp
 import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.kqueue.ReadIntoBuffer
 import gears.async.io.kqueue.Resolve
 import gears.async.io.kqueue.WriteFromBuffer
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.PosixSockets
-import gears.async.io.internal.Sockets.Transport
-import gears.async.io.kqueue.KqueueHandles
+
+import java.nio.charset.StandardCharsets
+import scala.scalanative.unsafe.Zone
+
 import KQueueExampleIO.*
 
 /** Pulls a real reply off the internet with the WHOIS protocol (RFC 3912): resolve the host, connect to port 43, send

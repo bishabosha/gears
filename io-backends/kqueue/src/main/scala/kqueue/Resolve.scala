@@ -1,11 +1,11 @@
 package gears.async.io
 package kqueue
 
-import java.io.IOException
-
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
 import gears.async.io.internal.PosixResolver
+
+import java.io.IOException
 
 /** Resolves a host name without blocking the reactor. There is no non-blocking `getaddrinfo`, so the lookup runs on the
   * reactor's blocker pool, the way libuv and tokio do it. Completes after writing the addresses into `into`, or fails

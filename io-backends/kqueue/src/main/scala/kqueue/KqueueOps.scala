@@ -1,17 +1,16 @@
 package gears.async.io
 package kqueue
 
-import java.nio.ByteBuffer
-
 import gears.async.io.BlockingOps
 import gears.async.io.BufferPool
-import gears.async.io.Received
 import gears.async.io.Completion
+import gears.async.io.FifoOps
 import gears.async.io.FileOps
-import KqueueBackend.Handle
 import gears.async.io.Interest
 import gears.async.io.IpAddress
+import gears.async.io.PipeOps
 import gears.async.io.ReadinessOps
+import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
@@ -19,11 +18,13 @@ import gears.async.io.Slot
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
-import gears.async.io.PipeOps
-import gears.async.io.FifoOps
 import gears.async.io.internal.BlockingRun
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking
+
+import java.nio.ByteBuffer
+
+import KqueueBackend.Handle
 
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below
   * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -124,9 +125,9 @@ sealed abstract class KqueueAtOnce extends KqueueOp {
   def perform(): Unit
 }
 
-/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a
-  * time limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its
-  * slot, so that nothing is left open that the caller never got.
+/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
+  * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
+  * so that nothing is left open that the caller never got.
   */
 sealed trait Opens extends KqueueOp {
   def abandon(): Unit
@@ -184,10 +185,10 @@ final class OpenPipe(read: Slot[Handle], write: Slot[Handle]) extends KqueueAtOn
   }
 }
 
-/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking
-  * connect started, when the op is submitted (`open`), and the op then waits as `Connect` does. Done once connected,
-  * after writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is
-  * closed and `into` left empty.
+/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking connect
+  * started, when the op is submitted (`open`), and the op then waits as `Connect` does. Done once connected, after
+  * writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is closed and
+  * `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Command with Opens {
   private var socket = -1
@@ -224,8 +225,8 @@ final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Comman
 }
 
 /** Closes a handle (see `Ops.close` and `KqueueBackend.Handle`): at once in meaning, and the descriptor itself at once
-  * too if no use of it is in progress, as nearly always, completing as an at-once op does; otherwise once the last
-  * use ends, on whose thread the descriptor is closed and this completed, as a promise is from another thread.
+  * too if no use of it is in progress, as nearly always, completing as an at-once op does; otherwise once the last use
+  * ends, on whose thread the descriptor is closed and this completed, as a promise is from another thread.
   */
 final class Close(val handle: Handle) extends KqueuePromise {
 
@@ -347,8 +348,8 @@ object KqueuePromise {
 }
 
 /** A promise the reactor completes by running `block` on the blocker pool, with `BlockingRun`'s cancellation: skipped
-  * if not started, interrupted if running, and `onCancel` waits for `block` to return. One marked `Repeatable`, such
-  * as a file op, is restarted on each submission.
+  * if not started, interrupted if running, and `onCancel` waits for `block` to return. One marked `Repeatable`, such as
+  * a file op, is restarted on each submission.
   */
 abstract class KqueueBlocking extends KqueuePromise with BlockingRun {
 

@@ -1,5 +1,12 @@
 package example
 
+import gears.async.io.internal.Bracket
+import gears.async.io.internal.Bracket.FileOperation
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixErr.cError
+import gears.async.io.internal.PosixSockets
+import gears.async.io.kqueue.KqueueHandles
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.scalanative.posix.fcntl
@@ -7,13 +14,6 @@ import scala.scalanative.posix.sys.socket
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
-
-import gears.async.io.internal.Bracket
-import gears.async.io.internal.Bracket.FileOperation
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.PosixErr.cError
-import gears.async.io.internal.PosixSockets
-import gears.async.io.kqueue.KqueueHandles
 
 /** Building blocks shared by the kqueue demos: the stream framing (from `gearsexample.DemoIO`), non-blocking I/O that
   * reports would-block and EOF as values instead of exceptions, and datagram peers.
@@ -32,9 +32,9 @@ object KQueueExampleIO {
     }
     r.run()
     failure match {
-      case null                                   => ()
+      case null                                      => ()
       case reported: gears.async.io.CompletionFailed => throw reported.getCause
-      case other                                  => throw other.nn
+      case other                                     => throw other.nn
     }
   }
 

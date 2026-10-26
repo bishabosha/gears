@@ -1,10 +1,11 @@
 package gearsexample
 
+import gears.async.io.FifoBackend
+import gears.async.io.ReactorFutures
+import gears.async.io.testkit.BufferArena
+
 import java.nio.charset.StandardCharsets
 
-import gears.async.io.FifoBackend
-import gears.async.io.testkit.BufferArena
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */

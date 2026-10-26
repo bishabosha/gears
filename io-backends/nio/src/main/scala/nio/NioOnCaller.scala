@@ -3,27 +3,25 @@ package nio
 
 import gears.async.Async
 import gears.async.cancellationScope
+import gears.async.io.CallerBackend
+import gears.async.io.Interest
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
-import gears.async.io.CallerBackend
-import gears.async.io.Interest
-
 /** NIO with no reactor: the backend for a program whose threads may block, such as gears' own virtual threads, the
-  * JVM's default. It has the ops and handles of `NioBackend`, and does each op on the calling thread. A
-  * command is tried at once, since a non-blocking channel may be used from any thread; one that would block is tried
-  * again after a yield, up to `Retries` times, because in request-response traffic the reply often arrives within
-  * microseconds, and a yield puts the caller behind every other thread ready to run, so this stays fair; then it
-  * waits on its handle's own selector (`SelectorWait`), which the JDK's poller parks a virtual thread in, and is tried
-  * again when woken. A timer parks until its time (`TimerWait`); a blocking op runs on the caller (`BlockingHere`),
-  * interrupted from a timer thread if its time limit is up; an op done at once, such as a close, is done. Cancelling
-  * the caller ends the wait, and the handle stays open. Nothing spins: busy waiting gave the best latency and starved
-  * the other futures, so it was dropped (see the NIO TODO, items 10 and 11). A time limit runs from the call: an op
-  * whose time runs out has done nothing and throws. Its `Io` is an `OnCaller` over it, which works from any `Async`
-  * context with no runner, and is what `ReactorFutures.run` hands the program. Nothing of the JDK beyond its public
-  * interface.
+  * JVM's default. It has the ops and handles of `NioBackend`, and does each op on the calling thread. A command is
+  * tried at once, since a non-blocking channel may be used from any thread; one that would block is tried again after a
+  * yield, up to `Retries` times, because in request-response traffic the reply often arrives within microseconds, and a
+  * yield puts the caller behind every other thread ready to run, so this stays fair; then it waits on its handle's own
+  * selector (`SelectorWait`), which the JDK's poller parks a virtual thread in, and is tried again when woken. A timer
+  * parks until its time (`TimerWait`); a blocking op runs on the caller (`BlockingHere`), interrupted from a timer
+  * thread if its time limit is up; an op done at once, such as a close, is done. Cancelling the caller ends the wait,
+  * and the handle stays open. Nothing spins: busy waiting gave the best latency and starved the other futures, so it
+  * was dropped (see the NIO TODO, items 10 and 11). A time limit runs from the call: an op whose time runs out has done
+  * nothing and throws. Its `Io` is an `OnCaller` over it, which works from any `Async` context with no runner, and is
+  * what `ReactorFutures.run` hands the program. Nothing of the JDK beyond its public interface.
   */
 object NioOnCaller extends CallerBackend with NioCapabilities {
 
@@ -32,8 +30,8 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     */
   val Retries: Int = sys.props.get("asyncio.gears.retriesHere").map(_.toInt).getOrElse(8)
 
-  /** Submissions of one command in a row that finished at once before the caller yields, so that a run of them gives
-    * up the thread now and then, as a pool's fast path gives up its turn.
+  /** Submissions of one command in a row that finished at once before the caller yields, so that a run of them gives up
+    * the thread now and then, as a pool's fast path gives up its turn.
     */
   inline val HereBudget = 32
 
@@ -41,7 +39,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     if ac.group.isCancelled then throw new CancellationException()
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
-      case connect: ConnectTo    =>
+      case connect: ConnectTo =>
         connect.open()
         try performCommand(connect, deadline)
         catch {

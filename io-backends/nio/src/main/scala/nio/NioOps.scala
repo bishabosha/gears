@@ -1,6 +1,24 @@
 package gears.async.io
 package nio
 
+import gears.async.io.AddressFamily
+import gears.async.io.BlockingOps
+import gears.async.io.BufferPool
+import gears.async.io.Completion
+import gears.async.io.FileOps
+import gears.async.io.Interest
+import gears.async.io.IpAddress
+import gears.async.io.PipeOps
+import gears.async.io.Received
+import gears.async.io.Repeatable
+import gears.async.io.ResolveOps
+import gears.async.io.ResolvedAddress
+import gears.async.io.Slot
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamOps
+import gears.async.io.internal.Blockers
+import gears.async.io.internal.BlockingRun
+
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -11,24 +29,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
-import gears.async.io.AddressFamily
-import gears.async.io.internal.Blockers
-import gears.async.io.BlockingOps
-import gears.async.io.internal.BlockingRun
-import gears.async.io.BufferPool
-import gears.async.io.Received
-import gears.async.io.Completion
-import gears.async.io.FileOps
 import NioCapabilities.Handle
-import gears.async.io.Interest
-import gears.async.io.IpAddress
-import gears.async.io.Repeatable
-import gears.async.io.ResolveOps
-import gears.async.io.ResolvedAddress
-import gears.async.io.Slot
-import gears.async.io.PipeOps
-import gears.async.io.UnixAddress
-import gears.async.io.UnixStreamOps
 
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
   * code that only knows the `Reactor` interface builds them through `reactor.ops`.
@@ -95,16 +96,16 @@ object NioOps
   }
 }
 
-/** An op the reactor performs as soon as it is submitted, with no handle to wait for: its completion runs on the
-  * next turn, with the failure `perform` threw, if any. One-shot.
+/** An op the reactor performs as soon as it is submitted, with no handle to wait for: its completion runs on the next
+  * turn, with the failure `perform` threw, if any. One-shot.
   */
 sealed abstract class NioAtOnce extends NioOp {
   def perform(): Unit
 }
 
-/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a
-  * time limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its
-  * slot, so that nothing is left open that the caller never got.
+/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
+  * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
+  * so that nothing is left open that the caller never got.
   */
 sealed trait Opens extends NioOp {
   def abandon(): Unit
@@ -166,7 +167,8 @@ final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
 }
 
-/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, as `SocketChannel.shutdownOutput` does. */
+/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, as `SocketChannel.shutdownOutput` does.
+  */
 final class ShutdownOutput(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.shutdownOutput(handle)
 }
@@ -284,18 +286,19 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[Handle]], max: Int) e
       }
     catch {
       case failure: Throwable =>
-        if clients.isEmpty then throw failure // with some accepted, they are delivered, and the next accept fails instead
+        if clients.isEmpty then
+          throw failure // with some accepted, they are delivered, and the next accept fails instead
     }
     if clients.nonEmpty then into.set(clients.toArray)
     clients.nonEmpty
   }
 }
 
-/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking
-  * connect started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect
-  * to finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as
-  * a Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times
-  * out first, the socket is closed and `into` left empty.
+/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking connect
+  * started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect to
+  * finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as a
+  * Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times out
+  * first, the socket is closed and `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[Handle]) extends Command with Opens {
   private var socket: Handle | Null = null

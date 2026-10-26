@@ -2,12 +2,11 @@ package higherlevel
 
 import gears.async.Async
 import gears.async.Future
+import gears.async.io.IpAddress
+import gears.async.io.testkit.ProgramSuite
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
-
-import gears.async.io.IpAddress
-import gears.async.io.testkit.ProgramSuite
 
 /** Checks of the higher level, run over every backend by the demos' suites: what the lowest level is for. */
 trait HigherLevelChecks extends ProgramSuite {

@@ -1,13 +1,14 @@
 package example
 
-import scala.scalanative.unsafe.Zone
-
 import gears.async.io.Completion
 import gears.async.io.Interest
-import gears.async.io.kqueue.Command
-import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.Sockets.Transport
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.KqueueReactor
+
+import scala.scalanative.unsafe.Zone
+
 import KQueueExampleIO.*
 
 object KQueueExampleDatagramServerSocket {

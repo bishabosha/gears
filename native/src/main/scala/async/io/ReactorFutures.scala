@@ -1,19 +1,16 @@
 package gears.async.io
 
-import gears.async.io.internal.*
-
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.AsyncSupport
 import gears.async.Future
 import gears.async.Listener
-import gears.async.native.NativeSuspend
-
-
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.OnPool
 import gears.async.io.ReactorBackend
+import gears.async.io.internal.*
+import gears.async.native.NativeSuspend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
 object ReactorSupport extends AsyncSupport with NativeSuspend {
@@ -23,9 +20,9 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
 /** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is `OnPool`'s. */
 object ReactorFutures {
 
-  /** Runs `program` on one worker, the calling thread, and returns what it returns (see the other `run`). Scala
-    * Native suspends futures on a pool's workers, which run reactors, so the backend must be a reactor backend. A
-    * program's `Io` is not a `Backend`, so starting a run over one is refused when compiling.
+  /** Runs `program` on one worker, the calling thread, and returns what it returns (see the other `run`). Scala Native
+    * suspends futures on a pool's workers, which run reactors, so the backend must be a reactor backend. A program's
+    * `Io` is not a `Backend`, so starting a run over one is refused when compiling.
     */
   def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
@@ -33,14 +30,16 @@ object ReactorFutures {
       case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")
     }
 
-  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s (see `ReactorPool`): the
-    * calling thread becomes the first. The program starts as a future, is given an `Io` over the backend on the pool
-    * as a context parameter, with which it performs its ops and which is its `AsyncOperations`; the workers run until
-    * it finishes, and what it returns is returned. `policy` says which tasks a worker out of work may take from
-    * another. A failure of the program is rethrown. With `GEARS_POOL_STATS=1`, the pool's counters are printed once
-    * its workers stop, and each reactor as it prints itself.
+  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s (see `ReactorPool`): the calling
+    * thread becomes the first. The program starts as a future, is given an `Io` over the backend on the pool as a
+    * context parameter, with which it performs its ops and which is its `AsyncOperations`; the workers run until it
+    * finishes, and what it returns is returned. `policy` says which tasks a worker out of work may take from another. A
+    * failure of the program is rethrown. With `GEARS_POOL_STATS=1`, the pool's counters are printed once its workers
+    * stop, and each reactor as it prints itself.
     */
-  def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using backend: ReactorBackend)(
+  def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
+      backend: ReactorBackend
+  )(
       program: OnPool[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T
   ): T = {
     FileLimit.raised: Unit // as the JVM does, so that a server's sockets are not capped at a shell's 256

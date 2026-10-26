@@ -1,6 +1,9 @@
 package gears.async.io
 package internal
 
+import gears.async.io.AddressFamily
+import gears.async.io.ResolvedAddress
+
 import scala.scalanative.posix.arpa.inet
 import scala.scalanative.posix.netdb
 import scala.scalanative.posix.netdbOps.*
@@ -8,9 +11,6 @@ import scala.scalanative.posix.netinet.in
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
-
-import gears.async.io.AddressFamily
-import gears.async.io.ResolvedAddress
 
 /** Host name resolution with POSIX `getaddrinfo`. It blocks, so a reactor runs it off its own thread. */
 object PosixResolver {

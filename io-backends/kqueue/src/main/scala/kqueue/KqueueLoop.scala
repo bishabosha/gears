@@ -1,6 +1,7 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.internal.Bracket.FileOperation
 import gears.async.io.internal.{Bracket, PosixErr, Unblocked}
 
 import java.io.IOException
@@ -8,16 +9,15 @@ import scala.scalanative.annotation.alwaysinline
 import scala.scalanative.bsd.kevent
 import scala.scalanative.libc.stdlib
 import scala.scalanative.meta.LinktimeInfo
+import scala.scalanative.posix.errno as posixErrno
 import scala.scalanative.posix.time.timespec
 import scala.scalanative.posix.timeOps.*
-import scala.scalanative.posix.errno as posixErrno
 import scala.scalanative.posix.unistd
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.USize
 import scala.scalanative.unsigned.{*, given}
 
 import PosixErr.cError
-import gears.async.io.internal.Bracket.FileOperation
 
 object KqueueLoop {
 
@@ -300,8 +300,8 @@ object KqueueLoop {
     polled(polledEvents)
   }
 
-  /** The result of a poll: a signal interrupting it, `EINTR`, reports no events, so the loop turns and polls again;
-    * any other failure, of the kqueue itself, throws.
+  /** The result of a poll: a signal interrupting it, `EINTR`, reports no events, so the loop turns and polls again; any
+    * other failure, of the kqueue itself, throws.
     */
   @alwaysinline private def polled(polledEvents: Int): Int =
     if (polledEvents >= 0) polledEvents

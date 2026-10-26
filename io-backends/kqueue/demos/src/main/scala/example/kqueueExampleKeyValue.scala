@@ -1,5 +1,19 @@
 package example
 
+import gears.async.io.Completion
+import gears.async.io.Interest
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Transport
+import gears.async.io.kqueue.Accept
+import gears.async.io.kqueue.Command
+import gears.async.io.kqueue.KqueueBackend.Handle
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.ReadIntoBuffer
+import gears.async.io.kqueue.WriteFromBuffer
+
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -7,19 +21,6 @@ import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import scala.scalanative.unsafe.Zone
 
-import gears.async.io.Completion
-import gears.async.io.kqueue.KqueueBackend.Handle
-import gears.async.io.Interest
-import gears.async.io.kqueue.Accept
-import gears.async.io.kqueue.Command
-import gears.async.io.kqueue.KqueueHandles
-import gears.async.io.kqueue.KqueueOps
-import gears.async.io.kqueue.KqueueReactor
-import gears.async.io.kqueue.ReadIntoBuffer
-import gears.async.io.kqueue.WriteFromBuffer
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.PosixSockets
-import gears.async.io.internal.Sockets.Transport
 import KQueueExampleIO.*
 
 /** A pipelined key-value service over the length-framed stream protocol, in the style of a Redis client and server. A

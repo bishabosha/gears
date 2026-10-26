@@ -4,11 +4,11 @@ package nwframework
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 
-/** The C side of the backend, `nwframework_io.c` beside this project's resources: the blocks Network.framework and Dispatch
-  * call, each a trampoline that queues an event on its handle and wakes the reactor watching it; the queue a reactor
-  * parks on; and the framework calls themselves. Everything returns at once, except `nwf_reactor_wait`, which parks the
-  * reactor's thread, `nwf_listen`, which waits for the listener to be ready or to fail, and `nwf_cancel` of a listener,
-  * which waits for its cancelled state. What the events mean is `NWFrameworkHandle`'s business.
+/** The C side of the backend, `nwframework_io.c` beside this project's resources: the blocks Network.framework and
+  * Dispatch call, each a trampoline that queues an event on its handle and wakes the reactor watching it; the queue a
+  * reactor parks on; and the framework calls themselves. Everything returns at once, except `nwf_reactor_wait`, which
+  * parks the reactor's thread, `nwf_listen`, which waits for the listener to be ready or to fail, and `nwf_cancel` of a
+  * listener, which waits for its cancelled state. What the events mean is `NWFrameworkHandle`'s business.
   */
 @extern
 private[nwframework] object NWFrameworkIo {
@@ -80,8 +80,8 @@ private[nwframework] object NWFrameworkEvent {
   inline val Readable = 9
   inline val Writable = 10
 
-  /** The kinds that wake a reactor with an op waiting to read, to write, or to connect, as bits for
-    * `nwf_handle_watch`; the connection ending wakes whichever.
+  /** The kinds that wake a reactor with an op waiting to read, to write, or to connect, as bits for `nwf_handle_watch`;
+    * the connection ending wakes whichever.
     */
   inline val Ending = (1 << Failed) | (1 << Cancelled)
   inline val ForRead = (1 << Received) | (1 << Packet) | (1 << Accepted) | (1 << Flow) | (1 << Readable) | Ending
@@ -95,6 +95,7 @@ private[nwframework] object NWFrameworkEvent {
     inline def isFinal: Boolean = e._5 != 0
     inline def len: Int = e._6.toInt
     inline def bytes: Ptr[Byte] = e._9
+
     /** Non-null for bytes received straight into a buffer the caller gave (`nwf_receive_into`). */
     inline def intoBuffer: Ptr[Byte] = e._8
     inline def flow: NWFrameworkIo.Handle = e._10

@@ -2,21 +2,21 @@ package gearsexample
 
 import gears.async.Async
 import gears.async.Future
+import gears.async.io.Backend
+import gears.async.io.Io
+import gears.async.io.IpAddress
+import gears.async.io.ReactorFutures
+import gears.async.io.Slot
+import gears.async.io.SocketBackend
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagramBackend
+import gears.async.io.testkit.BufferArena
 
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
-import gears.async.io.Io
-import gears.async.io.Backend
-import gears.async.io.IpAddress
-import gears.async.io.SocketBackend
-import gears.async.io.UnixAddress
-import gears.async.io.UnixDatagramBackend
-import gears.async.io.Slot
-import gears.async.io.testkit.BufferArena
 import DemoIO.text
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirrors of `example.KQueueExampleDatagramSocket` and `example.KQueueExampleDatagramServerSocket`, using the
@@ -57,7 +57,8 @@ object GearsDatagram {
     }
   }
 
-  /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done. */
+  /** Sends `request` with `send`, then waits for the reply with `receive`, both repeatable ops resubmitted until done.
+    */
   private def exchange(
       io: Io[Backend],
       remote: Any,

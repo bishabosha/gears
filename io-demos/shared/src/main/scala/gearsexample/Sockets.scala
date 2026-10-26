@@ -1,16 +1,16 @@
 package gearsexample
 
-import java.nio.file.Files
-import java.nio.file.Paths
-
 import gears.async.Async
 import gears.async.Future
-
 import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.IpSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
+
+import java.nio.file.Files
+import java.nio.file.Paths
+
 import higherlevel.HigherLevel
 
 /** Where a stream demo's server listens: an IP address, or a Unix path on a backend with Unix stream sockets. */
@@ -18,6 +18,7 @@ type StreamAddress = IpAddress | UnixAddress
 
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
+
   /** A stream socket connected to `address`, of either family, on a backend with Unix stream sockets. */
   def connect(address: StreamAddress)(using io: Io[UnixStreams], async: Async): io.Handle = address match {
     case unix: UnixAddress => HigherLevel.connect(unix)
@@ -30,13 +31,15 @@ object Sockets {
     case ip: IpAddress     => HigherLevel.listen(ip)
   }
 
-  /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A
-    * failed accept leaves the server running: the connection it was for is gone, and running out of descriptors
-    * (`EMFILE`) passes as connections close, so it waits a little and accepts again. One repeatable op serves every
-    * connection, taking all that are pending each time (`acceptAll`), so that a burst does not wait an op apiece behind
-    * the connections already being served while the listen queue fills.
+  /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A failed
+    * accept leaves the server running: the connection it was for is gone, and running out of descriptors (`EMFILE`)
+    * passes as connections close, so it waits a little and accepts again. One repeatable op serves every connection,
+    * taking all that are pending each time (`acceptAll`), so that a burst does not wait an op apiece behind the
+    * connections already being served while the listen queue fills.
     */
-  def serve(using io: Io[IpSockets])(listener: io.Handle)(serve: io.Handle => Async.Spawn ?=> Unit)(using
+  def serve(using
+      io: Io[IpSockets]
+  )(listener: io.Handle)(serve: io.Handle => Async.Spawn ?=> Unit)(using
       Async.Spawn
   ): Unit = {
     val accepted = gears.async.io.Slot[Array[io.Handle]]()

@@ -1,10 +1,9 @@
 package gears.async.io
 package nwframework
 
-import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
-
+import gears.async.io.Io
 import gears.async.io.nwframework.NWFrameworkBackend
 import gears.async.io.testkit.FuturesContract
 

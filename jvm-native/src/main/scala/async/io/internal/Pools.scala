@@ -5,17 +5,16 @@ import gears.async.Async
 import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
+import gears.async.io.Completion
+import gears.async.io.OnPool
+import gears.async.io.Reactor
+import gears.async.io.ReactorBackend
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicReference
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
-
-import gears.async.io.Completion
-import gears.async.io.OnPool
-import gears.async.io.Reactor
-import gears.async.io.ReactorBackend
 
 /** How an `OnPool` performs and submits its ops on the pool: the same on every platform. `bound` is the `OnPool` a
   * program is given, over a scheduler of the pool's.
@@ -30,8 +29,8 @@ private[io] object Pools {
     def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
       performOnReactor(b, op, timeoutMillis, scheduler)
 
-    /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if
-      * the caller has been cancelled by the time it resumes. Cheaper than gears' own, which spawns a task.
+    /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if the
+      * caller has been cancelled by the time it resumes. Cheaper than gears' own, which spawns a task.
       */
     override def `yield`()(using ac: Async): Unit = {
       ac.withGroup(CompletionGroup.Unlinked).await(Yield)
@@ -41,15 +40,15 @@ private[io] object Pools {
 
   /** Submits `op`, which must have been built by `b.ops`, to the reactor of the worker running the caller, on
     * `scheduler`, the pool's, and suspends the caller until the reactor finishes with it: it returns when the op
-    * completes, throws its failure, throws `CancellationException` when it is cancelled, or throws
-    * `TimeoutException` when its time limit, `timeoutMillis` unless negative, ran out first (see `Submitter.submit`).
-    * A repeatable op may go to a different reactor each time.
+    * completes, throws its failure, throws `CancellationException` when it is cancelled, or throws `TimeoutException`
+    * when its time limit, `timeoutMillis` unless negative, ran out first (see `Submitter.submit`). A repeatable op may
+    * go to a different reactor each time.
     *
     * Cancelling the caller asks the reactor to cancel the op, but this keeps waiting until the reactor confirms, so
     * once it returns or throws, the op's buffers and slots belong to the caller again.
     */
-  private[io] def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int, scheduler: ReactorScheduler)(
-      using ac: Async
+  private[io] def performOnReactor(b: ReactorBackend, op: b.Op, timeoutMillis: Int, scheduler: ReactorScheduler)(using
+      ac: Async
   ): Unit = {
     // Pinned to its thread from finding the worker to submitting on it (see `ReactorScheduler.pin`): `performHere`
     // unpins once the op is submitted, before it waits.
@@ -238,8 +237,7 @@ private[io] object Pools {
       val submission = generation
       val target = worker
       target.sync(
-        if submission == generation && !state.get().isInstanceOf[Try[?]] then
-          cancelOn(target, op)
+        if submission == generation && !state.get().isInstanceOf[Try[?]] then cancelOn(target, op)
       )
     }
   }

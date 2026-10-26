@@ -1,31 +1,32 @@
 package gearsexample
 
-import mainargs.{ParserForMethods, arg, main}
-import gears.async.io.IpAddress
-import gears.async.io.UnixAddress
 import gears.async.io.BlockingBackend
 import gears.async.io.FileBackend
+import gears.async.io.IpAddress
 import gears.async.io.PipeBackend
 import gears.async.io.ResolveBackend
+import gears.async.io.TakePolicy
+import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
-import gears.async.io.TakePolicy
+
+import mainargs.{ParserForMethods, arg, main}
 
 /** The gears demos on the JVM, run as `sbt "ioDemosJVM/run <command>"`, with the commands and flags of
-  * `iokqueuedemos gears` that NIO can run: the FIFO and Unix datagram demos need capabilities NIO lacks, so they would not
-  * compile here, and `move-bench` is kqueue's own.
+  * `iokqueuedemos gears` that NIO can run: the FIFO and Unix datagram demos need capabilities NIO lacks, so they would
+  * not compile here, and `move-bench` is kqueue's own.
   *
   * This is the edge, the one place that chooses NIO: `NioOnCaller`, with no reactor, each op performed on the future's
-  * own virtual thread; or, with `-Dasyncio.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor
-  * pool (see `gears.async.io.ReactorFutures`).
+  * own virtual thread; or, with `-Dasyncio.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor pool
+  * (see `gears.async.io.ReactorFutures`).
   */
 object Main {
   given (UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
     sys.props.get("asyncio.nio.backend") match {
       case Some("reactors")      => NioBackend
       case None | Some("caller") => NioOnCaller
-      case Some(other)           => throw new IllegalArgumentException(s"asyncio.nio.backend is caller or reactors, not `$other`")
+      case Some(other) => throw new IllegalArgumentException(s"asyncio.nio.backend is caller or reactors, not `$other`")
     }
 
   @main
@@ -125,7 +126,9 @@ object Main {
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
-      @arg(doc = "run every scenario once at a fifth of its count first, so the JIT has compiled it") warmup: mainargs.Flag
+      @arg(doc =
+        "run every scenario once at a fifth of its count first, so the JIT has compiled it"
+      ) warmup: mainargs.Flag
   ): Unit = {
     val endpoint =
       if tcp.value then Endpoint.Ip(IpAddress.IPv4("127.0.0.1", port))
@@ -152,9 +155,13 @@ object Main {
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,
       @arg(doc = "connections in the concurrent scenario") connections: Int = 64,
-      @arg(doc = "run every scenario once at a fifth of its count first, so the JIT has compiled it") warmup: mainargs.Flag,
-      @arg(doc = "ignored, so the same flags as bench's can be passed: the JDK's virtual thread scheduler decides; set "
-        + "-Djdk.virtualThreadScheduler.parallelism to bound it") workers: Int = 1,
+      @arg(doc =
+        "run every scenario once at a fifth of its count first, so the JIT has compiled it"
+      ) warmup: mainargs.Flag,
+      @arg(doc =
+        "ignored, so the same flags as bench's can be passed: the JDK's virtual thread scheduler decides; set "
+          + "-Djdk.virtualThreadScheduler.parallelism to bound it"
+      ) workers: Int = 1,
       @arg(doc = "do the I/O with non-blocking channels and a selector thread for each side, instead of blocking ones")
       selector: mainargs.Flag,
       @arg(

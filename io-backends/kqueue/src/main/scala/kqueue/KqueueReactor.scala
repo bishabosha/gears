@@ -1,12 +1,6 @@
 package gears.async.io
 package kqueue
 
-import java.io.IOException
-import java.util.concurrent.TimeoutException
-import scala.scalanative.posix.string
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.*
-
 import gears.async.io.Completion
 import gears.async.io.Interest
 import gears.async.io.Reactor
@@ -15,30 +9,36 @@ import gears.async.io.internal.DescriptorTable
 import gears.async.io.kqueue.KqueueLoop
 import gears.async.io.kqueue.KqueueLoop.Event
 
+import java.io.IOException
+import java.util.concurrent.TimeoutException
+import scala.scalanative.posix.string
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
+
 /** The kqueue implementation of `Reactor`, for ops built by `KqueueOps`. A command is performed as soon as it is
   * submitted when its descriptor is known to be ready, or when readiness is not known yet and the command allows it;
   * otherwise, or when it would block, it waits for readiness and is performed on the loop thread. The reactor's own
   * reads (`Command.edgeTriggered`) wait on a persistent edge-triggered filter, added once per descriptor, so waiting
   * again costs no syscall; other reads, and writes, which rarely have to wait, use a one-shot filter. Descriptors must
-  * be closed through `KqueueHandles.close`, from any thread, which tells every reactor (`closed`): the commands
-  * pending on the descriptor fail, and its slot is forgotten before the number is reused; timers, and the ops with a
-  * time limit, are kept in a heap on the loop thread, by deadline, and bound how long a poll blocks, so setting or
+  * be closed through `KqueueHandles.close`, from any thread, which tells every reactor (`closed`): the commands pending
+  * on the descriptor fail, and its slot is forgotten before the number is reused; timers, and the ops with a time
+  * limit, are kept in a heap on the loop thread, by deadline, and bound how long a poll blocks, so setting or
   * cancelling one costs no syscall, and an op that times out is withdrawn as a cancelled one is, with `onFailure`
   * instead of `onCancel`; `wakeup`, and blocking tasks finishing on other threads, wake the loop with a user event.
   * Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
   */
 final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) extends Reactor {
 
-  /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go to
-    * any kqueue reactor in turn (see `KqueueBackend`).
+  /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go
+    * to any kqueue reactor in turn (see `KqueueBackend`).
     */
   type Op = KqueueOp
   type Handle = KqueueBackend.Handle
 
   def ops: KqueueOps.type = KqueueOps
 
-  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may
-    * then submit the op again.
+  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may then
+    * submit the op again.
     */
   private def take(op: KqueueOp): Completion[KqueueOp] = {
     val completion = op.completion.nn
@@ -160,7 +160,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
     * limit, goes into the timer heap to time out when it is due.
     */
-  private def submitOrFinish[C <: Op](op: C, completion: Completion[C], finishNow: Boolean, timeoutMillis: Int): Boolean = {
+  private def submitOrFinish[C <: Op](
+      op: C,
+      completion: Completion[C],
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
     var finished = false
     var waits = false
     op match {
@@ -172,7 +177,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     op match {
       case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command =>
+      case command: Command                                           =>
         // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
         val handle = command.handle
         if handle != null && !handle.acquire() then {
@@ -267,9 +272,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     finished
   }
 
-  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure
-    * as an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns
-    * false.
+  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure as
+    * an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns false.
     */
   private def opened(connect: ConnectTo, pending: Completion[KqueueOp], finishNow: Boolean): Boolean =
     try {
@@ -283,8 +287,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         false
     }
 
-  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to
-    * time out then (see `fireDueTimers`).
+  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
+    * out then (see `fireDueTimers`).
     */
   private def schedule(op: KqueueOp, milliseconds: Int): Unit = {
     op.deadline = System.nanoTime() + milliseconds * 1_000_000L
@@ -314,7 +318,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * A registration that fails, such as with `EBADF` for a descriptor closed behind the reactor's back, takes the
     * command out of its slot, so that the command fails alone, through its completion, and the loop goes on.
     */
-  private inline def registrationFailure(command: Command, slot: Slot, read: Boolean)(inline register: Unit): Throwable | Null =
+  private inline def registrationFailure(command: Command, slot: Slot, read: Boolean)(
+      inline register: Unit
+  ): Throwable | Null =
     try {
       register
       null
@@ -387,8 +393,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   }
 
   /** Called from any thread when descriptor `fd`, whose generation in `DescriptorTable` was `generation`, is closed:
-    * the commands pending on it here fail, from the loop, as `Ops.close` says, and its slot forgets it. A slot
-    * that knows a later generation knows a reused number, and is left alone.
+    * the commands pending on it here fail, from the loop, as `Ops.close` says, and its slot forgets it. A slot that
+    * knows a later generation knows a reused number, and is left alone.
     */
   private[kqueue] def closed(fd: Int, generation: Int): Unit =
     if !closed then {
@@ -477,7 +483,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         case _ =>
           if completion != null then {
             val failure = promise.failure
-            if failure != null then deliverFailure(completion, promise, failure.nn) else deliverComplete(completion, promise)
+            if failure != null then deliverFailure(completion, promise, failure.nn)
+            else deliverComplete(completion, promise)
           }
       }
       remaining -= 1
@@ -759,9 +766,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
   }
 
-  /** An event with `EV_ERROR`, whose data is the error number: the command pending on the descriptor's filter fails, and
-    * no other; the slot forgets what it knew of reading, so a later read registers its filter again. On the wake event
-    * or a timer, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
+  /** An event with `EV_ERROR`, whose data is the error number: the command pending on the descriptor's filter fails,
+    * and no other; the slot forgets what it knew of reading, so a later read registers its filter again. On the wake
+    * event or a timer, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
     */
   private def dispatchError(event: Event): Unit =
     if KqueueLoop.isUserEvent(event) then wakePending.set(false)
@@ -778,7 +785,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         }
         if pending != null then {
           val code = KqueueLoop.errno(event)
-          fail(pending, new IOException(s"kqueue reported an error on descriptor $ident: ${fromCString(string.strerror(code))}"))
+          fail(
+            pending,
+            new IOException(s"kqueue reported an error on descriptor $ident: ${fromCString(string.strerror(code))}")
+          )
         }
       }
     }
@@ -856,8 +866,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       val submittedBefore = nextTimerOrder
       while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
         timers.poll() match {
-          case timer: KqueueTimer => if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
-          case op                 => timedOut(op)
+          case timer: KqueueTimer =>
+            if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+          case op => timedOut(op)
         }
     }
 

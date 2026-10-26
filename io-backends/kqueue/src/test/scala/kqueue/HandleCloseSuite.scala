@@ -1,14 +1,14 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.internal.NativeBuffer
+
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.posix.fcntl
 import scala.scalanative.unsafe.Zone
-
-import gears.async.io.internal.NativeBuffer
 
 /** Closing a kqueue handle while another thread uses its descriptor: the close waits for the use in progress, and no
   * use starts after it, so that nothing a thread still writing through the stale handle sends reaches the descriptors

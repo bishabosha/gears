@@ -17,19 +17,20 @@ import java.util.concurrent.atomic.AtomicReferenceArray
   * data.
   *
   * The generation is a well-worn answer to the first problem, the ABA problem as it appears for descriptors: the same
-  * number names a different file once it has been closed and reopened. Event loops that index their state by
-  * descriptor all meet it. libev's epoll backend keeps a generation per descriptor, since epoll silently drops closed
-  * descriptors; Go's netpoller tags what it registers with a per-descriptor sequence number so that events for a
-  * closed and reused descriptor are recognised as stale; Tokio's I/O driver packs a generation into its registration
-  * tokens for the same reason. It is the generational index of slot maps and generational arenas: an index paired with
-  * a generation, checked on each use. The read owner, for the second problem, has less of a precedent, since those
-  * runtimes either poll every descriptor from one place or never move descriptors between threads; dropping a filter
-  * lazily, when it next reports an event that turns out to be someone else's, follows the usual event-loop practice of
-  * treating events as hints to check rather than facts to keep in step.
+  * number names a different file once it has been closed and reopened. Event loops that index their state by descriptor
+  * all meet it. libev's epoll backend keeps a generation per descriptor, since epoll silently drops closed descriptors;
+  * Go's netpoller tags what it registers with a per-descriptor sequence number so that events for a closed and reused
+  * descriptor are recognised as stale; Tokio's I/O driver packs a generation into its registration tokens for the same
+  * reason. It is the generational index of slot maps and generational arenas: an index paired with a generation,
+  * checked on each use. The read owner, for the second problem, has less of a precedent, since those runtimes either
+  * poll every descriptor from one place or never move descriptors between threads; dropping a filter lazily, when it
+  * next reports an event that turns out to be someone else's, follows the usual event-loop practice of treating events
+  * as hints to check rather than facts to keep in step.
   *
-  * Each descriptor has one `Long`: its generation, counting closes, in the high 32 bits; whether reads of it must always
-  * be tried (`markAlwaysTry`) in bit 31; and its read owner, the id of a reactor, in the low 31 bits, 0 for none; packed
-  * so that one compare-and-swap updates them all. Pages of descriptors are allocated as numbers are first used.
+  * Each descriptor has one `Long`: its generation, counting closes, in the high 32 bits; whether reads of it must
+  * always be tried (`markAlwaysTry`) in bit 31; and its read owner, the id of a reactor, in the low 31 bits, 0 for
+  * none; packed so that one compare-and-swap updates them all. Pages of descriptors are allocated as numbers are first
+  * used.
   */
 object DescriptorTable {
   private inline val PageBits = 10

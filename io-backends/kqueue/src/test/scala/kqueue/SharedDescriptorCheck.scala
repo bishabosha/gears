@@ -1,16 +1,16 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.Completion
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NonBlocking
+import gears.async.io.kqueue.KqueueBackend.Handle
+
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
-
-import gears.async.io.Completion
-import gears.async.io.kqueue.KqueueBackend.Handle
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.NonBlocking
 
 /** Checks that kqueue reactors on different threads can share a descriptor, as a pool's workers will when a task moves
   * from one to another (see `SharedDescriptorSuite`). Two reactors, A and B, each on its own thread, take turns reading

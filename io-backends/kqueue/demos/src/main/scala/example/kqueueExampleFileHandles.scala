@@ -1,16 +1,16 @@
 package example
 
-import java.io.IOException
-import scala.scalanative.posix.fcntl
-import scala.scalanative.posix.sys.resource
-import scala.scalanative.posix.unistd
-import scala.scalanative.unsafe.*
-
 import gears.async.io.internal.PosixErr.cError
 import gears.async.io.internal.PosixSockets
 import gears.async.io.internal.Sockets.Flavor
 import gears.async.io.internal.Sockets.Transport
 import gears.async.io.kqueue.KqueueHandles
+
+import java.io.IOException
+import scala.scalanative.posix.fcntl
+import scala.scalanative.posix.sys.resource
+import scala.scalanative.posix.unistd
+import scala.scalanative.unsafe.*
 
 /** Opens many descriptors and prints their numbers, to check the assumption behind an fd-indexed handler table:
   * descriptors are small, dense integers, the kernel hands out the lowest free number, and the soft RLIMIT_NOFILE

@@ -1,6 +1,11 @@
 package gears.async.io
 package nwframework
 
+import gears.async.io.IpAddress
+import gears.async.io.Received
+import gears.async.io.internal.Descriptors
+import gears.async.io.internal.NativePool
+
 import java.io.IOException
 import scala.collection.mutable
 import scala.scalanative.libc.stdlib
@@ -15,26 +20,22 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import NWFrameworkBackend.Handle
-import gears.async.io.IpAddress
-import gears.async.io.Received
-import gears.async.io.internal.Descriptors
-import gears.async.io.internal.NativePool
 import NWFrameworkEvent.*
 import NWFrameworkHandle.{Close, Connect, Read, Write}
 
 /** A datagram taken in, with its sender. */
 private[nwframework] final class Datagram(val bytes: Array[Byte], val from: IpAddress)
 
-/** An open I/O object of the NWFramework backend and everything known about it: a Network.framework connection, listener
-  * or datagram socket, or a descriptor, each with its C side (`NWFrameworkIo`); a regular file has only its descriptor,
-  * since its reads and writes never wait. Its number is its index in `NWFrameworkHandles`' table, which the C side
-  * carries, and the program's handle (`NWFrameworkBackend.Handle`) holds it.
+/** An open I/O object of the NWFramework backend and everything known about it: a Network.framework connection,
+  * listener or datagram socket, or a descriptor, each with its C side (`NWFrameworkIo`); a regular file has only its
+  * descriptor, since its reads and writes never wait. Its number is its index in `NWFrameworkHandles`' table, which the
+  * C side carries, and the program's handle (`NWFrameworkBackend.Handle`) holds it.
   *
-  * The C side only queues what the framework delivers; `drain` takes those events and applies them here: bytes
-  * received go to the stash, datagrams to `packets`, accepted connections to `accepted`, the connection's state and
-  * errors to their fields, and the op waiting for any of it is told. Everything is guarded by the handle's own lock,
-  * since the ops on it may be on any reactor, and the reactor that drains its events is whichever is watching it:
-  * the reactor of an op waiting on it, told to the C side with `nwf_handle_watch`, so that it is woken for them.
+  * The C side only queues what the framework delivers; `drain` takes those events and applies them here: bytes received
+  * go to the stash, datagrams to `packets`, accepted connections to `accepted`, the connection's state and errors to
+  * their fields, and the op waiting for any of it is told. Everything is guarded by the handle's own lock, since the
+  * ops on it may be on any reactor, and the reactor that drains its events is whichever is watching it: the reactor of
+  * an op waiting on it, told to the C side with `nwf_handle_watch`, so that it is woken for them.
   */
 private[nwframework] final class NWFrameworkHandle(
     val kind: Int,
@@ -49,7 +50,7 @@ private[nwframework] final class NWFrameworkHandle(
   private[nwframework] var number = -1
 
   // Guarded by `this`, from here on.
-  private var closed = false   // no more ops: closing, or closed
+  private var closed = false // no more ops: closing, or closed
   private var released = false // the C side is let go: no more calls to it
 
   /** The connection's or listener's state: 0 not ready yet, 1 ready, 2 failed, 3 cancelled; and its errors. */
@@ -99,8 +100,8 @@ private[nwframework] final class NWFrameworkHandle(
   private def failure(what: String, errno: Int) =
     new IOException(s"$what failed: ${NWFrameworkHandles.errorText(if errno != 0 then errno else 5)}")
 
-  /** Takes the C side's queued events and applies them, each under the lock, telling the waiters they finish. From
-    * the reactor attempting an op here, or draining this handle as its watcher. Nothing is taken once closed.
+  /** Takes the C side's queued events and applies them, each under the lock, telling the waiters they finish. From the
+    * reactor attempting an op here, or draining this handle as its watcher. Nothing is taken once closed.
     */
   def drain(event: Ptr[NWFrameworkIo.Event]): Unit = synchronized {
     while !released && NWFrameworkIo.nwf_handle_next(ptr, event) != 0 do
@@ -254,7 +255,8 @@ private[nwframework] final class NWFrameworkHandle(
       case Write   => writeReactor != null
       case Connect => connectReactor != null
     }
-    if slotTaken then throw new IllegalStateException(s"A ${NWFrameworkHandle.name(kind)} is already pending on the handle")
+    if slotTaken then
+      throw new IllegalStateException(s"A ${NWFrameworkHandle.name(kind)} is already pending on the handle")
     kind match {
       case Read =>
         readReactor = reactor
@@ -283,8 +285,8 @@ private[nwframework] final class NWFrameworkHandle(
   private var watchMask = 0
 
   /** The reactor the C side wakes for events, and for which kinds: that of an op waiting here, for what it waits for,
-    * so that a send's completion, say, wakes nobody while no write waits; or none. Under the lock. (Keeping the
-    * reactor that last read as the watcher, so that a read registers no change, measured no gain: see the TODO.)
+    * so that a send's completion, say, wakes nobody while no write waits; or none. Under the lock. (Keeping the reactor
+    * that last read as the watcher, so that a read registers no change, measured no gain: see the TODO.)
     */
   private def updateWatcher(): Unit = {
     val wanted: NWFrameworkReactor | Null =
@@ -310,8 +312,8 @@ private[nwframework] final class NWFrameworkHandle(
 
   private def checkOpen(): Unit = if closed then throw closedFailure
 
-  /** A stream read: takes up to `cap` stashed bytes into `into`, returning how many; 0 at the end of the stream;
-    * or false after registering the read waiter, with a receive outstanding. After taking bytes it keeps a receive
+  /** A stream read: takes up to `cap` stashed bytes into `into`, returning how many; 0 at the end of the stream; or
+    * false after registering the read waiter, with a receive outstanding. After taking bytes it keeps a receive
     * outstanding, so that the next read finds its bytes waiting (`NWFrameworkHandle.Prefetch`).
     */
   def read(into: Ptr[Byte], cap: Int, reactor: NWFrameworkReactor, token: Long): Int = synchronized {
@@ -346,10 +348,10 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
-  /** A pooled read: a buffer of `pool`'s with what was received, its limit at the bytes, or null with the read
-    * waiter registered and a receive outstanding straight into a buffer of the pool's. Bytes already received, into
-    * the stash by a plain read or a pool buffer by an earlier pooled read, are handed over first. Fails if the pool
-    * has no buffer free when one is needed.
+  /** A pooled read: a buffer of `pool`'s with what was received, its limit at the bytes, or null with the read waiter
+    * registered and a receive outstanding straight into a buffer of the pool's. Bytes already received, into the stash
+    * by a plain read or a pool buffer by an earlier pooled read, are handed over first. Fails if the pool has no buffer
+    * free when one is needed.
     */
   def readPooled(pool: NativePool, reactor: NWFrameworkReactor, token: Long): Received | Null = synchronized {
     checkOpen()
@@ -391,8 +393,8 @@ private[nwframework] final class NWFrameworkHandle(
     slot.nn
   }
 
-  /** Keeps a receive outstanding into a buffer of `pool`'s, if it has one free, so that the next read finds its
-    * bytes waiting.
+  /** Keeps a receive outstanding into a buffer of `pool`'s, if it has one free, so that the next read finds its bytes
+    * waiting.
     */
   private def prefetchPooled(pool: NativePool): Unit =
     if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 && pool.available > 0 then {
@@ -432,7 +434,13 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
-  private def sendOn(on: NWFrameworkIo.Handle, bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Boolean = {
+  private def sendOn(
+      on: NWFrameworkIo.Handle,
+      bytes: Ptr[Byte],
+      len: Int,
+      reactor: NWFrameworkReactor,
+      token: Long
+  ): Boolean = {
     val fits = sentBytes < NWFrameworkHandle.SendWindow
     if !fits then await(Write, reactor, token)
     sentBytes += len
@@ -510,21 +518,22 @@ private[nwframework] final class NWFrameworkHandle(
   }
 
   /** A datagram to `to` from a bound socket: on the flow of that peer if it has sent to us, or a flow opened to it. */
-  def sendTo(to: IpAddress, bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
-    checkOpen()
-    if writeError != 0 then throw failure("send", writeError)
-    val flow = flowsByPeer.getOrElse(
-      to, {
-        val (host, port) = NWFrameworkHandles.hostAndPort(to)
-        val opened = Zone.acquire { implicit z => NWFrameworkIo.nwf_flow_open(ptr, toCString(host), port) }
-        val f = new Flow(opened, to)
-        flows.put(opened.toLong, f)
-        flowsByPeer.put(to, f)
-        f
-      }
-    )
-    sendOn(flow.ptr, bytes, len, reactor, token)
-  }
+  def sendTo(to: IpAddress, bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Boolean =
+    synchronized {
+      checkOpen()
+      if writeError != 0 then throw failure("send", writeError)
+      val flow = flowsByPeer.getOrElse(
+        to, {
+          val (host, port) = NWFrameworkHandles.hostAndPort(to)
+          val opened = Zone.acquire { implicit z => NWFrameworkIo.nwf_flow_open(ptr, toCString(host), port) }
+          val f = new Flow(opened, to)
+          flows.put(opened.toLong, f)
+          flowsByPeer.put(to, f)
+          f
+        }
+      )
+      sendOn(flow.ptr, bytes, len, reactor, token)
+    }
 
   /** A descriptor's wait for readiness, `read` or write: false, with the waiter registered and the source armed. */
   def armed(read: Boolean, reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
@@ -534,16 +543,15 @@ private[nwframework] final class NWFrameworkHandle(
     false
   }
 
-  /** Closes the handle, from any thread: the ops waiting on it are told, and fail on their reactors; the connection
-    * is cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
+  /** Closes the handle, from any thread: the ops waiting on it are told, and fail on their reactors; the connection is
+    * cancelled (once its sends have gone, on the C side), a listener's at once, and the C side released. Accepted
     * connections not taken and flows go with it.
     */
   /** The close op: begins closing, as `close` does, but the framework's cancellation is not waited for here: false,
     * with the close waiter registered, told once the cancelled state has come, when `closeDone` is true. For a
     * connection that is once its sends have gone; for a listener, or a bound datagram socket, once the framework has
-    * let its port go, so that a port whose listener's close op has completed can be listened on again at once,
-    * which completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once:
-    * true.
+    * let its port go, so that a port whose listener's close op has completed can be listened on again at once, which
+    * completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once: true.
     */
   def closeAsync(reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
     if closed then throw closedFailure
@@ -572,9 +580,9 @@ private[nwframework] final class NWFrameworkHandle(
   /** Whether the close op is done: the connection's cancelled state came (see `closeAsync`). */
   def closeDone: Boolean = synchronized(released)
 
-  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock.
-    * A receive outstanding into a pool buffer keeps that buffer, since the framework may still write it: the close
-    * op waits for the cancelled state, by when that receive has completed and given the buffer back; the synchronous
+  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock. A
+    * receive outstanding into a pool buffer keeps that buffer, since the framework may still write it: the close op
+    * waits for the cancelled state, by when that receive has completed and given the buffer back; the synchronous
     * `close` does not, and leaks it to the pool, which is why the interface's way is the op.
     */
   private def finishClose(): Unit = {
@@ -654,8 +662,8 @@ private[nwframework] object NWFrameworkHandle {
   }
 
   /** How many bytes of sends a handle may have outstanding before a write waits for a completion: the pacing
-    * Network.framework asks for, as a kernel socket's send buffer paces writes. `ASYNCIO_NWFRAMEWORK_SEND_WINDOW` in the
-    * environment overrides it, in bytes; 0 makes every write wait for its send, for measuring.
+    * Network.framework asks for, as a kernel socket's send buffer paces writes. `ASYNCIO_NWFRAMEWORK_SEND_WINDOW` in
+    * the environment overrides it, in bytes; 0 makes every write wait for its send, for measuring.
     */
   val SendWindow: Long = sys.env.get("ASYNCIO_NWFRAMEWORK_SEND_WINDOW").map(_.toLong).getOrElse(256L * 1024)
 
@@ -690,8 +698,8 @@ object NWFrameworkHandles {
     handle.target
   }
 
-  /** The handle whose C side is `ptr`, if still open: found by the number the C side carries, and checked against
-    * it, since the number may have been reused since the handle closed.
+  /** The handle whose C side is `ptr`, if still open: found by the number the C side carries, and checked against it,
+    * since the number may have been reused since the handle closed.
     */
   private[nwframework] def at(ptr: NWFrameworkIo.Handle): NWFrameworkHandle | Null = {
     val found = table.find((!ptr.asInstanceOf[Ptr[Long]]).toInt)
@@ -733,7 +741,9 @@ object NWFrameworkHandles {
   /** A listener that will be listening once Network.framework has it ready, which `NWFrameworkListen` waits for. */
   private[nwframework] def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val (host, port) = hostAndPort(address)
-    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0) }
+    val ptr = Zone.acquire { implicit z =>
+      NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0)
+    }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }
@@ -741,7 +751,9 @@ object NWFrameworkHandles {
   def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
     val (host, port) = hostAndPort(address)
     val error = stackalloc[CInt]()
-    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen(toCString(host), port, if reuseAddr then 1 else 0, error) }
+    val ptr = Zone.acquire { implicit z =>
+      NWFrameworkIo.nwf_listen(toCString(host), port, if reuseAddr then 1 else 0, error)
+    }
     if ptr == null then throw new IOException(s"Failed to listen on $host:$port: ${errorText(!error)}")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }

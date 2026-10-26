@@ -1,6 +1,17 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+import gears.async.io.internal.DescriptorTable
+import gears.async.io.internal.Descriptors
+import gears.async.io.internal.NonBlocking
+import gears.async.io.internal.PosixErr.cError
+import gears.async.io.internal.PosixFileOps
+import gears.async.io.internal.PosixSockets
+import gears.async.io.internal.Sockets.Flavor
+import gears.async.io.internal.Sockets.Transport
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
@@ -16,16 +27,6 @@ import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 import KqueueBackend.Handle
-import gears.async.io.IpAddress
-import gears.async.io.UnixAddress
-import gears.async.io.internal.DescriptorTable
-import gears.async.io.internal.Descriptors
-import gears.async.io.internal.NonBlocking
-import gears.async.io.internal.PosixErr.cError
-import gears.async.io.internal.PosixFileOps
-import gears.async.io.internal.PosixSockets
-import gears.async.io.internal.Sockets.Flavor
-import gears.async.io.internal.Sockets.Transport
 
 /** Kqueue's handles are POSIX file descriptors, opened non-blocking (see `Descriptors`). Descriptor numbers are
   * process-wide, so the Unix paths bound by `listen` and `datagram` are remembered per descriptor and removed when it
@@ -136,9 +137,9 @@ object KqueueHandles {
   def writeNow(handle: Handle, buf: ByteBuffer): Int = using(handle)(NonBlocking.write(handle.fd, buf))
 
   /** Closes a descriptor, from any thread: its generation in `DescriptorTable` ends first, while the number is still
-    * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on
-    * it fail and its slots are forgotten before the number is reused (see `Ops.close`). A handle must not be used
-    * while it is being closed.
+    * its, and every open reactor is told afterwards, with the generation that ended, so that the commands pending on it
+    * fail and its slots are forgotten before the number is reused (see `Ops.close`). A handle must not be used while it
+    * is being closed.
     */
   def close(handle: Handle): Unit = {
     val closed = new java.util.concurrent.CountDownLatch(1)
@@ -167,7 +168,7 @@ object KqueueHandles {
       )
     handle.close(finish) match {
       case KqueueBackend.Handle.AlreadyClosed => throw notOpen(handle)
-      case KqueueBackend.Handle.Idle =>
+      case KqueueBackend.Handle.Idle          =>
         closeDescriptor(fd)
         true
       case _ =>

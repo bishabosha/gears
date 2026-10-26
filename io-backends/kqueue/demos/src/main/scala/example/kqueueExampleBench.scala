@@ -1,5 +1,14 @@
 package example
 
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NonBlocking
+import gears.async.io.internal.PosixSockets
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueLoop
+import gears.async.io.kqueue.KqueueLoop.EventQueue
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
@@ -11,14 +20,6 @@ import scala.collection.mutable
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
-import gears.async.io.IpAddress
-import gears.async.io.UnixAddress
-import gears.async.io.kqueue.KqueueHandles
-import gears.async.io.kqueue.KqueueLoop
-import gears.async.io.kqueue.KqueueLoop.EventQueue
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.NonBlocking
-import gears.async.io.internal.PosixSockets
 import gearsexample.GearsBench
 
 /** The scenarios of `gearsexample.GearsBench`, written against `KqueueLoop` directly, with no reactor: a reference for
@@ -29,8 +30,7 @@ import gearsexample.GearsBench
   *   - a deadline timer added and deleted with `kevent`, as the reactor does now;
   *   - blocking tasks run on a worker thread that signals through a pipe.
   *
-  * The scenario names, counts, and output match `GearsBench`, so `bench/compare.py` can put them side by
-  * side.
+  * The scenario names, counts, and output match `GearsBench`, so `bench/compare.py` can put them side by side.
   */
 object KQueueExampleBench {
 
@@ -98,72 +98,74 @@ object KQueueExampleBench {
     finally KqueueLoop.close(kq)
   }
 
-  private def pingPong(address: IpAddress | UnixAddress, count: Int, deadline: Boolean): Unit = withLoop { (kq, events) =>
-    val fd = connect(kq, events, address)
-    val zone = Zone.open()
-    try {
-      val buf = NativeBuffer.allocate(MessageSize)(using zone)
-      var i = 0
-      while i < count do {
-        if deadline then
-          KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.addTimerOneShot(e(0), DeadlineTimer, 60_000))
-        buf.clear()
-        writeAll(kq, events, fd, buf)
-        buf.clear()
-        while buf.hasRemaining() do {
-          KqueueLoop.pollEventsForever(kq, events, MaxEvents) // only this socket is registered for reads
-          if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
-        }
-        if deadline then KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.deleteTimer(e(0), DeadlineTimer))
-        i += 1
-      }
-    } finally {
-      zone.close()
-      closeFd(fd)
-    }
-  }
-
-  private def concurrent(address: IpAddress | UnixAddress, count: Int, connections: Int): Unit = withLoop { (kq, events) =>
-    val each = math.max(1, count / connections)
-    val zone = Zone.open()
-    val open = mutable.HashMap.empty[Int, (ByteBuffer, Array[Int])] // fd -> its buffer and remaining round trips
-    try {
-      for _ <- 1 to connections do {
-        val fd = connect(kq, events, address)
+  private def pingPong(address: IpAddress | UnixAddress, count: Int, deadline: Boolean): Unit = withLoop {
+    (kq, events) =>
+      val fd = connect(kq, events, address)
+      val zone = Zone.open()
+      try {
         val buf = NativeBuffer.allocate(MessageSize)(using zone)
-        writeAll(kq, events, fd, buf) // the first message
-        buf.clear()
-        open(fd) = (buf, Array(each))
-      }
-      while open.nonEmpty do {
-        val polled = KqueueLoop.pollEventsForever(kq, events, MaxEvents)
         var i = 0
-        while i < polled do {
-          val event = events(i)
-          val fd = KqueueLoop.fileIdent(event)
-          open.get(fd) match {
-            case Some((buf, remaining)) if KqueueLoop.isReadEvent(event) =>
-              if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
-              if !buf.hasRemaining() then {
-                remaining(0) -= 1
-                if remaining(0) == 0 then {
-                  open.remove(fd)
-                  closeFd(fd)
-                } else {
-                  buf.clear()
-                  writeAll(kq, events, fd, buf)
-                  buf.clear()
-                }
-              }
-            case _ => ()
+        while i < count do {
+          if deadline then
+            KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.addTimerOneShot(e(0), DeadlineTimer, 60_000))
+          buf.clear()
+          writeAll(kq, events, fd, buf)
+          buf.clear()
+          while buf.hasRemaining() do {
+            KqueueLoop.pollEventsForever(kq, events, MaxEvents) // only this socket is registered for reads
+            if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
           }
+          if deadline then KqueueLoop.createAndRegisterEvents(kq, 1)(e => KqueueLoop.deleteTimer(e(0), DeadlineTimer))
           i += 1
         }
+      } finally {
+        zone.close()
+        closeFd(fd)
       }
-    } finally {
-      open.keys.foreach(closeFd)
-      zone.close()
-    }
+  }
+
+  private def concurrent(address: IpAddress | UnixAddress, count: Int, connections: Int): Unit = withLoop {
+    (kq, events) =>
+      val each = math.max(1, count / connections)
+      val zone = Zone.open()
+      val open = mutable.HashMap.empty[Int, (ByteBuffer, Array[Int])] // fd -> its buffer and remaining round trips
+      try {
+        for _ <- 1 to connections do {
+          val fd = connect(kq, events, address)
+          val buf = NativeBuffer.allocate(MessageSize)(using zone)
+          writeAll(kq, events, fd, buf) // the first message
+          buf.clear()
+          open(fd) = (buf, Array(each))
+        }
+        while open.nonEmpty do {
+          val polled = KqueueLoop.pollEventsForever(kq, events, MaxEvents)
+          var i = 0
+          while i < polled do {
+            val event = events(i)
+            val fd = KqueueLoop.fileIdent(event)
+            open.get(fd) match {
+              case Some((buf, remaining)) if KqueueLoop.isReadEvent(event) =>
+                if NonBlocking.read(fd, buf) < 0 then throw new IOException("The server closed the connection")
+                if !buf.hasRemaining() then {
+                  remaining(0) -= 1
+                  if remaining(0) == 0 then {
+                    open.remove(fd)
+                    closeFd(fd)
+                  } else {
+                    buf.clear()
+                    writeAll(kq, events, fd, buf)
+                    buf.clear()
+                  }
+                }
+              case _ => ()
+            }
+            i += 1
+          }
+        }
+      } finally {
+        open.keys.foreach(closeFd)
+        zone.close()
+      }
   }
 
   /** The `connections` scenario: a new connection for each round trip, on one kqueue. */
@@ -266,7 +268,8 @@ object KQueueExampleBench {
     }
   }
 
-  /** Starts a worker thread that runs the tasks queued on the returned queue, writing a byte to `writeEnd` after each. */
+  /** Starts a worker thread that runs the tasks queued on the returned queue, writing a byte to `writeEnd` after each.
+    */
   private def blockingWorker(writeEnd: Int): LinkedBlockingQueue[Runnable] = {
     val tasks = new LinkedBlockingQueue[Runnable]()
     val worker = new Thread(
@@ -354,7 +357,11 @@ object KQueueExampleBench {
   /** The echo server: echoes every connection's bytes until it closes. A connection whose echo would block stops being
     * read until the echo has been written.
     */
-  private def serve(address: IpAddress | UnixAddress, listening: CountDownLatch, failure: AtomicReference[Throwable | Null]): Unit =
+  private def serve(
+      address: IpAddress | UnixAddress,
+      listening: CountDownLatch,
+      failure: AtomicReference[Throwable | Null]
+  ): Unit =
     try {
       val kq = KqueueLoop.open()
       val server =
@@ -442,12 +449,21 @@ object KQueueExampleBench {
     // compute work, and `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written
     // loop has a counterpart for.
     val gearsOnly =
-      Set("mixed", "pingpong-fresh-ops", "pingpong-pooled", "large", "large-pooled", "fairness", "starvation",
-        "concurrent-compute", "concurrent-offload")
+      Set(
+        "mixed",
+        "pingpong-fresh-ops",
+        "pingpong-pooled",
+        "large",
+        "large-pooled",
+        "fairness",
+        "starvation",
+        "concurrent-compute",
+        "concurrent-offload"
+      )
     val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
       case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))
-      case _                  => ()
+      case _                 => ()
     }
     try {
       startServer(address)
@@ -473,7 +489,7 @@ object KQueueExampleBench {
     } finally
       address match {
         case UnixAddress(path) => Files.deleteIfExists(Paths.get(path))
-        case _                  => ()
+        case _                 => ()
       }
   }
 }

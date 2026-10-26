@@ -1,18 +1,19 @@
 package example
 
-import java.io.IOException
-import java.nio.charset.StandardCharsets
-import scala.scalanative.unsafe.Zone
-
 import gears.async.io.Completion
 import gears.async.io.Interest
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.Sockets.Flavor
+import gears.async.io.internal.Sockets.Transport
 import gears.async.io.kqueue.Command
 import gears.async.io.kqueue.KqueueOp
 import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.kqueue.KqueueTimer
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.Sockets.Flavor
-import gears.async.io.internal.Sockets.Transport
+
+import java.io.IOException
+import java.nio.charset.StandardCharsets
+import scala.scalanative.unsafe.Zone
+
 import KQueueExampleIO.*
 
 object KQueueExampleDatagramSocket {

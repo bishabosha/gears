@@ -1,11 +1,11 @@
 package gears.async.io
 package kqueue
 
-import java.io.IOException
-import scala.collection.mutable.ArrayBuffer
-
 import gears.async.io.Completion
 import gears.async.io.Interest
+
+import java.io.IOException
+import scala.collection.mutable.ArrayBuffer
 
 /** Errors in kqueue itself fail the op they are for, and the loop goes on: here, registering the filter of a command
   * whose descriptor is not open, which kqueue refuses with `EBADF`. Before, the failure escaped `submit` and left the

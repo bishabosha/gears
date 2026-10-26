@@ -15,8 +15,8 @@ import gears.async.io.UnixStreams
 
 /** Kqueue's reactors, with every capability a backend may have: IP, Unix stream and Unix datagram sockets, regular
   * files and name resolution on the blocker pool, pipes, readiness, blocking ops on blocker threads, and FIFOs. Kqueue
-  * watches POSIX file descriptors, so a handle holds the descriptor. The reactors all run the same ops, which keep
-  * no state of one reactor between submissions, so an op may go to any of them in turn; what kqueue keeps about a
+  * watches POSIX file descriptors, so a handle holds the descriptor. The reactors all run the same ops, which keep no
+  * state of one reactor between submissions, so an op may go to any of them in turn; what kqueue keeps about a
   * descriptor stays with the reactor that registered it.
   */
 object KqueueBackend
@@ -35,10 +35,10 @@ object KqueueBackend
     * kqueue's own code), so that a program cannot forge a handle from a number. Every use of the descriptor (a
     * command's system call and registration, a file op's on its blocker thread, `readNow` and `writeNow`) takes the
     * handle for its length (`acquire`), which fails once the handle is closed, so that a stale handle fails its op
-    * rather than reaching whatever reuses the descriptor's number. Closing it is Go's: the handle is closed at once,
-    * so that no use starts after, and the descriptor itself once no use is in progress, by the closer if none is, and
-    * otherwise by the last use to end, on its own thread, so that the number is not reused under a use and nobody
-    * waits for one (`close`).
+    * rather than reaching whatever reuses the descriptor's number. Closing it is Go's: the handle is closed at once, so
+    * that no use starts after, and the descriptor itself once no use is in progress, by the closer if none is, and
+    * otherwise by the last use to end, on its own thread, so that the number is not reused under a use and nobody waits
+    * for one (`close`).
     */
   final class Handle private[kqueue] (private[kqueue] val fd: Int) {
     // The sign bit: closed. The rest: how many uses of the descriptor are in progress.

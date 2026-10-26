@@ -8,9 +8,20 @@ trait GearsBenchCheck extends KQueueDemoSuite {
     val output = run("bench", "--scale", "0.01", "--connections", "8", "--workers", "4")
     for (
       scenario <- Seq(
-        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
-        "connections", "pipelined", "blocking",
-        "blocking-io", "fairness", "fairness-tick", "mixed", "mixed-compute"
+        "pingpong",
+        "pingpong-fresh-ops",
+        "pingpong-deadline",
+        "concurrent",
+        "concurrent-compute",
+        "concurrent-offload",
+        "connections",
+        "pipelined",
+        "blocking",
+        "blocking-io",
+        "fairness",
+        "fairness-tick",
+        "mixed",
+        "mixed-compute"
       ) ++ (if (hasReactors) Seq("timers") else Nil) // `timers` submits to a reactor, which only a reactor backend has
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
@@ -26,9 +37,22 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
     val output = run("bench", "--backend", "nwframework", "--tcp", "--scale", "0.01", "--connections", "8")
     for (
       scenario <- Seq(
-        "pingpong", "pingpong-fresh-ops", "pingpong-deadline", "concurrent", "concurrent-compute", "concurrent-offload",
-        "connections", "pipelined", "blocking", "blocking-io", "timers", "fairness", "fairness-tick", "starvation-p99",
-        "mixed", "mixed-compute"
+        "pingpong",
+        "pingpong-fresh-ops",
+        "pingpong-deadline",
+        "concurrent",
+        "concurrent-compute",
+        "concurrent-offload",
+        "connections",
+        "pipelined",
+        "blocking",
+        "blocking-io",
+        "timers",
+        "fairness",
+        "fairness-tick",
+        "starvation-p99",
+        "mixed",
+        "mixed-compute"
       )
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
@@ -47,8 +71,8 @@ class GearsSocketDemoSuite extends SocketDemoSuite {
 
 /** The same gears demos on the JVM, over NIO: `NioOnCaller` (`backend` "caller"), or `NioBackend` on a reactor pool
   * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets nor readiness, so neither do its demos, and the JDK
-  * cannot send an empty datagram on a connected socket. Empty packets to the server, from Java's own clients, are
-  * still echoed.
+  * cannot send an empty datagram on a connected socket. Empty packets to the server, from Java's own clients, are still
+  * echoed.
   */
 trait OnJvm extends DemoSuite {
   def backend: String

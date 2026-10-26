@@ -1,6 +1,9 @@
 package gears.async.io
 package nio
 
+import gears.async.io.IpAddress
+import gears.async.io.UnixAddress
+
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -25,8 +28,6 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 import NioCapabilities.Handle
-import gears.async.io.IpAddress
-import gears.async.io.UnixAddress
 
 /** What a handle names: an I/O object, and how to read and write it without waiting. `read` returns the bytes read, 0
   * if none are available, or -1 at end of stream; `write` returns the bytes written, or -1 if nothing fits.
@@ -198,8 +199,8 @@ private[nio] type SocketAddress = IpAddress | UnixAddress
   */
 object NioHandles {
 
-  /** Connections a listener queues before it accepts them, as `PosixSockets.maxConnections`: the kernel caps it at
-    * its own limit, so a raised limit takes effect.
+  /** Connections a listener queues before it accepts them, as `PosixSockets.maxConnections`: the kernel caps it at its
+    * own limit, so a raised limit takes effect.
     */
   private inline val Backlog = 4096
 
@@ -316,13 +317,13 @@ object NioHandles {
     * name.
     */
   private[nio] def socketAddress(address: SocketAddress): java.net.SocketAddress = address match {
-    case UnixAddress(path)          => UnixDomainSocketAddress.of(path)
+    case UnixAddress(path)       => UnixDomainSocketAddress.of(path)
     case IpAddress.IPv4(host, p) => new InetSocketAddress(numeric(host, ipv6 = false), port(p))
     case IpAddress.IPv6(host, p) => new InetSocketAddress(numeric(host, ipv6 = true), port(p))
   }
 
-  /** A numeric host as an address. `InetAddress.getByName` only checks the form of a literal, but would look up a
-    * name, so anything that is not one is refused first, with the kqueue backend's message.
+  /** A numeric host as an address. `InetAddress.getByName` only checks the form of a literal, but would look up a name,
+    * so anything that is not one is refused first, with the kqueue backend's message.
     */
   private def numeric(host: String, ipv6: Boolean): InetAddress = {
     def invalid = new IOException(s"Invalid numeric IP address: $host")

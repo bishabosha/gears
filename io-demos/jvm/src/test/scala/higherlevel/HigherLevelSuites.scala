@@ -2,7 +2,6 @@ package higherlevel
 
 import gears.async.Async
 import gears.async.AsyncOperations
-
 import gears.async.io.Io
 import gears.async.io.ReactorFutures
 import gears.async.io.nio.NioBackend

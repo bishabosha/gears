@@ -2,20 +2,18 @@ package gears.async.io
 package internal
 
 import gears.async.Scheduler
-
 import gears.async.io.ReactorBackend
 
 /** A gears scheduler whose futures run on a `ReactorPool`'s workers, and so perform their ops on the workers' own
-  * reactors (see `Pools.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual threads
-  * the pool carries (`VirtualReactorScheduler`). The `OnPool` a program is given is made over it
-  * (`Pools.bound`).
+  * reactors (see `Pools.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual threads the
+  * pool carries (`VirtualReactorScheduler`). The `OnPool` a program is given is made over it (`Pools.bound`).
   */
 private[io] trait ReactorScheduler extends Scheduler {
   def backend: ReactorBackend
 
-  /** The worker running the caller, whose reactor the caller may use directly. Every thread a program on this
-    * scheduler runs on is a worker's, or the one that started the pool, so this throws only for a thread the program
-    * should never have reached, such as one of its own making.
+  /** The worker running the caller, whose reactor the caller may use directly. Every thread a program on this scheduler
+    * runs on is a worker's, or the one that started the pool, so this throws only for a thread the program should never
+    * have reached, such as one of its own making.
     */
   def currentWorker: ReactorWorker
 

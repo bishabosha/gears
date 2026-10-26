@@ -240,7 +240,8 @@ object PosixSockets {
     */
   def accept(fd: Int): Int = {
     var clientFd = socket.accept(fd, null, null)
-    while (clientFd < 0 && errno.errno == errno.ECONNABORTED) clientFd = socket.accept(fd, null, null) // reset while queued
+    while (clientFd < 0 && errno.errno == errno.ECONNABORTED)
+      clientFd = socket.accept(fd, null, null) // reset while queued
     if (clientFd < 0) {
       if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK)
         // TODO: perhaps between the event and calling accept the socket was closed?

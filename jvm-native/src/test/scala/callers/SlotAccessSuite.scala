@@ -2,6 +2,7 @@ package callers
 
 import gears.async.io.Backend
 import gears.async.io.Slot
+
 import munit.FunSuite
 
 /** Lives outside `gears.async.io`, where callers of the interface live. */

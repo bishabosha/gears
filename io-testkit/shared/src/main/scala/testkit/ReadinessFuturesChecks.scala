@@ -2,15 +2,14 @@ package gears.async.io
 package testkit
 
 import gears.async.Future
-
-import java.nio.charset.StandardCharsets
-
 import gears.async.io.Backend
 import gears.async.io.Interest
 import gears.async.io.PipeBackend
 import gears.async.io.ReadinessBackend
 import gears.async.io.ResolveBackend
 import gears.async.io.SocketBackend
+
+import java.nio.charset.StandardCharsets
 
 /** `FuturesContract`'s checks of readiness, for a backend that has it. */
 trait ReadinessFuturesChecks extends FuturesContract {

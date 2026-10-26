@@ -1,12 +1,13 @@
 package gears.async.io
 package nio
 
+import gears.async.io.Repeatable
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 
 import NioCapabilities.Handle
-import gears.async.io.Repeatable
 
 /** The file ops (see `FileOps`), each a blocking task on the blocker pool, since `FileChannel` blocks for the disk:
   * opening, positional reads and writes, and `force`.

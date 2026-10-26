@@ -2,18 +2,18 @@ package gearsexample
 
 import gears.async.Async
 import gears.async.Future
-
-import java.io.EOFException
-import java.io.IOException
-
-import gears.async.io.Io
 import gears.async.io.Backend
+import gears.async.io.Io
+import gears.async.io.ReactorFutures
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
 import gears.async.io.testkit.BufferArena
+
+import java.io.EOFException
+import java.io.IOException
+
 import DemoIO.{FrameReader, InvalidFrame, StreamProtocol}
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleServerSocket`. The acceptor is a loop, and each connection is its own future whose

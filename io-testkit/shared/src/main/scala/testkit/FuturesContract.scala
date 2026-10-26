@@ -1,27 +1,15 @@
 package gears.async.io
 package testkit
 
-import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
-import gears.async.Future
 import gears.async.AsyncOperations.sleep
+import gears.async.Future
 import gears.async.Future.awaitAll
-import gears.async.withTimeout
-
-import scala.concurrent.duration.*
-
-import java.io.IOException
-import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.util.concurrent.CancellationException
-import java.util.concurrent.TimeoutException
-import munit.FunSuite
-
-import gears.async.io.Interest
-import gears.async.io.IpAddress
 import gears.async.io.Backend
+import gears.async.io.Interest
+import gears.async.io.Io
+import gears.async.io.IpAddress
 import gears.async.io.PipeBackend
 import gears.async.io.ResolveBackend
 import gears.async.io.ResolvedAddress
@@ -30,6 +18,17 @@ import gears.async.io.SocketBackend
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.testkit.BufferArena
+import gears.async.withTimeout
+
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
+import scala.concurrent.duration.*
+
+import munit.FunSuite
 
 /** What gears programs over any backend must do, checked through `perform` alone, so that the same program runs the
   * same on every backend and every way of carrying its futures: a backend's suite extends this with the backend and
@@ -88,57 +87,60 @@ trait FuturesContract extends ProgramSuite {
     val clients = 16
     val trips = 200
     val echoed =
-      try running { io ?=>
-      val (listener, connect) = listenAndConnect(io, dir)
-      try {
-        val server = Future {
-          val accepted = Slot[Handle]()
-          val accept = io.backend.ops.accept(listener, accepted)
-          val connections = (1 to clients).map { _ =>
-            io.perform(accept)
-            val socket = accepted.clear()
-            Future {
-              val buf = arena.allocate(64)
-              val read = io.backend.ops.read(socket, buf)
-              val write = io.backend.ops.write(socket, buf)
-              try
-                for _ <- 1 to trips do {
-                  buf.clear().limit(5)
-                  while buf.hasRemaining do io.perform(read)
-                  buf.flip()
-                  while buf.hasRemaining do io.perform(write)
+      try
+        running { io ?=>
+          val (listener, connect) = listenAndConnect(io, dir)
+          try {
+            val server = Future {
+              val accepted = Slot[Handle]()
+              val accept = io.backend.ops.accept(listener, accepted)
+              val connections = (1 to clients).map { _ =>
+                io.perform(accept)
+                val socket = accepted.clear()
+                Future {
+                  val buf = arena.allocate(64)
+                  val read = io.backend.ops.read(socket, buf)
+                  val write = io.backend.ops.write(socket, buf)
+                  try
+                    for _ <- 1 to trips do {
+                      buf.clear().limit(5)
+                      while buf.hasRemaining do io.perform(read)
+                      buf.flip()
+                      while buf.hasRemaining do io.perform(write)
+                    }
+                  finally io.perform(io.backend.ops.close(socket))
                 }
-              finally io.perform(io.backend.ops.close(socket))
-            }
-          }
-          connections.awaitAll
-        }
-        val done = (1 to clients).map { _ =>
-          Future {
-            val socket = connect()
-            try {
-              val buf = arena.allocate(64)
-              val read = io.backend.ops.read(socket, buf)
-              val write = io.backend.ops.write(socket, buf)
-              for _ <- 1 to trips do {
-                buf.clear().put("hello".getBytes(StandardCharsets.UTF_8)).flip()
-                while buf.hasRemaining do io.perform(write)
-                buf.clear().limit(5)
-                while buf.hasRemaining do io.perform(read)
-                assertEquals(text(buf), "hello")
               }
-              1
-            } finally io.perform(io.backend.ops.close(socket))
-          }
+              connections.awaitAll
+            }
+            val done = (1 to clients).map { _ =>
+              Future {
+                val socket = connect()
+                try {
+                  val buf = arena.allocate(64)
+                  val read = io.backend.ops.read(socket, buf)
+                  val write = io.backend.ops.write(socket, buf)
+                  for _ <- 1 to trips do {
+                    buf.clear().put("hello".getBytes(StandardCharsets.UTF_8)).flip()
+                    while buf.hasRemaining do io.perform(write)
+                    buf.clear().limit(5)
+                    while buf.hasRemaining do io.perform(read)
+                    assertEquals(text(buf), "hello")
+                  }
+                  1
+                } finally io.perform(io.backend.ops.close(socket))
+              }
+            }
+            val echoed = done.awaitAll.sum
+            server.await
+            echoed
+          } finally io.perform(io.backend.ops.close(listener))
         }
-        val echoed = done.awaitAll.sum
-        server.await
-        echoed
-      } finally io.perform(io.backend.ops.close(listener))
-      } finally if Files.exists(dir) then {
-        Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
-        Files.deleteIfExists(dir): Unit
-      }
+      finally
+        if Files.exists(dir) then {
+          Files.list(dir).forEach(Files.deleteIfExists(_): Unit)
+          Files.deleteIfExists(dir): Unit
+        }
     assertEquals(echoed, clients)
   }
 

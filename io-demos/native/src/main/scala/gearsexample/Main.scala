@@ -1,16 +1,17 @@
 package gearsexample
 
-import mainargs.{ParserForMethods, arg, main}
 import gears.async.io.IpAddress
 import gears.async.io.IpSockets
+import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.kqueue.KqueueBackend
-import gears.async.io.TakePolicy
+
+import mainargs.{ParserForMethods, arg, main}
 
 /** The gears mirrors, run as `iokqueuedemos gears <command>` with the same commands and flags as the plain demos.
   *
-  * This is the edge: the demos only know the `gears.async.io` interface, and this is the one place that chooses kqueue. Each
-  * demo asks for the capabilities it needs (Unix sockets, FIFOs), and kqueue has them all.
+  * This is the edge: the demos only know the `gears.async.io` interface, and this is the one place that chooses kqueue.
+  * Each demo asks for the capabilities it needs (Unix sockets, FIFOs), and kqueue has them all.
   */
 object Main {
   given KqueueBackend.type = KqueueBackend
@@ -144,7 +145,9 @@ object Main {
       @arg(doc = "the TCP address: 127.0.0.1, or this machine's, or with --no-server another machine's") host: String =
         "127.0.0.1",
       @arg port: Int = 19876,
-      @arg(doc = "connect to an echo server already listening (`bench-serve`), instead of starting one") noServer: mainargs.Flag,
+      @arg(doc =
+        "connect to an echo server already listening (`bench-serve`), instead of starting one"
+      ) noServer: mainargs.Flag,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
       @arg(doc = "kqueue, or nwframework: Network.framework, which needs --tcp") backend: String = "kqueue"
@@ -177,9 +180,9 @@ object Main {
 
   /** Runs `body` with the backend named: kqueue, or nwframework, Network.framework. */
   private def withBackend(backend: String)(body: gears.async.io.SocketBackend => Unit): Unit = backend match {
-    case "kqueue" => body(KqueueBackend)
+    case "kqueue"      => body(KqueueBackend)
     case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
-    case other    => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
+    case other         => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
   }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)

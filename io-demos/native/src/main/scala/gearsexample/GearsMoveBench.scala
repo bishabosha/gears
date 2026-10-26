@@ -1,5 +1,15 @@
 package gearsexample
 
+import gears.async.io.Completion
+import gears.async.io.UnixAddress
+import gears.async.io.internal.NativeBuffer
+import gears.async.io.internal.NonBlocking
+import gears.async.io.kqueue.KqueueBackend.Handle
+import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -7,22 +17,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.unsafe.Zone
 
-import gears.async.io.Completion
-import gears.async.io.kqueue.KqueueBackend.Handle
-import gears.async.io.UnixAddress
-import gears.async.io.kqueue.KqueueHandles
-import gears.async.io.kqueue.KqueueOp
-import gears.async.io.kqueue.KqueueOps
-import gears.async.io.kqueue.KqueueReactor
-import gears.async.io.internal.NativeBuffer
-import gears.async.io.internal.NonBlocking
-
 /** Measures what moving a descriptor between kqueue reactors costs, run as `iokqueuedemos gears move-bench`: ping-pong
   * round trips of 64 bytes against an echo server on a reactor thread of its own, driven by completions on the client
   * reactors directly, with no scheduler. Three ways:
   *   - `stay`: one client reactor and one connection, round trips back to back;
-  *   - `hand-off`: two client reactors, each on its own thread and with its own connection, taking turns every N
-  *     round trips, so the work moves between threads but no descriptor does;
+  *   - `hand-off`: two client reactors, each on its own thread and with its own connection, taking turns every N round
+  *     trips, so the work moves between threads but no descriptor does;
   *   - `move`: the same, sharing one connection, so its descriptor moves with every turn: the new reactor starts over
   *     with it and registers a filter, and the old one drops its own when the descriptor's next data wakes it.
   * `move` less `hand-off`, times N, is what each move of a descriptor costs beyond moving the work.
@@ -100,8 +100,8 @@ object GearsMoveBench {
   }
 
   /** Runs `count` round trips, each on `reactors(i)` with `conns(i)`, where `i` changes after every `every` of them,
-    * and returns the microseconds each took. The state is used by one thread at a time, the reactor running the
-    * current round trip, and passes between them through a reactor's task queue.
+    * and returns the microseconds each took. The state is used by one thread at a time, the reactor running the current
+    * round trip, and passes between them through a reactor's task queue.
     */
   private def measure(reactors: Array[Driven], conns: Array[Conn], count: Int, every: Int): Double = {
     val done = new CountDownLatch(1)

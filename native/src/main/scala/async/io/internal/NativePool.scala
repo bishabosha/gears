@@ -1,6 +1,9 @@
 package gears.async.io
 package internal
 
+import gears.async.io.BufferPool
+import gears.async.io.Received
+
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -8,9 +11,6 @@ import scala.scalanative.libc.stdlib
 import scala.scalanative.memory.PointerBuffer
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
-
-import gears.async.io.BufferPool
-import gears.async.io.Received
 
 /** A `BufferPool` in C memory, for the Native backends: one `malloc` for all the buffers, a `ByteBuffer` and a
   * `Received` made once per buffer and reused, and a free list that takes no lock, since a `Received` may be released

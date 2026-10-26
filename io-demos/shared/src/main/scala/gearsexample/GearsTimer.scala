@@ -1,7 +1,6 @@
 package gearsexample
 
 import gears.async.Future
-
 import gears.async.io.Backend
 import gears.async.io.ReactorFutures
 

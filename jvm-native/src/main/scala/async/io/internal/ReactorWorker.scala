@@ -2,12 +2,11 @@ package gears.async.io
 package internal
 
 import gears.async.Cancellable
+import gears.async.io.Reactor
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration.FiniteDuration
-
-import gears.async.io.Reactor
 
 /** One worker of a `ReactorPool`: a thread, the reactor it drives, and the tasks queued for it. Its loop alternates
   * between running queued tasks, such as starting a future or resuming a suspended one, and turns of the reactor; with

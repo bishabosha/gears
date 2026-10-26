@@ -4,20 +4,20 @@ import gears.async.Async
 import gears.async.BufferedChannel
 import gears.async.Future
 import gears.async.Future.awaitAllOrCancel
+import gears.async.io.Backend
+import gears.async.io.Io
+import gears.async.io.ReactorFutures
+import gears.async.io.UnixAddress
+import gears.async.io.UnixStreamBackend
+import gears.async.io.UnixStreams
+import gears.async.io.testkit.BufferArena
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.collection.mutable
 
-import gears.async.io.Io
-import gears.async.io.Backend
-import gears.async.io.UnixAddress
-import gears.async.io.UnixStreamBackend
-import gears.async.io.UnixStreams
-import gears.async.io.testkit.BufferArena
 import DemoIO.{FrameParser, StreamProtocol}
-import gears.async.io.ReactorFutures
 import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleKeyValue`, the pipelined key-value service. Each session is a reader future and a
@@ -95,8 +95,8 @@ object GearsKeyValue {
       fd: io.Handle,
       outbox: ByteBuffer,
       replies: BufferedChannel[Array[Byte]]
-  )(
-      using Async
+  )(using
+      Async
   ): Unit = {
     val writeReplies = io.backend.ops.write(fd, outbox) // one repeatable op for the whole session
     var done = false

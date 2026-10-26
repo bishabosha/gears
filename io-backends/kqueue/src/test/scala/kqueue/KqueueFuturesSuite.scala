@@ -1,10 +1,9 @@
 package gears.async.io
 package kqueue
 
-import gears.async.io.Io
 import gears.async.Async
 import gears.async.AsyncOperations
-
+import gears.async.io.Io
 import gears.async.io.kqueue.KqueueBackend
 import gears.async.io.testkit.FuturesContract
 import gears.async.io.testkit.ReadinessFuturesChecks

@@ -22,10 +22,10 @@ import GearsBench.WorkSteps
 import GearsBench.report
 
 /** `GearsBench`'s scenarios written against the JDK alone, as a JVM program would without a reactor: blocking channels
-  * on virtual threads (or, with `selector`, the least a selector design does: see `SelectorIo`), concurrency with structured task scopes (a preview API, run with `--enable-preview`), and
-  * timers on a `ScheduledThreadPoolExecutor`. The echo server, a virtual thread per connection, runs in the same
-  * process, over a Unix socket. Each scenario prints its `bench:` line as `GearsBench` does, so
-  * `bench/compare.py` reads both.
+  * on virtual threads (or, with `selector`, the least a selector design does: see `SelectorIo`), concurrency with
+  * structured task scopes (a preview API, run with `--enable-preview`), and timers on a `ScheduledThreadPoolExecutor`.
+  * The echo server, a virtual thread per connection, runs in the same process, over a Unix socket. Each scenario prints
+  * its `bench:` line as `GearsBench` does, so `bench/compare.py` reads both.
   *
   * Where the reactor has no direct counterpart, the closest JDK one stands in: an op built anew is no different from
   * one kept (`pingpong-fresh-ops` is `pingpong`); a blocking op is a subtask forked and joined, so it too runs on
@@ -310,7 +310,8 @@ object JdkBench {
       else names.map(name => scenarios.find(_._1 == name).getOrElse(throw new IllegalArgumentException(name)))
     val address = startServer(path)
     try {
-      if warmup then for (_, base, body) <- selected do body(address, math.max(1, (base * scale / 5).toInt), connections)
+      if warmup then
+        for (_, base, body) <- selected do body(address, math.max(1, (base * scale / 5).toInt), connections)
       println(f"bench: ${"scenario"}%-18s ${"ops"}%10s ${"seconds"}%9s ${"ops/s"}%12s ${"us/op"}%8s")
       for (name, base, body) <- selected do {
         val count = math.max(1, (base * scale).toInt)
