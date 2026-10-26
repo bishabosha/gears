@@ -5,6 +5,7 @@ import gears.async.io.BufferPool
 import gears.async.io.Received
 
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import scala.scalanative.libc.stdlib
@@ -38,6 +39,10 @@ final class NativePool(val bufferSize: Int, val buffers: Int) extends BufferPool
     /** The index of the slot below this one on the free stack, while it is on it. */
     @volatile private[NativePool] var next = -1
 
+    /** Whether a read or a `Received` holds this buffer: set by `take`, cleared by `release`, which refuses a second.
+      */
+    private[NativePool] val held = new AtomicBoolean(false)
+
     def release(): Unit = NativePool.this.release(this)
   }
 
@@ -61,17 +66,20 @@ final class NativePool(val bufferSize: Int, val buffers: Int) extends BufferPool
       }
     }
     if taken != null then {
+      taken.held.set(true)
       free.decrementAndGet()
       taken.buffer.clear()
     }
     taken
   }
 
-  private def release(slot: Slot): Unit =
-    if !closed then {
-      push(slot)
-      free.incrementAndGet()
-    }
+  private def release(slot: Slot): Unit = {
+    // A second release would push the slot again, making a cycle of the free stack, so it fails instead.
+    if !slot.held.compareAndSet(true, false) then
+      throw new IllegalStateException(s"Buffer ${slot.index} of the pool was released already")
+    push(slot)
+    free.incrementAndGet()
+  }
 
   private def push(slot: Slot): Unit = {
     var done = false
@@ -84,8 +92,9 @@ final class NativePool(val bufferSize: Int, val buffers: Int) extends BufferPool
 
   def close(): Unit = synchronized {
     if !closed then {
-      closed = true
+      // Checked first, so that a pool closed too early stays open, for its buffers to be released and the close done.
       require(free.get() == buffers, s"${buffers - free.get()} of the pool's buffers are still held")
+      closed = true
       stdlib.free(memory)
     }
   }

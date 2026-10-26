@@ -176,94 +176,100 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     }
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
-    op match {
-      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command                                           =>
-        // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
-        val handle = command.handle
-        if handle != null && !handle.acquire() then {
-          command.completion = pending
-          command.atOnceFailure = KqueueHandles.notOpen(handle)
-          if finishNow then finished = true else ready.add(command)
-        } else
-          try {
-            val read = command.interest == Interest.Read
-            val slot = currentSlot(command.fd, read)
-            // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
-            if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
-            else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+    val slotRefusal = op.slotRefusal
+    if slotRefusal != null then {
+      op.completion = pending
+      op.atOnceFailure = slotRefusal
+      if finishNow then finished = true else ready.add(op)
+    } else
+      op match {
+        case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
+        case command: Command                                           =>
+          // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
+          val handle = command.handle
+          if handle != null && !handle.acquire() then {
             command.completion = pending
-            val refusal = command.refusal
-            if refusal != null then {
-              command.atOnceFailure = refusal
-              if finishNow then finished = true else ready.add(command)
-            } else if read then {
-              val attempt =
-                slot.readReadiness == KqueueReactor.Ready ||
-                  (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
-              if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
+            command.atOnceFailure = KqueueHandles.notOpen(handle)
+            if finishNow then finished = true else ready.add(command)
+          } else
+            try {
+              val read = command.interest == Interest.Read
+              val slot = currentSlot(command.fd, read)
+              // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+              if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
+              else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+              command.completion = pending
+              val refusal = command.refusal
+              if refusal != null then {
+                command.atOnceFailure = refusal
+                if finishNow then finished = true else ready.add(command)
+              } else if read then {
+                val attempt =
+                  slot.readReadiness == KqueueReactor.Ready ||
+                    (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
+                if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
+                else {
+                  slot.read = command
+                  val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                  if failed == null then waits = true
+                  else {
+                    command.atOnceFailure = failed
+                    if finishNow then finished = true else ready.add(command)
+                  }
+                }
+              } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
               else {
-                slot.read = command
-                val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                slot.write = command
+                val failed = registrationFailure(command, slot, read = false)(
+                  if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
+                  else arm(command.fd, read = false)
+                )
                 if failed == null then waits = true
                 else {
                   command.atOnceFailure = failed
                   if finishNow then finished = true else ready.add(command)
                 }
               }
-            } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
-            else {
-              slot.write = command
-              val failed = registrationFailure(command, slot, read = false)(
-                if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
-                else arm(command.fd, read = false)
-              )
-              if failed == null then waits = true
-              else {
-                command.atOnceFailure = failed
-                if finishNow then finished = true else ready.add(command)
-              }
-            }
-          } finally if handle != null then handle.release()
-      case timer: KqueueTimer =>
-        require(timer.heapIndex < 0, "This timer is already pending")
-        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
-        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
-        timer.completion = pending
-        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
-      case close: Close =>
-        // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
-        // until the last use ends and closes it.
-        close.reset()
-        close.reactor = this
-        close.completion = pending
-        if close.start() then { if finishNow then finished = true else ready.add(close) }
-        else {
-          pendingPromises += close
+            } finally if handle != null then handle.release()
+        case timer: KqueueTimer =>
+          require(timer.heapIndex < 0, "This timer is already pending")
+          // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+          timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
+          timer.completion = pending
+          schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+        case close: Close =>
+          // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
+          // until the last use ends and closes it.
+          close.reset()
+          close.reactor = this
+          close.completion = pending
+          if close.start() then { if finishNow then finished = true else ready.add(close) }
+          else {
+            pendingPromises += close
+            waits = true
+          }
+        case promise: KqueuePromise =>
+          promise match {
+            case blocking: KqueueBlocking if blocking.cancelling != null =>
+              throw new IllegalStateException(s"$op is still running after being cancelled")
+            case _ => ()
+          }
+          promise.reset() // a `Repeatable` promise's previous outcome
+          promise.reactor = this
+          promise.completion = pending
+          pendingPromises += promise
+          promise match {
+            case blocking: KqueueBlocking =>
+              blocking.restart()
+              gears.async.io.internal.Blockers.run(blocking)
+          }
           waits = true
-        }
-      case promise: KqueuePromise =>
-        promise match {
-          case blocking: KqueueBlocking if blocking.cancelling != null =>
-            throw new IllegalStateException(s"$op is still running after being cancelled")
-          case _ => ()
-        }
-        promise.reset() // a `Repeatable` promise's previous outcome
-        promise.reactor = this
-        promise.completion = pending
-        pendingPromises += promise
-        promise match {
-          case blocking: KqueueBlocking =>
-            blocking.restart()
-            gears.async.io.internal.Blockers.run(blocking)
-        }
-        waits = true
-      case atOnce: KqueueAtOnce =>
-        atOnce.completion = pending
-        try atOnce.perform()
-        catch case t: Throwable => atOnce.atOnceFailure = t
-        if finishNow then finished = true else ready.add(atOnce)
-    }
+        case atOnce: KqueueAtOnce =>
+          atOnce.completion = pending
+          try atOnce.perform()
+          catch case t: Throwable => atOnce.atOnceFailure = t
+          if finishNow then finished = true else ready.add(atOnce)
+      }
     op.submitted = true
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
@@ -531,15 +537,22 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         resolved = resolvedQueue.poll()
       }
       val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
+      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
+      val written = scala.collection.mutable.ArrayBuffer.empty[(KqueueBlocking, Completion[KqueueOp])]
       for promise <- pendingPromises.toList do {
         val completion = detach(promise)
-        if completion != null then {
-          dropped += ((promise, completion))
+        if completion != null then
           promise match {
-            case blocking: KqueueBlocking if blocking.interrupt() => running += blocking
-            case _                                                => ()
+            case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() =>
+              written += ((blocking, completion))
+              running += blocking
+            case _ =>
+              dropped += ((promise, completion))
+              promise match {
+                case blocking: KqueueBlocking if blocking.interrupt() => running += blocking
+                case _                                                => ()
+              }
           }
-        }
       }
       for blocking <- cancellingBlockers do {
         dropped += ((blocking, blocking.cancelling.nn))
@@ -559,6 +572,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
         KqueueReactor.all.remove(this)
       }
       running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
+      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
       finished.foreach { (op, completion, failure) =>
         if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
@@ -623,9 +637,10 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
             take(command)
           }
         }
-      case timer: KqueueTimer     => if timer.heapIndex < 0 then null else take(timer)
-      case promise: KqueuePromise => detach(promise)
-      case _: KqueueAtOnce        => null // performed when submitted, so finished
+      case timer: KqueueTimer => if timer.heapIndex < 0 then null else take(timer)
+      case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
+      case promise: KqueuePromise                                        => detach(promise)
+      case _: KqueueAtOnce => null // performed when submitted, so finished
     }
 
   /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed

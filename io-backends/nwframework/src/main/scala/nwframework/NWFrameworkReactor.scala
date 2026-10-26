@@ -115,47 +115,55 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     }
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[NWFrameworkOp]] // only ever called with `op`, which is a C
-    op match {
-      case command: NWFrameworkCommand =>
-        command.token = nextToken
-        nextToken += 1
-        command.completion = pending
-        // A command on a handle that is not open fails, as one on a closed descriptor does, through its completion.
-        val open =
-          try {
-            command match {
-              case opening: NWFrameworkOpening[?] => opening.open() // makes the handle it waits on
-              case _                              => ()
+    val slotRefusal = op.slotRefusal
+    if slotRefusal != null then {
+      op.completion = pending
+      op.atOnceFailure = slotRefusal
+      if finishNow then finished = true else ready.add(op)
+    } else
+      op match {
+        case command: NWFrameworkCommand =>
+          command.token = nextToken
+          nextToken += 1
+          command.completion = pending
+          // A command on a handle that is not open fails, as one on a closed descriptor does, through its completion.
+          val open =
+            try {
+              command match {
+                case opening: NWFrameworkOpening[?] => opening.open() // makes the handle it waits on
+                case _                              => ()
+              }
+              command.target = NWFrameworkHandles.get(command.handle)
+              true
+            } catch {
+              case NonFatal(
+                    e
+                  ) => // an argument the opener refuses, too, fails the op, never escaping a half-made submit
+                command.atOnceFailure = e
+                false
             }
-            command.target = NWFrameworkHandles.get(command.handle)
-            true
-          } catch {
-            case NonFatal(e) => // an argument the opener refuses, too, fails the op, never escaping a half-made submit
-              command.atOnceFailure = e
-              false
+          if !open || attempted(command) then {
+            if finishNow then finished = true else ready.add(command)
+          } else {
+            waiting.put(command.token, command)
+            waits = true
           }
-        if !open || attempted(command) then {
-          if finishNow then finished = true else ready.add(command)
-        } else {
-          waiting.put(command.token, command)
+        case timer: NWFrameworkTimer =>
+          require(timer.heapIndex < 0, "This timer is already pending")
+          // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+          timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
+          timer.completion = pending
+          schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+        case blocking: NWFrameworkBlocking =>
+          if blocking.cancelling != null then
+            throw new IllegalStateException(s"$op is still running after being cancelled")
+          blocking.reactor = this
+          blocking.completion = pending
+          pendingBlockers += blocking
+          blocking.restart()
+          Blockers.run(blocking)
           waits = true
-        }
-      case timer: NWFrameworkTimer =>
-        require(timer.heapIndex < 0, "This timer is already pending")
-        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
-        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
-        timer.completion = pending
-        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
-      case blocking: NWFrameworkBlocking =>
-        if blocking.cancelling != null then
-          throw new IllegalStateException(s"$op is still running after being cancelled")
-        blocking.reactor = this
-        blocking.completion = pending
-        pendingBlockers += blocking
-        blocking.restart()
-        Blockers.run(blocking)
-        waits = true
-    }
+      }
     op.submitted = true
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
@@ -329,7 +337,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
           take(command)
         }
       case timer: NWFrameworkTimer       => if timer.heapIndex < 0 then null else take(timer)
-      case blocking: NWFrameworkBlocking => detach(blocking)
+      case blocking: NWFrameworkBlocking =>
+        if blocking.cancelUnlessCommitted() then detach(blocking) else null // it wrote its result: finishing
     }
 
   /** Runs the completion of an op `withdrawOp` took out: `onCancel`, or `onFailure` with `failure` for one that timed
@@ -442,11 +451,18 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         resolved = resolvedQueue.poll()
       }
       val running = scala.collection.mutable.ArrayBuffer.empty[NWFrameworkBlocking]
+      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
+      val written = scala.collection.mutable.ArrayBuffer.empty[(NWFrameworkBlocking, Completion[NWFrameworkOp])]
       for blocking <- pendingBlockers.toList do {
         val completion = detach(blocking)
         if completion != null then {
-          dropped += ((blocking, completion))
-          if blocking.interrupt() then running += blocking
+          if !blocking.cancelUnlessCommitted() then {
+            written += ((blocking, completion))
+            running += blocking
+          } else {
+            dropped += ((blocking, completion))
+            if blocking.interrupt() then running += blocking
+          }
         }
       }
       for blocking <- cancellingBlockers do {
@@ -462,6 +478,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       resolvedQueue.clear()
       notifiedElsewhere.clear()
       running.foreach(_.awaitEnd())
+      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       NWFrameworkIo.nwf_reactor_destroy(ptr)
       stdlib.free(drained.asInstanceOf[Ptr[Byte]])
       stdlib.free(event.asInstanceOf[Ptr[Byte]])

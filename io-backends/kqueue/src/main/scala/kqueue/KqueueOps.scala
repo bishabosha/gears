@@ -45,6 +45,11 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[kqueue] var atOnceFailure: Throwable | Null = null
 
+  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
+    * it does anything; null if its slots are empty.
+    */
+  private[kqueue] def slotRefusal: Throwable | Null = null
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[kqueue] var attachment: AnyRef | Null = null
 }
@@ -153,6 +158,7 @@ sealed trait Opens extends KqueueOp {
   * pipes and FIFOs are: `opened` is what it opened, written into `into` by the time the op completes.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K) extends KqueueAtOnce with Opens {
+  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened = -1
   protected def open(): Int
   def perform(): Unit = {
@@ -192,6 +198,7 @@ final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], k
 final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.Writable])
     extends KqueueAtOnce
     with Opens {
+  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
   private var ends: (Int, Int) | Null = null
   def perform(): Unit = {
     val (in, out) = KqueueHandles.pipeDescriptors()
@@ -215,6 +222,7 @@ final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.W
   * `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]) extends Command with Opens {
+  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket = -1
   private var connected = false
   def fd: Int = socket
@@ -400,6 +408,7 @@ final class BlockingTask(body: () => Unit) extends KqueueBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends KqueueBlocking {
+  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     publish(into, body())
   }

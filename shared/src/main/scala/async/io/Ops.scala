@@ -9,8 +9,9 @@ enum Interest {
 
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
   * to the backend while the op is pending: the caller clears it only after the op's completion has reached them, and
-  * the handoff that delivers the completion is what makes the op's write visible. Setting it again before it is cleared
-  * is forbidden.
+  * the handoff that delivers the completion is what makes the op's write visible. An op submitted with a slot not yet
+  * cleared fails with an `IllegalArgumentException` as it is submitted, doing nothing, since what it opened or took
+  * would have nowhere to go.
   */
 final class Slot[A <: AnyRef] {
   private var value: A | Null = null
@@ -26,6 +27,9 @@ final class Slot[A <: AnyRef] {
     if value != null then throw new IllegalStateException("Slot was already set")
     value = outcome.nn
   }
+
+  /** Whether nothing has been written here, or what was has been cleared: what an op checks as it is submitted. */
+  private[io] def isEmpty: Boolean = value == null
 }
 
 /** Marks an op that may be submitted again after its previous submission finished, instead of building a new one each
@@ -193,7 +197,8 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Opens the regular file at `path` for reading, or for writing with `write`, and completes after writing its handle
     * into `into`, which must be empty; anything but a regular file is refused, failing the op with an `IOException`, as
-    * a path that cannot be opened does. A cancel that arrives before the write leaves `into` empty and the file closed.
+    * a path that cannot be opened does. A cancel that arrives before the write leaves `into` empty and the file closed;
+    * one after it is too late, and the op completes (see `BlockingOps.blocking`).
     */
   def open(path: String, write: Boolean, into: Slot[File]): Op
 
@@ -218,7 +223,7 @@ trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form,
     * into `into`, which must be empty; fails with an `IOException` if the name cannot be resolved. A cancel that
-    * arrives before the write leaves `into` empty.
+    * arrives before the write leaves `into` empty; one after it is too late, and the op completes.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
@@ -291,7 +296,9 @@ trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def blocking(body: () => Unit): Op
 
   /** Like the other `blocking`, writing `body`'s value into `into`, which must be empty, before completing. A cancel
-    * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel.
+    * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel. One
+    * that arrives after the write is too late: the op completes, with `into` holding the value, as an op that finished
+    * before its cancel does, and the same for a time limit or a reactor closing.
     */
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }
@@ -319,6 +326,14 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
 }
 
 private[io] object Ops {
+
+  /** The failure of an op submitted with a slot that still holds a value (see `Slot`), before it does anything: what it
+    * opened, accepted or received would have nowhere to go, an opened handle leaking; null if `slots` are all empty.
+    */
+  def notEmpty(slots: Slot[?]*): IllegalArgumentException | Null =
+    if slots.forall(_.isEmpty) then null
+    else
+      new IllegalArgumentException("The op's slot still holds a value, not yet cleared, which the op would overwrite")
 
   /** The failure of a read into `buf` when it has no room: such a read could only read nothing, which says the stream
     * has ended, so it fails before anything is read or waited for.

@@ -45,6 +45,11 @@ sealed trait NWFrameworkOp extends TimerHeap.Entry {
   /** For an op that failed as soon as it was submitted: its failure, until its completion runs. */
   private[nwframework] var atOnceFailure: Throwable | Null = null
 
+  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
+    * it does anything; null if its slots are empty.
+    */
+  private[nwframework] def slotRefusal: Throwable | Null = null
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[nwframework] var attachment: AnyRef | Null = null
 }
@@ -158,6 +163,7 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
   */
 final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
     extends NWFrameworkCommand {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
@@ -193,6 +199,7 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
 /** Accepts the connections waiting on a listener, at most `max`, writing their handles into `into`. */
 final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFrameworkKinds.Connection]], max: Int)
     extends NWFrameworkCommand {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
@@ -212,6 +219,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
   * and leaves `into` empty.
   */
 sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Handle => K) extends NWFrameworkCommand {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened: Handle | Null = null
   private var delivered = false
   def kind: Int = NWFrameworkHandle.Connect
@@ -301,6 +309,7 @@ final class NWFrameworkOpenFifo[K <: Handle](path: String, write: Boolean, into:
   */
 final class NWFrameworkOpenPipe(read: Slot[NWFrameworkKinds.Readable], write: Slot[NWFrameworkKinds.Writable])
     extends NWFrameworkOpening(read, NWFrameworkKinds.readable) {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
   private var writeEnd: Handle | Null = null
   protected def make(): Handle = {
     val (in, out) = NWFrameworkHandles.pipe()
@@ -386,6 +395,7 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
 
 /** Accepts one connection on a listener, writing its handle into `into`. */
 final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
@@ -400,6 +410,7 @@ final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Co
 
 /** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender into `from`. */
 final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends NWFrameworkCommand {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
@@ -479,6 +490,7 @@ final class NWFrameworkBlockingTask(body: () => Unit) extends NWFrameworkBlockin
 }
 
 final class NWFrameworkBlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NWFrameworkBlocking {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = publish(into, body())
 }
 
@@ -486,6 +498,7 @@ final class NWFrameworkBlockingResultTask[A <: AnyRef](body: () => A, into: Slot
   * resolver of its own, only connections by host name.
   */
 final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) extends NWFrameworkBlocking {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = PosixResolver.lookup(host) match {
     case Right(addresses) => publish(into, addresses)
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
@@ -497,6 +510,7 @@ final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) 
   */
 final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[NWFrameworkKinds.File])
     extends NWFrameworkBlocking {
+  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     val handle = NWFrameworkHandles.openFile(path, write)
     if !unlessCancelled(into.set(NWFrameworkKinds.file(handle))) then NWFrameworkHandles.close(handle)

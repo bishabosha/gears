@@ -15,8 +15,11 @@ import java.util.concurrent.atomic.AtomicInteger
   * cannot be interrupted and run to the end, with their result discarded. Either way the completion's `onCancel` waits
   * until `block` has returned, since until then it may still write to the op's buffers and slots.
   *
-  * Writes made before the cancel are allowed, as with a partly filled buffer, but none may follow it: a subclass must
-  * write its final result into its slot through `publish`, which skips the write once cancelled.
+  * A subclass writes its result, into its slot or the op's buffer, through `publish` or `unlessCancelled`, as the last
+  * thing `block` does: once that write is made the op has as good as finished, so a cancel, or its time limit, loses
+  * (`cancelUnlessCommitted`) and the op completes with what was written, as one that finished at submission does,
+  * rather than being cancelled with its result in the caller's slot; before it, the cancel wins and the write is
+  * skipped.
   *
   * A backend that runs a blocking op on the calling thread, as NIO's `NioOnCaller` does, runs it with `runHere`, under
   * the same rules.
@@ -33,6 +36,7 @@ trait BlockingRun {
   private var runner: Thread | Null = null
   private var cancelled = false
   private var ended = false
+  private var committed = false // the result was written, so a cancel loses
 
   /** What `block` threw, if anything: written by the thread that ran it, before `end`, and read there. */
   private var thrown: Throwable | Null = null
@@ -58,6 +62,7 @@ trait BlockingRun {
     require(runner == null, "A blocking task cannot be restarted while it is running")
     cancelled = false
     ended = false
+    committed = false
     thrown = null
   }
 
@@ -128,9 +133,27 @@ trait BlockingRun {
     if cancelled then false
     else {
       write
+      committed = true
       true
     }
   }
+
+  /** Marks the task cancelled, so that its result is not written, unless it has been already: true if so, for a cancel
+    * or a time limit that takes the op, which then interrupts it (`interrupt`); false once the result is written, when
+    * the op is as good as finished and completes with it, so the cancel loses.
+    */
+  private[io] def cancelUnlessCommitted(): Boolean = synchronized {
+    if committed then false
+    else {
+      cancelled = true
+      true
+    }
+  }
+
+  /** What `block` threw, once it has returned (`awaitEnd`): for a reactor that closes while a task whose result is
+    * written still runs, which then gets its outcome.
+    */
+  private[io] def thrownBy: Throwable | Null = synchronized(thrown)
 
   /** Waits until a running `block` has returned. An interrupt of the waiting thread is kept for later. */
   def awaitEnd(): Unit = {

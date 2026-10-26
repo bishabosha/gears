@@ -157,86 +157,93 @@ final class NioReactor private (selector: Selector) extends Reactor {
     }
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[NioOp]] // only ever called with `op`, which is a C
-    op match {
-      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command                                           =>
-        // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
-        var failure: java.io.IOException | Null = null
-        val entry =
-          try NioHandles.entry(command.handle)
-          catch {
-            case e: java.io.IOException =>
-              failure = e
-              null
-          }
-        command.entry = entry
-        val read = command.interest == Interest.Read
-        val key = entry match {
-          case s: Selectable =>
-            try keyFor(command, s)
+    val slotRefusal = op.slotRefusal
+    if slotRefusal != null then {
+      op.completion = pending
+      op.atOnceFailure = slotRefusal
+      if finishNow then finished = true else ready.add(op)
+    } else
+      op match {
+        case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
+        case command: Command                                           =>
+          // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
+          var failure: java.io.IOException | Null = null
+          val entry =
+            try NioHandles.entry(command.handle)
             catch {
               case e: java.io.IOException =>
                 failure = e
                 null
             }
-          case _ => null
-        }
-        (entry, key) match {
-          case _ if failure != null =>
-            command.completion = pending
-            command.atOnceFailure = failure
-            if !finishNow then ready.add(command)
-            finished = finishNow
-          case (s: Selectable, key: SelectionKey) =>
-            val waiting = key.attachment().asInstanceOf[Waiting]
-            // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
-            if read then require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
-            else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
-            command.completion = pending
-            if performedAtOnce(command, queue = !finishNow) then finished = finishNow
-            else {
-              val ops = command.selectOps(s.channel)
-              if read then {
-                waiting.read = command
-                waiting.readOps = ops
-              } else {
-                waiting.write = command
-                waiting.writeOps = ops
+          command.entry = entry
+          val read = command.interest == Interest.Read
+          val key = entry match {
+            case s: Selectable =>
+              try keyFor(command, s)
+              catch {
+                case e: java.io.IOException =>
+                  failure = e
+                  null
               }
-              markChanged(key, waiting)
-              waits = true
-            }
-          case (_: RegularFile, _) =>
-            command.completion = pending
-            if performedAtOnce(command, queue = !finishNow) then finished = finishNow // always ready
-            else {
-              again.add(command)
-              waits = true
-            }
-          case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
-        }
-      case timer: NioTimer =>
-        require(timer.heapIndex < 0, "This timer is already pending")
-        // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
-        timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
-        timer.completion = pending
-        schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
-      case blocking: NioBlocking =>
-        if blocking.cancelling != null then
-          throw new IllegalStateException(s"$op is still running after being cancelled")
-        blocking.reset() // a `Repeatable` promise's previous outcome
-        blocking.reactor = this
-        blocking.completion = pending
-        pendingPromises += blocking
-        blocking.restart()
-        blocking.start()
-        waits = true
-      case atOnce: NioAtOnce =>
-        atOnce.completion = pending
-        try atOnce.perform()
-        catch case t: Throwable => atOnce.atOnceFailure = t
-        if finishNow then finished = true else ready.add(atOnce)
-    }
+            case _ => null
+          }
+          (entry, key) match {
+            case _ if failure != null =>
+              command.completion = pending
+              command.atOnceFailure = failure
+              if !finishNow then ready.add(command)
+              finished = finishNow
+            case (s: Selectable, key: SelectionKey) =>
+              val waiting = key.attachment().asInstanceOf[Waiting]
+              // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+              if read then
+                require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
+              else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
+              command.completion = pending
+              if performedAtOnce(command, queue = !finishNow) then finished = finishNow
+              else {
+                val ops = command.selectOps(s.channel)
+                if read then {
+                  waiting.read = command
+                  waiting.readOps = ops
+                } else {
+                  waiting.write = command
+                  waiting.writeOps = ops
+                }
+                markChanged(key, waiting)
+                waits = true
+              }
+            case (_: RegularFile, _) =>
+              command.completion = pending
+              if performedAtOnce(command, queue = !finishNow) then finished = finishNow // always ready
+              else {
+                again.add(command)
+                waits = true
+              }
+            case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
+          }
+        case timer: NioTimer =>
+          require(timer.heapIndex < 0, "This timer is already pending")
+          // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
+          timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
+          timer.completion = pending
+          schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+        case blocking: NioBlocking =>
+          if blocking.cancelling != null then
+            throw new IllegalStateException(s"$op is still running after being cancelled")
+          blocking.reset() // a `Repeatable` promise's previous outcome
+          blocking.reactor = this
+          blocking.completion = pending
+          pendingPromises += blocking
+          blocking.restart()
+          blocking.start()
+          waits = true
+        case atOnce: NioAtOnce =>
+          atOnce.completion = pending
+          try atOnce.perform()
+          catch case t: Throwable => atOnce.atOnceFailure = t
+          if finishNow then finished = true else ready.add(atOnce)
+      }
     op.submitted = true
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
@@ -473,15 +480,22 @@ final class NioReactor private (selector: Selector) extends Reactor {
         resolved = resolvedQueue.poll()
       }
       val running = scala.collection.mutable.ArrayBuffer.empty[NioBlocking]
+      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
+      val written = scala.collection.mutable.ArrayBuffer.empty[(NioBlocking, Completion[NioOp])]
       for promise <- pendingPromises.toList do {
         val completion = detach(promise)
-        if completion != null then {
-          dropped += ((promise, completion))
+        if completion != null then
           promise match {
-            case blocking: NioBlocking if blocking.interrupt() => running += blocking
-            case _                                             => ()
+            case blocking: NioBlocking if !blocking.cancelUnlessCommitted() =>
+              written += ((blocking, completion))
+              running += blocking
+            case _ =>
+              dropped += ((promise, completion))
+              promise match {
+                case blocking: NioBlocking if blocking.interrupt() => running += blocking
+                case _                                             => ()
+              }
           }
-        }
       }
       for blocking <- cancellingBlockers do {
         dropped += ((blocking, blocking.cancelling.nn))
@@ -500,6 +514,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
         selector.close() // deregisters every channel; the channels stay open
       }
       running.foreach(_.awaitEnd())
+      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       finished.foreach { (op, completion, failure) =>
         if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
       }
@@ -558,9 +573,10 @@ final class NioReactor private (selector: Selector) extends Reactor {
             case _: RegularFile => if again.remove(command) then take(command) else null
             case _              => null // never submitted
           }
-      case timer: NioTimer     => if timer.heapIndex < 0 then null else take(timer)
-      case promise: NioPromise => detach(promise)
-      case _: NioAtOnce        => null // performed when submitted, so finished
+      case timer: NioTimer => if timer.heapIndex < 0 then null else take(timer)
+      case blocking: NioBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
+      case promise: NioPromise                                        => detach(promise)
+      case _: NioAtOnce                                               => null // performed when submitted, so finished
     }
 
   /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed

@@ -509,6 +509,59 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a cancel that comes once a blocking op has written its value is too late: the op completes with it") {
+    withReactor { r =>
+      val returning = new CountDownLatch(1)
+      val into = Slot[String]()
+      val op = backend.ops.blocking(
+        () => {
+          returning.countDown()
+          "value"
+        },
+        into
+      )
+      val outcome = Outcome()
+      r.submit(op, outcome)
+      returning.await()
+      Thread.sleep(50) // for the value to be written once the body returns; the reactor does not turn meanwhile
+      assert(!r.cancel(op), "the cancel took an op whose value was written")
+      turnUntil(r)(outcome.finished)
+      assertEquals((outcome.completed, outcome.cancelled), (1, 0))
+      assertEquals(into.clear(), "value")
+    }
+  }
+
+  test("an op submitted with a slot not yet cleared fails with IllegalArgumentException, doing nothing") {
+    withReactor { r =>
+      val into = Slot[String]()
+      assertEquals(run(r, backend.ops.blocking(() => "first", into)), null)
+      val ran = new AtomicBoolean
+      val failure = run(
+        r,
+        backend.ops.blocking(
+          () => {
+            ran.set(true)
+            "second"
+          },
+          into
+        )
+      )
+      assert(failure.isInstanceOf[IllegalArgumentException], String.valueOf(failure))
+      assert(!ran.get(), "the body ran")
+      assertEquals(into.clear(), "first")
+
+      val read = Slot[Readable]()
+      val write = Slot[Writable]()
+      assertEquals(run(r, backend.ops.pipe(read, write)), null)
+      val in = read.clear()
+      val refused = run(r, backend.ops.pipe(read, write)) // `write` still holds the first pipe's end
+      assert(refused.isInstanceOf[IllegalArgumentException], String.valueOf(refused))
+      intercept[IllegalStateException](read.clear()) // nothing opened
+      close(r, in)
+      close(r, write.clear())
+    }
+  }
+
   test("a repeatable op moves between two reactors of the backend") {
     withReactor { a =>
       withReactor { b =>
@@ -792,6 +845,65 @@ trait ReactorContract extends FunSuite {
           val received = second.clear()
           assertEquals(textOf(received), "two")
           received.release()
+        } finally {
+          close(r, in)
+          close(r, out)
+        }
+      }
+    finally pool.close()
+  }
+
+  /** A pooled read of what `out` is sent, `text`, from `in`, run to its end: what it received, which the caller
+    * releases.
+    */
+  private def receivedOf(r: R, in: Readable, out: Writable, pool: BufferPool, text: String)(using
+      munit.Location
+  ): Received = {
+    r.submit(backend.ops.write(out, bytes(text)), Outcome())
+    val into = Slot[Received]()
+    val outcome = Outcome()
+    r.submit(backend.ops.read(in, pool, into), outcome)
+    turnUntil(r)(outcome.finished)
+    assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+    into.clear()
+  }
+
+  test("releasing a Received twice throws IllegalStateException, leaving the pool as it was") {
+    val pool = backend.pool(bufferSize = 16, buffers = 2)
+    try
+      withReactor { r =>
+        val (in, out) = pipe(r)
+        try {
+          val received = receivedOf(r, in, out, pool, "once")
+          received.release()
+          intercept[IllegalStateException](received.release())
+          assertEquals(pool.available, 2)
+          val next = receivedOf(r, in, out, pool, "next") // the free list is whole
+          val other = receivedOf(r, in, out, pool, "other")
+          assertEquals(pool.available, 0)
+          next.release()
+          other.release()
+        } finally {
+          close(r, in)
+          close(r, out)
+        }
+      }
+    finally pool.close()
+  }
+
+  test("closing a pool with a buffer held fails, leaving it open, for the buffer to be released and the close done") {
+    val pool = backend.pool(bufferSize = 16, buffers = 1)
+    try
+      withReactor { r =>
+        val (in, out) = pipe(r)
+        try {
+          val held = receivedOf(r, in, out, pool, "held")
+          intercept[IllegalArgumentException](pool.close())
+          assertEquals(textOf(held), "held")
+          held.release()
+          assertEquals(pool.available, 1, "the release reached the pool")
+          receivedOf(r, in, out, pool, "again").release() // and the pool still lends it
+          pool.close()
         } finally {
           close(r, in)
           close(r, out)

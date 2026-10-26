@@ -122,5 +122,5 @@ private[nio] final class TimerWait(milliseconds: Int) extends WaitHere {
   */
 private[nio] final class BlockingHere(task: NioBlocking) extends Cancellable {
   def run(): Unit = task.runHere()
-  def cancel(): Unit = task.interrupt(): Unit
+  def cancel(): Unit = if task.cancelUnlessCommitted() then task.interrupt(): Unit // else it wrote its result
 }

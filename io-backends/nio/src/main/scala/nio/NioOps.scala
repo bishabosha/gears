@@ -48,6 +48,11 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
   /** For a command that failed as soon as it was submitted: its failure, until its completion runs. */
   private[nio] var atOnceFailure: Throwable | Null = null
 
+  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
+    * it does anything; null if its slots are empty.
+    */
+  private[nio] def slotRefusal: Throwable | Null = null
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[nio] var attachment: AnyRef | Null = null
 }
@@ -123,6 +128,7 @@ sealed trait Opens extends NioOp {
   * pipes are.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce with Opens {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened: K | Null = null
   protected def open(): K
   def perform(): Unit = {
@@ -154,6 +160,7 @@ final class OpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
 final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writable]) extends NioAtOnce with Opens {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
   private var ends: (NioKinds.Readable, NioKinds.Writable) | Null = null
   def perform(): Unit = {
     val (in, out) = NioHandles.pipe()
@@ -228,6 +235,7 @@ final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
 final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val slot = pool.take()
@@ -261,6 +269,7 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
 final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends Command {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = selectable(classOf[ServerSocketChannel], "Accepting").accept()
@@ -281,6 +290,7 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
   * `SocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]], max: Int) extends Command {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val listener = selectable(classOf[ServerSocketChannel], "Accepting")
@@ -317,6 +327,7 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   * first, the socket is closed and `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) extends Command with Opens {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket: Handle | Null = null
   private var connected = false
   def handle: Handle = socket.nn
@@ -357,6 +368,7 @@ final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) e
 
 /** Receives one packet into `buf`, left flipped for reading, and writes its sender into `from`. */
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends Command {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the JDK would drop the whole packet
@@ -483,11 +495,13 @@ final class BlockingTask(body: () => Unit) extends NioBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NioBlocking {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = publish(into, body())
 }
 
 /** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = publish(into, Resolve.addresses(host))
 }
 
