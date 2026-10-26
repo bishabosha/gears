@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicReference
 /** Stress tests for a reactor and its gears integration, to measure each change against. An echo server runs on one
   * reactor thread and the clients on another, so both sides go through the reactor; each scenario is timed on its own
   * and stresses a different cost (see `io-backends/kqueue/TODO.md`). Every line it prints for a scenario starts with
-  * `bench:` so that `bench/compare.py` can collect the results.
+  * `bench:` so that `bench/compare.sc` can collect the results.
   */
 object GearsBench {
 
@@ -324,7 +324,7 @@ object GearsBench {
     }
   }
 
-  /** Prints one result line, in the format `bench/compare.py` reads. */
+  /** Prints one result line, in the format `bench/compare.sc` reads. */
   def report(name: String, count: Long, seconds: Double): Unit =
     println(f"bench: $name%-18s $count%10d $seconds%9.3f ${count / seconds}%12.0f ${seconds * 1e6 / count}%8.2f")
 
@@ -412,7 +412,7 @@ object GearsBench {
     computes.awaitAll
     val sorted = late.sorted
     def at(fraction: Double): Long = if sorted.isEmpty then 0L else sorted(((sorted.length - 1) * fraction).toInt)
-    // As one op taking the lateness, so that `compare.py` shows it in µs.
+    // As one op taking the lateness, so that `compare.sc` shows it in µs.
     report("starvation-p50", 1, at(0.5) / 1e9)
     report("starvation-p99", 1, at(0.99) / 1e9)
     report("starvation-max", 1, at(1.0) / 1e9)
@@ -687,7 +687,7 @@ object GearsBench {
       runOn(workers, policy) { io ?=>
         val connect = new Connect[io.Handle] { def apply()(using Async): io.Handle = endpoint.connect() }
         // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; its results,
-        // the few a scenario prints itself, come before the measured ones, which `compare.py` keeps.
+        // the few a scenario prints itself, come before the measured ones, which `compare.sc` keeps.
         if warmup then
           for scenario <- runnable do
             scenario.body(io, connect, math.max(1, (scenario.baseCount * scale / 5).toInt), connections)

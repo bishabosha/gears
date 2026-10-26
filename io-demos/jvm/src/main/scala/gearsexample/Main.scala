@@ -118,7 +118,7 @@ object Main {
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)
   }
-  @main(doc = "Stress tests to measure reactor changes against; see bench/compare.py")
+  @main(doc = "Stress tests to measure reactor changes against; see bench/compare.sc")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,

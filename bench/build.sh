@@ -5,9 +5,9 @@
 #
 #   bench/build.sh <commit> <output>
 #
-# Then compare executables with bench/compare.py. <commit> may be WORKTREE, for HEAD with the working tree's
+# Then compare executables with bench/compare.sc. <commit> may be WORKTREE, for HEAD with the working tree's
 # changes, untracked files included (ignored ones are not). Where the executable came from is written beside it, to
-# <output>.json, which compare.py --save includes in its results.
+# <output>.json, which compare.sc --save includes in its results.
 #
 # It links with conditional yieldpoints (SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=0): on macOS, the trap-based ones that
 # release builds use by default can deadlock a collection in multithreaded programs (see "The GC's signal blocking" in
@@ -83,19 +83,8 @@ if nm "$binary" | grep scalanative_GC_yieldpoint_trap >/dev/null; then linked=tr
 [ "$linked" = "$yieldpoints" ] || { echo "the executable has $linked yieldpoints, not $yieldpoints" >&2; exit 1; }
 mkdir -p "$(dirname "$output")"
 cp "$binary" "$output"
-COMMIT="$commit_sha" SUBJECT="$commit_subject" CHANGES="$worktree_changes" CHANGES_HASH="$changes_hash" \
-  SCALA_NATIVE="$scala_native" YIELDPOINTS="$yieldpoints" PROJECT="$project" python3 - "$output.json" <<'PY'
-import datetime, json, os, sys
-json.dump({
-    "project": os.environ["PROJECT"],
-    "commit": os.environ["COMMIT"],
-    "subject": os.environ["SUBJECT"],
-    "worktree_changes": os.environ["CHANGES"] == "true",
-    "worktree_changes_hash": os.environ["CHANGES_HASH"] or None,
-    "mode": "release-fast",
-    "scala_native": os.environ["SCALA_NATIVE"],
-    "yieldpoints": os.environ["YIELDPOINTS"],
-    "built": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-}, open(sys.argv[1], "w"), indent=2)
-PY
+if [ -n "$changes_hash" ]; then hash_field="worktree_changes_hash=$changes_hash"; else hash_field="worktree_changes_hash:=null"; fi
+"$repo/bench/provenance.sc" "$output.json" project="$project" commit="$commit_sha" subject="$commit_subject" \
+  worktree_changes:="$worktree_changes" "$hash_field" mode=release-fast scala_native="$scala_native" \
+  yieldpoints="$yieldpoints"
 echo "$output" >&2

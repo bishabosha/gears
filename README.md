@@ -211,9 +211,10 @@ timeout armed and cancelled per round trip; many connections at once; full-duple
 pipelining with a write per message; and blocking tasks completing on worker threads).
 `ioKqueueDemos/run bench` runs the same scenarios written against `KqueueLoop` directly,
 with no reactor, as a reference for what a hand-written loop costs.
-`bench/compare.py before=<old executable> after=<new executable>` runs saved
+`bench/compare.sc before=<old executable> after=<new executable>` runs saved
 builds alternately and reports each scenario's median microseconds per operation and the
-change (add `raw=<executable>@raw` for the reference).
+change (add `raw=<executable>@raw` for the reference). The bench's scripts (`compare.sc`,
+`syscalls.sc`, `provenance.sc`) are Scala CLI scripts, run by the `scala` command of Scala 3.5 or later.
 `bench/build.sh <commit> <output>` builds an executable to compare: the commit
 linked in release-fast mode against a Scala Native nightly, because 0.5.12's GC can crash
 multithreaded release builds of the gears demos (scala-native#5080). Setting

@@ -178,7 +178,7 @@ lazy val ioDemos =
     .nativeConfigure(_.dependsOn(ioKqueue, ioNWFramework))
 
 // The plain kqueue demos, over the kqueue backend's own types with no gears, as the executable `iokqueuedemos`, which
-// also runs the gears demos as `iokqueuedemos gears <command>` for bench/compare.py.
+// also runs the gears demos as `iokqueuedemos gears <command>` for bench/compare.sc.
 // ported from https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0
 lazy val ioKqueueDemos =
   (project in file("io-backends/kqueue/demos"))
@@ -192,7 +192,7 @@ lazy val ioKqueueDemos =
     )
     .dependsOn(ioDemos.native)
 
-// The bench scenarios written with cats-effect and fs2, to compare against; see bench/compare.py. The same code on
+// The bench scenarios written with cats-effect and fs2, to compare against; see bench/compare.sc. The same code on
 // Scala Native (kqueue, through bench/build.sh) and on the JVM (its selector poller, through bench/build-jvm.sh).
 lazy val ceBench =
   crossProject(JVMPlatform, NativePlatform)

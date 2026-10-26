@@ -33,6 +33,6 @@ metals.sbt
 /.worksheet/
 *.local.json
 
-# Benchmark results and provenance records (see bench/compare.py and build.sh)
+# Benchmark results and provenance records (see bench/compare.sc and build.sh)
 bench/results/
 bench/*.json

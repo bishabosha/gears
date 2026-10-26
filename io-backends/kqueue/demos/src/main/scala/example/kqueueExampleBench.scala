@@ -30,7 +30,7 @@ import gearsexample.GearsBench
   *   - a deadline timer added and deleted with `kevent`, as the reactor does now;
   *   - blocking tasks run on a worker thread that signals through a pipe.
   *
-  * The scenario names, counts, and output match `GearsBench`, so `bench/compare.py` can put them side by side.
+  * The scenario names, counts, and output match `GearsBench`, so `bench/compare.sc` can put them side by side.
   */
 object KQueueExampleBench {
 

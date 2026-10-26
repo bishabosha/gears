@@ -26,7 +26,7 @@ import mainargs.arg
 import mainargs.main
 
 /** The scenarios of `GearsBench` written with cats-effect and fs2, to compare against: the same echo server, message
-  * size, operation counts and result lines, so `bench/compare.py` reads them alike (pass the executable as
+  * size, operation counts and result lines, so `bench/compare.sc` reads them alike (pass the executable as
   * `<label>=<path>@raw`, since it runs as `cebench bench`). As in `GearsBench`, the echo server runs on a runtime of
   * its own and the clients on another, each with one worker thread, polling its own kqueue, unless `--workers` says
   * otherwise. `pingpong-fresh-ops` has no counterpart: fs2 builds no op values to reuse. On the JVM the workers poll a
@@ -230,7 +230,7 @@ object CeBench {
     } yield ()
   }
 
-  /** Prints one result line, in the format `bench/compare.py` reads. */
+  /** Prints one result line, in the format `bench/compare.sc` reads. */
   def report(name: String, count: Long, seconds: Double): Unit =
     println(f"bench: $name%-18s $count%10d $seconds%9.3f ${count / seconds}%12.0f ${seconds * 1e6 / count}%8.2f")
 
@@ -262,7 +262,7 @@ object CeBench {
     IORuntime(compute, blocking, compute, List(poller), () => { computeDown(); blockingDown() }, IORuntimeConfig())
   }
 
-  @main(doc = "The gears bench scenarios with cats-effect and fs2; see bench/compare.py")
+  @main(doc = "The gears bench scenarios with cats-effect and fs2; see bench/compare.sc")
   def bench(
       @arg(doc = "comma-separated scenarios to run, or all of them when empty") scenarios: String = "",
       @arg(doc = "multiplies every scenario's operation count") scale: Double = 1.0,
@@ -297,7 +297,7 @@ object CeBench {
       serve(address, listening).unsafeRunAndForget()(using serverRuntime)
       listening.await()
       // On the JVM, a first pass at a fifth of each count, so the JIT has compiled what is measured; the few results
-      // a scenario prints itself come before the measured ones, which `compare.py` keeps.
+      // a scenario prints itself come before the measured ones, which `compare.sc` keeps.
       val warm =
         if warmup.value then
           selected.toList.traverse_(scenario =>
