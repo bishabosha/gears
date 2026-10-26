@@ -20,7 +20,7 @@ object GearsFileRead {
       val contents = new ByteArrayOutputStream()
       ReactorFutures.run { io ?=>
         println(s"attempt to open file $fifo")
-        val file = HigherLevel.openFifo(fifo, write = false)
+        val file = HigherLevel.openFifoForReading(fifo)
         try {
           println(s"opened file: $file")
 

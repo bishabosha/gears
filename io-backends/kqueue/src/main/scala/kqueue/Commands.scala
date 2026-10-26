@@ -82,12 +82,12 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
 /** Accepts one connection on a listening socket, writing its handle into `into`. Done once a connection has been
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
-final case class Accept(fd: Int, into: Slot[Handle]) extends Command {
+final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Command {
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
     val client = NonBlocking.accept(fd)
-    if client >= 0 then into.set(KqueueHandles.handle(client))
+    if client >= 0 then into.set(KqueueKinds.connection(KqueueHandles.handle(client)))
     client >= 0
   }
   override def transferred: Int =
@@ -97,7 +97,7 @@ final case class Accept(fd: Int, into: Slot[Handle]) extends Command {
 /** Accepts the connections pending on a listening socket, at most `max`, writing their handles into `into` (see
   * `SocketOps.acceptAll`). Done once at least one has been accepted.
   */
-final class AcceptAll(val fd: Int, into: Slot[Array[Handle]], max: Int) extends Command {
+final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], max: Int) extends Command {
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   private var count = 0
@@ -117,7 +117,7 @@ final class AcceptAll(val fd: Int, into: Slot[Array[Handle]], max: Int) extends 
       case failure: Throwable =>
         if count == 0 then throw failure // with some accepted, they are delivered, and the next accept fails instead
     }
-    if count > 0 then into.set(Array.tabulate(count)(i => KqueueHandles.handle(clients(i))))
+    if count > 0 then into.set(Array.tabulate(count)(i => KqueueKinds.connection(KqueueHandles.handle(clients(i)))))
     count > 0
   }
   override def transferred: Int =

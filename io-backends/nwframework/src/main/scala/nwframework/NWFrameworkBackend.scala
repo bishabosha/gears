@@ -26,6 +26,13 @@ object NWFrameworkBackend
     with Resolving
     with Pipes {
   type Op = NWFrameworkOp
+  type Readable = NWFrameworkKinds.Readable
+  type Writable = NWFrameworkKinds.Writable
+  type Connection = NWFrameworkKinds.Connection
+  type Listener = NWFrameworkKinds.Listener
+  type Datagram = NWFrameworkKinds.Datagram
+  type UnixDatagram = NWFrameworkKinds.UnixDatagram
+  type File = NWFrameworkKinds.File
 
   /** An open I/O object, as this backend's ops name it: made only by the ops that open one, so that a program cannot
     * forge a handle, and closed once, a second close failing.

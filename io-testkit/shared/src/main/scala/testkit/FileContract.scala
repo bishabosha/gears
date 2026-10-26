@@ -13,8 +13,8 @@ trait FileContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & FileBackend
 
   /** Opens the file at `path` through `r` with the `open` op, throwing its failure. */
-  protected def open(r: R, path: Path, write: Boolean)(using munit.Location): Handle = {
-    val into = Slot[Handle]()
+  protected def open(r: R, path: Path, write: Boolean)(using munit.Location): File = {
+    val into = Slot[File]()
     val failure = run(r, backend.ops.open(path.toString, write, into))
     if failure != null then throw failure
     into.clear()
@@ -24,7 +24,7 @@ trait FileContract extends ReactorContract {
     val dir = tempDir()
     try
       withReactor { r =>
-        val into = Slot[Handle]()
+        val into = Slot[File]()
         val failure = run(r, backend.ops.open(dir.toString, write = false, into))
         assert(failure.isInstanceOf[IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())

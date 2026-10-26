@@ -23,14 +23,21 @@ class NioOnCallerSuite extends FuturesContract {
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(using backend)(body)
 
+  test("NIO's kinds of handle are distinct types, though one class underneath") {
+    assert(compileErrors("def k(c: NioBackend.Connection): NioBackend.Listener = c").nonEmpty)
+    assert(compileErrors("def k(r: NioBackend.Readable): NioBackend.Writable = r").nonEmpty)
+    assert(compileErrors("def k(f: NioBackend.File): NioBackend.Connection = f").nonEmpty)
+    assertEquals(compileErrors("def k(c: NioBackend.Connection): NioBackend.Readable = c"), "")
+  }
+
   test("a program over NioOnCaller needs no runner: its Io is an OnCaller anyone may make, on the calling thread") {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     var outcome = ""
     Async.blocking {
       val io = OnCaller(NioOnCaller)
-      val read = Slot[io.Handle]()
-      val write = Slot[io.Handle]()
+      val read = Slot[io.Readable]()
+      val write = Slot[io.Writable]()
       io.perform(io.backend.ops.pipe(read, write)) // on this, a platform thread
       val (in, out) = (read.clear(), write.clear())
       val arena = BufferArena.open()

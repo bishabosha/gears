@@ -32,7 +32,14 @@ class WorkerFailureSuite extends FunSuite {
   private def backendOf(reactor: FailingReactor): ReactorBackend = new ReactorBackend {
     type Op = AnyRef
     type Handle = AnyRef
-    def ops: Ops[Op, Handle] = throw new UnsupportedOperationException
+    type Readable = AnyRef
+    type Writable = AnyRef
+    type Connection = AnyRef
+    type Listener = AnyRef
+    type Datagram = AnyRef
+    type UnixDatagram = AnyRef
+    type File = AnyRef
+    def ops: Kinded[Ops[Op, Handle]] = throw new UnsupportedOperationException
     def attachment(op: Op): AnyRef | Null = null
     def attach(op: Op, value: AnyRef | Null): Unit = ()
     def open(): Reactor.Of[Op, Handle] = reactor

@@ -213,7 +213,9 @@ object NioHandles {
   /** Opens a regular file, blocking for the disk: the `open` op's body, run on the blocker pool, and for code with no
     * reactor.
     */
-  def openFile(path: String, write: Boolean): Handle = {
+  def openFile(path: String, write: Boolean): NioKinds.File = NioKinds.file(openFileHandle(path, write))
+
+  private def openFileHandle(path: String, write: Boolean): Handle = {
     val file = Path.of(path)
     if !Files.exists(file) then throw new NoSuchFileException(path)
     if !Files.isRegularFile(file) then throw new IOException(s"Not a regular file: $path")
@@ -230,7 +232,7 @@ object NioHandles {
     }
   }
 
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
+  def listen(address: IpAddress, reuseAddr: Boolean = true): NioKinds.Listener = NioKinds.listener {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
@@ -239,7 +241,7 @@ object NioHandles {
     }
   }
 
-  def listen(address: UnixAddress): Handle = {
+  def listen(address: UnixAddress): NioKinds.Listener = NioKinds.listener {
     val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
     val path = Path.of(address.path)
     selectable(channel, path) {
@@ -249,7 +251,7 @@ object NioHandles {
     }
   }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): NioKinds.Datagram = NioKinds.datagram {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
     require(
@@ -264,7 +266,7 @@ object NioHandles {
     }
   }
 
-  def pipe(): (Handle, Handle) = {
+  def pipe(): (NioKinds.Readable, NioKinds.Writable) = {
     val pipe = Pipe.open()
     val source = selectable(pipe.source(), null)(pipe.source().configureBlocking(false))
     val sink =
@@ -274,7 +276,7 @@ object NioHandles {
           close(source)
           throw t
       }
-    (source, sink)
+    (NioKinds.readable(source), NioKinds.writable(sink))
   }
 
   def close(handle: Handle): Unit = {

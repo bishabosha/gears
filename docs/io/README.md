@@ -31,10 +31,14 @@ Three axes, chosen independently of one another:
   `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
   `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
   nothing. Every handle is opened by an op of the capability that has it (`connect`, `listen`, `datagram`, `pipe`,
-  `openFifo`, `open`), which writes it into a slot as it completes and leaves the slot empty, with nothing open, if it
-  fails or is cancelled: opening may wait, for a connection, a bind or the disk, and some environments, such as
-  Network.framework, only open asynchronously. A program asks for a backend with one as `SocketBackend`, which is
-  `Backend & IpSockets`, and likewise for the others.
+  `openFifoForReading`, `openFifoForWriting`, `open`), which writes it into a slot as it completes and leaves the
+  slot empty, with nothing open, if it fails or is cancelled: opening may wait, for a connection, a bind or the disk,
+  and some environments, such as Network.framework, only open asynchronously. A handle's kind is in its type, a
+  subtype of the backend's `Handle`: `Readable` and `Writable` streams, a `Connection` (both, and shut down for
+  writing), a `Listener`, an IP `Datagram` and a `UnixDatagram`, and a `File` (both, and read, written and synced at
+  offsets); each opener writes its kind, and each op takes the kind it works on, so an op on the wrong kind of handle
+  does not compile. A program asks for a backend with one as `SocketBackend`, which is `Backend & IpSockets`, and
+  likewise for the others.
 - **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
   thread, which may block. A backend is one kind, with any set of capabilities.
@@ -58,7 +62,7 @@ direction to explore.
 ## A program
 
 ```scala
-def echo(using io: Io[IpSockets])(client: io.Handle)(using Async): Unit = {
+def echo(using io: Io[IpSockets])(client: io.Connection)(using Async): Unit = {
   val buf = ...
   val read = io.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
   val write = io.backend.ops.write(client, buf)
@@ -78,8 +82,8 @@ does; the run that takes `workers` and a `policy` exists only for a `ReactorBack
 group's end waits for. The runner gives the program its `Io` as
 a context parameter, alongside `Async.Spawn`, which the program names where it uses it (`io ?=>`); code over a
 program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type and a
-handle's are path-dependent on it (`io.Op`, `io.Handle`), so `perform` is a method of `io`, and a method taking a
-handle takes the `Io` first (`def echo(using io: Io[IpSockets])(client: io.Handle)`). Time limits are an `Int` of
+handle's are path-dependent on it (`io.Op`, `io.Connection`), so `perform` is a method of `io`, and a method taking a
+handle takes the `Io` first (`def echo(using io: Io[IpSockets])(client: io.Connection)`). Time limits are an `Int` of
 milliseconds, the op's own unit.
 
 ## What the interface fixes, and what it leaves
@@ -100,7 +104,7 @@ can be written once over every backend.
 
 `higherlevel`, in `ioDemos`, is the API that wraps the lowest level: written over the interface's public contract
 alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
-`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifo`), `read`,
+`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifoForReading`, `openFifoForWriting`), `read`,
 `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
 with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
 ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the

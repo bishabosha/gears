@@ -9,6 +9,7 @@ import gears.async.io.kqueue.Accept
 import gears.async.io.kqueue.Command
 import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueKinds
 import gears.async.io.kqueue.KqueueOps
 import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.kqueue.ReadIntoBuffer
@@ -57,7 +58,7 @@ object KQueueExampleKeyValue {
   /** One client connection: parses commands out of whatever arrives, queues the replies, and writes them back while
     * reading continues. Owns a zone holding its two buffers, closed with the connection.
     */
-  private final class Session(r: KqueueReactor, val fd: Handle, store: Store, server: Server)
+  private final class Session(r: KqueueReactor, val fd: KqueueKinds.Connection, store: Store, server: Server)
       extends AutoCloseable
       with Completion[Command] {
     private val zone: Zone = Zone.open()
@@ -140,7 +141,7 @@ object KQueueExampleKeyValue {
     private val store = new Store
     private var sessions: Map[Handle, Session] = Map.empty
 
-    private val accepted = gears.async.io.Slot[Handle]() // each accept writes its connection here
+    private val accepted = gears.async.io.Slot[KqueueKinds.Connection]() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 

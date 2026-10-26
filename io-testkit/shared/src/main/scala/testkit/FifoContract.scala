@@ -8,10 +8,16 @@ import java.nio.file.Files
 trait FifoContract extends FileContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & FifoBackend & FileBackend
 
-  /** A FIFO from the `openFifo` op, whose failure is thrown. */
-  protected def openFifo(r: R, path: String, write: Boolean)(using munit.Location): Handle = {
-    val into = Slot[Handle]()
-    opened(r, into, backend.ops.openFifo(path, write, into))
+  /** A FIFO's read end from the `openFifoForReading` op, whose failure is thrown. */
+  protected def openFifoForReading(r: R, path: String)(using munit.Location): Readable = {
+    val into = Slot[Readable]()
+    opened(r, into, backend.ops.openFifoForReading(path, into))
+  }
+
+  /** A FIFO's write end from the `openFifoForWriting` op, whose failure is thrown. */
+  protected def openFifoForWriting(r: R, path: String)(using munit.Location): Writable = {
+    val into = Slot[Writable]()
+    opened(r, into, backend.ops.openFifoForWriting(path, into))
   }
 
   test("a FIFO carries what its writer writes, then ends when the writer closes") {
@@ -21,9 +27,9 @@ trait FifoContract extends FileContract {
         val fifo = dir.resolve("fifo")
         val made = new ProcessBuilder("mkfifo", fifo.toString).start().waitFor()
         assertEquals(made, 0)
-        val reader = openFifo(r, fifo.toString, write = false) // a non-blocking writer needs a reader to open
+        val reader = openFifoForReading(r, fifo.toString) // a non-blocking writer needs a reader to open
         try {
-          val writer = openFifo(r, fifo.toString, write = true)
+          val writer = openFifoForWriting(r, fifo.toString)
           val sent = Outcome()
           r.submit(backend.ops.write(writer, bytes("through the fifo")), sent)
           turnUntil(r)(sent.finished)
@@ -35,7 +41,7 @@ trait FifoContract extends FileContract {
       }
     finally deleteAll(dir)
   }
-  test("open refuses a FIFO, and openFifo a regular file") {
+  test("open refuses a FIFO, and openFifoForReading a regular file") {
     val dir = tempDir()
     try
       withReactor { r =>
@@ -44,8 +50,8 @@ trait FifoContract extends FileContract {
         intercept[java.io.IOException](open(r, fifo, write = false))
         val file = dir.resolve("file")
         Files.write(file, "x".getBytes(StandardCharsets.UTF_8))
-        val into = Slot[Handle]()
-        val failure = run(r, backend.ops.openFifo(file.toString, write = false, into))
+        val into = Slot[Readable]()
+        val failure = run(r, backend.ops.openFifoForReading(file.toString, into))
         assert(failure.isInstanceOf[java.io.IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())
       }

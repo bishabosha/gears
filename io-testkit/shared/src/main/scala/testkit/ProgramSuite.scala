@@ -41,24 +41,30 @@ trait ProgramSuite extends FunSuite {
 
   /** The backend's handles. */
   protected type Handle = backend.Handle
+  protected type Readable = backend.Readable
+  protected type Writable = backend.Writable
+  protected type Connection = backend.Connection
+  protected type Listener = backend.Listener
+  protected type Datagram = backend.Datagram
+  protected type File = backend.File
 
   /** Performs `op`, which opens a handle into `into`, and returns the handle. */
-  protected def opening(io: Io[backend.type], into: Slot[Handle], op: io.Op)(using Async): Handle = {
+  protected def opening[K <: Handle](io: Io[backend.type], into: Slot[K], op: io.Op)(using Async): K = {
     io.perform(op)
     into.clear()
   }
 
   /** Opens a pipe: its read end and its write end. */
-  protected def pipe(io: Io[backend.type])(using Async): (Handle, Handle) = {
-    val read = Slot[Handle]()
-    val write = Slot[Handle]()
+  protected def pipe(io: Io[backend.type])(using Async): (Readable, Writable) = {
+    val read = Slot[Readable]()
+    val write = Slot[Writable]()
     io.perform(io.backend.ops.pipe(read, write))
     (read.clear(), write.clear())
   }
 
   /** Connects a client to a test's server: each call performs a connect op, and returns a new socket. */
   protected trait Connect {
-    def apply()(using Async): Handle
+    def apply()(using Async): Connection
   }
 
   /** A listener for a test's server, and a way to connect to it: on a Unix socket in `dir` where the backend has them,
@@ -66,14 +72,14 @@ trait ProgramSuite extends FunSuite {
     */
   protected def listenAndConnect(io: Io[backend.type], dir: java.nio.file.Path)(using
       Async
-  ): (Handle, Connect) = io.backend match {
+  ): (Listener, Connect) = io.backend match {
     case unix: (gears.async.io.UnixStreams & io.backend.type) =>
       val address = UnixAddress(dir.resolve("echo.sock").toString)
-      val listening = Slot[Handle]()
+      val listening = Slot[Listener]()
       val listener = opening(io, listening, unix.ops.listen(address, listening))
       val connect = new Connect {
-        def apply()(using Async): Handle = {
-          val into = Slot[Handle]()
+        def apply()(using Async): Connection = {
+          val into = Slot[Connection]()
           opening(io, into, unix.ops.connect(address, into))
         }
       }
@@ -82,15 +88,15 @@ trait ProgramSuite extends FunSuite {
       // A port nothing listens on: the first the listen op does not fail on.
       val random = new java.util.Random()
       var attempts = 0
-      var found: (Handle, Connect) | Null = null
+      var found: (Listener, Connect) | Null = null
       while found == null do {
         val address = IpAddress.IPv4("127.0.0.1", 20000 + random.nextInt(30000))
-        val listening = Slot[Handle]()
+        val listening = Slot[Listener]()
         try {
           val listener = opening(io, listening, io.backend.ops.listen(address, listening))
           val connect = new Connect {
-            def apply()(using Async): Handle = {
-              val into = Slot[Handle]()
+            def apply()(using Async): Connection = {
+              val into = Slot[Connection]()
               opening(io, into, io.backend.ops.connect(address, into))
             }
           }
@@ -114,7 +120,7 @@ trait ProgramSuite extends FunSuite {
     var attempts = 0
     while port < 0 do {
       val candidate = 20000 + random.nextInt(30000)
-      val into = Slot[Handle]()
+      val into = Slot[Listener]()
       try {
         val listener = opening(io, into, io.backend.ops.listen(IpAddress.IPv4("127.0.0.1", candidate), into))
         io.perform(io.backend.ops.close(listener))

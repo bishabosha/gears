@@ -28,8 +28,15 @@ trait Io[+B <: Backend] extends AsyncOperations {
   /** What this performs: its backend's ops. */
   type Op = backend.Op
 
-  /** The handles of the backend's I/O objects. */
+  /** The handles of the backend's I/O objects, and their kinds (see `Ops`). */
   type Handle = backend.Handle
+  type Readable = backend.Readable
+  type Writable = backend.Writable
+  type Connection = backend.Connection
+  type Listener = backend.Listener
+  type Datagram = backend.Datagram
+  type UnixDatagram = backend.UnixDatagram
+  type File = backend.File
 
   /** Performs `op` with no time limit (see the other `perform`). */
   final def perform(op: Op)(using Async): Unit = perform(op, Backend.NoTimeout)

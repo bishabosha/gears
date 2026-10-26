@@ -25,7 +25,7 @@ object GearsServerSocket {
   /** Reads a length-framed request through one 8 KiB buffer, replies with a framed response, and closes the connection
     * gracefully, so that the client reads the whole reply however the request ended.
     */
-  private def serve(io: Io[UnixStreams], client: io.Handle)(using Async): Unit = {
+  private def serve(io: Io[UnixStreams], client: io.Connection)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)

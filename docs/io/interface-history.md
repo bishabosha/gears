@@ -178,3 +178,15 @@ found and what changed:
 
 A script turned each clause into greps for a while and was audited and then removed: what it measured is now the
 build's module boundaries, the types and the contract suites.
+
+## A handle's kind is its type
+
+A handle's type said which backend it belonged to, not what it named, so an op on the wrong kind of handle (a read on a
+listener, an accept on a connection, an IP send on a Unix datagram socket) compiled, and each backend failed it
+differently, one by crashing. The alternatives were a kind recorded in every handle and checked as each op is built,
+which every backend would have to do the same way, or the kind in the type. The type won: the compiler refuses the
+misuse, nothing is checked or stored at runtime, and the openers already knew what they opened. The cost is in
+programs, which name `io.Connection` or `io.Listener` rather than `io.Handle`, as they name the capabilities they need;
+and in FIFOs, whose direction was a `Boolean` and is now two openers, since it picks the type. See
+[`handles.md`](handles.md), "Kinds of handle, as types".
+

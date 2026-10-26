@@ -47,6 +47,13 @@ trait ReactorContract extends FunSuite {
 
   /** The backend's handles. */
   protected type Handle = backend.Handle
+  protected type Readable = backend.Readable
+  protected type Writable = backend.Writable
+  protected type Connection = backend.Connection
+  protected type Listener = backend.Listener
+  protected type Datagram = backend.Datagram
+  protected type UnixDatagram = backend.UnixDatagram
+  protected type File = backend.File
 
   protected def withReactor(body: R => Unit): Unit = {
     val reactor = backend.open()
@@ -72,24 +79,24 @@ trait ReactorContract extends FunSuite {
   protected def closeAlone(handle: Handle)(using munit.Location): Unit = withReactor(r => close(r, handle))
 
   /** Runs `op`, which opens a handle into `into`, on `r`, and returns the handle; throws the op's failure. */
-  protected def opened(r: R, into: Slot[Handle], op: backend.Op)(using munit.Location): Handle = {
+  protected def opened[K <: Handle](r: R, into: Slot[K], op: backend.Op)(using munit.Location): K = {
     val failure = run(r, op)
     if failure != null then throw failure
     into.clear()
   }
 
   /** Opens a pipe through `r`, as the interface has it: its read end and its write end. */
-  protected def pipe(r: R)(using munit.Location): (Handle, Handle) = {
-    val read = Slot[Handle]()
-    val write = Slot[Handle]()
+  protected def pipe(r: R)(using munit.Location): (Readable, Writable) = {
+    val read = Slot[Readable]()
+    val write = Slot[Writable]()
     val failure = run(r, backend.ops.pipe(read, write))
     if failure != null then throw failure
     (read.clear(), write.clear())
   }
 
   /** Opens a pipe from a thread with no reactor, on a reactor opened for it. */
-  protected def pipeAlone()(using munit.Location): (Handle, Handle) = {
-    var ends: (Handle, Handle) | Null = null
+  protected def pipeAlone()(using munit.Location): (Readable, Writable) = {
+    var ends: (Readable, Writable) | Null = null
     withReactor(r => ends = pipe(r))
     ends.nn
   }

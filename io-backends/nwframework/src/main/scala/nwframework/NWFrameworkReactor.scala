@@ -124,8 +124,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
         val open =
           try {
             command match {
-              case opening: NWFrameworkOpening => opening.open() // makes the handle it waits on
-              case _                           => ()
+              case opening: NWFrameworkOpening[?] => opening.open() // makes the handle it waits on
+              case _                              => ()
             }
             command.target = NWFrameworkHandles.get(command.handle)
             true
@@ -341,7 +341,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       failure: Throwable | Null
   ): Unit =
     op match {
-      case opening: NWFrameworkOpening =>
+      case opening: NWFrameworkOpening[?] =>
         opening.abandon() // what it opened never reaches the caller
         if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
       case blocking: NWFrameworkBlocking if blocking.interrupt() =>
@@ -470,8 +470,8 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
       }
       dropped.foreach { (op, completion) =>
         op match {
-          case opening: NWFrameworkOpening => opening.abandon() // what it opened never reaches the caller
-          case _                           => ()
+          case opening: NWFrameworkOpening[?] => opening.abandon() // what it opened never reaches the caller
+          case _                              => ()
         }
         deliverCancel(completion, op)
       }

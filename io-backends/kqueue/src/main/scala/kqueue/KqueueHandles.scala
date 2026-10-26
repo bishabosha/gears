@@ -62,6 +62,11 @@ object KqueueHandles {
     */
   def handle(fd: Int): Handle = new Handle(fd)
 
+  /** The handle of a connected stream socket's descriptor `fd`, as a connection, for kqueue-specific code that accepts
+    * or connects one itself.
+    */
+  def connection(fd: Int): KqueueKinds.Connection = KqueueKinds.connection(handle(fd))
+
   /** The descriptor `handle` is, for kqueue-specific code. */
   def descriptor(handle: Handle): Int = handle.fd
 
@@ -73,16 +78,17 @@ object KqueueHandles {
     * it is drained: kqueue reports a regular file readable only while its offset is short of the end, so a read waiting
     * for that would never see the end.
     */
-  def openFile(path: String, write: Boolean): Handle = {
+  def openFile(path: String, write: Boolean): KqueueKinds.File = {
     val fd = Descriptors.openFile(path, write)
     DescriptorTable.markAlwaysTry(fd)
-    wrap(fd)
+    KqueueKinds.file(wrap(fd))
   }
 
   /** Opens a FIFO. Its descriptor is marked as a regular file's is: on macOS, a FIFO whose writer closed before the
     * reactor's read filter was added never reports the end either.
     */
-  def openFifo(path: String, write: Boolean): Handle = wrap(fifoDescriptor(path, write))
+  def openFifoForReading(path: String): KqueueKinds.Readable = KqueueKinds.readable(wrap(fifoDescriptor(path, false)))
+  def openFifoForWriting(path: String): KqueueKinds.Writable = KqueueKinds.writable(wrap(fifoDescriptor(path, true)))
 
   private[kqueue] def fifoDescriptor(path: String, write: Boolean): Int = {
     val fd = Descriptors.openFifo(path, write)
@@ -90,15 +96,16 @@ object KqueueHandles {
     fd
   }
 
-  def connect(address: IpAddress): Handle = wrap(connectStream(address))
-  def connect(address: UnixAddress): Handle = wrap(connectStream(address))
+  def connect(address: IpAddress): KqueueKinds.Connection = KqueueKinds.connection(wrap(connectStream(address)))
+  def connect(address: UnixAddress): KqueueKinds.Connection = KqueueKinds.connection(wrap(connectStream(address)))
 
   private[kqueue] def connectStream(address: SocketAddress): Int =
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
 
   /** A listening socket, bound and listening at once. */
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = wrap(listenStream(address, reuseAddr))
-  def listen(address: UnixAddress): Handle = wrap(listenStream(address, reuseAddr = false))
+  def listen(address: IpAddress, reuseAddr: Boolean = true): KqueueKinds.Listener =
+    KqueueKinds.listener(wrap(listenStream(address, reuseAddr)))
+  def listen(address: UnixAddress): KqueueKinds.Listener = KqueueKinds.listener(wrap(listenStream(address, false)))
 
   private[kqueue] def listenStream(address: SocketAddress, reuseAddr: Boolean): Int =
     socketFor(address, Transport.Stream) { fd =>
@@ -107,15 +114,16 @@ object KqueueHandles {
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null): KqueueKinds.Datagram = {
     require(
       local == null || remote == null || flavorOf(local) == flavorOf(remote),
       "Local and remote addresses must be of the same family"
     )
-    wrap(datagramSocket(local, remote))
+    KqueueKinds.datagram(wrap(datagramSocket(local, remote)))
   }
 
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): Handle = wrap(datagramSocket(local, remote))
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): KqueueKinds.UnixDatagram =
+    KqueueKinds.unixDatagram(wrap(datagramSocket(local, remote)))
 
   private[kqueue] def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
     val either = if local != null then local else remote
@@ -126,9 +134,9 @@ object KqueueHandles {
     }
   }
 
-  def pipe(): (Handle, Handle) = {
+  def pipe(): (KqueueKinds.Readable, KqueueKinds.Writable) = {
     val (in, out) = pipeDescriptors()
-    (wrap(in), wrap(out))
+    (KqueueKinds.readable(wrap(in)), KqueueKinds.writable(wrap(out)))
   }
 
   private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()

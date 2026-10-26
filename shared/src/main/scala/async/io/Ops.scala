@@ -39,6 +39,12 @@ trait Repeatable
   * between position and limit, and belong to the backend while the op is being performed: on a reactor, from submission
   * until the op's completion.
   *
+  * A handle's kind is in its type, a subtype of `H`, so that an op on the wrong kind of handle does not compile: a
+  * stream is read through a `Readable` and written through a `Writable`; a `Connection` (a connected stream socket) and
+  * a `File` are both; a `Listener` accepts; a `Datagram` (IP) and a `UnixDatagram` send and receive packets. Every
+  * handle is closed with `close`. The opener of each kind writes a handle of that kind into its slot, so a program
+  * holds the kind it opened.
+  *
   * Handles are opened by ops too, each kind by the capability that has it (`SocketOps.connect`, `PipeOps.pipe`,
   * `FileOps.open` and the rest), since opening may wait, for a connection, a bind or the disk, and some environments
   * can only open asynchronously. Such an op writes what it opened into a slot when it completes; one that fails, is
@@ -47,17 +53,38 @@ trait Repeatable
   */
 trait Ops[Op, H <: AnyRef] {
 
+  /** A handle that can be read as a stream: a connection, a pipe's or FIFO's read end, or a file. */
+  type Readable <: H
+
+  /** A handle that can be written as a stream: a connection, a pipe's or FIFO's write end, or a file. */
+  type Writable <: H
+
+  /** A connected stream socket, IP or Unix, from `connect` or `accept`: read, written and shut down for writing. */
+  type Connection <: Readable & Writable
+
+  /** A listening stream socket, IP or Unix, from `listen`, which accepts connections. */
+  type Listener <: H
+
+  /** An IP datagram socket, from `datagram`, which sends and receives packets. */
+  type Datagram <: H
+
+  /** A Unix domain datagram socket, from the Unix `datagram`, which sends and receives packets. */
+  type UnixDatagram <: H
+
+  /** A regular file, from `open`: read and written as a stream and at offsets, and synced. */
+  type File <: Readable & Writable
+
   /** Fills `buf`, which must have room. Completes once at least one byte has been read, or at end of stream, when
     * nothing was added: compare the buffer's position before and after. A read into a buffer with no room fails with an
     * `IllegalArgumentException` as it is submitted, reading nothing, since it could only add nothing, which means the
     * end of the stream.
     */
-  def read(handle: H, buf: ByteBuffer): Op & Repeatable
+  def read(handle: Readable, buf: ByteBuffer): Op & Repeatable
 
   /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. With
     * nothing remaining, completes at once, writing nothing.
     */
-  def write(handle: H, buf: ByteBuffer): Op & Repeatable
+  def write(handle: Writable, buf: ByteBuffer): Op & Repeatable
 
   /** Completes once `milliseconds` have passed. */
   def timer(milliseconds: Int): Op & Repeatable
@@ -70,7 +97,7 @@ trait Ops[Op, H <: AnyRef] {
     * hands it over, where a read into the caller's buffer costs it a copy; one whose facility hands it chunks of its
     * own, as Node's streams do, hands such a chunk over.
     */
-  def read(handle: H, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+  def read(handle: Readable, pool: BufferPool, into: Slot[Received]): Op & Repeatable
 
   /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever submitter they are, have failed
     * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from that
@@ -89,41 +116,41 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
     * be empty.
     */
-  def accept(handle: H, into: Slot[H]): Op & Repeatable
+  def accept(handle: Listener, into: Slot[Connection]): Op & Repeatable
 
   /** Accepts the connections pending on a listening socket, as `accept` does one: completes once at least one has been
     * accepted, after writing them, at most `max`, into `into`, which must be empty. A server under a burst of
     * connections takes them in one op each time the listener is ready rather than one op apiece, which keeps its listen
     * queue from filling, and the kernel from resetting what arrives meanwhile, while its other work runs.
     */
-  def acceptAll(handle: H, into: Slot[Array[H]], max: Int): Op & Repeatable
+  def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): Op & Repeatable
 
   /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
     * `into`, which must be empty; fails if the connection is refused or cannot be made.
     */
-  def connect(address: IpAddress, into: Slot[H]): Op
+  def connect(address: IpAddress, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`, which
     * must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be bound while
     * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for them
     * to expire.
     */
-  def listen(address: IpAddress, into: Slot[H], reuseAddr: Boolean = true): Op
+  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): Op
 
   /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading: what
     * was written before is still sent, then the end of the stream, which the peer reads as it would a close. Completes
     * once the end is queued; writes after it fail. A server that closes once it has replied shuts down first and reads
     * until the client's end before closing, since closing with bytes from the peer unread resets the connection, and a
     * reset can discard the reply the peer has not read yet; a client shuts down once its request is out, so that the
-    * server sees where it ends. Fails if `handle` is not a connected stream socket.
+    * server sees where it ends.
     */
-  def shutdownOutput(handle: H): Op
+  def shutdownOutput(handle: Connection): Op
 
   /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family.
     * Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use or
     * cannot be bound.
     */
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[H]): Op
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): Op
 
   /** Receives one packet on an IP datagram socket into `buf`, which is cleared first and left flipped for reading, and
     * writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
@@ -132,7 +159,7 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * holds it. A buffer of no capacity fails the op with an `IllegalArgumentException`, receiving nothing, since it
     * would drop a whole packet.
     */
-  def receive(handle: H, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
+  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
   /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
     * consuming `buf`; an empty `buf` sends an empty packet on a socket that is not connected. Sent means handed to the
@@ -142,13 +169,13 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * fails; any other address fails the op with an `IllegalArgumentException`, sending nothing, as the JDK does,
     * whatever the system would do.
     */
-  def send(handle: H, buf: ByteBuffer, to: IpAddress): Op & Repeatable
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Op & Repeatable
 
   /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. Fails
     * with an `IllegalArgumentException`, sending nothing, on a socket that is not connected, or if `buf` is empty: no
     * backend sends an empty packet on a connected socket, since the JDK cannot.
     */
-  def send(handle: H, buf: ByteBuffer): Op & Repeatable
+  def send(handle: Datagram, buf: ByteBuffer): Op & Repeatable
 }
 
 /** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
@@ -166,22 +193,22 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * into `into`, which must be empty; anything but a regular file is refused, failing the op with an `IOException`, as
     * a path that cannot be opened does. A cancel that arrives before the write leaves `into` empty and the file closed.
     */
-  def open(path: String, write: Boolean, into: Slot[H]): Op
+  def open(path: String, write: Boolean, into: Slot[File]): Op
 
   /** Fills `buf` from the file at `offset`, as `Ops.read` fills it from a stream: completes once at least one byte has
     * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced; and
     * fails, as it does, if `buf` has no room.
     */
-  def read(handle: H, buf: ByteBuffer, offset: Long): Op & Repeatable
+  def read(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
   /** Drains `buf` into the file at `offset`, as `Ops.write` drains it into a stream: completes once at least one byte
     * has been written, or, if nothing remains, without writing; resubmit while `buf` has bytes remaining, with the
     * offset advanced.
     */
-  def write(handle: H, buf: ByteBuffer, offset: Long): Op & Repeatable
+  def write(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
   /** Completes once the file's written bytes have reached the device, as `fsync` does. */
-  def sync(handle: H): Op & Repeatable
+  def sync(handle: File): Op & Repeatable
 }
 
 /** Name resolution, for a backend that has it (see `ResolveBackend`). */
@@ -208,30 +235,36 @@ trait ReadinessOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * Throws `IllegalArgumentException` if `buf` has no room, as `Ops.read` fails. Not an op: it runs on the calling
     * thread and returns.
     */
-  def readNow(handle: H, buf: ByteBuffer): Int
+  def readNow(handle: Readable, buf: ByteBuffer): Int
 
   /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits; 0 if `buf` has nothing
     * remaining, writing nothing. Not an op.
     */
-  def writeNow(handle: H, buf: ByteBuffer): Int
+  def writeNow(handle: Writable, buf: ByteBuffer): Int
 }
 
-/** The ops of pipes, for a backend that has them (see `PipeBackend`); `read` and `write` run on either end. */
+/** The ops of pipes, for a backend that has them (see `PipeBackend`): `read` on its read end, `write` on its write end.
+  */
 trait PipeOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Opens a pipe. Completes after writing its read end into `read` and its write end into `write`, which must both be
     * empty; one that fails or is cancelled leaves both empty and neither end open.
     */
-  def pipe(read: Slot[H], write: Slot[H]): Op
+  def pipe(read: Slot[Readable], write: Slot[Writable]): Op
 }
 
 /** The ops of FIFOs, for a backend that has them (see `FifoBackend`), which are then read and written as pipes are. */
 trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Opens the FIFO at `path` for reading, or for writing with `write`, without waiting for the other end, and
-    * completes after writing it into `into`, which must be empty. Opening one for writing fails while it has no reader.
+  /** Opens the FIFO at `path` for reading, without waiting for a writer, and completes after writing it into `into`,
+    * which must be empty. Read before a writer has opened it, it is at its end.
     */
-  def openFifo(path: String, write: Boolean, into: Slot[H]): Op
+  def openFifoForReading(path: String, into: Slot[Readable]): Op
+
+  /** Opens the FIFO at `path` for writing, without waiting for a reader, and completes after writing it into `into`,
+    * which must be empty; fails while the FIFO has no reader.
+    */
+  def openFifoForWriting(path: String, into: Slot[Writable]): Op
 }
 
 /** The ops of Unix domain stream sockets, which the ops of IP stream sockets (`accept`, `read`, `write`) also run on.
@@ -239,12 +272,12 @@ trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
 trait UnixStreamOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`, as the other `connect` does to an IP address. */
-  def connect(address: UnixAddress, into: Slot[H]): Op
+  def connect(address: UnixAddress, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket file
     * already there.
     */
-  def listen(address: UnixAddress, into: Slot[H]): Op
+  def listen(address: UnixAddress, into: Slot[Listener]): Op
 }
 
 /** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
@@ -267,16 +300,20 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
   /** Opens a datagram socket, bound to `local` and connected to `remote` where given, as the other `datagram` does. A
     * client needs a `local` path so that replies can reach it.
     */
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[H]): Op
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): Op
 
   /** Receives one packet on a Unix datagram socket, as `receive` does on an IP one; an unnamed sender has the empty
     * path.
     */
   @annotation.targetName("receiveUnix")
-  def receive(handle: H, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
+  def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
 
   /** Sends one packet on a Unix datagram socket, to `to`, as `send` does on an IP one. */
-  def send(handle: H, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+  def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+
+  /** Sends one packet on a connected Unix datagram socket to its peer, as the other `send` does on an IP one. */
+  @annotation.targetName("sendUnix")
+  def send(handle: UnixDatagram, buf: ByteBuffer): Op & Repeatable
 }
 
 private[io] object Ops {

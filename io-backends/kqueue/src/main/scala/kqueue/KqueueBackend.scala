@@ -30,6 +30,13 @@ object KqueueBackend
     with Resolving
     with Pipes {
   type Op = KqueueOp
+  type Readable = KqueueKinds.Readable
+  type Writable = KqueueKinds.Writable
+  type Connection = KqueueKinds.Connection
+  type Listener = KqueueKinds.Listener
+  type Datagram = KqueueKinds.Datagram
+  type UnixDatagram = KqueueKinds.UnixDatagram
+  type File = KqueueKinds.File
 
   /** An open descriptor, as this backend's ops name it: made only by the ops that open one (and `KqueueHandles`, for
     * kqueue's own code), so that a program cannot forge a handle from a number. Every use of the descriptor (a

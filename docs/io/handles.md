@@ -352,3 +352,23 @@ Proposal 4 for programs, and proposal 3, now built, under it:
 - Whether a close should interrupt a file op reading or writing the disk on a blocker thread, which now delays only
   the descriptor's close and the close op's completion, not the reactor: by `dup2`ing a closed descriptor over it,
   as the JDK closes a socket a thread is blocked in.
+
+## Kinds of handle, as types (2026-10-26)
+
+Proposal 3 made a handle its backend's type; it still did not say what kind of I/O object it named, so a stream op on
+a listener, a datagram op on a stream, an IP send on a Unix datagram socket or `shutdownOutput` on a pipe compiled, and
+each backend then did something of its own: Network.framework called its framework on a null connection, kqueue read a
+stream's bytes as a datagram, NIO failed with an `IOException`. Now the kind is in the type. `Backend` declares seven
+subtypes of its `Handle`, `Readable`, `Writable`, `Connection` (both), `Listener`, `Datagram`, `UnixDatagram` and
+`File` (both), which the ops traits declare too and `Backend.Kinded` ties together; each opener writes its kind into
+its slot (`connect` and `accept` a `Connection`, `pipe` a `Readable` and a `Writable`, the FIFO openers one each, now
+two ops since the direction picks the type), and each op takes the kind it works on, so the wrong kind does not
+compile (`ReactorSuite`). A program names them through its `Io` (`io.Connection`), as it names `io.Op`.
+
+Each backend makes them opaque types over its one handle class (`KqueueKinds`, `NioKinds`, `NWFrameworkKinds`), so
+that, with a backend of a known type, one kind is not another either, and nothing changes at runtime: there is no
+kind field, no check and no allocation. Its own code converts a handle it opened into its kind there; kqueue-specific
+code that opens descriptors itself has `KqueueHandles.connection` beside `KqueueHandles.handle`. A file keeps one type
+for both directions, since a file is often opened for both, and a read of one opened only for writing still fails as
+the system fails it. The runtime kind checks that were about to be added for the same misuse were not needed.
+

@@ -11,8 +11,8 @@ trait UnixDatagramContract extends SocketContract {
   /** A Unix datagram socket from the `datagram` op, whose failure is thrown. */
   protected def unixDatagram(r: R, local: UnixAddress | Null, remote: UnixAddress | Null)(using
       munit.Location
-  ): Handle = {
-    val into = Slot[Handle]()
+  ): UnixDatagram = {
+    val into = Slot[UnixDatagram]()
     opened(r, into, backend.ops.datagram(local, remote, into))
   }
 

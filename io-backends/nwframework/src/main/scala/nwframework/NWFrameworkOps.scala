@@ -57,40 +57,50 @@ object NWFrameworkOps
     with BlockingOps[NWFrameworkOp, Handle]
     with FileOps[NWFrameworkOp, Handle]
     with ResolveOps[NWFrameworkOp, Handle] {
-  def read(handle: Handle, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
-  def write(handle: Handle, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
-  def accept(handle: Handle, into: Slot[Handle]): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
-  def acceptAll(handle: Handle, into: Slot[Array[Handle]], max: Int): NWFrameworkAcceptAll = {
+  type Readable = NWFrameworkKinds.Readable
+  type Writable = NWFrameworkKinds.Writable
+  type Connection = NWFrameworkKinds.Connection
+  type Listener = NWFrameworkKinds.Listener
+  type Datagram = NWFrameworkKinds.Datagram
+  type UnixDatagram = NWFrameworkKinds.UnixDatagram
+  type File = NWFrameworkKinds.File
+
+  def read(handle: Readable, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
+  def write(handle: Writable, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
+  def accept(handle: Listener, into: Slot[Connection]): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
+  def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): NWFrameworkAcceptAll = {
     require(max > 0, s"max must be positive, not $max")
     new NWFrameworkAcceptAll(handle, into, max)
   }
-  def connect(address: IpAddress, into: Slot[Handle]): NWFrameworkOp = new NWFrameworkConnectTo(address, into)
-  def listen(address: IpAddress, into: Slot[Handle], reuseAddr: Boolean = true): NWFrameworkOp =
+  def connect(address: IpAddress, into: Slot[Connection]): NWFrameworkOp = new NWFrameworkConnectTo(address, into)
+  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): NWFrameworkOp =
     new NWFrameworkListen(address, reuseAddr, into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Handle]): NWFrameworkOp =
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NWFrameworkOp =
     new NWFrameworkOpenDatagram(local, remote, into)
-  def pipe(read: Slot[Handle], write: Slot[Handle]): NWFrameworkOp = new NWFrameworkOpenPipe(read, write)
-  def openFifo(path: String, write: Boolean, into: Slot[Handle]): NWFrameworkOp =
-    new NWFrameworkOpenFifo(path, write, into)
-  def receive(handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive =
+  def pipe(read: Slot[Readable], write: Slot[Writable]): NWFrameworkOp = new NWFrameworkOpenPipe(read, write)
+  def openFifoForReading(path: String, into: Slot[Readable]): NWFrameworkOp =
+    new NWFrameworkOpenFifo(path, write = false, into, NWFrameworkKinds.readable)
+  def openFifoForWriting(path: String, into: Slot[Writable]): NWFrameworkOp =
+    new NWFrameworkOpenFifo(path, write = true, into, NWFrameworkKinds.writable)
+  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive =
     new NWFrameworkReceive(handle, buf, from)
-  def send(handle: Handle, buf: ByteBuffer, to: IpAddress): NWFrameworkSend = new NWFrameworkSend(handle, buf, to)
-  def send(handle: Handle, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): NWFrameworkSend = new NWFrameworkSend(handle, buf, to)
+  def send(handle: Datagram, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
   def timer(milliseconds: Int): NWFrameworkTimer = new NWFrameworkTimer(milliseconds)
   def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking =
     new NWFrameworkBlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): NWFrameworkOp = new NWFrameworkResolve(host, into)
-  def read(handle: Handle, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
+  def read(handle: Readable, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
     new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
   def close(handle: Handle): NWFrameworkOp = new NWFrameworkClose(handle)
-  def shutdownOutput(handle: Handle): NWFrameworkOp = new NWFrameworkShutdownOutput(handle)
-  def open(path: String, write: Boolean, into: Slot[Handle]): NWFrameworkOp = new NWFrameworkOpenFile(path, write, into)
-  def read(handle: Handle, buf: ByteBuffer, offset: Long): NWFrameworkPositionalRead =
+  def shutdownOutput(handle: Connection): NWFrameworkOp = new NWFrameworkShutdownOutput(handle)
+  def open(path: String, write: Boolean, into: Slot[File]): NWFrameworkOp = new NWFrameworkOpenFile(path, write, into)
+  def read(handle: File, buf: ByteBuffer, offset: Long): NWFrameworkPositionalRead =
     new NWFrameworkPositionalRead(handle, buf, offset)
-  def write(handle: Handle, buf: ByteBuffer, offset: Long): NWFrameworkPositionalWrite =
+  def write(handle: File, buf: ByteBuffer, offset: Long): NWFrameworkPositionalWrite =
     new NWFrameworkPositionalWrite(handle, buf, offset)
-  def sync(handle: Handle): NWFrameworkFileSync = new NWFrameworkFileSync(handle)
+  def sync(handle: File): NWFrameworkFileSync = new NWFrameworkFileSync(handle)
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -181,14 +191,15 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
 }
 
 /** Accepts the connections waiting on a listener, at most `max`, writing their handles into `into`. */
-final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[Handle]], max: Int) extends NWFrameworkCommand {
+final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFrameworkKinds.Connection]], max: Int)
+    extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
     val accepted = h.acceptAll(max, reactor, token)
     if accepted == null then false
     else {
-      into.set(accepted.map(NWFrameworkHandles.accepted))
+      into.set(accepted.map(a => NWFrameworkKinds.connection(NWFrameworkHandles.accepted(a))))
       true
     }
   }
@@ -200,7 +211,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[Handle]], 
   * or the submission is cancelled first, by `cancel`, a time limit or the reactor closing, `abandon` closes the handle
   * and leaves `into` empty.
   */
-sealed abstract class NWFrameworkOpening(into: Slot[Handle]) extends NWFrameworkCommand {
+sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Handle => K) extends NWFrameworkCommand {
   private var opened: Handle | Null = null
   private var delivered = false
   def kind: Int = NWFrameworkHandle.Connect
@@ -234,7 +245,7 @@ sealed abstract class NWFrameworkOpening(into: Slot[Handle]) extends NWFramework
   }
 
   /** Writes what was opened into the caller's slots. */
-  protected def deliver(handle: Handle): Unit = into.set(handle)
+  protected def deliver(handle: Handle): Unit = into.set(kindOf(handle))
 
   /** Empties the caller's slots, once delivered. */
   protected def undeliver(): Unit = into.clear(): Unit
@@ -250,14 +261,15 @@ sealed abstract class NWFrameworkOpening(into: Slot[Handle]) extends NWFramework
 /** A connection to `address` (see `SocketOps.connect`): ready once Network.framework has it ready, failing with its
   * error if it failed.
   */
-final class NWFrameworkConnectTo(address: IpAddress, into: Slot[Handle]) extends NWFrameworkOpening(into) {
+final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds.Connection])
+    extends NWFrameworkOpening(into, NWFrameworkKinds.connection) {
   protected def make(): Handle = NWFrameworkHandles.connect(address)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
 /** A listener on `address` (see `SocketOps.listen`): ready once it is listening, failing if it cannot. */
-final class NWFrameworkListen(address: IpAddress, reuseAddr: Boolean, into: Slot[Handle])
-    extends NWFrameworkOpening(into) {
+final class NWFrameworkListen(address: IpAddress, reuseAddr: Boolean, into: Slot[NWFrameworkKinds.Listener])
+    extends NWFrameworkOpening(into, NWFrameworkKinds.listener) {
   protected def make(): Handle = NWFrameworkHandles.listener(address, reuseAddr)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
@@ -265,15 +277,21 @@ final class NWFrameworkListen(address: IpAddress, reuseAddr: Boolean, into: Slot
 /** A datagram socket (see `SocketOps.datagram`): a bound one is bound when made, and a connected one ready with its
   * connection.
   */
-final class NWFrameworkOpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Handle])
-    extends NWFrameworkOpening(into) {
+final class NWFrameworkOpenDatagram(
+    local: IpAddress | Null,
+    remote: IpAddress | Null,
+    into: Slot[NWFrameworkKinds.Datagram]
+) extends NWFrameworkOpening(into, NWFrameworkKinds.datagram) {
   protected def make(): Handle = NWFrameworkHandles.datagram(local, remote)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
     h.kind == NWFrameworkHandle.BoundDatagram || h.connected(reactor, token)
 }
 
-/** A FIFO, opened without waiting for its other end (see `FifoOps.openFifo`): a descriptor, ready when made. */
-final class NWFrameworkOpenFifo(path: String, write: Boolean, into: Slot[Handle]) extends NWFrameworkOpening(into) {
+/** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`): a
+  * descriptor, ready when made.
+  */
+final class NWFrameworkOpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kindOf: Handle => K)
+    extends NWFrameworkOpening(into, kindOf) {
   protected def make(): Handle = NWFrameworkHandles.openFifo(path, write)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = true
 }
@@ -281,7 +299,8 @@ final class NWFrameworkOpenFifo(path: String, write: Boolean, into: Slot[Handle]
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`): descriptors, ready
   * when made. The command's own handle is the read end.
   */
-final class NWFrameworkOpenPipe(read: Slot[Handle], write: Slot[Handle]) extends NWFrameworkOpening(read) {
+final class NWFrameworkOpenPipe(read: Slot[NWFrameworkKinds.Readable], write: Slot[NWFrameworkKinds.Writable])
+    extends NWFrameworkOpening(read, NWFrameworkKinds.readable) {
   private var writeEnd: Handle | Null = null
   protected def make(): Handle = {
     val (in, out) = NWFrameworkHandles.pipe()
@@ -290,8 +309,8 @@ final class NWFrameworkOpenPipe(read: Slot[Handle], write: Slot[Handle]) extends
   }
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = true
   override protected def deliver(handle: Handle): Unit = {
-    read.set(handle)
-    write.set(writeEnd.nn)
+    read.set(NWFrameworkKinds.readable(handle))
+    write.set(NWFrameworkKinds.writable(writeEnd.nn))
   }
   override protected def undeliver(): Unit = {
     read.clear(): Unit
@@ -366,14 +385,14 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
 }
 
 /** Accepts one connection on a listener, writing its handle into `into`. */
-final class NWFrameworkAccept(val handle: Handle, into: Slot[Handle]) extends NWFrameworkCommand {
+final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
     val accepted = h.accept(reactor, token)
     if accepted == null then false
     else {
-      into.set(NWFrameworkHandles.accepted(accepted))
+      into.set(NWFrameworkKinds.connection(NWFrameworkHandles.accepted(accepted)))
       true
     }
   }
@@ -476,10 +495,11 @@ final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) 
 /** Opens a regular file on the blocker pool and publishes its handle (see `FileOps.open`). A cancel that arrives once
   * the file is open closes it again, since the handle never reaches the caller.
   */
-final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[Handle]) extends NWFrameworkBlocking {
+final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[NWFrameworkKinds.File])
+    extends NWFrameworkBlocking {
   def block(): Unit = {
     val handle = NWFrameworkHandles.openFile(path, write)
-    if !unlessCancelled(into.set(handle)) then NWFrameworkHandles.close(handle)
+    if !unlessCancelled(into.set(NWFrameworkKinds.file(handle))) then NWFrameworkHandles.close(handle)
   }
 }
 

@@ -6,6 +6,7 @@ import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.NonBlocking
 import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueKinds
 import gears.async.io.kqueue.KqueueOp
 import gears.async.io.kqueue.KqueueOps
 import gears.async.io.kqueue.KqueueReactor
@@ -74,14 +75,14 @@ object GearsMoveBench {
   }
 
   /** A connection's client end, with its buffer and ops, which any client reactor may submit in turn. */
-  final class Conn(val fd: Handle, zone: Zone) {
+  final class Conn(val fd: KqueueKinds.Connection, zone: Zone) {
     val buf = NativeBuffer.allocate(MessageSize)(using zone)
     val write = KqueueOps.write(fd, buf)
     val read = KqueueOps.read(fd, buf)
   }
 
   /** Echoes everything `fd` sends, on `server`'s thread, until it closes. */
-  private def echo(server: Driven, fd: Handle, zone: Zone): Unit = server.onThread {
+  private def echo(server: Driven, fd: KqueueKinds.Connection, zone: Zone): Unit = server.onThread {
     val buf = NativeBuffer.allocate(8192)(using zone)
     val read = KqueueOps.read(fd, buf)
     val write = KqueueOps.write(fd, buf)
@@ -160,7 +161,7 @@ object GearsMoveBench {
           Thread.`yield`()
           accepted = NonBlocking.accept(KqueueHandles.descriptor(listener))
         }
-        echo(server, KqueueHandles.handle(accepted), zone)
+        echo(server, KqueueHandles.connection(accepted), zone)
         new Conn(client, zone)
       }
       val first = connection()

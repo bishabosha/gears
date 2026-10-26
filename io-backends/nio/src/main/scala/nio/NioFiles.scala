@@ -16,7 +16,7 @@ import NioCapabilities.Handle
 /** Opens a regular file and publishes its handle (see `FileOps.open`). A cancel that arrives once the file is open
   * closes it again, since the handle never reaches the caller.
   */
-final class OpenFile(path: String, write: Boolean, into: Slot[Handle]) extends NioBlocking {
+final class OpenFile(path: String, write: Boolean, into: Slot[NioKinds.File]) extends NioBlocking {
   def block(): Unit = {
     val handle = NioHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then NioHandles.close(handle)

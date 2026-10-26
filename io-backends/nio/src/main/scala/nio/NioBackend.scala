@@ -17,6 +17,13 @@ import gears.async.io.UnixStreams
 trait NioCapabilities extends Blocking with UnixStreams with Files with Resolving with Pipes {
   type Op = NioOp
   type Handle = NioCapabilities.Handle
+  type Readable = NioKinds.Readable
+  type Writable = NioKinds.Writable
+  type Connection = NioKinds.Connection
+  type Listener = NioKinds.Listener
+  type Datagram = NioKinds.Datagram
+  type UnixDatagram = NioKinds.UnixDatagram
+  type File = NioKinds.File
   def ops: NioOps.type = NioOps
   def pool(bufferSize: Int, buffers: Int): BufferPool = new DirectPool(bufferSize, buffers)
 }

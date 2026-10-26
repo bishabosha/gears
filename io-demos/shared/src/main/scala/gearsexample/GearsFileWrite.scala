@@ -16,7 +16,7 @@ object GearsFileWrite {
       val buf = arena.allocate(math.max(bytes.length, 1))
       ReactorFutures.run { io ?=>
         println(s"attempt to open file $fifo")
-        val file = HigherLevel.openFifo(fifo, write = true)
+        val file = HigherLevel.openFifoForWriting(fifo)
         try {
           println(s"opened file: $file")
           println("Event registered for file write.")

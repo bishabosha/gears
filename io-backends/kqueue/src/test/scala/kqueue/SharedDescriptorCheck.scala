@@ -93,7 +93,7 @@ object SharedDescriptorCheck {
     /** Submits a read of `fd` on `d`, then writes a byte to `writeEnd`, unless it is null, and waits for the read to
       * complete.
       */
-    def readOn(d: Driven, label: String, fd: Handle, writeEnd: Handle | Null): Unit = {
+    def readOn(d: Driven, label: String, fd: KqueueKinds.Readable, writeEnd: Handle | Null): Unit = {
       val done = new CountDownLatch(1)
       d.onThread {
         val buf = NativeBuffer.allocate(64)(using zone)

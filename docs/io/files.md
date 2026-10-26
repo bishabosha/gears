@@ -11,7 +11,7 @@ and the measurements. The aio findings are from the xnu sources (`bsd/kern/kern_
 
 `FileOps`, the ops of a `FileBackend`, which kqueue, NIO and Network.framework all are:
 
-- `open(path, write, into)`: opens the regular file and writes its handle into a `Slot[Handle]`, as `accept` does a
+- `open(path, write, into)`: opens the regular file and writes its handle into a `Slot[File]`, as `accept` does a
   connection's; anything but a regular file fails the op. Opening is an op, as every opener in the interface now is,
   because opening does disk I/O for the path lookup as reads do, and some environments can only open asynchronously
   (Node's `fs.open` on its threadpool, a browser's OPFS). The handle number is not allocated before the open: kqueue's

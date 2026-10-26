@@ -93,7 +93,7 @@ trait FuturesContract extends ProgramSuite {
           val (listener, connect) = listenAndConnect(io, dir)
           try {
             val server = Future {
-              val accepted = Slot[Handle]()
+              val accepted = Slot[Connection]()
               val accept = io.backend.ops.accept(listener, accepted)
               val connections = (1 to clients).map { _ =>
                 io.perform(accept)
@@ -171,7 +171,7 @@ trait FuturesContract extends ProgramSuite {
     /** Reads into a full buffer before and after `send` writes, then reads what was sent; the time limits turn a read
       * that never returns into a failure.
       */
-    def check(io: Io[backend.type], in: Handle, send: String => Unit)(using Async): String = {
+    def check(io: Io[backend.type], in: Readable, send: String => Unit)(using Async): String = {
       val full = arena.allocate(4)
       full.position(full.limit())
       val read = io.backend.ops.read(in, full)
@@ -188,7 +188,7 @@ trait FuturesContract extends ProgramSuite {
       while buf.position() < 5 do io.perform(readSome, timeoutMillis = 2_000)
       s"$before $after ${full.position() == full.limit()} ${text(buf)}"
     }
-    def writeAll(io: Io[backend.type], out: Handle)(message: String)(using Async): Unit = {
+    def writeAll(io: Io[backend.type], out: Writable)(message: String)(using Async): Unit = {
       val buf = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val write = io.backend.ops.write(out, buf)
       while buf.hasRemaining do io.perform(write)
@@ -206,7 +206,7 @@ trait FuturesContract extends ProgramSuite {
         val onSocket = {
           val (listener, connect) = listenAndConnect(io, dir)
           try {
-            val accepted = Slot[Handle]()
+            val accepted = Slot[Connection]()
             val accepting = Future(io.perform(io.backend.ops.accept(listener, accepted)))
             val client = connect()
             accepting.await
@@ -329,7 +329,7 @@ trait FuturesContract extends ProgramSuite {
         val (listener, connect) = listenAndConnect(io, dir)
         val client = connect()
         try {
-          val accepted = Slot[Handle]()
+          val accepted = Slot[Connection]()
           io.perform(io.backend.ops.accept(listener, accepted))
           val server = accepted.clear()
           try {
@@ -368,7 +368,7 @@ trait FuturesContract extends ProgramSuite {
   test("a connection refused after waiting for it fails perform") {
     val port = freePort() // nothing listens on it: one just given up
     val failure = running { io ?=>
-      val into = Slot[Handle]()
+      val into = Slot[Connection]()
       try {
         io.perform(io.backend.ops.connect(IpAddress.IPv4("127.0.0.1", port), into))
         io.perform(io.backend.ops.close(into.clear()))

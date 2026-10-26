@@ -9,6 +9,7 @@ import gears.async.io.kqueue.Accept
 import gears.async.io.kqueue.Command
 import gears.async.io.kqueue.KqueueBackend.Handle
 import gears.async.io.kqueue.KqueueHandles
+import gears.async.io.kqueue.KqueueKinds
 import gears.async.io.kqueue.KqueueOps
 import gears.async.io.kqueue.KqueueReactor
 
@@ -29,7 +30,7 @@ object KQueueExampleServerSocket {
     * response and closes. Owns a zone holding its single 8 KiB buffer, through which a body larger than that is read a
     * buffer's worth at a time. The zone closes with the connection.
     */
-  private final class Connection(r: KqueueReactor, val fd: Handle, server: Server)
+  private final class Connection(r: KqueueReactor, val fd: KqueueKinds.Connection, server: Server)
       extends AutoCloseable
       with Completion[Command] {
     private var state = State.ReadRequest
@@ -111,7 +112,7 @@ object KQueueExampleServerSocket {
   private class Server(r: KqueueReactor, serverFd: Int) extends Completion[Accept] {
     private var connections: Map[Handle, Connection] = Map.empty
 
-    private val accepted = gears.async.io.Slot[Handle]() // each accept writes its connection here
+    private val accepted = gears.async.io.Slot[KqueueKinds.Connection]() // each accept writes its connection here
 
     def start(): Unit = r.submit(Accept(serverFd, accepted), this)
 
