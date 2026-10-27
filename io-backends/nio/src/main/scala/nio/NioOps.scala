@@ -53,6 +53,13 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[nio] def slotRefusal: Throwable | Null = null
 
+  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
+    */
+  private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+
+  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
+  private[nio] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[nio] var attachment: AnyRef | Null = null
 }
@@ -204,6 +211,9 @@ abstract class Command extends NioOp with Repeatable {
   def interest: Interest
   def perform(): Boolean
 
+  override private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+    if interest == Interest.Read then handle.reader else handle.writer
+
   /** The interest ops to wait for on `channel`: reading a listener is accepting. */
   def selectOps(channel: SelectableChannel): Int =
     if interest == Interest.Write then SelectionKey.OP_WRITE
@@ -332,6 +342,9 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   * first, the socket is closed and `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) extends Command with Opens {
+  override private[nio] def oneShot: Boolean = true // it opens its socket
+  override private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+    null // on a socket of its own
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket: Handle | Null = null
   private var connected = false

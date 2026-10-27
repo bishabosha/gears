@@ -286,6 +286,20 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(outcome, "true true")
   }
 
+  test("a timer with a time limit no shorter than its time completes") {
+    val outcome = running { io ?=>
+      val completed =
+        for limit <- List(20, 21, 1000)
+        yield
+          try {
+            io.perform(io.backend.ops.timer(20), timeoutMillis = limit)
+            true
+          } catch case _: TimeoutException => false
+      completed.mkString(" ")
+    }
+    assertEquals(outcome, "true true true")
+  }
+
   test("gears' sleep and withTimeout run on the backend's timers: the program's Io is its AsyncOperations") {
     val outcome = running { io ?=>
       val (in, out) = pipe(io)

@@ -42,6 +42,8 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
       case connect: ConnectTo =>
+        if connect.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
+        connect.submitted = true
         connect.open()
         try performCommand(connect, deadline)
         catch {
@@ -49,8 +51,15 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
             connect.abandon() // what it opened never reaches the caller
             throw t
         }
-      case command: Command      => performCommand(command, deadline)
-      case timer: NioTimer       => performTimer(timer, deadline)
+      case command: Command =>
+        // Its handle's read or write, claimed while it is performed, as a reactor claims it (`Command.claim`).
+        val claim = command.claim
+        if claim != null && !claim.compareAndSet(null, command) then throw gears.async.io.Ops.alreadyPending(command)
+        try performCommand(command, deadline)
+        finally if claim != null then claim.compareAndSet(command, null): Unit
+      case timer: NioTimer =>
+        // A limit no shorter than the timer leaves it to complete, as a reactor does, rather than racing it.
+        performTimer(timer, if timeoutMillis >= 0 && timeoutMillis < timer.milliseconds then deadline else -1L)
       case blocking: NioBlocking => performBlocking(blocking, deadline)
       case atOnce: NioAtOnce     =>
         if atOnce.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")

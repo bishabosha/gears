@@ -914,6 +914,81 @@ trait ReactorContract extends FunSuite {
 
   // ---- Closing as an op
 
+  test("a close op completes after the failure of the op pending on the handle, on its reactor or another") {
+    withReactor { a =>
+      withReactor { b =>
+        val (in, out) = pipe(a)
+        val order = scala.collection.mutable.ArrayBuffer.empty[String]
+        val read = new Completion[backend.Op] {
+          def onComplete(op: backend.Op): Unit = order += "read completed"
+          override def onFailure(op: backend.Op, t: Throwable): Unit = order += "read failed"
+        }
+        a.submit(backend.ops.read(in, allocate(16)), read)
+        a.runOnce(block = false)
+        val closed = Outcome()
+        a.submit(backend.ops.close(in), op => { order += "closed"; closed.onComplete(op) })
+        turnUntil(a)(closed.finished)
+        assertEquals(order.toList, List("read failed", "closed"))
+        order.clear()
+        val (in2, out2) = pipe(a)
+        b.submit(backend.ops.read(in2, allocate(16)), read) // waiting on the other reactor
+        b.runOnce(block = false)
+        val closed2 = Outcome()
+        a.submit(backend.ops.close(in2), op => { order += "closed"; closed2.onComplete(op) })
+        turnUntil(a, b)(closed2.finished && order.contains("read failed"))
+        close(a, out)
+        close(a, out2)
+      }
+    }
+  }
+
+  test("a second read pending on a handle, or a second write, fails with IllegalArgumentException, on any reactor") {
+    withReactor { a =>
+      withReactor { b =>
+        val (in, out) = pipe(a)
+        try {
+          val first = Outcome()
+          a.submit(backend.ops.read(in, allocate(16)), first)
+          a.runOnce(block = false)
+          for r <- List(a, b) do {
+            val second = Outcome()
+            r.submit(backend.ops.read(in, allocate(16)), second)
+            turnUntil(r)(second.finished)
+            assert(second.failure.isInstanceOf[IllegalArgumentException], s"a second read: ${second.failure}")
+          }
+          assert(!first.finished, "the first read is still pending")
+          a.submit(backend.ops.write(out, bytes("x")), Outcome())
+          turnUntil(a)(first.finished)
+          assertEquals(first.completed, 1, String.valueOf(first.failure))
+          val again = Outcome()
+          b.submit(backend.ops.read(in, allocate(16)), again) // once the first has finished, another may wait
+          b.runOnce(block = false)
+          a.submit(backend.ops.write(out, bytes("y")), Outcome())
+          turnUntil(a, b)(again.finished)
+          assertEquals(again.completed, 1, String.valueOf(again.failure))
+        } finally {
+          close(a, in)
+          close(a, out)
+        }
+      }
+    }
+  }
+
+  test("an op that opens or closes is one-shot: submitted again, it throws IllegalStateException") {
+    withReactor { r =>
+      val read = Slot[Readable]()
+      val write = Slot[Writable]()
+      val opening = backend.ops.pipe(read, write)
+      assertEquals(run(r, opening), null)
+      val (in, out) = (read.clear(), write.clear())
+      intercept[IllegalStateException](r.submit(opening, Outcome()))
+      val closing = backend.ops.close(in)
+      assertEquals(run(r, closing), null)
+      intercept[IllegalStateException](r.submit(closing, Outcome()))
+      close(r, out)
+    }
+  }
+
   test("a close op completes once the handle is closed, and fails the op pending on it") {
     withReactor { r =>
       val (in, out) = pipe(r)

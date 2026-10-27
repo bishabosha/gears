@@ -40,6 +40,11 @@ object NWFrameworkBackend
   final class Handle private[nwframework] (private[nwframework] val target: NWFrameworkHandle) {
     @volatile private var open = true
 
+    // The ops pending on it, at most one reading and one writing, on any submitter: each claims its direction as it is
+    // submitted, and lets it go as its completion is taken (see `Ops.alreadyPending`).
+    private[nwframework] val reader = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+    private[nwframework] val writer = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+
     /** Whether it has not been closed. */
     private[nwframework] def isOpen: Boolean = open
 

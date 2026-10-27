@@ -54,6 +54,12 @@ trait Repeatable
   * can only open asynchronously. Such an op writes what it opened into a slot when it completes; one that fails, is
   * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
   * taken from the slot, and the caller closes it with `close`. Failures are `java.io.IOException`s.
+  *
+  * At most one op reading a handle (a read, a receive, an accept, or waiting until it is ready to read) and one writing
+  * it is pending at a time, on whichever submitter: another submitted meanwhile fails with an
+  * `IllegalArgumentException`, doing nothing, since two reads would take the stream's bytes in no order. An op that is
+  * not `Repeatable`, every opener and `close` among them, is submitted once; submitted again it throws
+  * `IllegalStateException`.
   */
 trait Ops[Op, H <: AnyRef] {
 
@@ -412,6 +418,13 @@ private[io] object Ops {
   /** The failure of a send to `to` on a socket connected to another `peer` (see `SocketOps.send`). */
   def notThePeer(to: AnyRef, peer: AnyRef): IllegalArgumentException =
     new IllegalArgumentException(s"The socket is connected to $peer, so it cannot send to $to")
+
+  /** The failure of `op`, submitted while another op reading, or writing, is pending on its handle, on any submitter:
+    * one of each at a time, since two reads would take the stream's bytes in no order, and two writes interleave
+    * theirs.
+    */
+  def alreadyPending(op: AnyRef): IllegalArgumentException =
+    new IllegalArgumentException(s"An op reading, or writing, as $op does, is already pending on its handle")
 
   /** The failure of a send with no address on a socket that is not connected (see `SocketOps.send`). */
   def notConnected(): IllegalArgumentException =

@@ -50,6 +50,13 @@ sealed trait NWFrameworkOp extends TimerHeap.Entry {
     */
   private[nwframework] def slotRefusal: Throwable | Null = null
 
+  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
+    */
+  private[nwframework] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+
+  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
+  private[nwframework] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[nwframework] var attachment: AnyRef | Null = null
 }
@@ -127,6 +134,11 @@ sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
 
   /** What the command waits for (`NWFrameworkHandle.Read`, `Write`, `Connect` or `Close`). */
   def kind: Int
+
+  override private[nwframework] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+    if kind == NWFrameworkHandle.Read then handle.reader
+    else if kind == NWFrameworkHandle.Write then handle.writer
+    else null
 
   /** The current submission's token, and the handle it resolved to when submitted, kept for its attempts since the
     * handle may be closed meanwhile. Loop thread only.
@@ -223,6 +235,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
   * and leaves `into` empty.
   */
 sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Handle => K) extends NWFrameworkCommand {
+  override private[nwframework] def oneShot: Boolean = true // it opens its handle
   override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened: Handle | Null = null
   private var delivered = false
@@ -342,6 +355,7 @@ final class NWFrameworkOpenPipe(read: Slot[NWFrameworkKinds.Readable], write: Sl
   * meanwhile; ops submitted on it meanwhile fail as closed.
   */
 final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
+  override private[nwframework] def oneShot: Boolean = true
   def kind: Int = NWFrameworkHandle.Close
   private var begun = false
 
@@ -361,6 +375,7 @@ final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
   * before it.
   */
 final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCommand {
+  override private[nwframework] def oneShot: Boolean = true
   def kind: Int = NWFrameworkHandle.Write
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {

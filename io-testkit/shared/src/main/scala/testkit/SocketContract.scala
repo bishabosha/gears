@@ -556,6 +556,38 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("connect, listen, datagram and shutdownOutput are one-shot: submitted again, they throw IllegalStateException") {
+    withReactor { r =>
+      val into = Slot[Listener]()
+      val (probe, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      close(r, probe)
+      val listening = backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), into)
+      assertEquals(run(r, listening), null)
+      val listener = into.clear()
+      intercept[IllegalStateException](r.submit(listening, Outcome()))
+      val connected = Slot[Connection]()
+      val connecting = backend.ops.connect(IpAddress.IPv4("127.0.0.1", port), connected)
+      val accepted = Slot[Connection]()
+      r.submit(backend.ops.accept(listener, accepted), Outcome())
+      assertEquals(run(r, connecting), null)
+      intercept[IllegalStateException](r.submit(connecting, Outcome()))
+      val client = connected.clear()
+      val shutting = backend.ops.shutdownOutput(client)
+      assertEquals(run(r, shutting), null)
+      intercept[IllegalStateException](r.submit(shutting, Outcome()))
+      val bound = Slot[Datagram]()
+      val binding = backend.ops.datagram(IpAddress.IPv4("127.0.0.1", 0), null, bound)
+      assertEquals(run(r, binding), null)
+      intercept[IllegalStateException](r.submit(binding, Outcome()))
+      close(r, bound.clear())
+      close(r, client)
+      turnUntil(r)(try {
+        close(r, accepted.clear()); true
+      } catch case _: IllegalStateException => false)
+      close(r, listener)
+    }
+  }
+
   test("a closed listener's port can be listened on again once its close op completes") {
     withReactor { r =>
       val (first, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))

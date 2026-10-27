@@ -50,6 +50,13 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[kqueue] def slotRefusal: Throwable | Null = null
 
+  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
+    */
+  private[kqueue] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+
+  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
+  private[kqueue] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[kqueue] var attachment: AnyRef | Null = null
 }
@@ -229,6 +236,7 @@ final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.W
   * `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]) extends Command with Opens {
+  override private[kqueue] def oneShot: Boolean = true // it opens its socket
   override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket = -1
   private var connected = false
@@ -296,6 +304,11 @@ trait Command extends KqueueOp with Repeatable {
   def fd: Int
   def interest: Interest
   def perform(): Boolean
+
+  override private[kqueue] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = {
+    val h = handle
+    if h == null then null else if interest == Interest.Read then h.reader else h.writer
+  }
 
   /** The handle the command was built on, through `KqueueOps`, which the reactor takes around each use of the
     * descriptor, the command's system call and its registration, failing the command if it is closed; null for a

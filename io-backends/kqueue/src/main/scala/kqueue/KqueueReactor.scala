@@ -40,14 +40,40 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may then
     * submit the op again.
     */
+  /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
+  private def release(op: KqueueOp): Unit = {
+    val claim = op.claim
+    if claim != null then claim.compareAndSet(op, null): Unit
+  }
+
   private def take(op: KqueueOp): Completion[KqueueOp] = {
     val completion = op.completion.nn
     op.completion = null
+    release(op)
     if op.heapIndex >= 0 then timers.remove(op)
     completion
   }
 
   private def complete(op: KqueueOp): Unit = deliverComplete(take(op), op)
+
+  // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
+  // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
+  // after them (`Ops.close`). Loop thread only.
+  private val closing = new java.util.ArrayDeque[KqueueOp]()
+
+  /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
+  private def deliverClosing(due: Int): Unit = {
+    var n = due
+    while n > 0 do {
+      val op = closing.poll().nn
+      n -= 1
+      val failure = op.atOnceFailure
+      if failure != null then {
+        op.atOnceFailure = null
+        fail(op, failure)
+      } else complete(op)
+    }
+  }
   private def fail(op: KqueueOp, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
 
   def attachment(op: Op): AnyRef | Null = op.attachment
@@ -172,17 +198,19 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if closed then throw new IllegalStateException(s"The reactor is closed: $op")
     var finished = false
     var waits = false
-    op match {
-      case _: Repeatable => ()
-      case one: KqueueOp =>
-        if one.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
-    }
+    if op.oneShot && op.submitted then
+      throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     val slotRefusal = op.slotRefusal
-    if slotRefusal != null then {
+    val claim = op.claim
+    val refusal =
+      if slotRefusal != null then slotRefusal
+      else if claim != null && !claim.compareAndSet(null, op) then gears.async.io.Ops.alreadyPending(op)
+      else null
+    if refusal != null then {
       op.completion = pending
-      op.atOnceFailure = slotRefusal
+      op.atOnceFailure = refusal
       if finishNow then finished = true else ready.add(op)
     } else
       op match {
@@ -246,7 +274,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           close.reset()
           close.reactor = this
           close.completion = pending
-          if close.start() then { if finishNow then finished = true else ready.add(close) }
+          if close.start() then closing.add(close) // completed after the failures it causes, never in trySubmit
           else {
             pendingPromises += close
             waits = true
@@ -277,6 +305,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called
+      release(op)
       val failure = op.atOnceFailure
       if failure != null then {
         op.atOnceFailure = null
@@ -563,6 +592,12 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
       while !ready.isEmpty do { // finished, but their completions have not run
         val op = ready.poll().nn
+        val failure = op.atOnceFailure
+        op.atOnceFailure = null
+        finished += ((op, take(op), failure))
+      }
+      while !closing.isEmpty do { // closed their handles, but their completions have not run
+        val op = closing.poll().nn
         val failure = op.atOnceFailure
         op.atOnceFailure = null
         finished += ((op, take(op), failure))
@@ -891,7 +926,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
     */
   def runOnce(block: Boolean): Unit = {
-    val delivered = deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() // without short-circuiting
+    val closingDue = closing.size
+    val delivered =
+      deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | closingDue > 0 // no short-circuiting
     val polled =
       if !delivered then {
         turnsWithoutPoll = 0
@@ -913,6 +950,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     fireDueTimers()
     deliverClosed() // their failures are delivered next turn, which a wake-up makes immediate
     deliverResolved() // including any whose wake-up was merged into an event just dispatched
+    deliverClosing(closingDue)
   }
 
   /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
