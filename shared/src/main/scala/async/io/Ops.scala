@@ -2,11 +2,6 @@ package gears.async.io
 
 import java.nio.ByteBuffer
 
-/** The readiness a custom op waits for before it runs. */
-enum Interest {
-  case Read, Write
-}
-
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
   * to the backend while the op is pending: the caller clears it only after the op's completion has reached them, and
   * the handoff that delivers the completion is what makes the op's write visible. An op submitted with a slot not yet
@@ -55,11 +50,10 @@ trait Repeatable
   * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
   * taken from the slot, and the caller closes it with `close`. Failures are `java.io.IOException`s.
   *
-  * At most one op reading a handle (a read, a receive, an accept, or waiting until it is ready to read) and one writing
-  * it is pending at a time, on whichever submitter: another submitted meanwhile fails with an
-  * `IllegalArgumentException`, doing nothing, since two reads would take the stream's bytes in no order. An op that is
-  * not `Repeatable`, every opener and `close` among them, is submitted once; submitted again it throws
-  * `IllegalStateException`.
+  * At most one op reading a handle (a read, a receive, or an accept) and one writing it is pending at a time, on
+  * whichever submitter: another submitted meanwhile fails with an `IllegalArgumentException`, doing nothing, since two
+  * reads would take the stream's bytes in no order. An op that is not `Repeatable`, every opener and `close` among
+  * them, is submitted once; submitted again it throws `IllegalStateException`.
   */
 trait Ops[Op, H <: AnyRef] {
 
@@ -247,28 +241,6 @@ trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * dropped; one after the write is too late, and the op completes. A time limit is a cancel, so it holds to its time.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
-}
-
-/** Readiness, for a backend that has it (see `ReadinessBackend`). */
-trait ReadinessOps[Op, H <: AnyRef] extends Ops[Op, H] {
-
-  /** Completes once `handle` is ready for `interest`. The caller then uses the handle without waiting (`readNow`,
-    * `writeNow`) until it would block, and performs the op again to wait for the next readiness. Level-triggered:
-    * performed again while the handle is still ready, it completes at once. For what the other ops do not cover, such
-    * as draining a FIFO.
-    */
-  def ready(handle: H, interest: Interest): Op & Repeatable
-
-  /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of stream.
-    * Throws `IllegalArgumentException` if `buf` has no room, as `Ops.read` fails. Not an op: it runs on the calling
-    * thread and returns.
-    */
-  def readNow(handle: Readable, buf: ByteBuffer): Int
-
-  /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits; 0 if `buf` has nothing
-    * remaining, writing nothing. Not an op.
-    */
-  def writeNow(handle: Writable, buf: ByteBuffer): Int
 }
 
 /** The ops of pipes, for a backend that has them (see `PipeBackend`): `read` on its read end, `write` on its write end.

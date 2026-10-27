@@ -152,16 +152,11 @@ class ReactorSuite extends FunSuite {
     assert(compileErrors("def o(b: Backend) = b.open()").nonEmpty)
   }
 
-  test("readiness, waitless use and blocking ops are capabilities a backend has, not every backend") {
-    assert(compileErrors("def ready(b: Backend)(h: b.Handle) = b.ops.ready(h, Interest.Read)").nonEmpty)
-    assert(compileErrors("def now(b: Backend)(h: b.Readable) = b.ops.readNow(h, null)").nonEmpty)
+  test("blocking ops are a capability a backend has, not every backend; readiness is no backend's, only kqueue's own") {
     assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
-    assertEquals(
-      compileErrors("def ready(b: ReadinessBackend)(h: b.Handle): Repeatable = b.ops.ready(h, Interest.Read)"),
-      ""
-    )
-    assertEquals(compileErrors("def now(b: ReadinessBackend)(h: b.Readable) = b.ops.readNow(h, null)"), "")
     assertEquals(compileErrors("def block(b: BlockingBackend) = b.ops.blocking(() => ())"), "")
+    assert(compileErrors("def ready(b: ReactorBackend & Pipes)(h: b.Readable) = b.ops.ready(h, null)").nonEmpty)
+    assert(compileErrors("def now(b: ReactorBackend & Pipes)(h: b.Readable) = b.ops.readNow(h, null)").nonEmpty)
   }
 
   test("a slot is empty until an implementation writes to it") {

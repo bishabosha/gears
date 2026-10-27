@@ -1,9 +1,9 @@
 package gears.async.io
 package kqueue
 
-import gears.async.io.Interest
 import gears.async.io.Received
 import gears.async.io.Slot
+import gears.async.io.internal.Interest
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking

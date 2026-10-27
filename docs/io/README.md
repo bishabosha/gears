@@ -28,7 +28,7 @@ program can neither forge one nor pass one backend's handle to another, whose `H
 Three axes, chosen independently of one another:
 
 - **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpSockets`,
-  `Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
+  `Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
   `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
   nothing. Every handle is opened by an op of the capability that has it (`connect`, `listen`, `datagram`, `pipe`,
   `openFifoForReading`, `openFifoForWriting`, `open`), which writes it into a slot as it completes and leaves the
@@ -92,7 +92,7 @@ Fixed, as semantics every backend must keep, and stated on `Io.perform` where a 
 leaves its handle usable and its buffer the caller's once `perform` returns, which waits until the kind has stopped
 the op; a time limit on a submission withdraws the op as a cancel would and fails it with
 `TimeoutException`; a reactor backend's op is performed only where a worker can run it, which the type of `Io`
-guarantees; readiness is an op that completes, level-triggered, with the handle then used without waiting; a
+guarantees; a
 blocking op's body is skipped if cancelled before it starts and interrupted if running, and its result is never
 written after a cancel.
 

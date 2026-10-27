@@ -1,13 +1,16 @@
 package gears.async.io
-package testkit
+package kqueue
+
+import gears.async.io.internal.Interest
+import gears.async.io.testkit.ReactorContract
 
 import java.util.concurrent.CountDownLatch
 
-/** What a backend with readiness must do (see `ReactorContract`): finish an op at once when its handle is ready, run
-  * `ready` ops, and use handles without waiting.
+/** Kqueue's own readiness, outside the interface (`KqueueOps.ready`, `readNow`, `writeNow`): a read of data already
+  * waiting finished at once, `ready` ops, and handles used without waiting.
   */
-trait ReadinessContract extends ReactorContract {
-  val backend: ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend
+trait KqueueReadinessChecks extends ReactorContract {
+  val backend: KqueueBackend.type
 
   test("trySubmit finishes a read of data already waiting without calling its completion") {
     withReactor { r =>

@@ -7,7 +7,6 @@ import gears.async.AsyncOperations.sleep
 import gears.async.Future
 import gears.async.Future.awaitAll
 import gears.async.io.Backend
-import gears.async.io.Interest
 import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.PipeBackend

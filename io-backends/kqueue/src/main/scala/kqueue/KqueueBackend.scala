@@ -8,20 +8,19 @@ import gears.async.io.Files
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
-import gears.async.io.Readiness
 import gears.async.io.Resolving
 import gears.async.io.UnixDatagrams
 import gears.async.io.UnixStreams
 
 /** Kqueue's reactors, with every capability a backend may have: IP, Unix stream and Unix datagram sockets, regular
-  * files and name resolution on the blocker pool, pipes, readiness, blocking ops on blocker threads, and FIFOs. Kqueue
-  * watches POSIX file descriptors, so a handle holds the descriptor. The reactors all run the same ops, which keep no
-  * state of one reactor between submissions, so an op may go to any of them in turn; what kqueue keeps about a
-  * descriptor stays with the reactor that registered it.
+  * files and name resolution on the blocker pool, pipes, blocking ops on blocker threads, and FIFOs; and, as kqueue's
+  * own, outside the interface, readiness (`KqueueOps.ready`, `readNow`, `writeNow`) and commands of its own (`Command`)
+  * on any descriptor. Kqueue watches POSIX file descriptors, so a handle holds the descriptor. The reactors all run the
+  * same ops, which keep no state of one reactor between submissions, so an op may go to any of them in turn; what
+  * kqueue keeps about a descriptor stays with the reactor that registered it.
   */
 object KqueueBackend
     extends ReactorBackend
-    with Readiness
     with Blocking
     with UnixStreams
     with UnixDatagrams

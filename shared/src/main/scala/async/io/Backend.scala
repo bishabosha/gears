@@ -15,9 +15,9 @@ import _root_.gears.async.Async
   * asynchronously, such as Network.framework or io_uring, reports a close done through a completion rather than by
   * blocking the caller. Where the streams come from is a capability the backend mixes in, with the ops that open its
   * handles and use them: IP sockets (`IpSockets`), regular files (`Files`), pipes (`Pipes`), name resolution
-  * (`Resolving`), readiness (`Readiness`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams` and `Fifos`; its
-  * kind is a reactor (`ReactorBackend`) or the caller (`CallerBackend`). Code that needs a capability asks for a
-  * backend that has it (`SocketBackend`, a `Backend & IpSockets`, and the other aliases below), or for an `Io` over one
+  * (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams` and `Fifos`; its kind is a reactor
+  * (`ReactorBackend`) or the caller (`CallerBackend`). Code that needs a capability asks for a backend that has it
+  * (`SocketBackend`, a `Backend & IpSockets`, and the other aliases below), or for an `Io` over one
   * (`Io[SocketBackend]`), so a backend without it, such as one in a browser, which has no sockets or files of these
   * kinds, is refused when compiling, not when running.
   */
@@ -118,13 +118,6 @@ trait Pipes extends Backend {
   def ops: Kinded[PipeOps[Op, Handle]]
 }
 
-/** Saying when a handle is ready, and using it without waiting (see `ReadinessOps`): over non-blocking descriptors
-  * whose reactor is the only thread to touch them, such as kqueue's.
-  */
-trait Readiness extends Backend {
-  def ops: Kinded[ReadinessOps[Op, Handle]]
-}
-
 /** Blocking code run as an op (see `BlockingOps`): where it may block, with the op's time limit and cancellation
   * interrupting it, the same whichever the kind. On a reactor backend that is off the reactors' threads, which keeps
   * them free; on a caller backend it is the calling thread, which may block anyway, so there the op adds only the limit
@@ -154,7 +147,6 @@ type SocketBackend = Backend & IpSockets
 type FileBackend = Backend & Files
 type ResolveBackend = Backend & Resolving
 type PipeBackend = Backend & Pipes
-type ReadinessBackend = Backend & Readiness
 type BlockingBackend = Backend & Blocking
 type UnixStreamBackend = Backend & UnixStreams
 type UnixDatagramBackend = Backend & UnixDatagrams

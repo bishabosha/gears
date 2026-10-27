@@ -46,7 +46,7 @@ class KQueueDemoSuite extends DemoSuite {
     assert(output.contains("resolved localhost to"), output)
   }
 
-  if (hasReadiness) demoTest("cancel pending ops of each kind") {
+  demoTest("cancel pending ops of each kind") {
     val output = run("cancel")
     val expected = Seq(
       "read cancelled: true",

@@ -3,11 +3,9 @@ package gearsexample
 import gears.async.Future
 import gears.async.Future.Promise
 import gears.async.io.BlockingBackend
-import gears.async.io.Interest
 import gears.async.io.PipeBackend
 import gears.async.io.ReactorBackend
 import gears.async.io.ReactorFutures
-import gears.async.io.ReadinessBackend
 import gears.async.io.Slot
 import gears.async.io.testkit.BufferArena
 
@@ -58,7 +56,7 @@ object GearsCancel {
       case _                                 => false
     }
 
-  def run()(using ReactorBackend & ReadinessBackend & BlockingBackend & PipeBackend): Unit = {
+  def run()(using ReactorBackend & BlockingBackend & PipeBackend): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the program ends
     val leftoverNotified = new AtomicBoolean() // set when the program's end cancels its future
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
@@ -69,7 +67,8 @@ object GearsCancel {
         val (readFd, writeFd) = HigherLevel.pipe()
         try {
           val sleeperInterrupted = new AtomicBoolean()
-          val read = io.backend.ops.ready(readFd, Interest.Read)
+          // A read with nothing written: cancelled before bytes come, it has taken none of them.
+          val read = io.backend.ops.read(readFd, arena.allocate(64))
           val blocking = io.backend.ops.blocking(sleeper(1000, sleeperInterrupted))
           val pending = Seq(
             "read" -> Future(io.perform(read)), // nothing has been written yet
@@ -137,7 +136,7 @@ object GearsCancel {
           println(s"the cancelled task left its slot empty: ${DemoIO.isEmpty(stubbornResult)}")
 
           // Data arrives only now; the cancelled read must not see it, and its slot takes a fresh read.
-          io.backend.ops.writeNow(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8)))
+          io.perform(io.backend.ops.write(writeFd, arena.of("hello".getBytes(StandardCharsets.UTF_8))))
           buf.clear()
           io.perform(io.backend.ops.read(readFd, buf))
           buf.flip()

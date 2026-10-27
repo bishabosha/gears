@@ -127,6 +127,10 @@ object Main {
   ): Unit = {
     GearsWhois.run(host, port, query)
   }
+  @main(doc = "On a reactor of NIO's whichever the backend chosen: `NioOnCaller` has none")
+  def cancel(): Unit = {
+    GearsCancel.run()(using NioBackend)
+  }
   @main
   def resolve(@arg host: String = "localhost"): Unit = {
     GearsWhois.resolve(host)

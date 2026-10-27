@@ -2,10 +2,10 @@ package gears.async.io
 package kqueue
 
 import gears.async.io.Completion
-import gears.async.io.Interest
 import gears.async.io.Reactor
 import gears.async.io.Repeatable
 import gears.async.io.internal.DescriptorTable
+import gears.async.io.internal.Interest
 import gears.async.io.kqueue.KqueueLoop
 import gears.async.io.kqueue.KqueueLoop.Event
 

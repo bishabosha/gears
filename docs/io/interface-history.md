@@ -8,7 +8,7 @@ objects of each backend's own class, have a note of their own ([handles.md](hand
 ## Capabilities are types, asked for by intersection
 
 What only some backends can do is a trait mixed into the backend, each narrowing `ops` to its own (`IpSockets`,
-`Files`, `Pipes`, `Resolving`, `Readiness`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`), and a program asks
+`Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`), and a program asks
 for the intersection it needs (`SocketBackend & FileBackend`, or `Io[IpSockets]` in a helper). The alternative is one
 `Backend` with every op, failing at run time where a backend lacks one. The backends differ in fact: NIO has neither
 Unix datagram sockets nor FIFOs, since the JDK has no Unix datagram channels and can only block on a FIFO, and a
@@ -31,7 +31,8 @@ closing, and pools of buffers.
 `Blocking` promises the same on either kind (skipped if cancelled before it starts, interrupted if running, its result
 never written after a cancel); an early version documented it as a reactor's alone, which `NioOnCaller` contradicted.
 NIO does not have `Readiness`: it was dropped from NIO when its caller path stopped being a reactor's side door, since
-nothing needed it there and kqueue and Network.framework keep it.
+nothing needed it there and kqueue and Network.framework kept it. It later left the interface altogether ("Readiness is
+kqueue's own", below).
 
 ## Readiness is an op that completes
 
@@ -40,7 +41,8 @@ level would inherit a closure run on a thread it does not own, in the lowest lay
 a `Repeatable` op that completes once the handle is ready, level-triggered: the caller uses the handle without waiting
 (`readNow`, `writeNow`) until it would block, then performs the op again, which completes at once while the handle is
 still ready. On kqueue it is the same one-shot, level-triggered filter the closure waited on. Readiness is then an op
-like any other: cancelled, timed out and raced the same way.
+like any other: cancelled, timed out and raced the same way. It later left the interface ("Readiness is kqueue's own",
+below).
 
 ## Closing a handle fails the ops pending on it
 
@@ -200,3 +202,17 @@ closed before it bound, which missed a connection made and ended in between. The
 capability Network.framework lacks, or no flag. No flag won: Go, libuv and Rust's standard library always bind this
 way, a second listener on a port is refused all the same, and refusing a lingering port is the restart that waits half a
 minute, which the option exists to avoid. A strict listen can come back as a capability if a program needs one.
+
+## Readiness is kqueue's own
+
+`Readiness` (`ready`, `readNow`, `writeNow`) was a capability that only kqueue had: NIO dropped it, and
+Network.framework's connections have no readiness to report. Nothing written against the interface needed it. Its
+only users were two demos, which drained a pipe or a FIFO after waiting for it, and used a pending `ready` as an op to
+cancel: a repeatable `read` does both, completing once bytes are there with all that are, and a read cancelled before
+they come has taken none. A server written as a state machine of completions on one reactor (`ReactorServerSocket`)
+does what kqueue's readiness-driven server does, and runs on every reactor backend, Network.framework's included. So
+it left the interface: the ops say what is done, not what is waited for. Kqueue keeps `ready`, `readNow` and
+`writeNow` on `KqueueOps`, beside its `Command`s, for code written against kqueue, and the checks of them moved to its
+own suites. Readiness of a descriptor handed to another library, the one use the completion ops cannot cover, needs
+the descriptor too, which the interface never hands out. The blend of kqueue and Network.framework under way then has
+no capability it would have to refuse for some of its handles.

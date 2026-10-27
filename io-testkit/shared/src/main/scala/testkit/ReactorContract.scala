@@ -14,10 +14,10 @@ import munit.FunSuite
 
 /** What every backend's reactors must do, as `Reactor` and `Ops` describe it, checked through the interface alone, so
   * that code written against it runs the same on any backend. A backend's suite extends this, and the contracts of the
-  * capabilities its backend has (`SocketContract`, `FileContract`, `ResolveContract`, `ReadinessContract`,
-  * `UnixStreamContract`, `UnixDatagramContract`, `FifoContract`), with the backend; buffers come from the platform's
-  * `BufferArena`. Each check drives one reactor, or two, from the test's thread, and uses handles only through ops,
-  * since a backend need not have readiness. The streams here are pipes, the simplest a backend has.
+  * capabilities its backend has (`SocketContract`, `FileContract`, `ResolveContract`, `UnixStreamContract`,
+  * `UnixDatagramContract`, `FifoContract`), with the backend; buffers come from the platform's `BufferArena`. Each
+  * check drives one reactor, or two, from the test's thread, and uses handles only through ops. The streams here are
+  * pipes, the simplest a backend has.
   */
 trait ReactorContract extends FunSuite {
 

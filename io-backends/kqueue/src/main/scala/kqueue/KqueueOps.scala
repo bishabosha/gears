@@ -6,10 +6,8 @@ import gears.async.io.BufferPool
 import gears.async.io.Completion
 import gears.async.io.FifoOps
 import gears.async.io.FileOps
-import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.PipeOps
-import gears.async.io.ReadinessOps
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
@@ -19,6 +17,7 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.BlockingRun
+import gears.async.io.internal.Interest
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking
 
@@ -72,7 +71,6 @@ object KqueueOps
     with UnixDatagramOps[KqueueOp, Handle]
     with PipeOps[KqueueOp, Handle]
     with FifoOps[KqueueOp, Handle]
-    with ReadinessOps[KqueueOp, Handle]
     with BlockingOps[KqueueOp, Handle]
     with FileOps[KqueueOp, Handle]
     with ResolveOps[KqueueOp, Handle] {
@@ -115,8 +113,6 @@ object KqueueOps
     new OpenFifo(path, write = false, into, KqueueKinds.readable)
   def openFifoForWriting(path: String, into: Slot[Writable]): KqueueOp =
     new OpenFifo(path, write = true, into, KqueueKinds.writable)
-  def readNow(handle: Readable, buf: ByteBuffer): Int = KqueueHandles.readNow(handle, buf)
-  def writeNow(handle: Writable, buf: ByteBuffer): Int = KqueueHandles.writeNow(handle, buf)
   def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = false))
   def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): SendTo =
@@ -130,7 +126,6 @@ object KqueueOps
   @annotation.targetName("sendUnix")
   def send(handle: UnixDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
-  def ready(handle: Handle, interest: Interest): Ready = on(handle)(new Ready(fd(handle), interest))
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
@@ -142,6 +137,25 @@ object KqueueOps
   def read(handle: File, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: File, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
   def sync(handle: File): FileSync = new FileSync(handle)
+
+  // Kqueue's own readiness, outside the interface, whose ops say what is done rather than what is waited for: for code
+  // written against kqueue that does its own operations once a handle is ready, as its demos do.
+
+  /** Completes once `handle` is ready for `interest`. The caller then uses the handle without waiting (`readNow`,
+    * `writeNow`) until it would block, and submits the op again to wait for the next readiness. Level-triggered:
+    * submitted again while the handle is still ready, it completes at once.
+    */
+  def ready(handle: Handle, interest: Interest): Ready = on(handle)(new Ready(fd(handle), interest))
+
+  /** Reads what is available now into `buf`, without waiting: the bytes read, 0 if nothing is, or -1 at end of stream.
+    * Throws `IllegalArgumentException` if `buf` has no room, as `read` fails. Not an op: it runs on the calling thread.
+    */
+  def readNow(handle: Readable, buf: ByteBuffer): Int = KqueueHandles.readNow(handle, buf)
+
+  /** Writes what fits now from `buf`, without waiting: the bytes written, or -1 if nothing fits; 0 if `buf` has nothing
+    * remaining, writing nothing. Not an op.
+    */
+  def writeNow(handle: Writable, buf: ByteBuffer): Int = KqueueHandles.writeNow(handle, buf)
 
   private def fd(handle: Handle): Int = KqueueHandles.fd(handle)
 
@@ -353,8 +367,8 @@ trait Command extends KqueueOp with Repeatable {
   def registersReads: Boolean = false
 }
 
-/** Readiness itself, for `ReadinessOps.ready`: done as soon as kqueue reports the descriptor ready, which it does at
-  * once while the descriptor stays so, since the command waits on a one-shot, level-triggered filter each time.
+/** Readiness itself, for `KqueueOps.ready`: done as soon as kqueue reports the descriptor ready, which it does at once
+  * while the descriptor stays so, since the command waits on a one-shot, level-triggered filter each time.
   */
 final class Ready(val fd: Int, val interest: Interest) extends Command {
   def perform(): Boolean = true

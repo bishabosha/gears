@@ -6,7 +6,7 @@ meets the same lock" in [`kqueue.md`](kqueue.md)), through its C interface, with
 does not cover. It is an experiment and is not published. It was built to answer two questions:
 
 - **Can the `Reactor`, `Ops` and handle semantics be kept over a completion-based framework?** Yes, except where the
-  public framework has no counterpart: Unix domain sockets, readiness, and the sender of a datagram on a connected
+  public framework has no counterpart: Unix domain sockets, and the sender of a datagram on a connected
   socket (see "What public Network.framework cannot keep").
 - **What does it cost against kqueue on the same scenarios?** Over loopback TCP it loses every I/O scenario by two to
   seven times, because each operation is a hand-off to a Dispatch thread and back; it wakes sooner for a starved
@@ -125,10 +125,9 @@ measuring; the defaults are the measured best.
 - **No Unix domain sockets.** The C headers define endpoints of type address, host, Bonjour and URL only; Swift's
   `NWEndpoint.unix` is private API. So the backend has neither `UnixStreams` nor `UnixDatagrams`, the gears demos that
   need Unix sockets do not compile against it, and the bench compares it with kqueue over TCP.
-- **No readiness.** Nothing can be tried on a connection without waiting, and no event says a connection is readable:
-  `ready`, `readNow` and `writeNow` have no counterpart, so it is not a `Readiness` backend. The contract tests that used
-  readiness moved to `ReadinessContract` and `ReadinessFuturesChecks`, which kqueue and NIO run, and the base
-  `ReactorContract` and `FuturesContract` use ops alone, so that every backend runs them.
+- **No readiness.** Nothing can be tried on a connection without waiting, and no event says a connection is readable.
+  The interface has no readiness either (see "Readiness is kqueue's own" in [interface-history.md](interface-history.md)):
+  it is kqueue's own, and the contracts use ops alone, so that every backend runs them.
 - **The sender of a datagram on a connected socket** is its peer as given at creation: Network.framework reports no
   per-packet sender on a connection. A bound socket's flows report theirs.
 - **A bound datagram socket is a listener with flows.** Network.framework opens a flow per peer that sends to it, each
@@ -257,7 +256,7 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
 
 ## Known limits
 
-- **macOS only, not published**, and no Unix sockets or readiness (above).
+- **macOS only, not published**, and no Unix sockets (above).
 - **A packet from a peer whose flow was idle for 60 s can be lost** if it comes while that flow is being cancelled
   (above).
 - **The back-pressure stream over a pipe hangs now and then.** `HigherLevelChecks`' "a stream of chunks consumed as a

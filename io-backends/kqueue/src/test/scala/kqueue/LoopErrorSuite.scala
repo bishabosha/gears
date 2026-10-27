@@ -2,7 +2,7 @@ package gears.async.io
 package kqueue
 
 import gears.async.io.Completion
-import gears.async.io.Interest
+import gears.async.io.internal.Interest
 
 import java.io.IOException
 import scala.collection.mutable.ArrayBuffer

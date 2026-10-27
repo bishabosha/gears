@@ -1,7 +1,7 @@
 package example
 
 import gears.async.io.Completion
-import gears.async.io.Interest
+import gears.async.io.internal.Interest
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.PosixSockets
 import gears.async.io.internal.Sockets.Transport

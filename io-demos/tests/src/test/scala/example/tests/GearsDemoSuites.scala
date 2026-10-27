@@ -79,8 +79,8 @@ class GearsSocketDemoSuite extends SocketDemoSuite {
 }
 
 /** The same gears demos on the JVM, over NIO: `NioOnCaller` (`backend` "caller"), or `NioBackend` on a reactor pool
-  * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets nor readiness, so neither do its demos; and, as on
-  * Scala Native, no empty datagram on a connected socket.
+  * ("reactors"). NIO has neither FIFOs nor Unix datagram sockets, so neither do its demos; the cancel demo is on NIO's
+  * reactors; and, as on Scala Native, no empty datagram on a connected socket.
   */
 trait OnJvm extends DemoSuite {
   def backend: String
@@ -101,7 +101,6 @@ trait OnJvm extends DemoSuite {
   override def gearsMirrors: Boolean = true
   override def hasFifos: Boolean = false
   override def hasUnixDatagrams: Boolean = false
-  override def hasReadiness: Boolean = false
   override def sendsEmptyConnectedDatagrams: Boolean = false
 }
 

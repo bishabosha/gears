@@ -1,8 +1,8 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.internal.Interest
 import gears.async.io.testkit.FifoContract
-import gears.async.io.testkit.ReadinessContract
 import gears.async.io.testkit.ResolveContract
 import gears.async.io.testkit.UnixDatagramContract
 import gears.async.io.testkit.UnixStreamContract
@@ -11,15 +11,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 class KqueueContractSuite
-    extends ReadinessContract
+    extends KqueueReadinessChecks
     with UnixStreamContract
     with UnixDatagramContract
     with FifoContract
     with ResolveContract {
   val backend: KqueueBackend.type = KqueueBackend
 
-  // Readiness on what kqueue's filters do not report, which `FifoWatcher`'s select does: here, since the readiness and
-  // FIFO contracts are each written for backends with one of the two.
+  // Kqueue's own readiness on what its filters do not report, which `FifoWatcher`'s select does.
 
   test("ready on a regular file at its end completes, as select and poll say a file is always readable") {
     val dir = tempDir()

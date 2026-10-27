@@ -1,19 +1,15 @@
 package gears.async.io
-package testkit
+package kqueue
 
 import gears.async.Future
-import gears.async.io.Backend
-import gears.async.io.Interest
-import gears.async.io.PipeBackend
-import gears.async.io.ReadinessBackend
-import gears.async.io.ResolveBackend
-import gears.async.io.SocketBackend
+import gears.async.io.internal.Interest
+import gears.async.io.testkit.FuturesContract
 
 import java.nio.charset.StandardCharsets
 
-/** `FuturesContract`'s checks of readiness, for a backend that has it. */
-trait ReadinessFuturesChecks extends FuturesContract {
-  val backend: Backend & SocketBackend & PipeBackend & ResolveBackend & ReadinessBackend
+/** `FuturesContract`'s checks of kqueue's own readiness (`KqueueOps.ready`), from futures. */
+trait KqueueReadinessFuturesChecks extends FuturesContract {
+  val backend: KqueueBackend.type
 
   test("ready completes once the handle is ready, and the handle can then be used without waiting") {
     val outcome = running { io ?=>

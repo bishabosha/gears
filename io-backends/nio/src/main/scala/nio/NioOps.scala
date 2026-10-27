@@ -6,7 +6,6 @@ import gears.async.io.BlockingOps
 import gears.async.io.BufferPool
 import gears.async.io.Completion
 import gears.async.io.FileOps
-import gears.async.io.Interest
 import gears.async.io.IpAddress
 import gears.async.io.PipeOps
 import gears.async.io.Received
@@ -18,6 +17,7 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.Blockers
 import gears.async.io.internal.BlockingRun
+import gears.async.io.internal.Interest
 
 import java.io.IOException
 import java.net.Inet4Address
