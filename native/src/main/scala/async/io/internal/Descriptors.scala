@@ -70,7 +70,7 @@ object Descriptors {
 
   private def isKind(fd: Int, kind: stat.mode_t => CInt): Boolean = {
     val info = stackalloc[stat.stat]()
-    if stat.fstat(fd, info) < 0 then throw new IOException(s"Failed to inspect file: ${cError()}")
+    if stat.fstat(fd, info) != 0 then throw new IOException(s"Failed to inspect file: ${cError()}")
     kind(info.st_mode) != 0
   }
 

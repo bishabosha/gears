@@ -77,11 +77,14 @@ object NWFrameworkOps
     require(max > 0, s"max must be positive, not $max")
     new NWFrameworkAcceptAll(handle, into, max)
   }
-  def connect(address: IpAddress, into: Slot[Connection]): NWFrameworkOp = new NWFrameworkConnectTo(address, into)
+  def connect(address: IpAddress, into: Slot[Connection]): NWFrameworkOp =
+    new NWFrameworkConnectTo(gears.async.io.Ops.ip(address), into)
   def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): NWFrameworkOp =
-    new NWFrameworkListen(address, reuseAddr, into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NWFrameworkOp =
-    new NWFrameworkOpenDatagram(local, remote, into)
+    new NWFrameworkListen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NWFrameworkOp = {
+    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    new NWFrameworkOpenDatagram(l, r, into)
+  }
   def pipe(read: Slot[Readable], write: Slot[Writable]): NWFrameworkOp = new NWFrameworkOpenPipe(read, write)
   def openFifoForReading(path: String, into: Slot[Readable]): NWFrameworkOp =
     new NWFrameworkOpenFifo(path, write = false, into, NWFrameworkKinds.readable)
@@ -89,7 +92,8 @@ object NWFrameworkOps
     new NWFrameworkOpenFifo(path, write = true, into, NWFrameworkKinds.writable)
   def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive =
     new NWFrameworkReceive(handle, buf, from)
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): NWFrameworkSend = new NWFrameworkSend(handle, buf, to)
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): NWFrameworkSend =
+    new NWFrameworkSend(handle, buf, gears.async.io.Ops.ip(to))
   def send(handle: Datagram, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
   def timer(milliseconds: Int): NWFrameworkTimer = new NWFrameworkTimer(milliseconds)
   def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)

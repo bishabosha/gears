@@ -1,12 +1,19 @@
 package gears.async.io
 
-/** Where an IP socket lives: a numeric IPv4 or IPv6 address and a port. */
+/** Where an IP socket lives: a numeric IPv4 or IPv6 address and a port. An op taking one refuses, with an
+  * `IllegalArgumentException` as it is built, a host that is not numeric or not of its case's family, an IPv6 scope
+  * (`fe80::1%en0`), and a port outside 0 to 65535; it takes the address in canonical form (`IpText.canonical`), so that
+  * `::1` and `0:0:0:0:0:0:0:1` are one address, as every address a backend reports is. An IPv6 socket on `::` is dual
+  * stack on every backend, taking IPv4 peers too, which it reports, and sends to, by their IPv4 addresses.
+  */
 enum IpAddress {
   case IPv4(host: String, port: Int)
   case IPv6(host: String, port: Int)
 }
 
-/** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket. */
+/** Where a Unix domain socket lives: a path, or the empty path for an unnamed socket, as a sender is reported; an op
+  * given the empty path, or one with a NUL, refuses it with an `IllegalArgumentException` as it is built.
+  */
 final case class UnixAddress(path: String)
 
 enum AddressFamily {
@@ -17,6 +24,103 @@ final case class ResolvedAddress(family: AddressFamily, host: String)
 
 /** Addresses as text, the same on every backend. */
 private[io] object IpText {
+
+  /** `address` checked, and in canonical form: a numeric host of its case's family, IPv4 dotted with no leading zeros,
+    * IPv6 as `ipv6` writes it, and a port from 0 to 65535; anything else is refused with an `IllegalArgumentException`,
+    * as is an IPv6 scope (`fe80::1%en0`), which `IpAddress` cannot carry. Every op that takes an address calls this as
+    * it is built, so that two spellings of one address are equal, and what a backend reports compares with it.
+    */
+  def canonical(address: IpAddress): IpAddress = address match {
+    case IpAddress.IPv4(host, port) =>
+      val bytes = parseIPv4(host)
+      if bytes == null then throw invalid(host, "IPv4")
+      IpAddress.IPv4(ipv4(bytes.nn), checkPort(port))
+    case IpAddress.IPv6(host, port) =>
+      if host.indexOf('%') >= 0 then
+        throw new IllegalArgumentException(s"An IPv6 address with a scope is not supported: $host")
+      val bytes = parseIPv6(host)
+      if bytes == null then throw invalid(host, "IPv6")
+      IpAddress.IPv6(ipv6(bytes.nn), checkPort(port))
+  }
+
+  /** `address` as the IPv4 address it maps, if it is an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`), which is how a
+    * dual-stack IPv6 socket sees an IPv4 peer; otherwise `address`.
+    */
+  def unmapped(address: IpAddress): IpAddress = address match {
+    case IpAddress.IPv6(host, port) if host.startsWith("::ffff:") && host.indexOf('.') > 0 =>
+      IpAddress.IPv4(host.substring("::ffff:".length), port)
+    case other => other
+  }
+
+  private def invalid(host: String, family: String) =
+    new IllegalArgumentException(s"Not a numeric $family address: $host")
+
+  private def checkPort(port: Int): Int = {
+    if port < 0 || port > 65535 then throw new IllegalArgumentException(s"A port is from 0 to 65535, not $port")
+    port
+  }
+
+  def ipv4(bytes: Array[Byte]): String = bytes.map(_ & 0xff).mkString(".")
+
+  /** The 4 bytes of a dotted IPv4 address, each part decimal from 0 to 255 without leading zeros; or null. */
+  def parseIPv4(host: String): Array[Byte] | Null = {
+    val parts = host.split("\\.", -1)
+    if parts.length != 4 then null
+    else if !parts.forall(p => p.nonEmpty && p.length <= 3 && p.forall(_.isDigit) && (p.length == 1 || p(0) != '0'))
+    then null
+    else {
+      val values = parts.map(_.toInt)
+      if values.exists(_ > 255) then null else values.map(_.toByte)
+    }
+  }
+
+  /** The 16 bytes of an IPv6 address: groups of 1 to 4 hex digits, at most one `::`, the last 32 bits perhaps dotted
+    * IPv4; or null.
+    */
+  def parseIPv6(host: String): Array[Byte] | Null = {
+    def groups(text: String): Array[Int] | Null = // the groups of one side of `::`, a dotted tail as two
+      if text.isEmpty then Array.empty[Int]
+      else {
+        val parts = text.split(":", -1)
+        val last = parts.last
+        val tail: Array[Int] | Null =
+          if last.indexOf('.') < 0 then Array.empty[Int]
+          else {
+            val v4 = parseIPv4(last)
+            if v4 == null then null
+            else Array(((v4.nn(0) & 0xff) << 8) | (v4.nn(1) & 0xff), ((v4.nn(2) & 0xff) << 8) | (v4.nn(3) & 0xff))
+          }
+        val hex = if last.indexOf('.') < 0 then parts else parts.init
+        val ok = hex.forall(g => g.nonEmpty && g.length <= 4 && g.forall(c => Character.digit(c, 16) >= 0))
+        if tail == null || !ok then null else hex.map(Integer.parseInt(_, 16)) ++ tail.nn
+      }
+    val gap = host.indexOf("::")
+    val all: Array[Int] | Null =
+      if gap < 0 then {
+        val g = groups(host)
+        if g == null || g.nn.length != 8 then null else g
+      } else if host.indexOf("::", gap + 1) >= 0 then null
+      else {
+        val before = groups(host.substring(0, gap))
+        val after = groups(host.substring(gap + 2))
+        if before == null || after == null then null
+        else {
+          // A dotted tail goes only at the very end, so not before the gap.
+          val dottedBefore = host.substring(0, gap).indexOf('.') >= 0
+          val fill = 8 - before.nn.length - after.nn.length
+          if fill < 1 || dottedBefore then null else before.nn ++ Array.fill(fill)(0) ++ after.nn
+        }
+      }
+    if all == null then null
+    else {
+      val bytes = new Array[Byte](16)
+      for i <- 0 until 8 do {
+        bytes(2 * i) = (all.nn(i) >> 8).toByte
+        bytes(2 * i + 1) = all.nn(i).toByte
+      }
+      bytes
+    }
+  }
 
   /** The 16 bytes of an IPv6 address in RFC 5952's form, as `inet_ntop` writes it: groups in lower-case hex without
     * leading zeros, the first longest run of two or more zero groups written `::`, and an IPv4-mapped or

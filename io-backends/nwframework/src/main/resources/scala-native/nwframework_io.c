@@ -404,8 +404,10 @@ static nw_endpoint_t nwf_endpoint(const char *host, int port) {
   return nw_endpoint_create_host(host, text);
 }
 
-/* Restricts `parameters` to the IP version of `host`, so that a listener on "::1" is not also on IPv4. */
+/* Restricts `parameters` to the IP version of `host`, so that a listener on "::1" is not also on IPv4; but not for
+ * "::", which is dual stack, taking IPv4 peers too, as an IPv6 socket on the other backends does. */
 static void nwf_restrict_family(nw_parameters_t parameters, const char *host) {
+  if (strcmp(host, "::") == 0) return;
   nw_protocol_stack_t stack = nw_parameters_copy_default_protocol_stack(parameters);
   nw_protocol_options_t ip = nw_protocol_stack_copy_internet_protocol(stack);
   nw_ip_options_set_version(ip, strchr(host, ':') ? nw_ip_version_6 : nw_ip_version_4);

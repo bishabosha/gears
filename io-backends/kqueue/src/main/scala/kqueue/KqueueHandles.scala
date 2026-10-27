@@ -46,6 +46,8 @@ object KqueueHandles {
     */
   private final class SocketNote {
     @volatile var boundPath: String | Null = null
+    @volatile var boundFile: PosixFileOps.FileId | Null = null // the socket file it bound there
+    @volatile var ipv6 = false // an IPv6 socket, dual stack, which reaches an IPv4 peer by its IPv4-mapped address
   }
 
   /** `fd`'s note, made if it has none. Only the thread opening or binding a socket sets one. */
@@ -201,29 +203,27 @@ object KqueueHandles {
 
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {
-    val path = takeBoundPath(handle) // taken before closing, while the number is still ours
+    removeBoundPath(handle) // before closing, while the number is still ours
     gears.async.io.internal.FifoWatcher.forget(handle) // so the number is not watched once reused
     val generation = DescriptorTable.generation(DescriptorTable.get(handle))
     DescriptorTable.closing(handle)
     PosixSockets.close(handle)
     KqueueReactor.descriptorClosed(handle, generation)
-    if path != null then Zone.acquire { implicit z => PosixFileOps.safeUnlink(toCString(path, StandardCharsets.UTF_8)) }
   }
 
-  /** The Unix path the socket `fd` bound, if any, forgotten as it is taken. */
-  private def takeBoundPath(fd: Int): String | Null = {
-    val path = DescriptorTable.note(fd) match {
-      case note: SocketNote => note.boundPath
-      case _                => null
+  /** Removes the socket file the socket `fd` bound at a Unix path, if any, and if it is still that file: a listener
+    * that took the path since replaced it with its own, which must stay. Forgotten as it is taken.
+    */
+  private def removeBoundPath(fd: Int): Unit = {
+    DescriptorTable.note(fd) match {
+      case note: SocketNote if note.boundPath != null && note.boundFile != null =>
+        val path = note.boundPath.nn
+        Zone.acquire { implicit z =>
+          PosixFileOps.unlinkIfStill(toCString(path, StandardCharsets.UTF_8), note.boundFile.nn)
+        }
+      case _ => ()
     }
     DescriptorTable.setNote(fd, null)
-    path
-  }
-
-  /** Removes the Unix path the socket `fd` bound, if any, before the descriptor closes. */
-  private def removeBoundPath(fd: Int): Unit = {
-    val path = takeBoundPath(fd)
-    if path != null then Zone.acquire { implicit z => PosixFileOps.safeUnlink(toCString(path, StandardCharsets.UTF_8)) }
   }
 
   private def flavorOf(address: SocketAddress): Flavor = address match {
@@ -234,9 +234,14 @@ object KqueueHandles {
 
   /** Opens a non-blocking socket and runs `setup` on it, closing it again if `setup` fails. */
   private def socketFor(address: SocketAddress, transport: Transport)(setup: Int => Unit): Int = {
-    val fd = PosixSockets.open(flavorOf(address), transport)
+    val flavor = flavorOf(address)
+    val fd = PosixSockets.open(flavor, transport)
     try {
       PosixSockets.setNonBlocking(fd)
+      if flavor == Flavor.IPv6 then {
+        PosixSockets.setDualStack(fd)
+        noteOf(fd).ipv6 = true
+      }
       setup(fd)
       fd
     } catch {
@@ -248,8 +253,10 @@ object KqueueHandles {
 
   private def bindTo(fd: Int, address: SocketAddress): Unit = address match {
     case UnixAddress(path) =>
-      PosixSockets.bindUnixAddr(fd, path, removeExisting = true)
-      noteOf(fd).boundPath = path
+      val bound = PosixSockets.bindUnixAddr(fd, path, removeExisting = true)
+      val note = noteOf(fd)
+      note.boundFile = bound
+      note.boundPath = path
     case IpAddress.IPv4(host, port) => PosixSockets.bindIPv4Addr(fd, host, port)
     case IpAddress.IPv6(host, port) => PosixSockets.bindIPv6Addr(fd, host, port)
   }
@@ -267,6 +274,18 @@ object KqueueHandles {
       case IpAddress.IPv4(host, port) => PosixSockets.withIPv4SocketAddr(host, port)(use)
       case IpAddress.IPv6(host, port) => PosixSockets.withIPv6SocketAddr(host, port)(use)
     }
+
+  /** `to` as the IPv6 socket `fd` reaches it: an IPv4 address as its IPv4-mapped one, since the socket is dual stack
+    * and cannot take an IPv4 socket address; otherwise `to` itself.
+    */
+  private[kqueue] def targetFor(fd: Int, to: SocketAddress): SocketAddress = to match {
+    case IpAddress.IPv4(host, port) if (DescriptorTable.note(fd) match {
+          case note: SocketNote => note.ipv6
+          case _                => false
+        }) =>
+      IpAddress.IPv6(s"::ffff:$host", port)
+    case other => other
+  }
 
   /** The peer `fd` is connected to, or null if it is not connected. */
   private[kqueue] def peerOf(fd: Int): SocketAddress | Null = {
@@ -296,7 +315,8 @@ object KqueueHandles {
       } else if family == socket.AF_INET6 then {
         val v6 = addr.asInstanceOf[Ptr[in.sockaddr_in6]]
         inet.inet_ntop(family, v6.at4.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
-        IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt)
+        // An IPv4 peer of a dual-stack socket comes IPv4-mapped: reported as the IPv4 address it is, as the JDK does.
+        gears.async.io.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
       } else throw new IOException(s"Unsupported address family $family")
     }
   }

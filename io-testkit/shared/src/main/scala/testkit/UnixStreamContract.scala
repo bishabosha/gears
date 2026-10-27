@@ -90,6 +90,45 @@ trait UnixStreamContract extends SocketContract {
     finally deleteAll(dir)
   }
 
+  test("closing a Unix listener leaves the socket file of a listener that took its path since") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = UnixAddress(dir.resolve("taken.sock").toString)
+        val first = listen(r, path)
+        val second = listen(r, path) // replaces the first's socket file
+        try {
+          close(r, first)
+          val (connected, into) = startConnect(r, path)
+          turnUntil(r)(connected.finished)
+          assertEquals(connected.completed, 1, s"the second listener's file was removed: ${connected.failure}")
+          close(r, into.clear())
+        } finally close(r, second)
+      }
+    finally deleteAll(dir)
+  }
+
+  test("listening on a path that holds a file other than a socket fails, leaving the file") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("data.txt")
+        Files.write(path, "data".getBytes(StandardCharsets.UTF_8))
+        val into = Slot[Listener]()
+        val failure = run(r, backend.ops.listen(UnixAddress(path.toString), into))
+        assert(failure.isInstanceOf[java.io.IOException], String.valueOf(failure))
+        assertEquals(Files.readString(path), "data")
+      }
+    finally deleteAll(dir)
+  }
+
+  test("an empty Unix path, or one with a NUL, is refused as the op is built") {
+    for path <- List("", "a\u0000b") do {
+      intercept[IllegalArgumentException](backend.ops.listen(UnixAddress(path), Slot[Listener]()))
+      intercept[IllegalArgumentException](backend.ops.connect(UnixAddress(path), Slot[Connection]()))
+    }
+  }
+
   test("closing a Unix listener removes its socket file") {
     val dir = tempDir()
     try

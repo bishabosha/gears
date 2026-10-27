@@ -194,7 +194,7 @@ final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) exten
     val sent =
       if to == null || peer != null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
       else
-        KqueueHandles.withSocketAddr(to) { (address, length) =>
+        KqueueHandles.withSocketAddr(KqueueHandles.targetFor(fd, to)) { (address, length) =>
           PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)
         }
     if sent then buf.position(buf.limit()) // a datagram goes whole or not at all

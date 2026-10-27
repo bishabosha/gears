@@ -208,6 +208,88 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("an address is checked as the op is built: numeric, of its case's family, with no scope, its port in range") {
+    val ops = backend.ops
+    val bad = List(
+      IpAddress.IPv4("1.2.3", 80),
+      IpAddress.IPv4("1.2.3.256", 80),
+      IpAddress.IPv4("localhost", 80),
+      IpAddress.IPv4("::1", 80),
+      IpAddress.IPv6("127.0.0.1", 80),
+      IpAddress.IPv6("fe80::1%en0", 80),
+      IpAddress.IPv6("[::1]", 80),
+      IpAddress.IPv4("127.0.0.1", 65536),
+      IpAddress.IPv4("127.0.0.1", -1)
+    )
+    for address <- bad do {
+      intercept[IllegalArgumentException](ops.connect(address, Slot[Connection]()))
+      intercept[IllegalArgumentException](ops.listen(address, Slot[Listener]()))
+      intercept[IllegalArgumentException](ops.datagram(address, null, Slot[Datagram]()))
+    }
+    intercept[IllegalArgumentException](
+      ops.datagram(IpAddress.IPv4("127.0.0.1", 0), IpAddress.IPv6("::1", 9), Slot[Datagram]())
+    )
+  }
+
+  test(
+    "over IPv6 a datagram's sender is written as inet_ntop does, and a connected socket's peer compared by meaning"
+  ) {
+    withReactor { r =>
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv6("::1", port), null))
+      try {
+        val client = datagram(r, null, IpAddress.IPv6("0:0:0:0:0:0:0:1", port))
+        try {
+          assertEquals(run(r, backend.ops.send(client, bytes("v6"), IpAddress.IPv6("::0:1", port))), null)
+          val buf = allocate(16)
+          val from = Slot[IpAddress]()
+          assertEquals(run(r, backend.ops.receive(server, buf, from)), null)
+          assertEquals(StandardCharsets.UTF_8.decode(buf).toString, "v6")
+          from.clear() match {
+            case IpAddress.IPv6(host, _) => assertEquals(host, "::1")
+            case other                   => fail(s"an IPv6 sender: $other")
+          }
+        } finally close(r, client)
+      } finally close(r, server)
+    }
+  }
+
+  test(
+    "an IPv6 socket on :: also takes IPv4: a listener accepts an IPv4 client, and a datagram socket replies to one"
+  ) {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv6("::", port)))
+      try {
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        val accepted = Slot[Connection]()
+        val acceptedOutcome = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptedOutcome)
+        turnUntil(r)(connected.finished && acceptedOutcome.finished)
+        assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+        close(r, into.clear())
+        close(r, accepted.clear())
+      } finally close(r, listener)
+
+      val (server, serverPort) = onFreePort(port => datagram(r, IpAddress.IPv6("::", port), null))
+      try {
+        val client = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        try {
+          assertEquals(run(r, backend.ops.send(client, bytes("v4"), IpAddress.IPv4("127.0.0.1", serverPort))), null)
+          val from = Slot[IpAddress]()
+          assertEquals(run(r, backend.ops.receive(server, allocate(16), from)), null)
+          val sender = from.clear()
+          sender match {
+            case IpAddress.IPv4(host, _) => assertEquals(host, "127.0.0.1", "an IPv4 sender, not IPv4-mapped")
+            case other                   => fail(s"an IPv4 sender, not IPv4-mapped: $other")
+          }
+          assertEquals(run(r, backend.ops.send(server, bytes("back"), sender)), null)
+          val buf = allocate(16)
+          assertEquals(run(r, backend.ops.receive(client, buf, Slot[IpAddress]())), null)
+          assertEquals(StandardCharsets.UTF_8.decode(buf).toString, "back")
+        } finally close(r, client)
+      } finally close(r, server)
+    }
+  }
+
   test("a packet larger than the receive buffer fills it, the rest dropped, and the next packet arrives whole") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
@@ -450,6 +532,27 @@ trait SocketContract extends ReactorContract {
       turnUntil(r)(connected.finished)
       assert(connected.failure.isInstanceOf[IOException], String.valueOf(connected.failure))
       intercept[IllegalStateException](into.clear())
+    }
+  }
+
+  test("without reuseAddr a port with a connection in TIME_WAIT cannot be listened on; with it, it can") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = false))
+      val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+      val accepted = Slot[Connection]()
+      val acceptedOutcome = Outcome()
+      r.submit(backend.ops.accept(listener, accepted), acceptedOutcome)
+      turnUntil(r)(connected.finished && acceptedOutcome.finished)
+      val client = into.clear()
+      close(r, accepted.clear()) // the server's side closes first, so its end of the connection is left in TIME_WAIT
+      val buf = allocate(8)
+      assertEquals(run(r, backend.ops.read(client, buf)), null) // the server's end
+      close(r, client)
+      close(r, listener)
+      val refused = Slot[Listener]()
+      val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), refused, reuseAddr = false))
+      assert(failure.isInstanceOf[IOException], s"listening without reuseAddr: $failure")
+      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = true))
     }
   }
 

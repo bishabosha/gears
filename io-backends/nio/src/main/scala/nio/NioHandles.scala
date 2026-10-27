@@ -41,7 +41,7 @@ private[nio] trait Entry {
 /** A channel a `Selector` watches: a socket, a listener, a datagram socket, or an end of a pipe, in non-blocking mode.
   * A Unix path it bound is removed when it is closed.
   */
-private[nio] final class Selectable(val channel: SelectableChannel, boundPath: Path | Null) extends Entry {
+private[nio] final class Selectable(val channel: SelectableChannel, bound: BoundFile | Null) extends Entry {
 
   def read(buf: ByteBuffer): Int = channel match {
     case readable: ReadableByteChannel => readable.read(buf)
@@ -98,7 +98,10 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
       waiters -= 1
       if closed && waiters == 0 then releaseSelectors() else Nil
     }
-    released.foreach(SelectorPool.give)
+    released.foreach { selector =>
+      selector.selectNow(): Unit // drops the closed channel's key, releasing its descriptor
+      SelectorPool.give(selector)
+    }
   }
 
   /** Takes the selectors off this handle, for the pool. Holding `this`. */
@@ -109,26 +112,34 @@ private[nio] final class Selectable(val channel: SelectableChannel, boundPath: P
     all
   }
 
-  /** Closes the channel, and tells the reactors it is registered with, which wakes them: a registered channel's
-    * descriptor is released only once each selector has seen its key cancelled, which one blocked with nothing else to
-    * do would never get to, so the other end of a pipe or socket would never see it close; and the commands pending on
-    * it there fail, as `Ops.close` says. An op waiting on one of its own selectors is woken, to find the channel
-    * closed, and the selectors go back to the pool once none waits.
+  /** Closes the channel, its descriptor released by the time this returns: a registered channel's descriptor is
+    * released only once each selector it is registered with has selected, which one blocked with nothing else to do, or
+    * a reactor not being run, would not get to, so the reactors' selectors drop its key here (`dropCancelledKeys`), and
+    * a listener's port is free, and the other end of a pipe or socket sees the end, as on the other backends. The
+    * reactors are then told, so that the commands pending on it there fail, as `Ops.close` says. An op waiting on one
+    * of the channel's own selectors is woken, to find it closed, and the selectors go back to the pool once none waits.
     */
   def close(): Unit = {
-    val (waking, released) = synchronized {
+    val (waking, idle) = synchronized {
       closed = true
       val waking = List(reading, writing).collect { case s: Selector => s }
       (waking, if waiters == 0 then releaseSelectors() else Nil)
     }
+    val reactors = scala.jdk.CollectionConverters.IteratorHasAsScala(registrations.iterator).asScala.toList.distinct
     try {
       channel.close()
-      registrations.forEach(_.closed(this))
+      // The JDK releases a registered channel's descriptor once each selector it is registered with has selected, so
+      // that a listener's port is free, and the peer sees the end, once the close returns, as on the other backends.
+      reactors.foreach(_.dropCancelledKeys())
+      reactors.foreach(_.closed(this))
     } finally {
       try {
         waking.foreach(_.wakeup())
-        released.foreach(SelectorPool.give)
-      } finally if boundPath != null then Files.deleteIfExists(boundPath): Unit
+        idle.foreach { selector =>
+          selector.selectNow(): Unit // drops the cancelled key now, not when the pool next lends the selector
+          SelectorPool.give(selector)
+        }
+      } finally if bound != null then bound.remove()
     }
   }
 
@@ -201,6 +212,37 @@ private[nio] object RegularFile {
     }
 }
 
+/** The socket file a Unix socket bound at `path`, known by its device and inode once bound: removed when the socket
+  * closes only if it is still that file, not one a later listener bound in its place.
+  */
+private[nio] final class BoundFile(val path: Path) {
+  private val id = BoundFile.idOf(path)
+
+  def remove(): Unit = if id != null && BoundFile.idOf(path) == id then Files.deleteIfExists(path): Unit
+}
+
+private[nio] object BoundFile {
+  private val noFollow = java.nio.file.LinkOption.NOFOLLOW_LINKS
+
+  /** The file at `path` as its device and inode, from the JDK's `unix` attribute view; null if there is none. */
+  def idOf(path: Path): (Long, Long) | Null =
+    try
+      (
+        Files.getAttribute(path, "unix:dev", noFollow).asInstanceOf[Long],
+        Files.getAttribute(path, "unix:ino", noFollow).asInstanceOf[Long]
+      )
+    catch case _: java.nio.file.NoSuchFileException => null
+
+  /** Removes a socket file at `path` for a socket to bind there, as kqueue does; fails if another kind of file is. */
+  def replaceSocket(path: Path): Unit =
+    if Files.exists(path, noFollow) then {
+      val mode = Files.getAttribute(path, "unix:mode", noFollow).asInstanceOf[Int]
+      if (mode & 0xf000) != 0xc000 then
+        throw new IOException(s"Failed to bind socket: $path exists and is not a socket")
+      Files.deleteIfExists(path): Unit
+    }
+}
+
 /** Either kind of socket address. */
 private[nio] type SocketAddress = IpAddress | UnixAddress
 
@@ -254,7 +296,7 @@ object NioHandles {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
-      if reuseAddr then channel.setOption(StandardSocketOptions.SO_REUSEADDR, true)
+      channel.setOption(StandardSocketOptions.SO_REUSEADDR, reuseAddr) // either way, whatever the JDK's default
       channel.bind(socketAddress(address), Backlog)
     }
   }
@@ -264,7 +306,7 @@ object NioHandles {
     val path = Path.of(address.path)
     selectable(channel, path) {
       channel.configureBlocking(false)
-      Files.deleteIfExists(path) // as the kqueue backend, which replaces a socket file already there
+      BoundFile.replaceSocket(path) // a socket file already there, but no other kind of file
       channel.bind(socketAddress(address), Backlog)
     }
   }
@@ -313,16 +355,19 @@ object NioHandles {
   }
 
   /** Runs `setup` on `channel` and gives it a handle, closing it again if `setup` fails. */
-  private def selectable(channel: SelectableChannel, boundPath: Path | Null)(setup: => Any): Handle =
+  private def selectable(channel: SelectableChannel, unixPath: Path | Null)(setup: => Any): Handle = {
+    var bound: BoundFile | Null = null
     try {
       setup
-      add(Selectable(channel, boundPath))
+      if unixPath != null then bound = BoundFile(unixPath)
+      add(Selectable(channel, bound))
     } catch {
       case t: Throwable =>
         channel.close()
-        if boundPath != null then Files.deleteIfExists(boundPath)
+        if bound != null then bound.nn.remove()
         throw t
     }
+  }
 
   private[nio] def familyOf(address: SocketAddress): StandardProtocolFamily = address match {
     case UnixAddress(_)       => StandardProtocolFamily.UNIX
@@ -334,7 +379,11 @@ object NioHandles {
     * name.
     */
   private[nio] def socketAddress(address: SocketAddress): java.net.SocketAddress = address match {
-    case UnixAddress(path)       => UnixDomainSocketAddress.of(path)
+    case UnixAddress(path) => UnixDomainSocketAddress.of(path)
+    case ip: IpAddress     => ipSocketAddress(gears.async.io.IpText.canonical(ip)) // refused as an op refuses it
+  }
+
+  private def ipSocketAddress(address: IpAddress): java.net.SocketAddress = address match {
     case IpAddress.IPv4(host, p) => new InetSocketAddress(numeric(host, ipv6 = false), port(p))
     case IpAddress.IPv6(host, p) => new InetSocketAddress(numeric(host, ipv6 = true), port(p))
   }
@@ -366,10 +415,7 @@ object NioHandles {
     case ip: InetSocketAddress =>
       ip.getAddress match {
         case v4: Inet4Address => IpAddress.IPv4(v4.getHostAddress, ip.getPort)
-        case v6               =>
-          val text = v6.getHostAddress
-          val scope = text.indexOf('%')
-          IpAddress.IPv6(if scope < 0 then text else text.substring(0, scope), ip.getPort)
+        case v6               => IpAddress.IPv6(gears.async.io.IpText.ipv6(v6.getAddress), ip.getPort) // as inet_ntop
       }
     case other => throw new IOException(s"Not an IP address: $other")
   }

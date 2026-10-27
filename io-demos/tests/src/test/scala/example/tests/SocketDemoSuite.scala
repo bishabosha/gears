@@ -241,9 +241,9 @@ class SocketDemoSuite extends DemoSuite {
     val invalidHosts =
       Seq(("sock4", "::1"), ("sock6", "127.0.0.1"), ("datagram4-serve", "invalid"), ("datagram6-serve", "invalid"))
     for ((command, host) <- invalidHosts)
-      assert(runFailing(command, "--host", host).contains("Invalid numeric IP address"))
+      assert(runFailing(command, "--host", host).contains("Not a numeric"))
     for (port <- Seq("-1", "65536"))
-      assert(runFailing("sock4", "--port", port).contains("Port must be between"))
+      assert(runFailing("sock4", "--port", port).contains("A port is from 0 to 65535"))
     // A bound but not listening TCP socket refuses connections.
     Using.resource(SocketChannel.open().bind(new InetSocketAddress("127.0.0.1", 0))) { reserved =>
       val port = reserved.getLocalAddress.asInstanceOf[InetSocketAddress].getPort

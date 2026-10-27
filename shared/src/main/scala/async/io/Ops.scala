@@ -106,8 +106,9 @@ trait Ops[Op, H <: AnyRef] {
   /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever submitter they are, have failed
     * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from that
     * submitter's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel that
-    * is closed; its number is then free for reuse. A Unix socket path that a listener or datagram socket bound is
-    * removed with it. Fails if `handle` is not open.
+    * is closed; its number is then free for reuse, and a listener's port for listening on again. A Unix socket path
+    * that a listener or datagram socket bound is removed with it, if the file there is still its own, not one a later
+    * listener bound in its place. Fails if `handle` is not open.
     */
   def close(handle: H): Op
 }
@@ -137,7 +138,7 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`, which
     * must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be bound while
     * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for them
-    * to expire.
+    * to expire; without it, such an address is refused, on every backend.
     */
   def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): Op
 
@@ -293,7 +294,7 @@ trait UnixStreamOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
   def connect(address: UnixAddress, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket file
-    * already there.
+    * already there; any other kind of file there fails the op with an `IOException`, and is left.
     */
   def listen(address: UnixAddress, into: Slot[Listener]): Op
 }
@@ -350,6 +351,27 @@ private[io] object Ops {
     if host.isEmpty then throw new IllegalArgumentException("An empty host name names no host")
     if host.indexOf('\u0000') >= 0 then
       throw new IllegalArgumentException(s"The host name has a NUL in it: ${host.replace("\u0000", "\\0")}")
+  }
+
+  /** `address` checked and canonical (`IpText.canonical`), as every op taking one is built. */
+  def ip(address: IpAddress): IpAddress = IpText.canonical(address)
+
+  /** A datagram socket's two addresses, each checked as `ip` does, and of one family. */
+  def ipPair(local: IpAddress | Null, remote: IpAddress | Null): (IpAddress | Null, IpAddress | Null) = {
+    val l = if local == null then null else ip(local)
+    val r = if remote == null then null else ip(remote)
+    if l != null && r != null && l.ordinal != r.ordinal then
+      throw new IllegalArgumentException(s"The local and remote addresses are of different families: $l, $r")
+    (l, r)
+  }
+
+  /** A Unix socket path checked, as every op taking one is built: an empty path names no file (an unnamed socket is one
+    * given no path), and a NUL would end it early.
+    */
+  def unix(address: UnixAddress): UnixAddress = {
+    if address.path.isEmpty then throw new IllegalArgumentException("An empty Unix socket path names no file")
+    checkPath(address.path)
+    address
   }
 
   /** Checks a file offset: a negative one names no byte of the file. */

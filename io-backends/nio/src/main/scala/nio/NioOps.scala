@@ -79,16 +79,21 @@ object NioOps
     require(max > 0, s"max must be positive, not $max")
     new AcceptAll(handle, into, max)
   }
-  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo = new ConnectTo(address, into)
-  def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo = new ConnectTo(address, into)
+  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo =
+    new ConnectTo(gears.async.io.Ops.ip(address), into)
+  def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
+    new ConnectTo(gears.async.io.Ops.unix(address), into)
   def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): NioOp =
-    new Listen(address, reuseAddr, into)
-  def listen(address: UnixAddress, into: Slot[Listener]): NioOp = new Listen(address, reuseAddr = false, into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NioOp =
-    new OpenDatagram(local, remote, into)
+    new Listen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def listen(address: UnixAddress, into: Slot[Listener]): NioOp =
+    new Listen(gears.async.io.Ops.unix(address), reuseAddr = false, into)
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NioOp = {
+    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    new OpenDatagram(l, r, into)
+  }
   def pipe(read: Slot[Readable], write: Slot[Writable]): NioOp = new OpenPipe(read, write)
   def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, to)
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, gears.async.io.Ops.ip(to))
   def send(handle: Datagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
   def timer(milliseconds: Int): NioTimer = new NioTimer(milliseconds)
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)

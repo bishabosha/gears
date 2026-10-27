@@ -580,6 +580,7 @@ private[nwframework] final class NWFrameworkHandle(
           val f = new Flow(opened, to)
           flows.put(opened.toLong, f)
           flowsByPeer.put(to, f)
+          NWFrameworkIo.nwf_receive_message(opened) // so the peer's replies to it come in, as an inbound flow's do
           f
         }
       )
@@ -818,6 +819,7 @@ object NWFrameworkHandles {
 
   /** A listener that will be listening once Network.framework has it ready, which `NWFrameworkListen` waits for. */
   private[nwframework] def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
+    if !reuseAddr then refuseInUse(address)
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z =>
       NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0)
@@ -827,6 +829,7 @@ object NWFrameworkHandles {
   }
 
   def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
+    if !reuseAddr then refuseInUse(address)
     val (host, port) = hostAndPort(address)
     val error = stackalloc[CInt]()
     val ptr = Zone.acquire { implicit z =>
@@ -871,6 +874,24 @@ object NWFrameworkHandles {
     table.remove(handle.target.number)
   }
 
+  /** Fails if `address` cannot be bound without `SO_REUSEADDR`, such as while a connection from an earlier listener on
+    * it is in `TIME_WAIT`: Network.framework binds such an address all the same, so a listener without `reuseAddr` asks
+    * the kernel first, with a socket bound and closed again, and is refused as one on the other backends is.
+    */
+  private def refuseInUse(address: IpAddress): Unit = {
+    import gears.async.io.internal.{PosixSockets, Sockets}
+    address match {
+      case IpAddress.IPv4(host, port) =>
+        val fd = PosixSockets.open(Sockets.Flavor.IPv4, Sockets.Transport.Stream)
+        try PosixSockets.bindIPv4Addr(fd, host, port)
+        finally unistd.close(fd)
+      case IpAddress.IPv6(host, port) =>
+        val fd = PosixSockets.open(Sockets.Flavor.IPv6, Sockets.Transport.Stream)
+        try PosixSockets.bindIPv6Addr(fd, host, port)
+        finally unistd.close(fd)
+    }
+  }
+
   private[nwframework] def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))
 
   /** A flow's peer, asked of the C side, or null if not known yet. */
@@ -890,7 +911,7 @@ object NWFrameworkHandles {
     } else if family == socket.AF_INET6 then {
       val v6 = addr.asInstanceOf[Ptr[in.sockaddr_in6]]
       inet.inet_ntop(family, v6.at4.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
-      IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt)
+      gears.async.io.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
     } else throw new IOException(s"Unsupported address family $family")
   }
 }

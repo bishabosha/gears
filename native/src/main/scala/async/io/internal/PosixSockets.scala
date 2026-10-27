@@ -97,12 +97,19 @@ object PosixSockets {
   private def unixSocketAddrLen(pathLength: Int): socket.socklen_t =
     (sizeOf[socket.sa_family_t].toInt + pathLength + 1).toUInt
 
-  def bindUnixAddr(fd: Int, sock: String, removeExisting: Boolean): Unit = {
+  /** Binds `fd` to the Unix path `sock`, replacing a socket file there if `removeExisting`, but no other kind of file,
+    * which fails the bind; returns the bound file's identity, for removing it on close only if it is still that file.
+    */
+  def bindUnixAddr(fd: Int, sock: String, removeExisting: Boolean): PosixFileOps.FileId = {
     Sockets.checkUnixPathLength(sock)
     Zone.acquire { implicit z =>
       val path = toCString(sock, StandardCharsets.UTF_8)
       if (removeExisting) {
-        PosixFileOps.safeUnlink(path) // Ensure the socket path is clean before binding
+        val existing = PosixFileOps.fileId(path)
+        if (existing != null) {
+          if (!existing.nn.socket) throw new IOException(s"Failed to bind socket: $sock exists and is not a socket")
+          PosixFileOps.safeUnlink(path)
+        }
       }
       val pathLength = string.strlen(path).toInt
       val addr = createUnixSocketAddr(path, pathLength)
@@ -112,6 +119,9 @@ object PosixSockets {
           s"Failed to bind socket: ${cError()}"
         )
       }
+      val bound = PosixFileOps.fileId(path)
+      if (bound == null) throw new IOException(s"Failed to bind socket: $sock is gone")
+      bound.nn
     }
   }
 
@@ -126,6 +136,16 @@ object PosixSockets {
       socket.setsockopt(fd, socket.SOL_SOCKET, socket.SO_REUSEADDR, on.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0
     )
       throw new IOException(s"Failed to set SO_REUSEADDR: ${cError()}")
+  }
+
+  /** Makes an IPv6 socket dual stack, taking IPv4 peers as IPv4-mapped addresses, as the JDK's are: the default on
+    * macOS and Linux, set all the same, since FreeBSD's is the other way. Call it before `bind`.
+    */
+  def setDualStack(fd: Int): Unit = {
+    val off = stackalloc[CInt]()
+    !off = 0
+    if socket.setsockopt(fd, in.IPPROTO_IPV6, in.IPV6_V6ONLY, off.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0 then
+      throw new IOException(s"Failed to clear IPV6_V6ONLY: ${cError()}")
   }
 
   def listen(fd: Int, backlog: Int): Unit = {
@@ -200,10 +220,6 @@ object PosixSockets {
     }
   }
 
-  private def checkPort(port: Int): Unit = {
-    require(port >= 0 && port <= 65535, s"Port must be between 0 and 65535: $port")
-  }
-
   private def parseAddress(family: Int, host: String, dest: Ptr[Byte]): Unit = {
     require(!host.contains('\u0000'), "IP address must not contain a NUL character")
     Zone.acquire { implicit z =>
@@ -214,7 +230,7 @@ object PosixSockets {
   }
 
   private def createIPv4SocketAddr(host: String, port: Int)(implicit z: Zone): Ptr[socket.sockaddr] = {
-    checkPort(port)
+    gears.async.io.IpText.canonical(gears.async.io.IpAddress.IPv4(host, port)) // refused as an op refuses it
     val addr = alloc[in.sockaddr_in]()
     addr.sin_len = sizeOf[in.sockaddr_in].toUByte
     addr.sin_family = socket.AF_INET.toUShort
@@ -224,7 +240,7 @@ object PosixSockets {
   }
 
   private def createIPv6SocketAddr(host: String, port: Int)(implicit z: Zone): Ptr[socket.sockaddr] = {
-    checkPort(port)
+    gears.async.io.IpText.canonical(gears.async.io.IpAddress.IPv6(host, port))
     val addr = alloc[in.sockaddr_in6]()
     addr.sin6_len = sizeOf[in.sockaddr_in6].toUByte
     addr.sin6_family = socket.AF_INET6.toUShort

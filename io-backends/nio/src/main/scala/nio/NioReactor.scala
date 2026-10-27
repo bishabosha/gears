@@ -379,6 +379,25 @@ final class NioReactor private (selector: Selector) extends Reactor {
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
+  /** Drops the cancelled keys of channels closed since this reactor last selected, from the thread closing one: the JDK
+    * releases a registered channel's descriptor only once each selector it is registered with has selected, which an
+    * idle reactor, or one not being run, may not do for a long time, while the close must have released it by the time
+    * it returns. The selector serialises selections, so this waits for one the loop is in: woken, and with
+    * `dropsWanted` raised, so that it does not block in another before this has had its turn; the loop's next waits for
+    * this one. Readiness is level-triggered, so nothing this selection sees is lost to the loop.
+    */
+  private[nio] def dropCancelledKeys(): Unit = {
+    dropsWanted.incrementAndGet()
+    try {
+      selector.wakeup() // a selection after the loop checked `dropsWanted` returns at once
+      selector.selectNow((_: java.nio.channels.SelectionKey) => ()): Unit
+    } catch case _: java.nio.channels.ClosedSelectorException => () // closed, so it let every channel go
+    finally dropsWanted.decrementAndGet(): Unit
+  }
+
+  // Threads waiting to select on this reactor's selector (`dropCancelledKeys`), for which the loop does not block.
+  private val dropsWanted = new java.util.concurrent.atomic.AtomicInteger(0)
+
   /** Fails the commands pending on the handles closed since the last turn. Their keys, cancelled by the close, are
     * dropped by the next select.
     */
@@ -507,12 +526,12 @@ final class NioReactor private (selector: Selector) extends Reactor {
       // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
       while !timers.isEmpty do drop(timers.poll())
       resolvedQueue.clear()
-      closedQueue.clear()
       waitingByEntry.clear()
       wakeLock.synchronized {
         closed = true
         selector.close() // deregisters every channel; the channels stay open
       }
+      closedQueue.clear()
       running.foreach(_.awaitEnd())
       for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       finished.foreach { (op, completion, failure) =>
@@ -651,7 +670,8 @@ final class NioReactor private (selector: Selector) extends Reactor {
       else {
         parked = true
         try
-          if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty then selector.selectNow(collect)
+          if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty || dropsWanted.get() > 0 then
+            selector.selectNow(collect)
           else if timers.isEmpty then selector.select(collect)
           else {
             // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.

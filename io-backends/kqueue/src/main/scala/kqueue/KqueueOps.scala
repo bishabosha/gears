@@ -79,20 +79,25 @@ object KqueueOps
     require(max > 0, s"max must be positive, not $max")
     on(handle)(new AcceptAll(fd(handle), into, max))
   }
-  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo = new ConnectTo(address, into)
-  def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo = new ConnectTo(address, into)
+  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo =
+    new ConnectTo(gears.async.io.Ops.ip(address), into)
+  def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
+    new ConnectTo(gears.async.io.Ops.unix(address), into)
   def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): KqueueOp =
-    new Listen(address, reuseAddr, into)
-  def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp = new Listen(address, reuseAddr = false, into)
+    new Listen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp =
+    new Listen(gears.async.io.Ops.unix(address), reuseAddr = false, into)
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
-    require(
-      local == null || remote == null || local.ordinal == remote.ordinal,
-      "Local and remote addresses must be of the same family"
-    )
-    new OpenDatagram(local, remote, into, KqueueKinds.datagram)
+    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    new OpenDatagram(l, r, into, KqueueKinds.datagram)
   }
   def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): KqueueOp =
-    new OpenDatagram(local, remote, into, KqueueKinds.unixDatagram)
+    new OpenDatagram(
+      if local == null then null else gears.async.io.Ops.unix(local),
+      if remote == null then null else gears.async.io.Ops.unix(remote),
+      into,
+      KqueueKinds.unixDatagram
+    )
   def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = new OpenPipe(read, write)
   def openFifoForReading(path: String, into: Slot[Readable]): KqueueOp =
     new OpenFifo(path, write = false, into, KqueueKinds.readable)
@@ -102,13 +107,14 @@ object KqueueOps
   def writeNow(handle: Writable, buf: ByteBuffer): Int = KqueueHandles.writeNow(handle, buf)
   def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = false))
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): SendTo = on(handle)(new SendTo(fd(handle), buf, to))
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): SendTo =
+    on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.ip(to)))
   def send(handle: Datagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   @annotation.targetName("receiveUnix")
   def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = true))
   def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): SendTo =
-    on(handle)(new SendTo(fd(handle), buf, to))
+    on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.unix(to)))
   @annotation.targetName("sendUnix")
   def send(handle: UnixDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
