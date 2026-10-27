@@ -27,6 +27,9 @@ clients on another, so both sides go through the reactor, and times each scenari
 | `blocking` | trivial blocking tasks one after another | a wake-up from a blocker thread for each |
 | `blocking-io` | a blocking task and a round trip in turn | moving between blocking work and I/O |
 | `timers` | timers armed 1,000 at a time, each by a future, half firing and half cancelled | many pending timers, and cancellation |
+| `rearm-cancel` | one timer re-armed again and again by cancelling the future performing it and performing a new one | re-arming as it was done before deadline timers |
+| `rearm-later` | one deadline timer performed once, its deadline moved later for each re-arm | `Deadline.moveTo`, QUIC's usual case |
+| `rearm-earlier` | the same, moved earlier each time | filing it again, and waking its reactor from another worker |
 | `fairness` | pipelined traffic while a ticker on the same thread performs zero-length timers | reports `fairness-tick`, the time between ticks |
 | `mixed` | `pingpong` while a compute future on the same thread works in slices, yielding between them | reports `mixed-compute`, the time per slice |
 | `starvation` | `concurrent`'s round trips while a compute future per core works in slices, and a checker sleeps 1 ms over and over | reports the checker's lateness at p50, p99 and worst, as cats-effect's starvation check does |

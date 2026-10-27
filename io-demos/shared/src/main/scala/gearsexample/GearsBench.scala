@@ -242,6 +242,41 @@ object GearsBench {
       }
     ),
     Scenario(
+      "rearm-cancel",
+      "one timer re-armed again and again, as QUIC re-arms its loss timer, by cancelling the future performing it and "
+        + "performing a new one: how it was done before deadline timers",
+      20_000,
+      new Client {
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
+          rearmByCancel(io, count)
+      }
+    ),
+    Scenario(
+      "rearm-later",
+      "one deadline timer, performed once by one future, its deadline moved later for each re-arm (Deadline.moveTo), "
+        + "QUIC's usual case",
+      2_000_000,
+      new Client {
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
+          rearmByMove(io, count, later = true)
+      }
+    ),
+    Scenario(
+      "rearm-earlier",
+      "the same, its deadline moved earlier each time, which files it again in the reactor's heap",
+      2_000_000,
+      new Client {
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+            Async.Spawn
+        ): Unit =
+          rearmByMove(io, count, later = false)
+      }
+    ),
+    Scenario(
       "fairness",
       "pipelined traffic while a ticker on the same thread performs zero-length timers; also reports fairness-tick, "
         + "the time between ticks, which rises if busy futures stop yielding",
@@ -324,6 +359,41 @@ object GearsBench {
       cancelled.foreach(_.awaitResult)
       done += batch
     }
+  }
+
+  /** Re-arms one timer `count` times by cancelling the future performing it and performing a new timer in a new future:
+    * each one pending when the next replaces it, as the previous's cancel waits for it to stop.
+    */
+  private def rearmByCancel(io: Io[Backend], count: Int)(using Async.Spawn): Unit = {
+    var pending = Future(io.perform(io.backend.ops.timer(60_000)))
+    io.perform(io.backend.ops.timer(0)) // so that it is waiting on its timer
+    var i = 0
+    while i < count do {
+      val next = Future(io.perform(io.backend.ops.timer(60_000)))
+      pending.cancel()
+      pending.awaitResult // the next one starts and waits meanwhile
+      pending = next
+      i += 1
+    }
+    pending.cancel()
+    pending.awaitResult: Unit
+  }
+
+  /** Re-arms one deadline timer `count` times by moving its deadline, later or earlier each time, while one future
+    * performs it; then moves it to now, so that it completes.
+    */
+  private def rearmByMove(io: Io[Backend], count: Int, later: Boolean)(using Async.Spawn): Unit = {
+    val base = System.nanoTime() + 60_000_000_000L
+    val timer = io.backend.ops.deadlineTimer(if later then base else base + count)
+    val waiting = Future(io.perform(timer))
+    io.perform(io.backend.ops.timer(0)) // so that it is waiting on its timer
+    var i = 0
+    while i < count do {
+      timer.moveTo(if later then base + i else base + count - i - 1)
+      i += 1
+    }
+    timer.moveTo(System.nanoTime())
+    waiting.await
   }
 
   /** Prints one result line, in the format `bench/compare.sc` reads. */

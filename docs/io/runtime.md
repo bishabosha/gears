@@ -409,7 +409,9 @@ not scale to 4 either: every worker still makes its own `read` and `write`. The 
   tried: no stack in gears core's cancellation exceptions, and an op as a passive `Future` of its own
   (`performAsync`), completed with its outcome rather than thrown out of a body. The rest of the cost against the old
   0.15–0.23 µs is each op's membership of its group (a hash set under a lock), which is what lets a scope's end cancel
-  it.
+  it. A timer re-armed again and again, QUIC's case, no longer pays it: a deadline timer's deadline moves while one
+  future performs it (`Deadline.moveTo`, 0.003 µs a move against 42–64 µs a cancel and a new future, in
+  `bench/results/native-rearm-timers.json`); other ops still do.
 - **`fairness` and `mixed` after the turn budget and yield**: each pair of a compute slice and a round trip takes about
   2 µs longer than before, for a reason not found (`bench/results/turns-combined.json`).
 - **A lone worker's slow polls**, not explained.

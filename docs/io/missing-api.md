@@ -53,7 +53,10 @@ no cancel and nothing thrown: a move later stores the new deadline, which the re
 files the timer again, as Go's runtime and Netty do; a move earlier files it again on the reactor's thread, or wakes the
 reactor from another. The arithmetic is one trait every backend's timer mixes in (`internal.TimerState`). Contract
 checks on every backend: a timer finer than a millisecond, moves later and earlier, from another thread to a reactor
-blocked waiting, a deadline passed, and a time limit coming first.
+blocked waiting, a deadline passed, and a time limit coming first. Measured (release, kqueue, 3 runs, on a machine
+loaded to 19, `bench/results/native-rearm-timers.json`, `-4-workers.json`): re-arming by cancel and a new future 63.7
+µs on one worker and 42.2 on four; a move later 0.003 µs on either; a move earlier 0.003 on one worker and 0.09 on four,
+where the mover is often another worker's thread and wakes the timer's reactor.
 
 ## Gaps that make them slow, not impossible
 

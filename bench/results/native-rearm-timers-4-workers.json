@@ -1,0 +1,65 @@
+{
+  "started": "2026-10-27T23:21:52+01:00",
+  "finished": "2026-10-27T23:21:55+01:00",
+  "load_average": {
+    "before": [
+      15.18,
+      17.23,
+      14.92
+    ],
+    "after": [
+      15.18,
+      17.23,
+      14.92
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--scenarios",
+    "rearm-cancel,rearm-later,rearm-earlier",
+    "--workers",
+    "4"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "four-workers",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/rearm",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "5648fffce9415819f413d2fa5cd0bd9fb846866d",
+        "subject": "interface: timers take a duration, completing no earlier than it to what the backend can wait for (kqueue's nanosecond, NIO's selector millisecond), the Int form a shorthand; and deadlineTimer, a timer at a System.nanoTime deadline that moves while pending (Deadline.moveTo), from any thread, with no cancel and nothing thrown, where re-arming a timer meant cancelling the future performing it, about 20 µs on Scala Native: a move later is a store, the reactor filing the timer again when the old deadline comes, as Go's runtime and Netty do; a move earlier files it again on the reactor's thread, or wakes the reactor, or unparks NioOnCaller's waiting thread; one TimerState every backend's timer mixes in; the heap's key renamed when; contract checks on every backend",
+        "worktree_changes": true,
+        "worktree_changes_hash": "ac319b7cfc1e",
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-27T23:21:16+01:00"
+      },
+      "median": {
+        "rearm-cancel": 42.2,
+        "rearm-later": 0,
+        "rearm-earlier": 0.09
+      },
+      "samples": {
+        "rearm-cancel": [
+          42.2,
+          42.2,
+          42.33
+        ],
+        "rearm-later": [
+          0,
+          0,
+          0
+        ],
+        "rearm-earlier": [
+          0.09,
+          0.09,
+          0.09
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}
