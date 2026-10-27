@@ -2,7 +2,6 @@ package gears.async.io
 package internal
 
 import gears.async.Cancellable
-import gears.async.io.Reactor
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference

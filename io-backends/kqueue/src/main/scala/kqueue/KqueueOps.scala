@@ -3,7 +3,6 @@ package kqueue
 
 import gears.async.io.BlockingOps
 import gears.async.io.BufferPool
-import gears.async.io.Completion
 import gears.async.io.FifoOps
 import gears.async.io.FileOps
 import gears.async.io.IpAddress
@@ -19,6 +18,7 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.BlockingRun
+import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking

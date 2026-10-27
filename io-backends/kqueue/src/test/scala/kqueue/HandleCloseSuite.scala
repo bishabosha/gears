@@ -1,6 +1,7 @@
 package gears.async.io
 package kqueue
 
+import gears.async.io.internal.Completion
 import gears.async.io.internal.NativeBuffer
 
 import java.io.IOException

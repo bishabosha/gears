@@ -1,9 +1,9 @@
 package example
 
 import gears.async.io.AddressFamily
-import gears.async.io.Completion
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
+import gears.async.io.internal.Completion
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.PosixSockets
 import gears.async.io.internal.Sockets.Transport

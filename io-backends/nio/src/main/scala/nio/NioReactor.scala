@@ -1,11 +1,11 @@
 package gears.async.io
 package nio
 
-import gears.async.io.Completion
 import gears.async.io.Ops
-import gears.async.io.Reactor
 import gears.async.io.Repeatable
+import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
+import gears.async.io.internal.Reactor
 import gears.async.io.internal.TimerHeap
 
 import java.nio.channels.CancelledKeyException

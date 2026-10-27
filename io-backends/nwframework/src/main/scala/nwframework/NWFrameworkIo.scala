@@ -1,6 +1,8 @@
 package gears.async.io
 package nwframework
 
+import gears.async.io.internal.Reactor
+
 import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 

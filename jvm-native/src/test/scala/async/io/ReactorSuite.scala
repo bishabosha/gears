@@ -1,5 +1,8 @@
 package gears.async.io
 
+import gears.async.io.internal.Completion
+import gears.async.io.internal.Reactor
+
 import munit.FunSuite
 
 class ReactorSuite extends FunSuite {

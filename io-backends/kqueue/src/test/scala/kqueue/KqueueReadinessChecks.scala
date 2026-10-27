@@ -2,6 +2,7 @@ package gears.async.io
 package kqueue
 
 import gears.async.io.internal.Interest
+import gears.async.io.internal.Reactor
 import gears.async.io.testkit.ReactorContract
 
 import java.util.concurrent.CountDownLatch

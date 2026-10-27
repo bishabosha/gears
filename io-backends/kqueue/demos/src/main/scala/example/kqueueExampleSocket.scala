@@ -1,6 +1,6 @@
 package example
 
-import gears.async.io.Completion
+import gears.async.io.internal.Completion
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.Sockets.Transport
 import gears.async.io.kqueue.Command

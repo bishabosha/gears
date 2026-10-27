@@ -1,6 +1,6 @@
 package example
 
-import gears.async.io.Completion
+import gears.async.io.internal.Completion
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.kqueue.WriteFromBuffer

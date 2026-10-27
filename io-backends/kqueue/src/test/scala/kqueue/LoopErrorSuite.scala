@@ -1,7 +1,7 @@
 package gears.async.io
 package kqueue
 
-import gears.async.io.Completion
+import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
 
 import java.io.IOException

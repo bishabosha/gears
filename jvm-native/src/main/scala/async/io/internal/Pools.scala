@@ -5,9 +5,7 @@ import gears.async.Async
 import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
-import gears.async.io.Completion
 import gears.async.io.OnPool
-import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
 
 import java.util.concurrent.CancellationException

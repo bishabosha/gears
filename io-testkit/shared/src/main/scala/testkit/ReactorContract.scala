@@ -1,6 +1,10 @@
 package gears.async.io
 package testkit
 
+import gears.async.io.internal.Completion
+import gears.async.io.internal.CompletionFailed
+import gears.async.io.internal.Reactor
+
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets

@@ -1,7 +1,7 @@
 package example
 
-import gears.async.io.Completion
 import gears.async.io.Slot
+import gears.async.io.internal.Completion
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.kqueue.KqueueBlocking
 import gears.async.io.kqueue.KqueueHandles

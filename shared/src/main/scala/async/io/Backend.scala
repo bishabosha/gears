@@ -1,5 +1,7 @@
 package gears.async.io
 
+import gears.async.io.internal.Reactor
+
 import _root_.gears.async.Async
 
 /** A way of doing I/O: the ops it can perform, the handles they name, and the pools its reads fill. How an op is

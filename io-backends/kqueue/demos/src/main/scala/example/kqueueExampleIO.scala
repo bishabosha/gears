@@ -24,7 +24,7 @@ object KQueueExampleIO {
     * default `onFailure` throws it); the reactor reports that (`Reactor.reportFailure`) rather than throwing it, and
     * these demos take any such failure as fatal: it stops the loop, and is thrown here.
     */
-  def runFailingFast(r: gears.async.io.Reactor): Unit = {
+  def runFailingFast(r: gears.async.io.internal.Reactor): Unit = {
     var failure: Throwable | Null = null
     r.reportFailure = t => {
       if failure == null then failure = t
@@ -32,9 +32,9 @@ object KQueueExampleIO {
     }
     r.run()
     failure match {
-      case null                                      => ()
-      case reported: gears.async.io.CompletionFailed => throw reported.getCause
-      case other                                     => throw other.nn
+      case null                                               => ()
+      case reported: gears.async.io.internal.CompletionFailed => throw reported.getCause
+      case other                                              => throw other.nn
     }
   }
 
