@@ -295,4 +295,93 @@ trait IpDatagramContract extends ReactorContract {
         )
       )
   }
+
+  /** A bound socket opening with `options` on loopback, port 0. */
+  private def boundWith(r: R, options: SocketOptions)(using munit.Location): BoundDatagram = {
+    val into = Slot[BoundDatagram]()
+    opened(r, into, backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", 0), options, into))
+  }
+
+  /** The loopback interface's MTU, if the platform tells it. */
+  private def loopbackMtu: Int =
+    scala.jdk.CollectionConverters
+      .EnumerationHasAsScala(java.net.NetworkInterface.getNetworkInterfaces)
+      .asScala
+      .find(_.isLoopback)
+      .map(_.getMTU)
+      .getOrElse(-1)
+
+  test("DontFragment given as a datagram socket opens is its own, read back, and changed where the backend can") {
+    assume(backend.ops.supports(SocketOption.DontFragment), "this backend has no don't-fragment option")
+    withReactor { r =>
+      val plain = boundWith(r, SocketOptions.default)
+      val dontFragment = boundWith(r, SocketOptions.default.set(SocketOption.DontFragment, true))
+      try {
+        assertEquals(backend.ops.option(plain, SocketOption.DontFragment), false, "the system's, off")
+        assertEquals(backend.ops.option(dontFragment, SocketOption.DontFragment), true)
+        if backend.ops.canChange(SocketOption.DontFragment) then {
+          backend.ops.setOption(plain, SocketOption.DontFragment, true)
+          assertEquals(backend.ops.option(plain, SocketOption.DontFragment), true)
+        } else intercept[IllegalArgumentException](backend.ops.setOption(plain, SocketOption.DontFragment, true))
+      } finally {
+        close(r, plain)
+        close(r, dontFragment)
+      }
+    }
+  }
+
+  test("with DontFragment a datagram larger than the path's MTU fails to send, where without it it goes fragmented") {
+    assume(backend.ops.supports(SocketOption.DontFragment) && backend.ops.supports(SocketOption.SendBuffer))
+    val mtu = loopbackMtu
+    assume(mtu > 0 && mtu + 1000 <= 65507, s"loopback's MTU, $mtu, leaves no room for a datagram larger than it")
+    val size = mtu + 1000
+    val room = SocketOptions.default.set(SocketOption.SendBuffer, 2 * size) // past the system's largest datagram
+    withReactor { r =>
+      val receiver = boundWith(r, SocketOptions.default)
+      val to = backend.ops.localAddress(receiver)
+      val fragmenting = boundWith(r, room)
+      val whole = boundWith(r, room.set(SocketOption.DontFragment, true))
+      try {
+        assertEquals(run(r, backend.ops.send(fragmenting, allocate(size), to)), null, "sent fragmented")
+        val failure = run(r, backend.ops.send(whole, allocate(size), to))
+        assert(failure.isInstanceOf[java.io.IOException], s"a datagram of $size bytes, MTU $mtu: $failure")
+      } finally {
+        close(r, receiver)
+        close(r, fragmenting)
+        close(r, whole)
+      }
+    }
+  }
+
+  test("ReusePort lets bound datagram sockets that set it share a port, refusing one that does not") {
+    assume(backend.ops.supports(SocketOption.ReusePort), "this backend has no reuse-port option")
+    val reuse = SocketOptions.default.set(SocketOption.ReusePort, true)
+    withReactor { r =>
+      val first = boundWith(r, reuse)
+      try {
+        assertEquals(backend.ops.option(first, SocketOption.ReusePort), true)
+        val port = backend.ops.localAddress(first)
+        val into = Slot[BoundDatagram]()
+        val second = opened(r, into, backend.ops.bindDatagram(port, reuse, into))
+        try {
+          val refused = Slot[BoundDatagram]()
+          assert(run(r, backend.ops.bindDatagram(port, refused)).isInstanceOf[java.io.IOException], "one without it")
+          intercept[IllegalArgumentException](backend.ops.setOption(second, SocketOption.ReusePort, false))
+        } finally close(r, second)
+      } finally close(r, first)
+    }
+  }
+
+  test("a connected datagram socket takes no ReusePort, and no backend changes it on an open socket") {
+    if backend.ops.supports(SocketOption.ReusePort) then
+      intercept[IllegalArgumentException](
+        backend.ops.connectDatagram(
+          null,
+          IpAddress.IPv4("127.0.0.1", 9),
+          SocketOptions.default.set(SocketOption.ReusePort, true),
+          Slot()
+        )
+      )
+    assert(!backend.ops.canChange(SocketOption.ReusePort))
+  }
 }

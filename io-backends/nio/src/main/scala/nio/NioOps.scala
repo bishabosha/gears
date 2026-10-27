@@ -98,19 +98,19 @@ object NioOps
     new AcceptAll(handle, into, max)
   }
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
     new ConnectTo(gears.async.io.Ops.ip(address), into, options)
   }
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
     new Listen(gears.async.io.Ops.ip(address), into, options)
   }
   def listen(address: UnixAddress, into: Slot[Listener]): NioOp =
     new Listen(gears.async.io.Ops.unix(address), into)
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
     new OpenDatagram(gears.async.io.Ops.ip(local), null, into, NioKinds.boundDatagram, options)
   }
   def connectDatagram(
@@ -119,19 +119,26 @@ object NioOps
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     new OpenDatagram(l, r, into, NioKinds.connectedDatagram, options)
   }
 
-  // Socket options: every one, keepalive's timings where the JDK has them here, changed at any time.
-  def supports(option: SocketOption[?]): Boolean = option != SocketOption.KeepAlive || NioHandles.keepAliveTimings
-  def canChange(option: SocketOption[?]): Boolean = supports(option)
+  // Socket options: each where the JDK has it here, changed at any time but `ReusePort`, set before binding.
+  def supports(option: SocketOption[?]): Boolean = option match {
+    case SocketOption.KeepAlive    => NioHandles.keepAliveTimings
+    case SocketOption.DontFragment => NioHandles.dontFragment
+    case SocketOption.ReusePort    => NioHandles.reusePort
+    case _                         => true
+  }
+  def canChange(option: SocketOption[?]): Boolean = supports(option) && option != SocketOption.ReusePort
   def option[V](handle: Handle, option: SocketOption[V]): V =
     NioHandles.optionOf(networkChannel(handle, option), option).asInstanceOf[V]
   def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
     option.check(value)
-    NioHandles.setOption(networkChannel(handle, option), option, value)
+    val channel = networkChannel(handle, option)
+    if !canChange(option) then throw new IllegalArgumentException(s"$option is given as a socket opens, not changed")
+    NioHandles.setOption(channel, option, value)
   }
 
   /** `handle`'s channel, an IP socket's `option` applies to; else an `IllegalArgumentException`. */
@@ -141,9 +148,14 @@ object NioOps
       case s: Selectable =>
         s.channel match {
           case c: java.nio.channels.NetworkChannel if c.getLocalAddress.isInstanceOf[java.net.InetSocketAddress] =>
-            val stream = c.isInstanceOf[SocketChannel] || c.isInstanceOf[ServerSocketChannel]
-            if option.streamsOnly && !stream then
-              throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+            val kind = c match {
+              case _: ServerSocketChannel => SocketOption.Kind.Listener
+              case _: SocketChannel       => SocketOption.Kind.Connection
+              case d: DatagramChannel     =>
+                if d.isConnected then SocketOption.Kind.ConnectedDatagram else SocketOption.Kind.BoundDatagram
+              case _ => throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
+            }
+            if !SocketOption.onSocket(option, kind) then throw gears.async.io.Ops.notFor(option, kind)
             c
           case _ => throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
         }

@@ -405,15 +405,18 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
 private[io] object Ops {
 
   /** Checks a path an op names: a NUL would end it early as a C string, so the op would act on another path. */
-  /** Checks the options an opener is given as it is built: each one the backend `supports`, and for a datagram socket,
-    * not one for streams only; else an `IllegalArgumentException`.
+  /** Checks the options an opener of a socket of kind `kind` is given as it is built: each one the backend `supports`,
+    * and that applies to such a socket; else an `IllegalArgumentException`.
     */
-  def checkOptions(options: SocketOptions, supports: SocketOption[?] => Boolean, stream: Boolean): Unit =
+  def checkOptions(options: SocketOptions, supports: SocketOption[?] => Boolean, kind: SocketOption.Kind): Unit =
     for option <- options.options do {
       if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option here")
-      if option.streamsOnly && !stream then
-        throw new IllegalArgumentException(s"$option applies to stream sockets, not datagram ones")
+      if !option.appliesTo(kind) then throw notFor(option, kind)
     }
+
+  /** The failure of `option` on a socket of a kind it does not apply to. */
+  def notFor(option: SocketOption[?], kind: SocketOption.Kind): IllegalArgumentException =
+    new IllegalArgumentException(s"$option does not apply to a ${kind.toString.toLowerCase}")
 
   /** Whether a stream socket opening with `options` has `NoDelay` on: unless they set it off. */
   def noDelay(options: SocketOptions): Boolean = options.get(SocketOption.NoDelay) != false

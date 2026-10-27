@@ -41,8 +41,10 @@ private[nwframework] final class NWFrameworkHandle(
   /** Its index in `NWFrameworkHandles`' table, set as it is added. */
   private[nwframework] var number = -1
 
-  /** The TCP options it opened with, or for an accepted connection its listener's, which `option` reports. */
-  private[nwframework] var tcp: SocketOptions = SocketOptions.default
+  /** The options it opened with, or for an accepted connection its listener's, which `option` reports, since
+    * Network.framework neither reports nor changes them after.
+    */
+  private[nwframework] var opened: SocketOptions = SocketOptions.default
 
   /** A listener's address as it was asked for, whose port, if 0, `address` replaces with the one it got. */
   private[nwframework] var listenedOn: IpAddress | Null = null
@@ -694,7 +696,7 @@ private[nwframework] object NWFrameworkHandles {
   /** Registers a connection `listener` accepted, as its own handle, with the listener's options. */
   def accepted(listener: NWFrameworkHandle, ptr: NWFrameworkIo.Handle): Handle = {
     val connection = new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, null)
-    connection.tcp = listener.tcp
+    connection.opened = listener.opened
     add(connection)
   }
 
@@ -723,7 +725,7 @@ private[nwframework] object NWFrameworkHandles {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_connect(toCString(host), port, tcpSettings(options)) }
     val connection = new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, address)
-    connection.tcp = options
+    connection.opened = options
     add(connection)
   }
 
@@ -734,21 +736,24 @@ private[nwframework] object NWFrameworkHandles {
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
     val listener = new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, null)
     listener.listenedOn = address
-    listener.tcp = options
+    listener.opened = options
     add(listener)
   }
 
   /** A datagram socket connected to `remote`, bound to `local` if given. */
-  def datagram(local: IpAddress | Null, remote: IpAddress): Handle = {
+  def datagram(local: IpAddress | Null, remote: IpAddress, options: SocketOptions): Handle = {
+    val dontFragment = if options.get(SocketOption.DontFragment) == true then 1 else 0
     require(local == null || local.getClass == remote.getClass, "Local and remote addresses must be of the same family")
     val (host, port) = hostAndPort(remote)
     val ptr = Zone.acquire { implicit z =>
       if local != null then {
         val (localHost, localPort) = hostAndPort(local)
-        NWFrameworkIo.nwf_datagram_connect(toCString(host), port, toCString(localHost), localPort)
-      } else NWFrameworkIo.nwf_datagram_connect(toCString(host), port, null, 0)
+        NWFrameworkIo.nwf_datagram_connect(toCString(host), port, toCString(localHost), localPort, dontFragment)
+      } else NWFrameworkIo.nwf_datagram_connect(toCString(host), port, null, 0, dontFragment)
     }
-    add(new NWFrameworkHandle(NWFrameworkHandle.Datagram, ptr, remote))
+    val datagram = new NWFrameworkHandle(NWFrameworkHandle.Datagram, ptr, remote)
+    datagram.opened = options
+    add(datagram)
   }
 
   /** Closes a handle, from any thread: the ops pending on it, on whichever reactor, fail there (see `Ops.close` and

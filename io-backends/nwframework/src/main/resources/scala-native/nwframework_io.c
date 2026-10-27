@@ -582,11 +582,19 @@ nwf_handle_t *nwf_listen(const char *host, int port, const nwf_tcp_settings_t *s
 
 /* ---- Datagrams ---- */
 
-/* A datagram socket connected to `host`:`port`, bound to `local_host`:`local_port` if `local_host` is given. */
-nwf_handle_t *nwf_datagram_connect(const char *host, int port, const char *local_host, int local_port) {
+/* A datagram socket connected to `host`:`port`, bound to `local_host`:`local_port` if `local_host` is given, its
+ * datagrams sent with the don't-fragment bit if `dont_fragment` (`SocketOption.DontFragment`). */
+nwf_handle_t *nwf_datagram_connect(const char *host, int port, const char *local_host, int local_port, int dont_fragment) {
   nwf_handle_t *h = nwf_handle_new(NWF_DGRAM);
   nw_endpoint_t endpoint = nwf_endpoint(host, port);
   nw_parameters_t parameters = nwf_udp_parameters();
+  if (dont_fragment) {
+    nw_protocol_stack_t stack = nw_parameters_copy_default_protocol_stack(parameters);
+    nw_protocol_options_t ip = nw_protocol_stack_copy_internet_protocol(stack);
+    nw_ip_options_set_disable_fragmentation(ip, true);
+    nw_release(ip);
+    nw_release(stack);
+  }
   if (local_host) {
     nw_endpoint_t local = nwf_endpoint(local_host, local_port);
     nw_parameters_set_local_endpoint(parameters, local);

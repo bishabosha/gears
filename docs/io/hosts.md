@@ -68,8 +68,8 @@ what keeping the same promises costs:
 | `TCP_NODELAY` | `setsockopt` | yes | `nw_tcp_options_set_no_delay` | `setsockopt`, or the ring's own (6.7+) | `setNoDelay` | *unverified*: not in 0.2 as far as I know |
 | keepalive and its timings | yes | on, and timings through `ExtendedSocketOptions` | `nw_tcp_options` | yes | on, and its first delay only | yes |
 | buffer sizes | yes | yes | not exposed for TCP | yes | datagrams only | yes |
-| don't-fragment (QUIC) | `IP_DONTFRAG`, *unverified* on IPv4 | `IP_DONTFRAGMENT` (JDK 19+) | *unverified* | `IP_MTU_DISCOVER` | no | no |
-| `SO_REUSEPORT` | yes | where the system has it | no | yes | recent versions, *unverified* | no |
+| don't-fragment (QUIC) | `IP_DONTFRAG`, `IPV6_DONTFRAG` (probed) | `IP_DONTFRAGMENT` (JDK 19+, probed) | `nw_ip_options_set_disable_fragmentation` | `IP_MTU_DISCOVER` | no | no |
+| `SO_REUSEPORT` | yes; the last bound gets everything (probed) | where the system has it | no | yes, spread by peer | recent versions, *unverified* | no |
 | ECN, per packet | `IP_RECVTOS`, *unverified* on macOS | no (sets TOS, cannot read it) | per message metadata | `recvmsg` control messages | no | no |
 | packet info | `IP_RECVPKTINFO` | no | no (no bound socket) | `recvmsg` control messages | no | no |
 | fine re-armable timers | own heap | own heap | own heap | `IORING_OP_TIMEOUT`, updated in place | `setTimeout`, milliseconds | `monotonic-clock`, nanoseconds |

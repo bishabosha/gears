@@ -15,6 +15,7 @@ import gears.async.io.internal.Sockets.Transport
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.arpa.inet
 import scala.scalanative.posix.netinet.in
 import scala.scalanative.posix.netinet.inOps.{*, given}
@@ -73,20 +74,23 @@ object KqueueHandles {
       case note: SocketNote if note.accepting != null =>
         // A connection its client reset at once refuses options (EINVAL on macOS): it is delivered all the same, and
         // its first read fails, as a reset connection's does, rather than failing the accept and the others with it.
-        try applyOptions(fd, note.accepting.nn, stream = true, connectionOnly = true)
+        try for (option, value) <- SocketOption.accepted(note.accepting.nn) do setOption(fd, option, value)
         catch case _: IOException => ()
       case _ => ()
     }
     handle(fd)
   }
 
-  /** Applies `options` to the IP socket `fd`, as it opens: for a stream socket `NoDelay` on unless they set it off;
-    * with `connectionOnly`, for an accepted connection, all but the receive buffer, which it has from its listener.
+  /** Applies `options` to the IP socket `fd`, of kind `kind`, as it opens, before it binds (see
+    * `SocketOption.opening`).
     */
-  private def applyOptions(fd: Int, options: SocketOptions, stream: Boolean, connectionOnly: Boolean = false): Unit = {
-    if stream then setOption(fd, SocketOption.NoDelay, gears.async.io.Ops.noDelay(options))
-    for option <- options.options if option != SocketOption.NoDelay do
-      if !(connectionOnly && option == SocketOption.ReceiveBuffer) then setOption(fd, option, options.get(option).nn)
+  private def applyOptions(fd: Int, options: SocketOptions, kind: SocketOption.Kind): Unit =
+    for (option, value) <- SocketOption.opening(options, kind) do setOption(fd, option, value)
+
+  /** Whether `fd` is an IPv6 socket, as `socketFor` noted. */
+  private def isIpv6(fd: Int): Boolean = DescriptorTable.note(fd) match {
+    case note: SocketNote => note.ipv6
+    case _                => false
   }
 
   /** Sets `option` on `fd`. */
@@ -107,6 +111,30 @@ object KqueueHandles {
       PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_RCVBUF, value.asInstanceOf[Int], "SO_RCVBUF")
     case SocketOption.SendBuffer =>
       PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_SNDBUF, value.asInstanceOf[Int], "SO_SNDBUF")
+    case SocketOption.DontFragment =>
+      val on = value.asInstanceOf[Boolean]
+      if isIpv6(fd) then // covers what a dual-stack socket sends to IPv4 peers too (see `SocketOption.DontFragment`)
+        PosixSockets.setIntOption(
+          fd,
+          PosixSockets.IPPROTO_IPV6,
+          PosixSockets.IPV6_DONTFRAG,
+          if on then 1 else 0,
+          "IPV6_DONTFRAG"
+        )
+      else if LinktimeInfo.isLinux then
+        val mode = if on then PosixSockets.IP_PMTUDISC_DO else PosixSockets.IP_PMTUDISC_DONT
+        PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_IP, PosixSockets.IP_MTU_DISCOVER, mode, "IP_MTU_DISCOVER")
+      else
+        PosixSockets.setIntOption(
+          fd,
+          PosixSockets.IPPROTO_IP,
+          PosixSockets.IP_DONTFRAG,
+          if on then 1 else 0,
+          "IP_DONTFRAG"
+        )
+    case SocketOption.ReusePort =>
+      val on = if value.asInstanceOf[Boolean] then 1 else 0
+      PosixSockets.setIntOption(fd, socket.SOL_SOCKET, PosixSockets.SO_REUSEPORT, on, "SO_REUSEPORT")
   }
 
   /** `option`'s value on `fd`, as the system has it. */
@@ -123,18 +151,37 @@ object KqueueHandles {
         )
     case SocketOption.ReceiveBuffer => PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_RCVBUF, "SO_RCVBUF")
     case SocketOption.SendBuffer    => PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_SNDBUF, "SO_SNDBUF")
+    case SocketOption.DontFragment  =>
+      if isIpv6(fd) then
+        PosixSockets.intOption(fd, PosixSockets.IPPROTO_IPV6, PosixSockets.IPV6_DONTFRAG, "IPV6_DONTFRAG") != 0
+      else if LinktimeInfo.isLinux then
+        PosixSockets.intOption(fd, PosixSockets.IPPROTO_IP, PosixSockets.IP_MTU_DISCOVER, "IP_MTU_DISCOVER") ==
+          PosixSockets.IP_PMTUDISC_DO
+      else PosixSockets.intOption(fd, PosixSockets.IPPROTO_IP, PosixSockets.IP_DONTFRAG, "IP_DONTFRAG") != 0
+    case SocketOption.ReusePort =>
+      PosixSockets.intOption(fd, socket.SOL_SOCKET, PosixSockets.SO_REUSEPORT, "SO_REUSEPORT") != 0
   }
 
-  /** Whether `fd` is a stream socket, and whether an IP one, as an option on it asks. */
-  private[kqueue] def socketKind(fd: Int): (Boolean, Boolean) = {
-    val stream = PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_TYPE, "SO_TYPE") == socket.SOCK_STREAM
+  /** `fd`'s kind of socket, as an option on it asks, or null if it is not an IP socket. */
+  private[kqueue] def socketKind(fd: Int): SocketOption.Kind | Null = {
     val storage = stackalloc[socket.sockaddr_storage]()
     val length = stackalloc[socket.socklen_t]()
     !length = sizeOf[socket.sockaddr_storage].toUInt
     val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
     if socket.getsockname(fd, address, length) != 0 then throw new IOException(s"Not a socket: descriptor $fd")
     val family = address.sa_family.toInt
-    (stream, family == socket.AF_INET || family == socket.AF_INET6)
+    if family != socket.AF_INET && family != socket.AF_INET6 then null
+    else if PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_TYPE, "SO_TYPE") == socket.SOCK_STREAM then
+      // Every IP listener this backend opens is noted (`listenStream`); macOS has no SO_ACCEPTCONN to ask.
+      DescriptorTable.note(fd) match {
+        case note: SocketNote if note.accepting != null => SocketOption.Kind.Listener
+        case _                                          => SocketOption.Kind.Connection
+      }
+    else {
+      !length = sizeOf[socket.sockaddr_storage].toUInt
+      if socket.getpeername(fd, address, length) == 0 then SocketOption.Kind.ConnectedDatagram
+      else SocketOption.Kind.BoundDatagram
+    }
   }
 
   /** A handle for another facility's I/O object, `target`, for a backend built on kqueue's reactors (see
@@ -186,7 +233,7 @@ object KqueueHandles {
 
   private[kqueue] def connectStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Int =
     socketFor(address, Transport.Stream) { fd =>
-      if address.isInstanceOf[IpAddress] then applyOptions(fd, options, stream = true)
+      if address.isInstanceOf[IpAddress] then applyOptions(fd, options, SocketOption.Kind.Connection)
       connectTo(fd, address)
     }
 
@@ -200,7 +247,7 @@ object KqueueHandles {
     socketFor(address, Transport.Stream) { fd =>
       if address.isInstanceOf[IpAddress] then {
         PosixSockets.setReuseAddress(fd)
-        applyOptions(fd, options, stream = true) // the buffers before listening, so its connections' windows scale
+        applyOptions(fd, options, SocketOption.Kind.Listener) // before binding and listening (see `SocketOption`)
         noteOf(fd).accepting = options
       }
       bindTo(fd, address)
@@ -234,7 +281,12 @@ object KqueueHandles {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
     socketFor(either, Transport.Datagram) { fd =>
-      if either.isInstanceOf[IpAddress] then applyOptions(fd, options, stream = false)
+      if either.isInstanceOf[IpAddress] then
+        applyOptions(
+          fd,
+          options,
+          if remote == null then SocketOption.Kind.BoundDatagram else SocketOption.Kind.ConnectedDatagram
+        )
       if local != null then bindTo(fd, local)
       if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
     }

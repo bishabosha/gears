@@ -147,6 +147,18 @@ object PosixSockets {
   def TCP_KEEPINTVL: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x101 else 5
   def TCP_KEEPCNT: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x102 else 6
 
+  /** Don't-fragment: `IP_DONTFRAG` on macOS and FreeBSD; on Linux `IP_MTU_DISCOVER`, `IP_PMTUDISC_DO` for on and
+    * `IP_PMTUDISC_DONT` for off. `IPV6_DONTFRAG` is the same on both.
+    */
+  inline val IPPROTO_IP = 0
+  inline val IPPROTO_IPV6 = 41
+  def IP_DONTFRAG: Int = 28
+  inline val IP_MTU_DISCOVER = 10
+  inline val IP_PMTUDISC_DONT = 0
+  inline val IP_PMTUDISC_DO = 2
+  inline val IPV6_DONTFRAG = 62
+  def SO_REUSEPORT: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x200 else 15
+
   /** Sets an `int` socket option, failing with an `IOException` that names it as `what`. */
   def setIntOption(fd: Int, level: Int, name: Int, value: Int, what: String): Unit = {
     val v = stackalloc[CInt]()

@@ -25,8 +25,17 @@ socket, fails as the op is built. Done: `NoDelay`, on unless set off on every ba
 on with its timings; `ReceiveBuffer` and `SendBuffer`, requests the system may round. A listener's options are each
 connection's it accepts. kqueue and NIO have all four and change them at any time; the Network.framework backend has
 `NoDelay` and `KeepAlive`, on its own sockets as they open only, read back as they opened, since it neither changes
-nor reports them after, and no buffer sizes. Contract checks follow each backend's `supports` and `canChange`. Still
-to come: don't-fragment, for QUIC (RFC 9000 §14); `SO_REUSEPORT`; options on Unix sockets.
+nor reports them after, and no buffer sizes. Then `DontFragment`, for QUIC (RFC 9000 §14), on datagram sockets, and
+`ReusePort`, on listeners and bound datagram sockets, given as they open only: kqueue and NIO have both, the
+Network.framework backend don't-fragment on its sockets as they open, and no reuse-port, since Network.framework shares
+no port. Probed on macOS 27.0, loopback's MTU 16384: a 20000-byte datagram goes fragmented, and with don't-fragment
+fails, `EMSGSIZE`, on IPv4 and IPv6, the IPv6 option covering a dual-stack socket's IPv4 sends; `SO_REUSEPORT` lets
+sockets that set it share a port, refusing one that does not, and macOS gives every connection and datagram to the
+socket bound last, where Linux spreads them, which the option's documentation says rather than hides. An option says
+which kinds of socket it applies to (`SocketOption.Kind`), and one place says what each opener and each accepted
+connection sets (`SocketOption.opening`, `accepted`), so the backends cannot differ there. Contract checks follow each
+backend's `supports` and `canChange`, and check the effect of each where the backend can show it. Still to come:
+options on Unix sockets.
 
 **A QUIC server on a wildcard address.** On a host with several addresses, a server bound to `0.0.0.0` must reply from
 the address the client sent to, or the client drops the reply. That needs the destination address with each received
@@ -112,7 +121,7 @@ Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-si
 | Step | Change | What it unblocks |
 | --- | --- | --- |
 | 1 | Local and peer addresses (done) | correctness for every server |
-| 2 | Options as a socket opens: no-delay, keepalive and buffer sizes done; don't-fragment next | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
+| 2 | Options as a socket opens (done: no-delay, keepalive, buffer sizes, don't-fragment, reuse-port) | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
 | 3 | Nanosecond timers re-armed in place | QUIC |
 | 4 | Vectored reads and writes | throughput for everything that frames its data |
 | 5 | Optional capabilities: packet info, batched datagrams, files sent without copying | fast QUIC and HTTP on the backends that can |

@@ -122,13 +122,13 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if owns(handle) then new NWFrameworkClose(handle) else KqueueOps.close(handle)
 
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
     val ip = gears.async.io.Ops.ip(address)
     if connectsOnKqueue(ip) then KqueueOps.connect(ip, options, forKqueue(into))
     else new NWFrameworkConnectTo(ip, options, into)
   }
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
     val ip = gears.async.io.Ops.ip(address)
     if listensOnKqueue(ip) then KqueueOps.listen(ip, options, forKqueue(into))
     else new NWFrameworkListen(ip, options, into)
@@ -141,10 +141,10 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     if connectsOnKqueue(r.nn) then KqueueOps.connectDatagram(l, r.nn, options, forKqueue(into))
-    else new NWFrameworkOpenDatagram(l, r.nn, into)
+    else new NWFrameworkOpenDatagram(l, r.nn, options, into)
   }
   def receive(handle: ConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
     if owns(handle) then new NWFrameworkReceive(handle, buf)
@@ -157,27 +157,33 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     * (see `NWFrameworkOps`).
     */
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
     KqueueOps.bindDatagram(local, options, forKqueue(into))
   }
 
   // Socket options: those Network.framework's own sockets take, as they open only, since nothing changes them after;
-  // not the buffer sizes, which it has none of, though kqueue's sockets here could take them.
+  // not the buffer sizes, which it has none of, nor `ReusePort`, since it shares no port (both of which kqueue's
+  // sockets here could take).
   def supports(option: SocketOption[?]): Boolean =
-    option == SocketOption.NoDelay || option == SocketOption.KeepAlive
+    option == SocketOption.NoDelay || option == SocketOption.KeepAlive || option == SocketOption.DontFragment
   def canChange(option: SocketOption[?]): Boolean = false
   def option[V](handle: Handle, option: SocketOption[V]): V = {
     if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option")
     if !owns(handle) then KqueueOps.option(handle, option)
     else {
       val h = NWFrameworkHandles.get(handle)
-      if h.kind == NWFrameworkHandle.Datagram then
-        throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+      val kind = h.kind match {
+        case NWFrameworkHandle.Stream   => SocketOption.Kind.Connection
+        case NWFrameworkHandle.Listener => SocketOption.Kind.Listener
+        case _                          => SocketOption.Kind.ConnectedDatagram
+      }
+      if !SocketOption.onSocket(option, kind) then throw gears.async.io.Ops.notFor(option, kind)
       option match {
-        case SocketOption.NoDelay   => gears.async.io.Ops.noDelay(h.tcp).asInstanceOf[V]
+        case SocketOption.NoDelay   => gears.async.io.Ops.noDelay(h.opened).asInstanceOf[V]
         case SocketOption.KeepAlive =>
-          val set = h.tcp.get(SocketOption.KeepAlive)
+          val set = h.opened.get(SocketOption.KeepAlive)
           (if set == null then KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
+        case SocketOption.DontFragment => (h.opened.get(SocketOption.DontFragment) == true).asInstanceOf[V]
         case _ => throw new IllegalArgumentException(s"This backend has no socket option $option")
       }
     }
@@ -402,9 +408,10 @@ final class NWFrameworkListen(address: IpAddress, options: SocketOptions, into: 
 final class NWFrameworkOpenDatagram(
     local: IpAddress | Null,
     remote: IpAddress,
+    options: SocketOptions,
     into: Slot[NWFrameworkKinds.ConnectedDatagram]
 ) extends NWFrameworkOpening(into, NWFrameworkKinds.connectedDatagram) {
-  protected def make(): Handle = NWFrameworkHandles.datagram(local, remote)
+  protected def make(): Handle = NWFrameworkHandles.datagram(local, remote, options)
 }
 
 /** Closes a handle, completing once it is closed (see `Ops.close`): a listener's cancellation is waited for, and its

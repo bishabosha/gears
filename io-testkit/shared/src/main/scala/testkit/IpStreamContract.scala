@@ -595,4 +595,35 @@ trait IpStreamContract extends ReactorContract {
     intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.ReceiveBuffer, 0))
     intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.KeepAlive, KeepAlive.On(0, 5, 3)))
   }
+
+  test("ReusePort lets listeners that set it share a port, refusing one that does not; a connection takes none") {
+    assume(backend.ops.supports(SocketOption.ReusePort), "this backend has no reuse-port option")
+    val reuse = SocketOptions.default.set(SocketOption.ReusePort, true)
+    intercept[IllegalArgumentException](backend.ops.connect(IpAddress.IPv4("127.0.0.1", 9), reuse, Slot()))
+    withReactor { r =>
+      val into = Slot[Listener]()
+      val first = opened(r, into, backend.ops.listen(IpAddress.IPv4("127.0.0.1", 0), reuse, into))
+      try {
+        assertEquals(backend.ops.option(first, SocketOption.ReusePort), true)
+        val address = backend.ops.localAddress(first).asInstanceOf[IpAddress]
+        val secondInto = Slot[Listener]()
+        val second = opened(r, secondInto, backend.ops.listen(address, reuse, secondInto))
+        try {
+          val refused = Slot[Listener]()
+          assert(run(r, backend.ops.listen(address, refused)).isInstanceOf[java.io.IOException], "one without it")
+        } finally close(r, second)
+      } finally close(r, first)
+    }
+  }
+
+  test("a stream socket takes no DontFragment, which is for datagram sockets") {
+    if backend.ops.supports(SocketOption.DontFragment) then
+      intercept[IllegalArgumentException](
+        backend.ops.connect(
+          IpAddress.IPv4("127.0.0.1", 9),
+          SocketOptions.default.set(SocketOption.DontFragment, true),
+          Slot()
+        )
+      )
+  }
 }

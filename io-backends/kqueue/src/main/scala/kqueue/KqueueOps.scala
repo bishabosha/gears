@@ -96,19 +96,19 @@ object KqueueOps
     on(handle)(new AcceptAll(fd(handle), into, max))
   }
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
     new ConnectTo(gears.async.io.Ops.ip(address), into, options)
   }
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
     new Listen(gears.async.io.Ops.ip(address), into, options)
   }
   def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp =
     new Listen(gears.async.io.Ops.unix(address), into)
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
     new OpenDatagram(gears.async.io.Ops.ip(local), null, into, KqueueKinds.boundDatagram, options)
   }
   def connectDatagram(
@@ -117,7 +117,7 @@ object KqueueOps
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     new OpenDatagram(l, r, into, KqueueKinds.connectedDatagram, options)
   }
@@ -164,13 +164,14 @@ object KqueueOps
   }
   def shutdownOutput(handle: Connection): KqueueOp = new ShutdownOutput(handle)
 
-  // Socket options: every one, on macOS and Linux alike, changed at any time.
+  // Socket options: every one, on macOS and Linux alike, changed at any time but `ReusePort`, set before binding.
   def supports(option: SocketOption[?]): Boolean = true
-  def canChange(option: SocketOption[?]): Boolean = true
+  def canChange(option: SocketOption[?]): Boolean = option != SocketOption.ReusePort
   def option[V](handle: Handle, option: SocketOption[V]): V =
     onSocket(handle, option)(KqueueHandles.optionOf(_, option).asInstanceOf[V])
   def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
     option.check(value)
+    if !canChange(option) then throw new IllegalArgumentException(s"$option is given as a socket opens, not changed")
     onSocket(handle, option)(KqueueHandles.setOption(_, option, value))
   }
 
@@ -178,10 +179,9 @@ object KqueueOps
   private def onSocket[A](handle: Handle, option: SocketOption[?])(body: Int => A): A = {
     KqueueHandles.checkOwn(handle)
     KqueueHandles.using(handle) {
-      val (stream, ip) = KqueueHandles.socketKind(handle.fd)
-      if !ip then throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
-      if option.streamsOnly && !stream then
-        throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+      val kind = KqueueHandles.socketKind(handle.fd)
+      if kind == null then throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
+      if !SocketOption.onSocket(option, kind.nn) then throw gears.async.io.Ops.notFor(option, kind.nn)
       body(handle.fd)
     }
   }
