@@ -58,11 +58,53 @@ passive future (`performAsync`, in the [README](README.md)) would remove the cos
 | An abortive close (RST, through `SO_LINGER` 0) | a server dropping an abusive client | through the options, or a flag on `close` |
 | A listen backlog of the caller's choosing | busy servers; it is 4096 on kqueue and NIO, capped by the kernel | kqueue and NIO; Network.framework has a connection limit instead |
 
+## QUIC and TLS from Network.framework itself
+
+Network.framework has QUIC built in (since macOS 12), with its own TLS 1.3, multiplexed streams and QUIC's unreliable
+datagrams (RFC 9221), and TLS over TCP; the Network.framework backend, which now uses the framework where it adds what
+kqueue cannot (see [`nwframework.md`](nwframework.md)), could offer both as optional capabilities that only it has, so
+that a program asking for them does not compile against kqueue or NIO. They map onto the interface's kinds:
+
+- **A QUIC connection** is like a listener of streams: an op opens it (address, ALPN, TLS settings), an accept-like op
+  takes each stream the peer opens, and an op opens one of its own.
+- **A bidirectional stream** is a `Connection`: `read`, `write`, `shutdownOutput` (its FIN) and `close` as they are; a
+  unidirectional one is a `Readable` or a `Writable`.
+- **QUIC's datagrams** are a send and a receive on the connection, and **a QUIC listener** accepts connections as a
+  TCP listener does.
+- **TLS over TCP** is a `Connection` opened with TLS settings, the rest as for any connection.
+
+That leaves two kinds of QUIC for gears, which are not exclusive: the framework's, as a capability of one backend, little
+work and macOS's alone; and QUIC in user space over datagrams, on every backend, a large project needing everything in
+the lists above (don't-fragment, fine timers re-armed in place, packet info, ECN, batching). What every server needs
+either way, addresses and socket options, stays first.
+
+Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-signed identity imported into memory):
+
+- **The pieces exist in the C interface since macOS 12**: `nw_parameters_create_quic` with ALPN, TLS identity and
+  verification, stream and datagram limits set on its options; a listener whose QUIC connections each arrive as a
+  connection group (`nw_listener_set_new_connection_group_handler`); a client's connection group with a multiplex
+  descriptor; streams opened with `nw_connection_group_extract_connection` and accepted with the group's new connection
+  handler, on either side.
+- **A stream is an `nw_connection_t`, read and written as a TCP connection is.** Three client streams (ids 4, 8, 12), a
+  unidirectional one (id 2) and a server-opened one (id 5) each carried their bytes and then their end as the
+  backend's TCP connections deliver it, a receive complete in the final context: the same events, so the backend's
+  stream handling, its send window and its pooled read would serve them as they are.
+- **Datagrams are a flow of their own** (options with `nw_quic_set_stream_is_datagram`), whose messages keep their
+  boundaries, complete and not final, as a connected UDP socket's do.
+- **Opening and accepting are what the interface has**: a stream's opener completes when the stream is ready, and the
+  group's handler hands over the peer's streams as a listener hands over connections, so a QUIC connection maps onto
+  an op that accepts streams and one that opens them.
+- **A stream's type from its metadata is not to be trusted**: the server's own stream, bidirectional by its id (5, a
+  server-opened bidirectional stream under RFC 9000) and by what it carried, reported itself a datagram stream on both
+  sides, with or without options saying otherwise; its id is what tells.
+- **Not probed yet**: a stream reset and its application error, flow control filling a stream's window, the connection
+  closing with streams open, and the cost against kqueue over TCP.
+
 ## What stays out of the backend interface
 
-- **TLS itself, ALPN and SNI.** They belong to a TLS layer over `read` and `write`. A native TLS library that drives a
-  socket itself would need readiness and the raw descriptor, which only kqueue has; kernel TLS on Linux and
-  Network.framework's own TLS would each be a capability of their own. Both are optional extras.
+- **TLS itself, ALPN and SNI, on kqueue and NIO.** They belong to a TLS layer over `read` and `write`. A native TLS
+  library that drives a socket itself would need readiness and the raw descriptor, which only kqueue has; kernel TLS on
+  Linux would be a capability of its own, as Network.framework's TLS would (above). Both are optional extras.
 - **The WebSocket upgrade.** The connection carries on after HTTP's 101 response. The catch is in a higher level: a
   buffered reader such as `chunks` that has read past the headers must hand those bytes back, which is a point for
   `higherlevel`, not the backends.
