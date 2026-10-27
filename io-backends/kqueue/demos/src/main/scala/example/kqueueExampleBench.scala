@@ -448,7 +448,7 @@ object KQueueExampleBench {
     // `mixed`, `fairness`, `starvation` and the compute variants of `concurrent` measure gears scheduling against
     // compute work, and `pingpong-fresh-ops` building ops through the reactor interface, none of which a hand-written
     // loop has a counterpart for; nor does it write `pingpong-pooled`, `large` and `large-pooled`, which measure the
-    // backend's pool and the copies of large reads.
+    // backend's pool and the copies of large reads, nor the `rearm` scenarios, which measure re-arming a gears timer.
     val gearsOnly =
       Set(
         "mixed",
@@ -459,7 +459,10 @@ object KQueueExampleBench {
         "fairness",
         "starvation",
         "concurrent-compute",
-        "concurrent-offload"
+        "concurrent-offload",
+        "rearm-cancel",
+        "rearm-later",
+        "rearm-earlier"
       )
     val selected = GearsBench.scenarios.filter(s => !gearsOnly(s.name) && (names.isEmpty || names.contains(s.name)))
     address match {
