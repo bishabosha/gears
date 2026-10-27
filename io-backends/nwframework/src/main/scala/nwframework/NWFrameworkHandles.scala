@@ -458,6 +458,95 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
+  /** A scattering read (see `Ops.read`): waits as `read` does for the first buffer with room, then fills those after it
+    * from what has come already, stopping at the first left short: the bytes taken, 0 at the end of the stream, or -1
+    * waiting.
+    */
+  def readMany(bufs: Array[java.nio.ByteBuffer], reactor: KqueueReactor, token: Long): Int = synchronized {
+    var total = 0
+    var result = 0
+    var i = 0
+    var more = true
+    while more && i < bufs.length do {
+      val buf = bufs(i)
+      if buf.hasRemaining() then {
+        val n =
+          if total == 0 then read(gears.async.io.internal.NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
+          else if pooledReady != null || stashLength > 0 then
+            read(gears.async.io.internal.NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
+          else 0
+        if n > 0 then {
+          gears.async.io.internal.NativeBuffer.advance(buf, n)
+          total += n
+        } else if total == 0 then result = n // the end, or waiting
+        more = n > 0 && !buf.hasRemaining()
+      }
+      i += 1
+    }
+    if total > 0 then total else result
+  }
+
+  /** A gathering write (see `Ops.write`), as `write` writes one buffer: the bytes of `bufs`, in order, as many as the
+    * send window has room for, copied once into one buffer the send frees, and returned; 0, sending nothing, with the
+    * window full; negated with no window.
+    */
+  def writeMany(bufs: Array[java.nio.ByteBuffer], reactor: KqueueReactor, token: Long): Int = synchronized {
+    checkOpen()
+    if writeError != 0 then throw failure("write", writeError)
+    if outputShut then throw new IOException("The connection was shut down for writing")
+    val total = gears.async.io.Ops.remaining(bufs)
+    val room = if NWFrameworkHandle.SendWindow == 0 then total else NWFrameworkHandle.SendWindow - sentBytes
+    if room <= 0 then {
+      await(Write, reactor, token)
+      0
+    } else {
+      val n = math.min(total, room).toInt
+      val region = gathered(bufs, n)
+      if NWFrameworkHandle.SendWindow == 0 then {
+        await(Write, reactor, token)
+        sentBytes += n
+        NWFrameworkIo.nwf_send_owned(ptr, region, n)
+        -n
+      } else {
+        sentBytes += n
+        NWFrameworkIo.nwf_send_owned(ptr, region, n)
+        n
+      }
+    }
+  }
+
+  /** A connected datagram socket's send of `bufs`, in order, as one datagram, as `send` sends one buffer. */
+  def sendMany(bufs: Array[java.nio.ByteBuffer], reactor: KqueueReactor, token: Long): Boolean = synchronized {
+    checkOpen()
+    if writeError != 0 then throw failure("write", writeError)
+    val n = gears.async.io.Ops.remaining(bufs).toInt
+    val fits = sentBytes < NWFrameworkHandle.SendWindow
+    if !fits then await(Write, reactor, token)
+    sentBytes += n
+    NWFrameworkIo.nwf_send_owned(ptr, gathered(bufs, n), n)
+    fits
+  }
+
+  /** The first `n` bytes remaining in `bufs`, in order, copied into a buffer from `malloc`, the buffers advanced past
+    * them.
+    */
+  private def gathered(bufs: Array[java.nio.ByteBuffer], n: Int): Ptr[Byte] = {
+    val region = stdlib.malloc(math.max(n, 1).toCSize)
+    var at = 0
+    var i = 0
+    while at < n && i < bufs.length do {
+      val buf = bufs(i)
+      val take = math.min(buf.remaining(), n - at)
+      if take > 0 then {
+        string.memcpy(region + at, gears.async.io.internal.NativeBuffer.atPosition(buf), take.toCSize)
+        gears.async.io.internal.NativeBuffer.advance(buf, take)
+        at += take
+      }
+      i += 1
+    }
+    region
+  }
+
   /** Ends a connected stream's sending side (see `StreamSocketOps.shutdownOutput`), after the sends before it. */
   def shutdownOutput(): Unit = synchronized {
     checkOpen()

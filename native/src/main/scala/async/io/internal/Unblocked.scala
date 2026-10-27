@@ -25,6 +25,12 @@ private[io] object Unblocked {
 
   def write(fildes: CInt, buf: CVoidPtr, nbyte: CSize): CInt = extern
 
+  def readv(fildes: CInt, iov: Ptr[scala.scalanative.posix.sys.uio.iovec], iovcnt: CInt): CSSize = extern
+
+  def writev(fildes: CInt, iov: Ptr[scala.scalanative.posix.sys.uio.iovec], iovcnt: CInt): CSSize = extern
+
+  def sendmsg(fd: CInt, message: Ptr[socket.msghdr], flags: CInt): CSSize = extern
+
   def accept(fd: CInt, address: Ptr[socket.sockaddr], addressLength: Ptr[socket.socklen_t]): CInt = extern
 
   def recvmsg(fd: CInt, message: Ptr[socket.msghdr], flags: CInt): CSSize = extern

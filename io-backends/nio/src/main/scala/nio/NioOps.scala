@@ -92,6 +92,14 @@ object NioOps
 
   def read(handle: Readable, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Writable, buf: ByteBuffer): Write = new Write(handle, buf)
+  def read(handle: Readable, bufs: Array[ByteBuffer]): ReadMany = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    new ReadMany(handle, bufs)
+  }
+  def write(handle: Writable, bufs: Array[ByteBuffer]): WriteMany = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    new WriteMany(handle, bufs)
+  }
   def accept(handle: Listener, into: Slot[Connection]): Accept = new Accept(handle, into)
   def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): AcceptAll = {
     require(max > 0, s"max must be positive, not $max")
@@ -168,6 +176,14 @@ object NioOps
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): Send =
     new Send(handle, buf, gears.async.io.Ops.ip(to))
   def send(handle: ConnectedDatagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
+  def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): Send = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    new Send(handle, bufs, gears.async.io.Ops.ip(to))
+  }
+  def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): Send = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    new Send(handle, bufs, null)
+  }
   def timer(duration: scala.concurrent.duration.FiniteDuration): NioTimer = {
     require(duration.length >= 0, s"A timer's time is not negative: $duration")
     new NioTimer(duration.toNanos)
@@ -195,6 +211,13 @@ object NioOps
   def read(handle: File, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: File, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)
   def sync(handle: File): FileSync = new FileSync(handle)
+
+  /** `bufs`' remaining bytes, `size` of them, in one buffer, for a send that takes one; `bufs` left as they were. */
+  private[nio] def joined(bufs: Array[ByteBuffer], size: Long): ByteBuffer = {
+    val packet = ByteBuffer.allocateDirect(size.toInt)
+    bufs.foreach(b => packet.put(b.duplicate()))
+    packet.flip()
+  }
 
   private def direct(pool: BufferPool): DirectPool = pool match {
     case direct: DirectPool => direct
@@ -374,6 +397,21 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
   def perform(): Boolean = !buf.hasRemaining() || entry.nn.write(buf) >= 0
 }
 
+/** Fills `bufs` in order, as `Read` fills one, through the channel's scattering read. */
+final class ReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
+  def interest: Interest = Interest.Read
+  def perform(): Boolean = {
+    if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.buffersFull(bufs)
+    entry.nn.read(bufs) != 0
+  }
+}
+
+/** Drains `bufs` in order, as `Write` drains one, through the channel's gathering write. */
+final class WriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
+  def interest: Interest = Interest.Write
+  def perform(): Boolean = !gears.async.io.Ops.anyRemaining(bufs) || entry.nn.write(bufs) >= 0
+}
+
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
 final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends Command {
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
@@ -505,18 +543,26 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] |
 /** Sends `buf` as one packet, consuming it: from a bound socket to `to`, an empty one too; from a connected one, `to`
   * null, to its peer, never an empty one.
   */
-final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends Command {
+final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Null) extends Command {
+  def this(handle: Handle, buf: ByteBuffer, to: IpAddress | Null) = this(handle, Array(buf), to)
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
-    val size = buf.remaining()
+    val size = gears.async.io.Ops.remaining(bufs)
     if target == null then {
       // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
       // so no backend sends an empty packet on a connected socket (see `IpDatagramOps.send`).
-      if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
-      channel.write(buf) > 0 // a datagram goes whole or not at all
-    } else channel.send(buf, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes
+      if size == 0 then throw gears.async.io.Ops.emptyPacket(bufs(0))
+      // A connected channel's gathering write sends one datagram of all the buffers.
+      (if bufs.length == 1 then channel.write(bufs(0)).toLong else channel.write(bufs)) > 0
+    } else {
+      // A send to an address takes one buffer: several are joined, a copy.
+      val packet = if bufs.length == 1 then bufs(0) else NioOps.joined(bufs, size)
+      val sent = channel.send(packet, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes
+      if sent && bufs.length > 1 then bufs.foreach(b => b.position(b.limit()))
+      sent
+    }
   }
 }
 

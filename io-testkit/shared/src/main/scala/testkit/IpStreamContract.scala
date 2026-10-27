@@ -626,4 +626,19 @@ trait IpStreamContract extends ReactorContract {
         )
       )
   }
+
+  test("a connection's gathering write and scattering read carry a header and its body in order") {
+    withReactor { r =>
+      connected(r, SocketOptions.default, SocketOptions.default) { (client, server) =>
+        val header = allocate(4)
+        header.putInt(5).flip()
+        assertEquals(run(r, backend.ops.write(client, Array(header, bytes("hello")))), null)
+        val into = Array(allocate(4), allocate(5))
+        while into(1).hasRemaining() do assertEquals(run(r, backend.ops.read(server, into)), null)
+        assertEquals(into(0).getInt(0), 5)
+        into(1).flip()
+        assertEquals(StandardCharsets.UTF_8.decode(into(1)).toString, "hello")
+      }
+    }
+  }
 }

@@ -351,6 +351,38 @@ object PosixSockets {
   /** Send exactly one packet, returning false if the socket would block. A null destination sends to the peer of a
     * connected datagram socket.
     */
+  /** Sends `bufs`, in order, as one datagram, with one `sendmsg`, to `destination` if given: true once sent, consuming
+    * them, false if it would block, as `sendDatagram`.
+    */
+  def sendDatagram(
+      fd: Int,
+      bufs: Array[java.nio.ByteBuffer],
+      destination: Ptr[socket.sockaddr],
+      destinationLength: socket.socklen_t
+  ): Boolean = {
+    val vectors = stackalloc[uio.iovec](math.min(bufs.length, NonBlocking.MaxBuffers))
+    val count = NonBlocking.fill(vectors, bufs, room = false)
+    val length = gears.async.io.Ops.remaining(bufs)
+    val message = stackalloc[socket.msghdr]()
+    message.msg_name = destination.asInstanceOf[Ptr[Byte]]
+    message.msg_namelen = destinationLength
+    message.msg_iov = vectors
+    message.msg_iovlen = count
+    message.msg_control = null
+    message.msg_controllen = 0.toUInt
+    message.msg_flags = 0
+    var written = Unblocked.sendmsg(fd, message, 0)
+    while (written < 0 && errno.errno == errno.EINTR) written = Unblocked.sendmsg(fd, message, 0)
+    if (written < 0) {
+      if (errno.errno == errno.EAGAIN || errno.errno == errno.EWOULDBLOCK) false
+      else throw new IOException(s"Failed to send datagram: ${cError()}")
+    } else {
+      if (written.toLong != length) throw new IOException(s"Incomplete datagram: sent $written of $length bytes")
+      bufs.foreach(b => b.position(b.limit()))
+      true
+    }
+  }
+
   def sendDatagram(
       fd: Int,
       buffer: Ptr[Byte],

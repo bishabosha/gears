@@ -522,6 +522,14 @@ void nwf_send(nwf_handle_t *h, const uint8_t *bytes, int len) {
   nw_release(data);
 }
 
+/* Sends `len` bytes of `bytes`, a buffer from `malloc` the send takes and frees once processed: for bytes gathered from
+ * several buffers into one, copied once, as `nwf_send` copies one; `NWF_EV_SENT` once processed. */
+void nwf_send_owned(nwf_handle_t *h, uint8_t *bytes, int len) {
+  dispatch_data_t data = dispatch_data_create(bytes, len, NULL, DISPATCH_DATA_DESTRUCTOR_FREE);
+  nwf_send_in(h, data, len, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT);
+  nw_release(data);
+}
+
 /* Ends a stream connection's sending side, after what was sent before: TCP's FIN, as `shutdown(SHUT_WR)` sends,
  * the connection staying open for receiving. `NWF_EV_SENT`, with length 0, once processed. */
 void nwf_send_final(nwf_handle_t *h) {

@@ -1146,4 +1146,63 @@ trait ReactorContract extends FunSuite {
       assertEquals(outClosed.completed, 1, String.valueOf(outClosed.failure))
     }
   }
+
+  /** The bytes of `bufs` read so far, in order, as text. */
+  private def readText(bufs: Array[ByteBuffer]): String =
+    bufs.map { b =>
+      val copy = b.duplicate()
+      copy.flip()
+      java.nio.charset.StandardCharsets.UTF_8.decode(copy).toString
+    }.mkString
+
+  test("a scattering read fills its buffers in order, each before the next, completing once bytes have come") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        assertEquals(run(r, backend.ops.write(out, bytes("hello world"))), null)
+        val bufs = Array(allocate(4), allocate(4), allocate(8))
+        assertEquals(run(r, backend.ops.read(in, bufs)), null)
+        assertEquals(bufs.map(_.position()).toList, List(4, 4, 3))
+        assertEquals(readText(bufs), "hello world")
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    }
+  }
+
+  test("a scattering read refuses buffers none of which has room, or none, and reads nothing at the end") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        intercept[IllegalArgumentException](backend.ops.read(in, Array.empty[ByteBuffer]))
+        val full = allocate(4)
+        full.position(4)
+        assert(run(r, backend.ops.read(in, Array(full, full.duplicate()))).isInstanceOf[IllegalArgumentException])
+        close(r, out)
+        val bufs = Array(allocate(4), allocate(4))
+        assertEquals(run(r, backend.ops.read(in, bufs)), null)
+        assertEquals(bufs.map(_.position()).toList, List(0, 0), "the end of the stream adds nothing")
+      } finally close(r, in)
+    }
+  }
+
+  test("a gathering write drains its buffers in order, and with nothing remaining completes at once") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        val parts = Array(bytes("ab"), bytes(""), bytes("cdef"))
+        assertEquals(run(r, backend.ops.write(out, parts)), null)
+        assert(parts.forall(!_.hasRemaining()), "all written: a pipe takes six bytes at once")
+        assertEquals(run(r, backend.ops.write(out, parts)), null, "nothing remaining")
+        val buf = allocate(16)
+        assertEquals(run(r, backend.ops.read(in, buf)), null)
+        buf.flip()
+        assertEquals(java.nio.charset.StandardCharsets.UTF_8.decode(buf).toString, "abcdef")
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    }
+  }
 }

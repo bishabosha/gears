@@ -84,6 +84,15 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if owns(handle) then new NWFrameworkRead(handle, buf) else KqueueOps.read(KqueueKinds.readable(handle), buf)
   def write(handle: Writable, buf: ByteBuffer): KqueueOp & Repeatable =
     if owns(handle) then new NWFrameworkWrite(handle, buf) else KqueueOps.write(KqueueKinds.writable(handle), buf)
+  def read(handle: Readable, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    if owns(handle) then new NWFrameworkReadMany(handle, bufs) else KqueueOps.read(KqueueKinds.readable(handle), bufs)
+  }
+  def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    if owns(handle) then new NWFrameworkWriteMany(handle, bufs)
+    else KqueueOps.write(KqueueKinds.writable(handle), bufs)
+  }
   def read(handle: Readable, pool: BufferPool, into: Slot[Received]): KqueueOp & Repeatable =
     if owns(handle) then new NWFrameworkPooledRead(handle, native(pool), into)
     else KqueueOps.read(KqueueKinds.readable(handle), pool, into)
@@ -150,8 +159,13 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if owns(handle) then new NWFrameworkReceive(handle, buf)
     else KqueueOps.receive(KqueueKinds.connectedDatagram(handle), buf)
   def send(handle: ConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
-    if owns(handle) then new NWFrameworkSend(handle, buf)
+    if owns(handle) then new NWFrameworkSend(handle, Array(buf))
     else KqueueOps.send(KqueueKinds.connectedDatagram(handle), buf)
+  def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    if owns(handle) then new NWFrameworkSend(handle, bufs)
+    else KqueueOps.send(KqueueKinds.connectedDatagram(handle), bufs)
+  }
 
   /** A bound datagram socket, which sends to and hears from anyone, is kqueue's: Network.framework has no such socket
     * (see `NWFrameworkOps`).
@@ -196,6 +210,8 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     KqueueOps.receive(KqueueKinds.boundDatagram(handle), buf, from)
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
     KqueueOps.send(KqueueKinds.boundDatagram(handle), buf, to)
+  def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.boundDatagram(handle), bufs, to)
 
   // Kqueue's alone.
   def connect(address: UnixAddress, into: Slot[Connection]): KqueueOp = KqueueOps.connect(address, forKqueue(into))
@@ -294,6 +310,38 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
       if n > 0 then NativeBuffer.advance(buf, n)
       n >= 0
     }
+}
+
+/** Fills `bufs` in order (see `Ops.read`), as `NWFrameworkRead` fills one (`NWFrameworkHandle.readMany`). */
+final class NWFrameworkReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Read
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
+    if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.buffersFull(bufs)
+    else h.readMany(bufs, reactor, token) >= 0
+}
+
+/** Drains `bufs` in order (see `Ops.write`), as `NWFrameworkWrite` drains one (`NWFrameworkHandle.writeMany`). */
+final class NWFrameworkWriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  def kind: Int = NWFrameworkHandle.Write
+  private var sent = false
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
+    if sent then {
+      sent = false
+      h.sent()
+    } else if !gears.async.io.Ops.anyRemaining(bufs) then true
+    else {
+      val n = h.writeMany(bufs, reactor, token)
+      if n > 0 then true
+      else if n == 0 then false
+      else {
+        sent = true
+        false
+      }
+    }
+
+  override protected def reset(): Unit = sent = false
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`). */
@@ -497,10 +545,10 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
   }
 }
 
-/** Sends `buf` as one datagram to the socket's peer, consuming it; never an empty one, as on every backend (see
-  * `IpDatagramOps.send`).
+/** Sends `bufs`, in order, as one datagram to the socket's peer, consuming them; never an empty one, as on every
+  * backend (see `IpDatagramOps.send`).
   */
-final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
+final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 
@@ -509,10 +557,14 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer) extends NWFrame
       sent = false
       h.sent()
     } else {
-      val size = buf.remaining()
-      if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
-      val done = h.send(NativeBuffer.atPosition(buf), size, reactor, token)
-      buf.position(buf.limit()) // a datagram goes whole or not at all
+      if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.emptyPacket(bufs(0))
+      val done =
+        if bufs.length == 1 then {
+          val buf = bufs(0)
+          val d = h.send(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
+          buf.position(buf.limit()) // a datagram goes whole or not at all
+          d
+        } else h.sendMany(bufs, reactor, token)
       sent = !done
       done
     }

@@ -62,7 +62,7 @@ where the mover is often another worker's thread and wakes the timer's reactor.
 
 | Proposal | Who needs it | Backends |
 | --- | --- | --- |
-| Vectored reads and writes (`readv`, `writev`) | a TLS record's header with its payload, HTTP/2 and WebSocket frames, HTTP headers with a body, all without copying | kqueue `readv`/`writev`; NIO's scattering and gathering channels; Network.framework concatenates `dispatch_data`. All three. |
+| Vectored reads and writes (`readv`, `writev`) | a TLS record's header with its payload, HTTP/2 and WebSocket frames, HTTP headers with a body, all without copying | kqueue `readv`/`writev`; NIO's scattering and gathering channels; Network.framework gathers a write into one buffer it owns, one copy as a single write has, and scatters what it received. All three, and the datagram sends. |
 | Batched datagrams, several packets a call, with segmentation offload | QUIC's throughput, dominated by system calls per packet | Linux `sendmmsg`/`recvmmsg`, macOS only private calls; none on the JDK; batched sends on Network.framework. An optional capability. |
 | A file sent to a socket without copying (`sendfile`, `transferTo`) | static files over HTTP/1 | kqueue and NIO; not Network.framework. An optional capability. |
 | Telling that a datagram was truncated (option B when truncation was settled) | mostly diagnostics, as QUIC fixes its packet size | all three, with a copy on NIO |
@@ -132,7 +132,7 @@ Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-si
 | 1 | Local and peer addresses (done) | correctness for every server |
 | 2 | Options as a socket opens (done: no-delay, keepalive, buffer sizes, don't-fragment, reuse-port) | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
 | 3 | Nanosecond timers re-armed in place (done) | QUIC |
-| 4 | Vectored reads and writes | throughput for everything that frames its data |
+| 4 | Vectored reads and writes (done) | throughput for everything that frames its data |
 | 5 | Optional capabilities: packet info, batched datagrams, files sent without copying | fast QUIC and HTTP on the backends that can |
 
 Each comes with contract checks on every backend that has it.

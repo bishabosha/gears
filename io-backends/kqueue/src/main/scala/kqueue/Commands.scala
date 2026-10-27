@@ -38,6 +38,29 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   override def edgeTriggered: Boolean = true
 }
 
+/** Fills `bufs` in order with one `readv`, as `ReadIntoBuffer` fills one (see `Ops.read`). */
+final class ReadIntoBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
+  def interest: Interest = Interest.Read
+  override def refusal: Throwable | Null =
+    if gears.async.io.Ops.anyRemaining(bufs) then null else gears.async.io.Ops.buffersFull(bufs)
+  private var read = 0
+  private var filled = false
+  def perform(): Boolean = {
+    read = NonBlocking.readv(fd, bufs)
+    filled = !gears.async.io.Ops.anyRemaining(bufs)
+    read != 0
+  }
+  override def transferred: Int = read
+  override def mayStillBeReady: Boolean = read < 0 || filled
+  override def edgeTriggered: Boolean = true
+}
+
+/** Drains `bufs` in order with one `writev`, as `WriteFromBuffer` drains one (see `Ops.write`). */
+final class WriteFromBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
+  def interest: Interest = Interest.Write
+  def perform(): Boolean = !gears.async.io.Ops.anyRemaining(bufs) || NonBlocking.writev(fd, bufs) >= 0
+}
+
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): as `ReadIntoBuffer`, into a buffer taken when
   * the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
@@ -177,21 +200,31 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
   * without an address, as the JDK sends it, since macOS refuses one there (`EISCONN`). An empty packet is refused on a
   * connected socket, since the JDK cannot send one (see `IpDatagramOps.send`). Done once it has gone.
   */
-final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) extends Command {
+final class SendTo(val fd: Int, bufs: Array[ByteBuffer], to: SocketAddress | Null) extends Command {
+  def this(fd: Int, buf: ByteBuffer, to: SocketAddress | Null) = this(fd, Array(buf), to)
   def interest: Interest = Interest.Write
 
   override def refusal: Throwable | Null =
-    if to == null && !buf.hasRemaining() then gears.async.io.Ops.emptyPacket(buf) else null
+    if to == null && !gears.async.io.Ops.anyRemaining(bufs) then gears.async.io.Ops.emptyPacket(bufs(0)) else null
 
   def perform(): Boolean = {
-    val size = buf.remaining()
     val sent =
-      if to == null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
+      if bufs.length == 1 then {
+        val buf = bufs(0)
+        val size = buf.remaining()
+        val done =
+          if to == null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
+          else
+            KqueueHandles.withSocketAddr(KqueueHandles.targetFor(fd, to)) { (address, length) =>
+              PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)
+            }
+        if done then buf.position(buf.limit()) // a datagram goes whole or not at all
+        done
+      } else if to == null then PosixSockets.sendDatagram(fd, bufs, null, 0.toUInt)
       else
         KqueueHandles.withSocketAddr(KqueueHandles.targetFor(fd, to)) { (address, length) =>
-          PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)
+          PosixSockets.sendDatagram(fd, bufs, address, length)
         }
-    if sent then buf.position(buf.limit()) // a datagram goes whole or not at all
     sent
   }
 }

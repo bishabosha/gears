@@ -44,6 +44,7 @@ private[nwframework] object NWFrameworkIo {
   def nwf_data_copy(data: Ptr[Byte], into: Ptr[Byte]): Unit = extern
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
   def nwf_send_final(handle: Handle): Unit = extern
+  def nwf_send_owned(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
 
   def nwf_listen(host: CString, port: CInt, settings: Ptr[TcpSettings]): Handle = extern
 

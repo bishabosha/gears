@@ -35,6 +35,12 @@ import NioCapabilities.Handle
 private[nio] trait Entry {
   def read(buf: ByteBuffer): Int
   def write(buf: ByteBuffer): Int
+
+  /** Fills `bufs` in order, as `read` fills one: the bytes read, 0 if none are there now, or -1 at end of stream. */
+  def read(bufs: Array[ByteBuffer]): Long
+
+  /** Drains `bufs` in order, as `write` drains one: the bytes written, or -1 if none fit now. */
+  def write(bufs: Array[ByteBuffer]): Long
   def close(): Unit
 }
 
@@ -55,6 +61,18 @@ private[nio] final class Selectable(val channel: SelectableChannel, bound: Bound
     case writable: WritableByteChannel =>
       val written = writable.write(buf)
       if written == 0 && buf.hasRemaining then -1 else written
+    case _ => throw new IOException(s"$channel cannot be written")
+  }
+
+  def read(bufs: Array[ByteBuffer]): Long = channel match {
+    case scattering: java.nio.channels.ScatteringByteChannel => scattering.read(bufs)
+    case _                                                   => throw new IOException(s"$channel cannot be read")
+  }
+
+  def write(bufs: Array[ByteBuffer]): Long = channel match {
+    case gathering: java.nio.channels.GatheringByteChannel =>
+      val written = gathering.write(bufs)
+      if written == 0 && gears.async.io.Ops.anyRemaining(bufs) then -1 else written
     case _ => throw new IOException(s"$channel cannot be written")
   }
 
@@ -194,6 +212,8 @@ private[nio] object SelectorPool {
 private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
   def read(buf: ByteBuffer): Int = RegularFile.failing(channel.read(buf))
   def write(buf: ByteBuffer): Int = RegularFile.failing(channel.write(buf))
+  def read(bufs: Array[ByteBuffer]): Long = RegularFile.failing(channel.read(bufs))
+  def write(bufs: Array[ByteBuffer]): Long = RegularFile.failing(channel.write(bufs))
   def read(buf: ByteBuffer, offset: Long): Int = RegularFile.failing(channel.read(buf, offset))
   def write(buf: ByteBuffer, offset: Long): Int = RegularFile.failing(channel.write(buf, offset))
   def force(): Unit = RegularFile.failing(channel.force(true)) // the metadata too, as fsync syncs it

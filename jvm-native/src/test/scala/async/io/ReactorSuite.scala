@@ -83,22 +83,34 @@ class ReactorSuite extends FunSuite {
   }
 
   test("an op on the wrong kind of handle does not compile") {
-    assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.read(l, null)").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.write(d, null)").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.accept(c, Slot[b.Connection]())").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.shutdownOutput(l)").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.send(c, null)").nonEmpty)
+    assert(
+      compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.read(l, (null: java.nio.ByteBuffer))").nonEmpty
+    )
     assert(
       compileErrors(
-        "def a(b: UnixDatagramBackend)(d: b.UnixBoundDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"
+        "def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.write(d, (null: java.nio.ByteBuffer))"
       ).nonEmpty
     )
-    assert(compileErrors("def a(b: FileBackend & SocketBackend)(c: b.Connection) = b.ops.read(c, null, 0L)").nonEmpty)
-    assert(compileErrors("def a(b: PipeBackend)(r: b.Readable) = b.ops.write(r, null)").nonEmpty)
+    assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.accept(c, Slot[b.Connection]())").nonEmpty)
+    assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.shutdownOutput(l)").nonEmpty)
+    assert(
+      compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.send(c, (null: java.nio.ByteBuffer))").nonEmpty
+    )
+    assert(
+      compileErrors(
+        "def a(b: UnixDatagramBackend)(d: b.UnixBoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
+      ).nonEmpty
+    )
+    assert(
+      compileErrors(
+        "def a(b: FileBackend & SocketBackend)(c: b.Connection) = b.ops.read(c, (null: java.nio.ByteBuffer), 0L)"
+      ).nonEmpty
+    )
+    assert(compileErrors("def a(b: PipeBackend)(r: b.Readable) = b.ops.write(r, (null: java.nio.ByteBuffer))").nonEmpty)
     assert(compileErrors("def a(b: SocketBackend)(c: b.Connection): b.Listener = c").nonEmpty)
     assertEquals(
       compileErrors(
-        "def a(b: SocketBackend & FileBackend)(c: b.Connection, f: b.File) = { b.ops.read(c, null); b.ops.read(f, null) }"
+        "def a(b: SocketBackend & FileBackend)(c: b.Connection, f: b.File) = { b.ops.read(c, (null: java.nio.ByteBuffer)); b.ops.read(f, (null: java.nio.ByteBuffer)) }"
       ),
       ""
     )
@@ -107,10 +119,12 @@ class ReactorSuite extends FunSuite {
   test(
     "a bound datagram socket sends to an address and hears from anyone; a connected one, to and from its peer alone"
   ) {
-    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, null)").nonEmpty)
+    assert(
+      compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))").nonEmpty
+    )
     assert(
       compileErrors(
-        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"
+        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
       ).nonEmpty
     )
     assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.receive(d, null)").nonEmpty)
@@ -121,15 +135,27 @@ class ReactorSuite extends FunSuite {
     )
     assert(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram): b.BoundDatagram = d").nonEmpty)
     assert(
-      compileErrors("def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, null, null)").nonEmpty
+      compileErrors(
+        "def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), null)"
+      ).nonEmpty
     )
     assertEquals(
-      compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"),
+      compileErrors(
+        "def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
+      ),
       ""
     )
-    assertEquals(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, null)"), "")
+    assertEquals(
+      compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"),
+      ""
+    )
     assertEquals(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.receive(d, null)"), "")
-    assertEquals(compileErrors("def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, null)"), "")
+    assertEquals(
+      compileErrors(
+        "def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"
+      ),
+      ""
+    )
   }
 
   test("each address family and transport is a capability of its own: IP streams need not bring IP datagrams") {
@@ -215,8 +241,22 @@ class ReactorSuite extends FunSuite {
     assertEquals(compileErrors("def p(b: PipeBackend) = b.ops.pipe(Slot[b.Readable](), Slot[b.Writable]())"), "")
     assertEquals(compileErrors("def r(b: ResolveBackend) = b.ops.resolve(\"h\", Slot())"), "")
     assertEquals(compileErrors("def f(b: FileBackend) = b.ops.open(\"p\", false, Slot[b.File]())"), "")
-    assertEquals(compileErrors("def s(b: FileBackend)(h: b.File): Repeatable = b.ops.read(h, null, 0L)"), "")
-    assertEquals(compileErrors("def t(b: Backend)(h: b.Readable): Repeatable = b.ops.read(h, null)"), "")
+    assertEquals(
+      compileErrors("def s(b: FileBackend)(h: b.File): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer), 0L)"),
+      ""
+    )
+    assertEquals(
+      compileErrors("def t(b: Backend)(h: b.Readable): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer))"),
+      ""
+    )
+    assertEquals(
+      compileErrors("def v(b: Backend)(h: b.Readable): Repeatable = b.ops.read(h, Array[java.nio.ByteBuffer]())"),
+      ""
+    )
+    assertEquals(
+      compileErrors("def w(b: Backend)(h: b.Writable): Repeatable = b.ops.write(h, Array[java.nio.ByteBuffer]())"),
+      ""
+    )
   }
 
   test("a reactor is a submitter with a loop; a submitter keeps its ops' attachments, a backend does not") {

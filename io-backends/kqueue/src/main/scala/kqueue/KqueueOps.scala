@@ -90,6 +90,14 @@ object KqueueOps
 
   def read(handle: Readable, buf: ByteBuffer): ReadIntoBuffer = on(handle)(ReadIntoBuffer(fd(handle), buf))
   def write(handle: Writable, buf: ByteBuffer): WriteFromBuffer = on(handle)(WriteFromBuffer(fd(handle), buf))
+  def read(handle: Readable, bufs: Array[ByteBuffer]): ReadIntoBuffers = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new ReadIntoBuffers(fd(handle), bufs))
+  }
+  def write(handle: Writable, bufs: Array[ByteBuffer]): WriteFromBuffers = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new WriteFromBuffers(fd(handle), bufs))
+  }
   def accept(handle: Listener, into: Slot[Connection]): Accept = on(handle)(Accept(fd(handle), into))
   def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): AcceptAll = {
     require(max > 0, s"max must be positive, not $max")
@@ -142,6 +150,14 @@ object KqueueOps
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): SendTo =
     on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.ip(to)))
   def send(handle: ConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
+  def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): SendTo = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.Ops.ip(to)))
+  }
+  def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): SendTo = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, null))
+  }
   @annotation.targetName("receiveUnix")
   def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = true))

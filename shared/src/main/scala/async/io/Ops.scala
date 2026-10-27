@@ -96,6 +96,19 @@ trait Ops[Op, H <: AnyRef] {
     */
   def write(handle: Writable, buf: ByteBuffer): Op & Repeatable
 
+  /** Fills `bufs` in order, each between position and limit, as the other `read` fills one (a scattering read):
+    * completes once at least one byte has been read, each buffer filled before the next is begun, or at end of stream,
+    * adding nothing. Fails with an `IllegalArgumentException`, reading nothing, if no buffer has room. Whether it costs
+    * a copy more than reading into one is the backend's: kqueue reads with `readv`, NIO with its scattering channels.
+    */
+  def read(handle: Readable, bufs: Array[ByteBuffer]): Op & Repeatable
+
+  /** Drains `bufs` in order, each between position and limit, as the other `write` drains one (a gathering write), so
+    * that a frame's header and its payload go in one call: completes once at least one byte has been written, each
+    * buffer drained before the next is begun, and at once, writing nothing, if none has bytes remaining.
+    */
+  def write(handle: Writable, bufs: Array[ByteBuffer]): Op & Repeatable
+
   /** Completes once `milliseconds` have passed (see the other `timer`). */
   final def timer(milliseconds: Int): Op & Repeatable = {
     require(milliseconds >= 0, s"A timer's time is not negative: $milliseconds ms")
@@ -257,6 +270,12 @@ trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
     * socket, since the JDK cannot.
     */
   def send(handle: ConnectedDatagram, buf: ByteBuffer): Op & Repeatable
+
+  /** Sends `bufs`, in order, as one packet, to `to`, as the other `send` sends one buffer, consuming them all. */
+  def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): Op & Repeatable
+
+  /** Sends `bufs`, in order, as one packet, to the peer, as the other `send` sends one buffer: never an empty one. */
+  def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): Op & Repeatable
 
   /** The address a datagram socket is bound to, with the port it got if it asked for port 0, or, for one connected with
     * no local address, the ephemeral port connecting gave it. Not an op, as `StreamSocketOps.localAddress`.
@@ -491,6 +510,20 @@ private[io] object Ops {
     if slots.forall(_.isEmpty) then null
     else
       new IllegalArgumentException("The op's slot still holds a value, not yet cleared, which the op would overwrite")
+
+  /** Checks the buffers of a vectored op as it is built: at least one. */
+  def checkBuffers(bufs: Array[ByteBuffer]): Unit =
+    if bufs.isEmpty then throw new IllegalArgumentException("A vectored op takes at least one buffer")
+
+  /** Whether any of `bufs` has room, or bytes remaining. */
+  def anyRemaining(bufs: Array[ByteBuffer]): Boolean = bufs.exists(_.hasRemaining())
+
+  /** The bytes remaining in `bufs`, all told. */
+  def remaining(bufs: Array[ByteBuffer]): Long = bufs.foldLeft(0L)(_ + _.remaining())
+
+  /** The failure of a read into `bufs` when none has room, as `bufferFull` is for one. */
+  def buffersFull(bufs: Array[ByteBuffer]): IllegalArgumentException =
+    new IllegalArgumentException(s"No buffer has room, so a read into them can read nothing: ${bufs.mkString(", ")}")
 
   /** The failure of a read into `buf` when it has no room: such a read could only read nothing, which says the stream
     * has ended, so it fails before anything is read or waited for.

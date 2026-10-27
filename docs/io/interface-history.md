@@ -278,3 +278,18 @@ wait for, and `deadlineTimer` is a timer whose deadline moves while it is pendin
 but a store, the reactor filing it again when the old deadline comes, as Go's runtime and Netty do; earlier by filing it
 again, or waking its reactor. A time limit on a timer's submission still fails it when it comes first.
 
+
+## Reads and writes take several buffers
+
+A frame's header and its payload (a TLS record, an HTTP/2 or WebSocket frame, HTTP headers with a body) are written
+with one call rather than two or a copy into one buffer: `write(handle, bufs)` drains them in order, `read(handle, bufs)`
+fills them in order, and `send` takes several buffers as one packet, each with the rules of its one-buffer form (at
+least one byte, a read into buffers with no room refused, an empty write completing at once, a datagram never empty).
+kqueue uses `readv`, `writev` and `sendmsg`; NIO its scattering and gathering channels, joining the buffers of a bound
+datagram send, which has no gathering form; the Network.framework backend gathers a write into one buffer the framework
+then owns, the one copy a single write already costs there.
+
+Pooled writes, a buffer from the backend's pool handed over for good and released once sent, were weighed alongside and
+left for later: they save the copy only where a backend copies (Network.framework, about 3% of a 128 KB message over
+loopback; io_uring's registered buffers and zero-copy sends; Node), nothing on kqueue or NIO, and their completion rule
+differs (complete only once all is handed over). To measure on Network.framework, and to settle with an io_uring backend.

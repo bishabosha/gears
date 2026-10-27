@@ -384,4 +384,35 @@ trait IpDatagramContract extends ReactorContract {
       )
     assert(!backend.ops.canChange(SocketOption.ReusePort))
   }
+
+  test(
+    "a datagram sent from several buffers is one packet, from a bound socket or a connected one, never empty there"
+  ) {
+    withReactor { r =>
+      val receiver = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
+      val to = backend.ops.localAddress(receiver)
+      val bound = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
+      val connected = connectDatagram(r, null, to)
+      try {
+        def received()(using munit.Location): String = {
+          val buf = allocate(64)
+          assertEquals(run(r, backend.ops.receive(receiver, buf, Slot[IpAddress]())), null)
+          StandardCharsets.UTF_8.decode(buf).toString
+        }
+        assertEquals(run(r, backend.ops.send(bound, Array(bytes("one "), bytes("packet")), to)), null)
+        assertEquals(received(), "one packet")
+        assertEquals(run(r, backend.ops.send(connected, Array(bytes("two "), bytes(""), bytes("parts")))), null)
+        assertEquals(received(), "two parts")
+        val empty = allocate(1)
+        empty.limit(0)
+        assert(
+          run(r, backend.ops.send(connected, Array(empty, empty.duplicate()))).isInstanceOf[IllegalArgumentException]
+        )
+      } finally {
+        close(r, receiver)
+        close(r, bound)
+        close(r, connected)
+      }
+    }
+  }
 }
