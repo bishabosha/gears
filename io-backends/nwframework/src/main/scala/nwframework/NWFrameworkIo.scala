@@ -43,6 +43,8 @@ private[nwframework] object NWFrameworkIo {
 
   def nwf_datagram_connect(host: CString, port: CInt, localHost: CString, localPort: CInt): Handle = extern
   def nwf_udp_receive_buffer(): CInt = extern
+
+  def nwf_is_host_address(host: CString): CInt = extern
 }
 
 /** The kinds of event the C side queues, and the fields of one. */

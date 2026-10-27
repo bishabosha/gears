@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <dispatch/dispatch.h>
 #include <errno.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -588,6 +589,28 @@ int nwf_udp_receive_buffer(void) {
   size_t size = sizeof(space);
   if (sysctlbyname("net.inet.udp.recvspace", &space, &size, NULL, 0) != 0 || space <= 0) space = 786896;
   return space;
+}
+
+/* ---- This host's addresses ---- */
+
+/* Whether `host`, numeric, is an address of one of this host's interfaces: traffic to it never leaves the host. */
+int nwf_is_host_address(const char *host) {
+  struct in_addr v4;
+  struct in6_addr v6;
+  int is_v6 = strchr(host, ':') != NULL;
+  if (is_v6 ? inet_pton(AF_INET6, host, &v6) != 1 : inet_pton(AF_INET, host, &v4) != 1) return 0;
+  struct ifaddrs *all;
+  if (getifaddrs(&all) != 0) return 0;
+  int found = 0;
+  for (struct ifaddrs *i = all; i && !found; i = i->ifa_next) {
+    if (!i->ifa_addr) continue;
+    if (!is_v6 && i->ifa_addr->sa_family == AF_INET)
+      found = memcmp(&((struct sockaddr_in *)i->ifa_addr)->sin_addr, &v4, sizeof v4) == 0;
+    else if (is_v6 && i->ifa_addr->sa_family == AF_INET6)
+      found = memcmp(&((struct sockaddr_in6 *)i->ifa_addr)->sin6_addr, &v6, sizeof v6) == 0;
+  }
+  freeifaddrs(all);
+  return found;
 }
 
 /* ---- Cancelling ---- */

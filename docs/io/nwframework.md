@@ -29,10 +29,15 @@ reactor pool that drives it in [`runtime.md`](runtime.md).
   domain socket (which its public C interface has no endpoint for), a bound datagram socket (which it has no socket
   for, see below), pipes, FIFOs and files are kqueue's. `NWFrameworkOps` routes each opener by what it opens, and each
   op by its handle.
-- **Loopback is kqueue's.** A socket whose address is on loopback (127.0.0.0/8, `::1`) goes to kqueue, as a Unix domain
-  socket does: Network.framework carries loopback over the kernel's own sockets, at several times kqueue's cost and
-  with nothing gained. A listener on the wildcard address is Network.framework's, and so are the connections it
-  accepts, from loopback too. `NWFrameworkBackend.Everywhere` keeps every IP socket on Network.framework, loopback's
+- **Loopback is kqueue's.** A listener on loopback (127.0.0.0/8, `::1`), and a connection or connected datagram socket
+  whose peer is on this host, on loopback or at any of its interfaces' addresses (`getifaddrs`, asked at each open),
+  go to kqueue, as a Unix domain socket does: the kernel carries traffic between two of the host's addresses over
+  loopback whichever interface holds them, and Network.framework does the same over the kernel's own sockets, at
+  several times kqueue's cost and with nothing gained. Given a local address on a `feth` interface it never makes the
+  connection ready at all, waiting with no error (probed on macOS 27.0: a `feth` pair, 64 MB each way; the kernel's
+  socket bound to `feth0` with `IP_BOUND_IF` fails with `EHOSTUNREACH`, and everything else between two of the host's
+  addresses crossed `lo0`). A listener at another of the host's addresses, or the wildcard, is Network.framework's, since
+  other hosts reach it, and so are the connections it accepts, from this host too. `NWFrameworkBackend.Everywhere` keeps every IP socket on Network.framework, loopback's
   included, for checking and measuring Network.framework itself: its contract suites run on loopback.
 - **Nothing calls back into Scala, and C does only what Scala cannot.** Network.framework delivers everything as blocks,
   which Scala Native cannot build, on Dispatch's threads, which cannot run managed code. The C side

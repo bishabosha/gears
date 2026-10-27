@@ -34,8 +34,9 @@ import NWFrameworkHandles.owns
   * (TN3151, "Choosing the right networking API"): Network.framework for TCP connections and listeners, and for UDP
   * between two peers, a connected datagram socket; kqueue's own code for what Network.framework does not do, or does no
   * better than the kernel: Unix domain sockets, a bound datagram socket that sends to and hears from anyone, pipes,
-  * FIFOs and files; and, with `loopbackOnKqueue`, sockets of loopback addresses, which Network.framework carries over
-  * the kernel's own loopback at several times kqueue's cost (see docs/io/nwframework.md).
+  * FIFOs and files; and, with `loopbackOnKqueue`, sockets on loopback, a listener there or a socket whose peer is on
+  * this host, which Network.framework carries over the kernel's own loopback at several times kqueue's cost (see
+  * docs/io/nwframework.md).
   *
   * Its kinds are opaque types of its own over kqueue's handle, so that a program cannot pass one to kqueue's ops, nor
   * kqueue's to these; underneath, kqueue's openers write the same handles into its slots.
@@ -56,8 +57,19 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   type UnixDatagram = NWFrameworkKinds.UnixDatagram
   type File = NWFrameworkKinds.File
 
-  /** Whether a socket of `address` goes to kqueue rather than Network.framework. */
-  private def onKqueue(address: IpAddress): Boolean = loopbackOnKqueue && gears.async.io.IpText.isLoopback(address)
+  /** Whether a listener on `address` goes to kqueue rather than Network.framework: one on loopback. One on another
+    * address of this host is Network.framework's, since other hosts reach it.
+    */
+  private def listensOnKqueue(address: IpAddress): Boolean =
+    loopbackOnKqueue && gears.async.io.IpText.isLoopback(address)
+
+  /** Whether a socket connected to `peer` goes to kqueue rather than Network.framework: one whose peer is on this host,
+    * on loopback or at another of its addresses (`nwf_is_host_address`, from `getifaddrs`), whose traffic the kernel
+    * carries over loopback whichever, and which Network.framework, given a local address on some interfaces, such as
+    * `feth`'s, never makes ready (probed on macOS 27.0).
+    */
+  private def connectsOnKqueue(peer: IpAddress): Boolean =
+    loopbackOnKqueue && (gears.async.io.IpText.isLoopback(peer) || NWFrameworkOps.isHostAddress(peer))
 
   /** `into`, for kqueue's opener: the same handles, under kqueue's kind of the same name. */
   private def forKqueue[K <: AnyRef](into: Slot[?]): Slot[K] = into.asInstanceOf[Slot[K]]
@@ -85,19 +97,19 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
 
   def connect(address: IpAddress, into: Slot[Connection]): KqueueOp = {
     val ip = gears.async.io.Ops.ip(address)
-    if onKqueue(ip) then KqueueOps.connect(ip, forKqueue(into)) else new NWFrameworkConnectTo(ip, into)
+    if connectsOnKqueue(ip) then KqueueOps.connect(ip, forKqueue(into)) else new NWFrameworkConnectTo(ip, into)
   }
   def listen(address: IpAddress, into: Slot[Listener]): KqueueOp = {
     val ip = gears.async.io.Ops.ip(address)
-    if onKqueue(ip) then KqueueOps.listen(ip, forKqueue(into)) else new NWFrameworkListen(ip, into)
+    if listensOnKqueue(ip) then KqueueOps.listen(ip, forKqueue(into)) else new NWFrameworkListen(ip, into)
   }
 
-  /** A connected socket is Network.framework's, unless its peer is on loopback; a bound one, which sends to and hears
+  /** A connected socket is Network.framework's, unless its peer is on this host; a bound one, which sends to and hears
     * from anyone, is kqueue's, Network.framework having no such socket (see `NWFrameworkOps`).
     */
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    if r == null || onKqueue(r.nn) then KqueueOps.datagram(l, r, forKqueue(into))
+    if r == null || connectsOnKqueue(r.nn) then KqueueOps.datagram(l, r, forKqueue(into))
     else new NWFrameworkOpenDatagram(l, r.nn, into)
   }
   def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
@@ -425,4 +437,16 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress |
     }
 
   override protected def reset(): Unit = sent = false
+}
+
+private[nwframework] object NWFrameworkOps {
+
+  /** Whether `address` is one of this host's own, asked of `getifaddrs` each time, since interfaces come and go. */
+  def isHostAddress(address: IpAddress): Boolean = gears.async.io.IpText.unmapped(address) match {
+    case IpAddress.IPv4(host, _) => scala.scalanative.unsafe.Zone.acquire(z => ask(host)(using z))
+    case IpAddress.IPv6(host, _) => scala.scalanative.unsafe.Zone.acquire(z => ask(host)(using z))
+  }
+
+  private def ask(host: String)(using scala.scalanative.unsafe.Zone): Boolean =
+    NWFrameworkIo.nwf_is_host_address(scala.scalanative.unsafe.toCString(host)) != 0
 }

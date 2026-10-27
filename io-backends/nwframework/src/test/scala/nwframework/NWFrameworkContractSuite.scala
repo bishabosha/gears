@@ -15,11 +15,14 @@ class NWFrameworkContractSuite
     extends UnixStreamContract
     with UnixDatagramContract
     with FifoContract
-    with ResolveContract {
+    with ResolveContract
+    with HostAddressChecks {
   val backend: NWFrameworkBackend.type = NWFrameworkBackend
+  def hostAddressesOnKqueue: Boolean = true
 }
 
 /** The socket contract with every IP socket on Network.framework, loopback's too (`NWFrameworkBackend.Everywhere`). */
-class NWFrameworkEverywhereContractSuite extends SocketContract {
+class NWFrameworkEverywhereContractSuite extends HostAddressChecks {
   val backend: NWFrameworkBackend.Everywhere.type = NWFrameworkBackend.Everywhere
+  def hostAddressesOnKqueue: Boolean = false
 }
