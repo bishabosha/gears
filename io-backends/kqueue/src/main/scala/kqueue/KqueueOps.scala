@@ -90,10 +90,10 @@ object KqueueOps
     new ConnectTo(gears.async.io.Ops.ip(address), into)
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
-  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): KqueueOp =
-    new Listen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def listen(address: IpAddress, into: Slot[Listener]): KqueueOp =
+    new Listen(gears.async.io.Ops.ip(address), into)
   def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp =
-    new Listen(gears.async.io.Ops.unix(address), reuseAddr = false, into)
+    new Listen(gears.async.io.Ops.unix(address), into)
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     new OpenDatagram(l, r, into, KqueueKinds.datagram)
@@ -186,9 +186,9 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K)
 }
 
 /** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
-final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Slot[KqueueKinds.Listener])
+final class Listen(address: SocketAddress, into: Slot[KqueueKinds.Listener])
     extends OpensAtOnce(into, KqueueKinds.listener) {
-  protected def open(): Int = KqueueHandles.listenStream(address, reuseAddr)
+  protected def open(): Int = KqueueHandles.listenStream(address)
 }
 
 /** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */

@@ -86,8 +86,8 @@ object NWFrameworkOps
   }
   def connect(address: IpAddress, into: Slot[Connection]): NWFrameworkOp =
     new NWFrameworkConnectTo(gears.async.io.Ops.ip(address), into)
-  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): NWFrameworkOp =
-    new NWFrameworkListen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def listen(address: IpAddress, into: Slot[Listener]): NWFrameworkOp =
+    new NWFrameworkListen(gears.async.io.Ops.ip(address), into)
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NWFrameworkOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     new NWFrameworkOpenDatagram(l, r, into)
@@ -293,9 +293,9 @@ final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds
 }
 
 /** A listener on `address` (see `SocketOps.listen`): ready once it is listening, failing if it cannot. */
-final class NWFrameworkListen(address: IpAddress, reuseAddr: Boolean, into: Slot[NWFrameworkKinds.Listener])
+final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Listener])
     extends NWFrameworkOpening(into, NWFrameworkKinds.listener) {
-  protected def make(): Handle = NWFrameworkHandles.listener(address, reuseAddr)
+  protected def make(): Handle = NWFrameworkHandles.listener(address)
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 

@@ -190,3 +190,13 @@ programs, which name `io.Connection` or `io.Listener` rather than `io.Handle`, a
 and in FIFOs, whose direction was a `Boolean` and is now two openers, since it picks the type. See
 [`handles.md`](handles.md), "Kinds of handle, as types".
 
+
+## A listener binds as `SO_REUSEADDR` does, with no flag
+
+`listen` took `reuseAddr`, and without it refused a port whose earlier connections lingered in `TIME_WAIT`. Network.framework
+cannot refuse such a port when the connections were its own, from any process: they are in no table a public call
+reads, and a socket held bound fails its own bind (probed on macOS 27.0). It emulated the flag with a socket bound and
+closed before it bound, which missed a connection made and ended in between. The alternatives were the flag as a
+capability Network.framework lacks, or no flag. No flag won: Go, libuv and Rust's standard library always bind this
+way, a second listener on a port is refused all the same, and refusing a lingering port is the restart that waits half a
+minute, which the option exists to avoid. A strict listen can come back as a capability if a program needs one.

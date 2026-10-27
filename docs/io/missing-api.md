@@ -20,7 +20,7 @@ Network.framework's options are from its headers, not yet probed.
   beside each connection. Every backend can: `getsockname` and `getpeername` on kqueue, the channels' addresses on
   NIO, a connection's endpoints on Network.framework.
 
-**Socket options.** None is exposed. The only one set is `SO_REUSEADDR`, from `listen`'s `reuseAddr`, and dual stack
+**Socket options.** None is exposed. The only ones set are `SO_REUSEADDR`, always on listeners, and dual stack
 on `::`, which is fixed on since the JDK cannot clear it.
 
 - `TCP_NODELAY`. Nagle's algorithm is on everywhere. TLS, HTTP/2 and WebSockets write small records, and Nagle with

@@ -583,10 +583,10 @@ static int nwf_listener_start(nwf_handle_t *h, int wait) {
 
 /* A stream listener on `host`:`port`: with `wait`, ready, or NULL with `*error` set; without, started, its ready or
  * failed state to come as an event. */
-static nwf_handle_t *nwf_listen_on(const char *host, int port, int reuse, int wait, int *error) {
+static nwf_handle_t *nwf_listen_on(const char *host, int port, int wait, int *error) {
   nwf_handle_t *h = nwf_handle_new(NWF_LISTENER);
   nw_parameters_t parameters = nwf_tcp_parameters();
-  if (reuse) nw_parameters_set_reuse_local_address(parameters, true);
+  nw_parameters_set_reuse_local_address(parameters, true); /* as SO_REUSEADDR, on every backend */
   nwf_restrict_family(parameters, host);
   nw_endpoint_t local = nwf_endpoint(host, port);
   nw_parameters_set_local_endpoint(parameters, local);
@@ -616,13 +616,13 @@ static nwf_handle_t *nwf_listen_on(const char *host, int port, int reuse, int wa
   return h;
 }
 
-nwf_handle_t *nwf_listen(const char *host, int port, int reuse, int *error) {
-  return nwf_listen_on(host, port, reuse, 1, error);
+nwf_handle_t *nwf_listen(const char *host, int port, int *error) {
+  return nwf_listen_on(host, port, 1, error);
 }
 
-nwf_handle_t *nwf_listen_async(const char *host, int port, int reuse) {
+nwf_handle_t *nwf_listen_async(const char *host, int port) {
   int error = 0;
-  return nwf_listen_on(host, port, reuse, 0, &error);
+  return nwf_listen_on(host, port, 0, &error);
 }
 
 /* ---- Datagrams ---- */

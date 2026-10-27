@@ -49,8 +49,8 @@ object HigherLevel {
     opened[io.Connection](io.backend.ops.connect(address, _))
 
   /** Listens on `address` and returns the listener. */
-  def listen(address: IpAddress, reuseAddr: Boolean = true)(using io: Io[IpSockets], async: Async): io.Listener =
-    opened[io.Listener](io.backend.ops.listen(address, _, reuseAddr))
+  def listen(address: IpAddress)(using io: Io[IpSockets], async: Async): io.Listener =
+    opened[io.Listener](io.backend.ops.listen(address, _))
 
   /** Listens on a Unix socket path and returns the listener. */
   def listen(address: UnixAddress)(using io: Io[UnixStreams], async: Async): io.Listener =

@@ -9,9 +9,9 @@ trait SocketContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & SocketBackend
 
   /** A listener on `address`, listening, from the `listen` op, whose failure is thrown. */
-  protected def listen(r: R, address: IpAddress, reuseAddr: Boolean = true)(using munit.Location): Listener = {
+  protected def listen(r: R, address: IpAddress)(using munit.Location): Listener = {
     val into = Slot[Listener]()
-    opened(r, into, backend.ops.listen(address, into, reuseAddr))
+    opened(r, into, backend.ops.listen(address, into))
   }
 
   /** A datagram socket from the `datagram` op, whose failure is thrown. */
@@ -491,7 +491,7 @@ trait SocketContract extends ReactorContract {
       val (taken, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
         val into = Slot[Listener]()
-        val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), into, reuseAddr = false))
+        val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), into))
         assert(failure.isInstanceOf[IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())
       } finally close(r, taken)
@@ -535,9 +535,9 @@ trait SocketContract extends ReactorContract {
     }
   }
 
-  test("without reuseAddr a port with a connection in TIME_WAIT cannot be listened on; with it, it can") {
+  test("a port whose connection lingers in TIME_WAIT can be listened on again at once") {
     withReactor { r =>
-      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = false))
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
       val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
       val accepted = Slot[Connection]()
       val acceptedOutcome = Outcome()
@@ -549,10 +549,7 @@ trait SocketContract extends ReactorContract {
       assertEquals(run(r, backend.ops.read(client, buf)), null) // the server's end
       close(r, client)
       close(r, listener)
-      val refused = Slot[Listener]()
-      val failure = run(r, backend.ops.listen(IpAddress.IPv4("127.0.0.1", port), refused, reuseAddr = false))
-      assert(failure.isInstanceOf[IOException], s"listening without reuseAddr: $failure")
-      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = true))
+      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port)))
     }
   }
 
@@ -609,7 +606,7 @@ trait SocketContract extends ReactorContract {
       r.submit(backend.ops.close(first), closed)
       turnUntil(r)(closed.finished)
       assertEquals(closed.completed, 1, String.valueOf(closed.failure))
-      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port), reuseAddr = false))
+      close(r, listen(r, IpAddress.IPv4("127.0.0.1", port)))
     }
   }
 

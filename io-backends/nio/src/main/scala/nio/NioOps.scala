@@ -90,10 +90,10 @@ object NioOps
     new ConnectTo(gears.async.io.Ops.ip(address), into)
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
-  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): NioOp =
-    new Listen(gears.async.io.Ops.ip(address), reuseAddr, into)
+  def listen(address: IpAddress, into: Slot[Listener]): NioOp =
+    new Listen(gears.async.io.Ops.ip(address), into)
   def listen(address: UnixAddress, into: Slot[Listener]): NioOp =
-    new Listen(gears.async.io.Ops.unix(address), reuseAddr = false, into)
+    new Listen(gears.async.io.Ops.unix(address), into)
   def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NioOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
     new OpenDatagram(l, r, into)
@@ -156,10 +156,9 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce 
 }
 
 /** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
-final class Listen(address: SocketAddress, reuseAddr: Boolean, into: Slot[NioKinds.Listener])
-    extends OpensAtOnce(into) {
+final class Listen(address: SocketAddress, into: Slot[NioKinds.Listener]) extends OpensAtOnce(into) {
   protected def open(): NioKinds.Listener = address match {
-    case ip: IpAddress     => NioHandles.listen(ip, reuseAddr)
+    case ip: IpAddress     => NioHandles.listen(ip)
     case unix: UnixAddress => NioHandles.listen(unix)
   }
 }

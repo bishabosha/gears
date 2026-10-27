@@ -292,11 +292,11 @@ object NioHandles {
     }
   }
 
-  def listen(address: IpAddress, reuseAddr: Boolean = true): NioKinds.Listener = NioKinds.listener {
+  def listen(address: IpAddress): NioKinds.Listener = NioKinds.listener {
     val channel = ServerSocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
-      channel.setOption(StandardSocketOptions.SO_REUSEADDR, reuseAddr) // either way, whatever the JDK's default
+      channel.setOption(StandardSocketOptions.SO_REUSEADDR, true) // whatever the JDK's default (see `Ops.listen`)
       channel.bind(socketAddress(address), Backlog)
     }
   }

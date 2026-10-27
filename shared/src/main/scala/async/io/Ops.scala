@@ -142,11 +142,12 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def connect(address: IpAddress, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`, which
-    * must be empty; fails if the address is in use or cannot be bound. With `reuseAddr`, the address can be bound while
-    * connections from an earlier listener on it are still in `TIME_WAIT`, so a restarted server need not wait for them
-    * to expire; without it, such an address is refused, on every backend.
+    * must be empty; fails if the address is in use or cannot be bound. A port another listener holds is in use, but not
+    * one whose earlier connections linger in `TIME_WAIT`, so a restarted server need not wait for them to expire: every
+    * backend binds as `SO_REUSEADDR` does, as Go, libuv and Rust's standard library always do, since Network.framework
+    * cannot refuse such a port.
     */
-  def listen(address: IpAddress, into: Slot[Listener], reuseAddr: Boolean = true): Op
+  def listen(address: IpAddress, into: Slot[Listener]): Op
 
   /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading: what
     * was written before is still sent, then the end of the stream, which the peer reads as it would a close. Completes

@@ -818,22 +818,20 @@ object NWFrameworkHandles {
   }
 
   /** A listener that will be listening once Network.framework has it ready, which `NWFrameworkListen` waits for. */
-  private[nwframework] def listener(address: IpAddress, reuseAddr: Boolean = true): Handle = {
-    if !reuseAddr then refuseInUse(address)
+  private[nwframework] def listener(address: IpAddress): Handle = {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z =>
-      NWFrameworkIo.nwf_listen_async(toCString(host), port, if reuseAddr then 1 else 0)
+      NWFrameworkIo.nwf_listen_async(toCString(host), port)
     }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }
 
-  def listen(address: IpAddress, reuseAddr: Boolean = true): Handle = {
-    if !reuseAddr then refuseInUse(address)
+  def listen(address: IpAddress): Handle = {
     val (host, port) = hostAndPort(address)
     val error = stackalloc[CInt]()
     val ptr = Zone.acquire { implicit z =>
-      NWFrameworkIo.nwf_listen(toCString(host), port, if reuseAddr then 1 else 0, error)
+      NWFrameworkIo.nwf_listen(toCString(host), port, error)
     }
     if ptr == null then throw new IOException(s"Failed to listen on $host:$port: ${errorText(!error)}")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
@@ -872,28 +870,6 @@ object NWFrameworkHandles {
   private[nwframework] def remove(handle: Handle): NWFrameworkHandle = {
     if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
     table.remove(handle.target.number)
-  }
-
-  /** Fails if `address` cannot be bound without `SO_REUSEADDR`, such as while a connection from an earlier listener on
-    * it is in `TIME_WAIT`. Network.framework refuses a port a kernel socket holds or left in `TIME_WAIT`, but binds one
-    * whose connections were its own, from any process, which only a `bind` sees: they are not in the kernel's TCP table
-    * (`net.inet.tcp.pcblist64`). So a listener without `reuseAddr` asks the kernel first, with a socket bound and
-    * closed again. Between that close and Network.framework's bind, a Network.framework connection on the port that
-    * ends in the meantime is not seen; no public call closes the window, as a socket held bound fails
-    * Network.framework's own bind (probed on macOS 27.0, see "Known limits" in nwframework.md).
-    */
-  private def refuseInUse(address: IpAddress): Unit = {
-    import gears.async.io.internal.{PosixSockets, Sockets}
-    address match {
-      case IpAddress.IPv4(host, port) =>
-        val fd = PosixSockets.open(Sockets.Flavor.IPv4, Sockets.Transport.Stream)
-        try PosixSockets.bindIPv4Addr(fd, host, port)
-        finally unistd.close(fd)
-      case IpAddress.IPv6(host, port) =>
-        val fd = PosixSockets.open(Sockets.Flavor.IPv6, Sockets.Transport.Stream)
-        try PosixSockets.bindIPv6Addr(fd, host, port)
-        finally unistd.close(fd)
-    }
   }
 
   private[nwframework] def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))

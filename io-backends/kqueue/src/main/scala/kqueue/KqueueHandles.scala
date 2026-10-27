@@ -105,13 +105,14 @@ object KqueueHandles {
     socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
 
   /** A listening socket, bound and listening at once. */
-  def listen(address: IpAddress, reuseAddr: Boolean = true): KqueueKinds.Listener =
-    KqueueKinds.listener(wrap(listenStream(address, reuseAddr)))
-  def listen(address: UnixAddress): KqueueKinds.Listener = KqueueKinds.listener(wrap(listenStream(address, false)))
+  def listen(address: IpAddress): KqueueKinds.Listener = KqueueKinds.listener(wrap(listenStream(address)))
+  def listen(address: UnixAddress): KqueueKinds.Listener = KqueueKinds.listener(wrap(listenStream(address)))
 
-  private[kqueue] def listenStream(address: SocketAddress, reuseAddr: Boolean): Int =
+  /** Binds as `SO_REUSEADDR` does, an IP port whose earlier connections linger in `TIME_WAIT` taken (see `Ops.listen`).
+    */
+  private[kqueue] def listenStream(address: SocketAddress): Int =
     socketFor(address, Transport.Stream) { fd =>
-      if reuseAddr then PosixSockets.setReuseAddress(fd)
+      if address.isInstanceOf[IpAddress] then PosixSockets.setReuseAddress(fd)
       bindTo(fd, address)
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }

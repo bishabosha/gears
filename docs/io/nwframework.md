@@ -244,14 +244,6 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
 
 - **macOS only, not published**, and no Unix sockets or readiness (above).
 - **Flows of a bound datagram socket that the framework fails on its own are not reclaimed.**
-- **Listening without `reuseAddr` can miss a port that just stopped being used.** Network.framework refuses a port
-  held by a kernel socket, or left in `TIME_WAIT` by one, and refuses a second listener on a port whatever its flags.
-  But it binds a port whose last connection was its own and is still reserved, from any process, while a BSD `bind`
-  refuses it. Those connections are not in the kernel's TCP table (`net.inet.tcp.pcblist64`), so only a `bind` sees
-  them. The backend therefore binds and closes a socket first, then starts the listener. A Network.framework
-  connection on the port that is made and ends between the two is missed, and the listen succeeds where kqueue's
-  would fail. No public call closes that window: a socket still bound when Network.framework binds makes its bind
-  fail too, with or without `SO_REUSEADDR` and `SO_REUSEPORT` (probed on macOS 27.0).
 - **The back-pressure stream over a pipe hangs now and then.** `HigherLevelChecks`' "a stream of chunks consumed as a
   gears channel, with back-pressure" waits for ever on four workers, all reactors idle, about once in 200 runs (30 to a
   process). It hangs the same with and without the final-send change, so that is not its cause. Pipes here are

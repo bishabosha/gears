@@ -56,8 +56,8 @@ private[nwframework] object NWFrameworkIo {
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
   def nwf_send_final(handle: Handle): Unit = extern
 
-  def nwf_listen(host: CString, port: CInt, reuse: CInt, error: Ptr[CInt]): Handle = extern
-  def nwf_listen_async(host: CString, port: CInt, reuse: CInt): Handle = extern
+  def nwf_listen(host: CString, port: CInt, error: Ptr[CInt]): Handle = extern
+  def nwf_listen_async(host: CString, port: CInt): Handle = extern
 
   def nwf_datagram_connect(host: CString, port: CInt, localHost: CString, localPort: CInt): Handle = extern
   def nwf_datagram_bind(host: CString, port: CInt, error: Ptr[CInt]): Handle = extern
