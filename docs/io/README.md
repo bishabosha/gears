@@ -135,4 +135,6 @@ future to feed its channel, as a `Future` is the gears way to turn a loop of ops
   a completion-based one, and Skywalk as a possible backend without Dispatch.
 - [`scala-native.md`](scala-native.md): costs only Scala Native can remove, the changes proposed to it, and the
   workarounds meanwhile (the `setjmp` override, the `Unblocked` bindings).
+- [`missing-api.md`](missing-api.md): what the interface lacks for TLS, QUIC, HTTP and WebSockets (addresses, socket
+  options, finer timers, vectored and batched I/O), a proposal not yet started.
 - [`bench.md`](bench.md): the bench scenarios, the scripts that build and compare builds, and how to measure well.
