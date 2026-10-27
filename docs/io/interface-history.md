@@ -293,3 +293,11 @@ Pooled writes, a buffer from the backend's pool handed over for good and release
 left for later: they save the copy only where a backend copies (Network.framework, about 3% of a 128 KB message over
 loopback; io_uring's registered buffers and zero-copy sends; Node), nothing on kqueue or NIO, and their completion rule
 differs (complete only once all is handed over). To measure on Network.framework, and to settle with an io_uring backend.
+
+A pooled vectored read was weighed too. Scattering into pool buffers means nothing, since a vectored read is the caller
+placing the bytes and a pooled read the backend; what could mean something is a pooled read completing with several
+pool buffers, a chain, each released on its own. It saves nothing on kqueue or NIO, where one read into one buffer is
+already the least, nor on the Network.framework backend, which copies received content, however many regions Dispatch
+holds it in, into one pool buffer in one pass (`nwf_data_copy`), so that nothing of Dispatch's reaches the reactor. It
+would pay on io_uring, whose receive bundles fill several provided buffers in one completion: to settle with an
+io_uring backend, with pooled writes.
