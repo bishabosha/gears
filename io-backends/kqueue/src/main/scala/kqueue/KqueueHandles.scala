@@ -202,6 +202,7 @@ object KqueueHandles {
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {
     val path = takeBoundPath(handle) // taken before closing, while the number is still ours
+    gears.async.io.internal.FifoWatcher.forget(handle) // so the number is not watched once reused
     val generation = DescriptorTable.generation(DescriptorTable.get(handle))
     DescriptorTable.closing(handle)
     PosixSockets.close(handle)

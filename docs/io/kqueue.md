@@ -118,7 +118,15 @@ is tried first only when it is likely to succeed:
 - Regular files and FIFOs are marked in `DescriptorTable` to be tried always (`markAlwaysTry`): a regular file's
   `EVFILT_READ` fires only while the offset is short of the end, and on macOS a FIFO whose writer closed never reports
   the end, whether the filter was added before the close or after, so a short read there must leave readiness unknown
-  rather than wait for an edge that never comes. The contract suite found it. Sockets and pipes keep the guess, which saves a would-block read
+  rather than wait for an edge that never comes. The contract suite found it. A read already waiting when the writer
+  closes would still wait for ever: probed on macOS 27.0.1, once a FIFO's writer has closed `EVFILT_READ` never fires,
+  whether added before the close or after, `poll` reports nothing either, and `FIONREAD` and `st_size` are 0 as they
+  are with the writer open and nothing written; only `select` reports it readable, waking when the writer closes. So a
+  read that waits on an always-tried descriptor is also watched by `FifoWatcher`, a `select` thread started when the
+  first such read waits, which tells the reactor once the descriptor is readable, and the read is tried again, as
+  libuv does with its `select` thread (`uv__stream_try_select`). It covers `ready` too, which on a regular file at its
+  end would otherwise wait for ever, since the filter fires only short of the end, where `select` says a file is always
+  readable. A descriptor is forgotten before it is closed, so a reused number is not watched; a watch is one-shot. Sockets and pipes keep the guess, which saves a would-block read
   in every round trip. See [`files.md`](files.md) for the file ops.
 
 Edge-triggered reads alone made `concurrent` 30% faster and `pingpong` 11% slower (`bench/results/edge-triggered-reads.json`):
@@ -311,16 +319,6 @@ descriptor's filters itself, so a close costs only the `close`. How a descriptor
 
 ## What is open
 
-- **A read waiting on a FIFO when its writer closes waits for ever** (the contract's check is a known failure here and
-  on Network.framework). Probed on macOS 27.0.1: once a FIFO's writer has closed, `EVFILT_READ` never fires, whether
-  added before the close or after, `poll` reports nothing either, and `FIONREAD` and `st_size` are 0, as they are with
-  the writer open and nothing written; only `select` reports it readable, and wakes when the writer closes, and a
-  `read` returns 0. A read tried after the close finds the end, which is why FIFOs are tried always; one already
-  waiting does not. libuv meets the same with a `select` thread for such descriptors (`uv__stream_try_select`). The
-  choices: a `select` thread watching the FIFOs that have a read waiting, waking the reactor; trying their reads again
-  on a timer; or leaving it documented. `ready` on a FIFO has the same hole, and on a regular file at its end waits
-  for ever too, since `EVFILT_READ` fires only short of the end, where `poll` and `select` say a file is always
-  readable.
 - **Cancelling a gears `Future` is expensive on Scala Native**, which `timers` shows now that it arms each timer by a
   future and cancels half of them: 20.7 µs a timer (release, 7 runs) against 0.41 when timers were submitted with
   completions, 0.61 for the hand-written loop and 1.13 for cats-effect (`bench/results/2026-10-25-timers-native.json`).

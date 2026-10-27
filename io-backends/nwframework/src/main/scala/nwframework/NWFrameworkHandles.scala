@@ -126,7 +126,8 @@ private[nwframework] final class NWFrameworkHandle(
   }
 
   /** Closes the descriptor of a pipe, FIFO or file, by `closeNow`, once no use of it is in progress: true if now. */
-  private def closeDescriptor(closeNow: () => Unit): Boolean =
+  private def closeDescriptor(closeNow: () => Unit): Boolean = {
+    if fifo then gears.async.io.internal.FifoWatcher.forget(fd) // so the number is not watched once reused
     if uses == 0 then {
       closeNow()
       true
@@ -134,6 +135,7 @@ private[nwframework] final class NWFrameworkHandle(
       deferredClose = closeNow
       false
     }
+  }
 
   /** A file's descriptor closed, telling the close op waiting for it. Under the lock. */
   private def closeFile(): Unit = {
@@ -589,7 +591,17 @@ private[nwframework] final class NWFrameworkHandle(
     checkOpen()
     await(if read then Read else Write, reactor, token)
     NWFrameworkIo.nwf_fd_arm(ptr, if read then 1 else 0)
+    // Dispatch's read source is a kqueue filter, which macOS never fires for a FIFO whose writer closes: `select` does.
+    if read && fifo then gears.async.io.internal.FifoWatcher.watch(fd, this, () => selected())
     false
+  }
+
+  /** Whether the descriptor is a FIFO's (see `armed`). */
+  private[nwframework] var fifo = false
+
+  /** From `FifoWatcher`'s thread: the FIFO is readable, at its end perhaps, so the read waiting here is told. */
+  private def selected(): Unit = synchronized {
+    if !closed then take(Read)
   }
 
   /** The close op: begins closing, as `close` does, but the framework's cancellation is not waited for here: false,
@@ -779,7 +791,11 @@ object NWFrameworkHandles {
   def openFile(path: String, write: Boolean): Handle =
     add(new NWFrameworkHandle(NWFrameworkHandle.File, null, Descriptors.openFile(path, write), null))
 
-  def openFifo(path: String, write: Boolean): Handle = descriptor(Descriptors.openFifo(path, write))
+  def openFifo(path: String, write: Boolean): Handle = {
+    val handle = descriptor(Descriptors.openFifo(path, write))
+    handle.target.fifo = true
+    handle
+  }
 
   def pipe(): (Handle, Handle) = {
     val (in, out) = Descriptors.pipe()

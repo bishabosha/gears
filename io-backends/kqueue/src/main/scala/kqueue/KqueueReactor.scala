@@ -129,6 +129,9 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   // generation that ended, and wakes a blocked poll, so that the commands pending on it fail (see `closed`).
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
+  // Descriptors `FifoWatcher` found readable, packed as `closedQueue`'s are, for the loop (`deliverSelected`).
+  private val selectedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
+
   private var slots = new Array[Slot | Null](64)
   // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
   private val timers = new gears.async.io.internal.TimerHeap[KqueueOp]
@@ -371,7 +374,8 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * registered once; if data is already waiting, kqueue reports it on the next poll. Any other command arms a one-shot
     * filter, which replaces a persistent one, and is gone once it fires.
     */
-  private def waitToRead(command: Command, slot: Slot): Unit =
+  private def waitToRead(command: Command, slot: Slot): Unit = {
+    if slot.alwaysTry then watchSelected(command.fd, slot.generation)
     if !command.edgeTriggered then {
       slot.readRegistered = false
       DescriptorTable.claimRead(command.fd, id) // so that another reactor's persistent filter is dropped
@@ -383,6 +387,43 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       }
       slot.readRegistered = true
     }
+  }
+
+  /** Has `FifoWatcher` watch `fd`, an always-tried descriptor (a FIFO or a regular file) with a read waiting, whose
+    * filter may never fire for its end: the watcher tells this reactor once `select` reports it readable.
+    */
+  private def watchSelected(fd: Int, generation: Int): Unit = {
+    val packed = (generation.toLong << 32) | (fd.toLong & 0xffffffffL)
+    gears.async.io.internal.FifoWatcher.watch(fd, this, () => selected(packed))
+  }
+
+  /** From `FifoWatcher`'s thread: the descriptor packed in `packed` is readable. */
+  private def selected(packed: Long): Unit =
+    if !closed then {
+      selectedQueue.add(packed)
+      wakeup()
+    }
+
+  /** Attempts the reads waiting on the descriptors `FifoWatcher` found readable since the last turn, as a read filter
+    * firing would, where the slot still knows that descriptor and a read waits. Returns whether there were any.
+    */
+  private def deliverSelected(): Boolean = {
+    var any = false
+    var packed = selectedQueue.poll()
+    while packed != null do {
+      val fd = (packed.longValue & 0xffffffffL).toInt
+      val generation = (packed.longValue >>> 32).toInt
+      if fd >= 0 && fd < slots.length then {
+        val slot = slots(fd)
+        if slot != null && slot.nn.generation == generation && slot.nn.read != null then {
+          any = true
+          dispatchFile(fd, write = false, eof = false, data = -1L)
+        }
+      }
+      packed = selectedQueue.poll()
+    }
+    any
+  }
 
   /** Runs the completions of the commands that finished when submitted, as many as were queued when it started: a
     * completion that submits a command which finishes at once is left for the next turn, so one busy descriptor cannot
@@ -565,6 +606,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
       while !timers.isEmpty do drop(timers.poll())
       resolvedQueue.clear()
       closedQueue.clear()
+      selectedQueue.clear()
       wakeLock.synchronized {
         closed = true
         KqueueLoop.close(kq) // Its filters and wake event go with it.
@@ -739,72 +781,75 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
   /** Finds the command an event is for, performs it, and hands its completion the result. The slot is cleared first so
     * the completion may submit the next command.
     */
-  private def dispatch(event: Event): Unit = {
-    val ident = fileIdent(event)
+  private def dispatch(event: Event): Unit =
     if KqueueLoop.isUserEvent(event) then wakePending.set(false) // resolved promises are delivered by `runOnce` itself
-    else {
-      val slot = if ident < slots.length then slots(ident) else null
-      if slot != null then {
-        val write = isWriteEvent(event)
-        val pending = if write then slot.write else slot.read
-        if pending == null then {
-          if !write then {
-            val entry = DescriptorTable.get(ident)
-            if DescriptorTable.readOwner(entry) != id || DescriptorTable.generation(entry) != slot.generation then {
-              // Another reactor reads the descriptor now, or its number was reused: this filter is left over. Drop it,
-              // so this reactor no longer wakes for it; it is registered again if a read here needs it.
-              KqueueLoop.deleteFileIfOpen(kq, ident, read = true): Unit // if it stays, it is dropped again next time
-              slot.forget()
-              filtersDropped += 1
-            } else { // kept for the next read submitted
-              if KqueueLoop.isEOF(event) then slot.readEof = true
-              slot.readReadiness = KqueueReactor.Ready
-              slot.readAvailable = KqueueLoop.data(event).toLong
-            }
+    else dispatchFile(fileIdent(event), isWriteEvent(event), KqueueLoop.isEOF(event), KqueueLoop.data(event).toLong)
+
+  /** What `dispatch` does for a descriptor's filter firing, a write's if `write`, at the end of the stream if `eof`,
+    * with `data` bytes available, -1 if not known; and for `FifoWatcher` reporting a descriptor readable
+    * (`deliverSelected`).
+    */
+  private def dispatchFile(ident: Int, write: Boolean, eof: Boolean, data: Long): Unit = {
+    val slot = if ident < slots.length then slots(ident) else null
+    if slot != null then {
+      val pending = if write then slot.write else slot.read
+      if pending == null then {
+        if !write then {
+          val entry = DescriptorTable.get(ident)
+          if DescriptorTable.readOwner(entry) != id || DescriptorTable.generation(entry) != slot.generation then {
+            // Another reactor reads the descriptor now, or its number was reused: this filter is left over. Drop it,
+            // so this reactor no longer wakes for it; it is registered again if a read here needs it.
+            KqueueLoop.deleteFileIfOpen(kq, ident, read = true): Unit // if it stays, it is dropped again next time
+            slot.forget()
+            filtersDropped += 1
+          } else { // kept for the next read submitted
+            if eof then slot.readEof = true
+            slot.readReadiness = KqueueReactor.Ready
+            slot.readAvailable = data
           }
-        } else {
-          if !write && KqueueLoop.isEOF(event) then slot.readEof = true
-          if write then slot.write = null else slot.read = null
-          pending.nn match {
-            case command: Command =>
-              // A throwing command fails its own op; an exception thrown by the completion itself is reported as a
-              // `CompletionFailed` (see `Reactor`), not as the op's failure. The system call, and a registration again
-              // if it was not ready, are a use of the command's handle (see `Command.handle`), ended before the
-              // completion runs, which may close the handle.
-              val handle = command.handle
-              var failure: Throwable | Null = null
-              var done = true
-              // Readiness is settled before the completion runs, since it may submit the next read at once.
-              if handle != null && !handle.acquire() then {
-                failure = KqueueHandles.notOpen(handle)
-                if !write then settleAfterRead(command, slot, done = true, failed = true, -1L)
-              } else
-                try {
-                  done =
-                    try command.perform()
-                    catch {
-                      case t: Throwable =>
-                        failure = t
-                        true
-                    }
-                  if !write then settleAfterRead(command, slot, done, failure != null, KqueueLoop.data(event).toLong)
-                  if !done then {
-                    // Not ready after all: wait again, without the completion ever seeing it, unless waiting fails.
-                    val failed =
-                      if write then {
-                        slot.write = command
-                        registrationFailure(command, slot, read = false)(arm(ident, read = false))
-                      } else {
-                        slot.read = command
-                        registrationFailure(command, slot, read = true)(waitToRead(command, slot))
-                      }
-                    if failed != null then failure = failed
+        }
+      } else {
+        if !write && eof then slot.readEof = true
+        if write then slot.write = null else slot.read = null
+        pending.nn match {
+          case command: Command =>
+            // A throwing command fails its own op; an exception thrown by the completion itself is reported as a
+            // `CompletionFailed` (see `Reactor`), not as the op's failure. The system call, and a registration again
+            // if it was not ready, are a use of the command's handle (see `Command.handle`), ended before the
+            // completion runs, which may close the handle.
+            val handle = command.handle
+            var failure: Throwable | Null = null
+            var done = true
+            // Readiness is settled before the completion runs, since it may submit the next read at once.
+            if handle != null && !handle.acquire() then {
+              failure = KqueueHandles.notOpen(handle)
+              if !write then settleAfterRead(command, slot, done = true, failed = true, -1L)
+            } else
+              try {
+                done =
+                  try command.perform()
+                  catch {
+                    case t: Throwable =>
+                      failure = t
+                      true
                   }
-                } finally if handle != null then handle.release()
-              if failure != null then fail(command, failure.nn)
-              else if done then complete(command)
-            case _ => () // Only commands live in descriptor slots.
-          }
+                if !write then settleAfterRead(command, slot, done, failure != null, data)
+                if !done then {
+                  // Not ready after all: wait again, without the completion ever seeing it, unless waiting fails.
+                  val failed =
+                    if write then {
+                      slot.write = command
+                      registrationFailure(command, slot, read = false)(arm(ident, read = false))
+                    } else {
+                      slot.read = command
+                      registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                    }
+                  if failed != null then failure = failed
+                }
+              } finally if handle != null then handle.release()
+            if failure != null then fail(command, failure.nn)
+            else if done then complete(command)
+          case _ => () // Only commands live in descriptor slots.
         }
       }
     }
@@ -846,7 +891,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
     */
   def runOnce(block: Boolean): Unit = {
-    val delivered = deliverClosed() | deliverReady() | deliverResolved() // all three, without short-circuiting
+    val delivered = deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() // without short-circuiting
     val polled =
       if !delivered then {
         turnsWithoutPoll = 0
