@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 /* Kinds of event, in `nwf_event.kind`. */
@@ -57,7 +58,8 @@ typedef struct nwf_event {
   int final;      /* its context is the stream's final one, so `complete` means the end of the stream */
   size_t len;     /* bytes received, or sent */
   void *data;     /* the framework's content, held for the reactor to copy (`nwf_receive_held`), else NULL */
-  void *map;      /* unused */
+  uintptr_t flow_id; /* the number of `flow`, unique for the process, so that an event of a flow let go meanwhile is
+                        not taken for one of a flow made since at the same address */
   uint8_t *bytes; /* the received bytes, `len` of them, copied in the callback; freed by `nwf_event_done` */
   nwf_handle_t *flow;    /* the flow of a bound datagram socket the event is for, else NULL */
   nwf_handle_t *accepted;
@@ -88,6 +90,7 @@ struct nwf_handle {
   nwf_reactor_t *watcher;      /* the reactor to wake for events, or NULL */
   int watch_mask;             /* the kinds of event to wake it for, a bit per kind: the rest only queue */
   nwf_handle_t *parent;        /* a flow's bound socket, whose queue its events go to */
+  uint64_t id;                 /* a flow's number, unique for the process */
   struct sockaddr_storage remote; /* a flow's peer */
   socklen_t remote_len;
   /* Under the watcher reactor's lock: whether linked in its list, and on which. */
@@ -325,7 +328,10 @@ void nwf_handle_release(nwf_handle_t *h) {
 /* Queues `e` on `h`, or on the bound socket `h` is a flow of, and wakes the watcher. */
 static void nwf_enqueue(nwf_handle_t *h, nwf_event_t *e) {
   nwf_handle_t *target = h->parent ? h->parent : h;
-  if (h->parent) e->flow = h;
+  if (h->parent) {
+    e->flow = h;
+    e->flow_id = h->id;
+  }
   e->next = NULL;
   pthread_mutex_lock(&target->lock);
   if (target->tail) target->tail->next = e;
@@ -634,10 +640,13 @@ static void nwf_remote_from(nwf_handle_t *h, nw_endpoint_t endpoint) {
 
 /* A flow of a bound datagram socket: a connection to one peer, inbound from its listener or opened to send; its
  * events go to the bound socket's queue, naming the flow. */
+static _Atomic uint64_t nwf_flows_made;
+
 static nwf_handle_t *nwf_flow(nwf_handle_t *bound, nw_connection_t connection) {
   nwf_handle_t *flow = nwf_handle_new(NWF_FLOW);
   flow->connection = connection;
   flow->parent = bound;
+  flow->id = atomic_fetch_add(&nwf_flows_made, 1) + 1;
   nw_endpoint_t endpoint = nw_connection_copy_endpoint(connection);
   nwf_remote_from(flow, endpoint);
   if (endpoint) nw_release(endpoint);
@@ -668,10 +677,23 @@ nwf_handle_t *nwf_datagram_bind(const char *host, int port) {
     nwf_handle_t *flow = nwf_flow(h, connection);
     nwf_event_t *e = nwf_event(NWF_EV_FLOW);
     e->flow = flow;
+    e->flow_id = flow->id;
     nwf_enqueue(h, e);
   });
   nwf_listener_start(h);
   return h;
+}
+
+/* A flow's number (`nwf_event`'s `flow_id`). */
+uint64_t nwf_flow_id(nwf_handle_t *flow) { return flow->id; }
+
+/* The bytes a kernel UDP socket's receive buffer holds (`net.inet.udp.recvspace`), the most a bound datagram socket
+ * queues before it drops what comes. */
+int nwf_udp_receive_buffer(void) {
+  int space = 0;
+  size_t size = sizeof(space);
+  if (sysctlbyname("net.inet.udp.recvspace", &space, &size, NULL, 0) != 0 || space <= 0) space = 786896;
+  return space;
 }
 
 /* Opens an outbound flow of a bound datagram socket to `host`:`port`, from the bound address. */

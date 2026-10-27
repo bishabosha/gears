@@ -83,11 +83,20 @@ private[nwframework] final class NWFrameworkHandle(
 
   private val accepted = new java.util.ArrayDeque[NWFrameworkIo.Handle]()
   private val packets = new java.util.ArrayDeque[Datagram]()
+  private var packetBytes = 0L // in `packets`, at most `NWFrameworkHandle.ReceiveBuffer`, as a kernel socket's buffer
 
-  // A bound datagram socket's flows, by the C handle's address and by peer.
+  // A bound datagram socket's flows, by number (`nwf_flow`), not by address, which a flow made since may have, and by
+  // peer; each the time it last carried a packet, so that one idle for `FlowIdleNanos` is let go.
   private val flows = mutable.LongMap.empty[Flow]
   private val flowsByPeer = mutable.HashMap.empty[IpAddress, Flow]
-  private final class Flow(val ptr: NWFrameworkIo.Handle, var peer: IpAddress | Null)
+  private final class Flow(val ptr: NWFrameworkIo.Handle, val id: Long, var peer: IpAddress | Null) {
+    var used: Long = System.nanoTime()
+    var leaving = false // cancelled, its packets still taken until its cancelled state, but sent on no more
+  }
+  private var swept = System.nanoTime()
+
+  /** How many flows a bound datagram socket keeps, not counting those leaving, for the checks. */
+  private[nwframework] def flowCount: Int = synchronized(flows.values.count(!_.leaving))
 
   // The ops waiting here, one per kind: the reactor to tell and the token of the submission there; no reactor, none.
   private var readReactor: NWFrameworkReactor | Null = null
@@ -165,9 +174,9 @@ private[nwframework] final class NWFrameworkHandle(
   private def apply(e: Ptr[NWFrameworkIo.Event]): Unit = {
     val flow = e.flow
     if e.kind == Flow then {
-      flows.put(flow.toLong, new Flow(flow, null))
+      flows.put(e.flowId, new Flow(flow, e.flowId, null))
       NWFrameworkIo.nwf_receive_message(flow) // a flow keeps one receive outstanding, so that its datagrams come in
-    } else if flow != null then applyToFlow(flow, e)
+    } else if flow != null then applyToFlow(e)
     else
       e.kind match {
         case Received =>
@@ -224,7 +233,7 @@ private[nwframework] final class NWFrameworkHandle(
             take(Read)
           } else {
             val sender: IpAddress | Null = if e.fromLength.toInt > 0 then NWFrameworkHandles.decode(e.from) else remote
-            if sender != null then {
+            if sender != null && queued(e) then {
               packets.add(new Datagram(copy(e.bytes, e.len), sender))
               take(Read)
             }
@@ -235,33 +244,69 @@ private[nwframework] final class NWFrameworkHandle(
       }
   }
 
-  /** Applies an event of one of a bound datagram socket's flows. Under the lock. */
-  private def applyToFlow(flowPtr: NWFrameworkIo.Handle, e: Ptr[NWFrameworkIo.Event]): Unit = {
-    val flow = flows.getOrNull(flowPtr.toLong)
+  /** Applies an event of one of a bound datagram socket's flows; one of a flow let go is ignored. Under the lock. */
+  private def applyToFlow(e: Ptr[NWFrameworkIo.Event]): Unit = {
+    val flow = flows.getOrNull(e.flowId)
     e.kind match {
       case Packet if flow != null =>
-        if e.error == 0 then {
-          if flow.peer == null then flow.peer = NWFrameworkHandles.flowPeer(flowPtr)
+        // A cancelled flow's receive completes first as an empty datagram would, no content and no error, then fails:
+        // on a flow leaving, that is the cancel's, not a packet (one empty packet in that moment is lost, as UDP may).
+        if e.error == 0 && !(flow.leaving && e.len == 0) then {
+          val now = System.nanoTime()
+          flow.used = now
+          if flow.peer == null then flow.peer = NWFrameworkHandles.flowPeer(flow.ptr)
           val peer = flow.peer
           if peer != null then {
-            flowsByPeer.put(peer.nn, flow)
-            packets.add(new Datagram(copy(e.bytes, e.len), peer.nn))
+            if !flow.leaving then flowsByPeer.put(peer.nn, flow)
+            if queued(e) then packets.add(new Datagram(copy(e.bytes, e.len), peer.nn))
           }
-          NWFrameworkIo.nwf_receive_message(flowPtr)
+          if !flow.leaving then NWFrameworkIo.nwf_receive_message(flow.ptr)
           take(Read)
-        }
+          sweepIdle(now)
+        } else if e.error != 0 then leave(flow) // its receive failed, as after an empty packet: made anew when needed
       case Sent =>
         // A packet a flow failed to send is lost, failing nothing: as a socket that is not connected never hears of
         // its packets' fate on any system, so that one peer's port unreachable does not fail sends to another.
         sentBytes -= e.len
         take(Write)
-      case Failed | Cancelled if flow != null =>
-        flows.remove(flowPtr.toLong)
-        if flow.peer != null then flowsByPeer.remove(flow.peer.nn)
-        NWFrameworkIo.nwf_handle_release(flowPtr)
-      case _ => ()
+      case Failed | Cancelled if flow != null => forget(flow)
+      case _                                  => ()
     }
   }
+
+  /** Whether a datagram of `e.len` bytes has room among those queued, as a kernel socket's buffer would; if so, counted
+    * in. One that has none is dropped, as a kernel socket drops what its buffer cannot hold.
+    */
+  private def queued(e: Ptr[NWFrameworkIo.Event]): Boolean =
+    if packetBytes + e.len > NWFrameworkHandle.ReceiveBuffer then false
+    else {
+      packetBytes += e.len
+      true
+    }
+
+  /** Cancels `flow`, sending on it no more: packets that reach it before its cancelled state are still taken, and the
+    * peer's next send or ours makes a flow anew. Under the lock.
+    */
+  private def leave(flow: Flow): Unit = if !flow.leaving then {
+    flow.leaving = true
+    if flow.peer != null && flowsByPeer.get(flow.peer.nn).exists(_ eq flow) then flowsByPeer.remove(flow.peer.nn)
+    NWFrameworkIo.nwf_cancel_async(flow.ptr)
+  }
+
+  /** Forgets `flow`, which has ended, and lets its C handle go. Under the lock. */
+  private def forget(flow: Flow): Unit = {
+    flows.remove(flow.id)
+    if flow.peer != null && flowsByPeer.get(flow.peer.nn).exists(_ eq flow) then flowsByPeer.remove(flow.peer.nn)
+    NWFrameworkIo.nwf_handle_release(flow.ptr)
+  }
+
+  /** Lets go the flows idle for `FlowIdleNanos`, looking at most once a second. Under the lock. */
+  private def sweepIdle(now: Long): Unit =
+    if now - swept > 1_000_000_000L then {
+      swept = now
+      val idle = flows.values.filter(f => !f.leaving && now - f.used > NWFrameworkHandle.FlowIdleNanos).toList
+      idle.foreach(leave)
+    }
 
   private def copy(bytes: Ptr[Byte], len: Int): Array[Byte] = {
     val out = new Array[Byte](len)
@@ -590,6 +635,7 @@ private[nwframework] final class NWFrameworkHandle(
     checkOpen()
     if !packets.isEmpty then {
       val packet = packets.poll()
+      packetBytes -= packet.bytes.length
       if kind == NWFrameworkHandle.Datagram && !receiving && readError == 0 then receiveMessage()
       packet
     } else if readError != 0 then throw failure("receive", readError)
@@ -614,13 +660,16 @@ private[nwframework] final class NWFrameworkHandle(
         to, {
           val (host, port) = NWFrameworkHandles.hostAndPort(to)
           val opened = Zone.acquire { implicit z => NWFrameworkIo.nwf_flow_open(ptr, toCString(host), port) }
-          val f = new Flow(opened, to)
-          flows.put(opened.toLong, f)
+          val f = new Flow(opened, NWFrameworkIo.nwf_flow_id(opened).toLong, to)
+          flows.put(f.id, f)
           flowsByPeer.put(to, f)
           NWFrameworkIo.nwf_receive_message(opened) // so the peer's replies to it come in, as an inbound flow's do
           f
         }
       )
+      val now = System.nanoTime()
+      flow.used = now
+      sweepIdle(now)
       sendOn(flow.ptr, bytes, len, reactor, token)
     }
 
@@ -781,6 +830,16 @@ private[nwframework] object NWFrameworkHandle {
     * `GEARS_IO_NWFRAMEWORK_SEND_WINDOW` in the environment overrides it, in bytes; 0 makes every write wait for its
     * send, for measuring.
     */
+  /** The most bytes of datagrams a socket queues before it drops what comes: a kernel UDP socket's receive buffer. */
+  lazy val ReceiveBuffer: Long = NWFrameworkIo.nwf_udp_receive_buffer().toLong
+
+  /** How long a bound datagram socket keeps a flow that carries no packet, either way, before letting it go: its peer's
+    * next packet, or a send to it, makes one anew, but a packet that comes while the framework is cancelling the flow,
+    * a few milliseconds, is lost. `GEARS_IO_NWFRAMEWORK_FLOW_IDLE_SECONDS` overrides it.
+    */
+  @volatile private[nwframework] var FlowIdleNanos: Long =
+    sys.env.get("GEARS_IO_NWFRAMEWORK_FLOW_IDLE_SECONDS").map(_.toLong).getOrElse(60L) * 1_000_000_000L
+
   val SendWindow: Long = sys.env.get("GEARS_IO_NWFRAMEWORK_SEND_WINDOW").map(_.toLong).getOrElse(256L * 1024)
 
   /** Whether a read that took bytes issues the next receive at once, so that the next read finds its bytes waiting:

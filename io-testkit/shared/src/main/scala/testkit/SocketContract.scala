@@ -313,6 +313,41 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("datagrams not received are dropped once the socket's buffer is full, not queued without bound") {
+    withReactor { r =>
+      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      try {
+        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        try {
+          val sent = 2000 // of 8 KiB: 16 MiB, beyond any socket's receive buffer
+          val packet = allocate(8192)
+          for _ <- 1 to sent do {
+            packet.clear()
+            assertEquals(run(r, backend.ops.send(client, packet)), null)
+          }
+          val buf = allocate(8192)
+          var received = 0
+          var drained = false
+          while !drained do {
+            buf.clear()
+            val outcome = Outcome()
+            r.submit(backend.ops.receive(server, buf, Slot[IpAddress]()), outcome, timeoutMillis = 200)
+            turnUntil(r)(outcome.finished)
+            if outcome.failure != null then {
+              assert(outcome.failure.isInstanceOf[TimeoutException], String.valueOf(outcome.failure))
+              drained = true
+            } else received += 1
+          }
+          assert(received > 0 && received < sent, s"$received of $sent received")
+          assertEquals(run(r, backend.ops.send(client, bytes("after"))), null)
+          buf.clear()
+          assertEquals(run(r, backend.ops.receive(server, buf, Slot[IpAddress]())), null)
+          assertEquals(StandardCharsets.UTF_8.decode(buf).toString, "after", "the socket goes on once drained")
+        } finally close(r, client)
+      } finally close(r, server)
+    }
+  }
+
   test("a datagram socket's op completes once it is bound, and fails, leaving its slot empty, on an address in use") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))

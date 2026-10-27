@@ -15,8 +15,8 @@ private[nwframework] object NWFrameworkIo {
   type Reactor = Ptr[Byte]
   type Handle = Ptr[Byte]
 
-  /** An event as the C side copies it out (`nwf_event`): next (unused), kind, error, complete, final, len, data, map
-    * (unused), bytes, flow, accepted, from_len, from.
+  /** An event as the C side copies it out (`nwf_event`): next (unused), kind, error, complete, final, len, data,
+    * flow_id, bytes, flow, accepted, from_len, from.
     */
   type Event = CStruct13[
     Ptr[Byte],
@@ -26,7 +26,7 @@ private[nwframework] object NWFrameworkIo {
     CInt,
     CSize,
     Ptr[Byte],
-    Ptr[Byte],
+    CSize,
     Ptr[Byte],
     Handle,
     Handle,
@@ -62,6 +62,8 @@ private[nwframework] object NWFrameworkIo {
   def nwf_datagram_bind(host: CString, port: CInt): Handle = extern
   def nwf_flow_open(bound: Handle, host: CString, port: CInt): Handle = extern
   def nwf_flow_remote(flow: Handle, from: Ptr[socket.sockaddr_storage]): CInt = extern
+  def nwf_flow_id(flow: Handle): CUnsignedLongLong = extern
+  def nwf_udp_receive_buffer(): CInt = extern
 
   def nwf_fd_open(fd: CInt): Handle = extern
   def nwf_fd_arm(handle: Handle, read: CInt): Unit = extern
@@ -99,6 +101,9 @@ private[nwframework] object NWFrameworkEvent {
     /** Non-null for content held for the reactor to copy (`nwf_receive_held`), `len` bytes of it. */
     inline def held: Ptr[Byte] = e._7
     inline def flow: NWFrameworkIo.Handle = e._10
+
+    /** The flow's number, unique for the process (`nwf_flow`), by which its handle knows it. */
+    inline def flowId: Long = e._8.toLong
     inline def accepted: NWFrameworkIo.Handle = e._11
     inline def fromLength: socket.socklen_t = e._12
     inline def from: Ptr[socket.sockaddr_storage] = e.at13

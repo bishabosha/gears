@@ -132,8 +132,14 @@ measuring; the defaults are the measured best.
   per-packet sender on a connection. A bound socket's flows report theirs.
 - **A bound datagram socket is a listener with flows.** Network.framework opens a flow per peer that sends to it, each
   with a receive outstanding, so packets are taken in per peer as they arrive rather than from one socket buffer;
-  sending to a peer that has not sent first opens an outbound flow from the bound address. Flows the framework ends on
-  its own (a failed state) are not reclaimed.
+  sending to a peer that has not sent first opens an outbound flow from the bound address. The packets taken and not
+  yet received are capped at a kernel UDP socket's receive buffer (`net.inet.udp.recvspace`), beyond which they are
+  dropped, as the kernel drops them. A flow is let go when it ends or fails, when its receive fails (as after an empty
+  packet, which Network.framework follows with an error), and when it has carried nothing for 60 s, so that a socket
+  with many peers keeps flows only for those it hears from; the peer's next packet, or a send to it, makes one anew.
+  Network.framework drops a packet that comes in the few milliseconds it takes to cancel a flow, which UDP allows and
+  a kernel socket would not do. A flow is known by a number (`nwf_flow`), not its address, which a flow made after one
+  let go may have.
 
 ## The slim C side, measured
 
@@ -251,7 +257,8 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
 ## Known limits
 
 - **macOS only, not published**, and no Unix sockets or readiness (above).
-- **Flows of a bound datagram socket that the framework fails on its own are not reclaimed.**
+- **A packet from a peer whose flow was idle for 60 s can be lost** if it comes while that flow is being cancelled
+  (above).
 - **The back-pressure stream over a pipe hangs now and then.** `HigherLevelChecks`' "a stream of chunks consumed as a
   gears channel, with back-pressure" waits for ever on four workers, all reactors idle, about once in 200 runs (30 to a
   process). It hangs the same with and without the final-send change, so that is not its cause. Pipes here are
