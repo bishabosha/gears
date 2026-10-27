@@ -65,7 +65,8 @@ measuring; the defaults are the measured best.
   issued at once, so the next read finds its bytes waiting and finishes at submission, which is how `trySubmit`
   finishes a read without suspending the caller.
 - **A FIFO's read is watched by `select` too.** Dispatch's read source is a kqueue filter, which macOS never fires for
-  a FIFO whose writer closes, so a read waiting on a FIFO is also watched by `FifoWatcher` (see [`kqueue.md`](kqueue.md)).
+  a FIFO whose writer closes, so a read waiting on a FIFO is also watched by `FifoWatcher` (see [`kqueue.md`](kqueue.md)),
+  each wait costing a hop through its `select` thread besides Dispatch's.
 - **A pooled read skips the stash, and takes its buffer only when bytes come.** `ops.read(handle, pool, into)` that
   waits issues a receive whose event holds the framework's own content (`nwf_receive_held`), uncopied; as the reactor
   applies it, it takes a buffer of the pool's and copies the content in, once, and hands that buffer over as a

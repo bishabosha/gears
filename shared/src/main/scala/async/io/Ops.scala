@@ -114,7 +114,8 @@ trait Ops[Op, H <: AnyRef] {
     * submitter's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel that
     * is closed; its number is then free for reuse, and a listener's port for listening on again. A Unix socket path
     * that a listener or datagram socket bound is removed with it, if the file there is still its own, not one a later
-    * listener bound in its place. Fails if `handle` is not open.
+    * listener bound in its place: checked, then removed, as no system call removes a file only if it is a given one, so
+    * a listener binding the path between the two, a few microseconds, loses its file. Fails if `handle` is not open.
     */
   def close(handle: H): Op
 }
@@ -302,7 +303,9 @@ trait UnixStreamOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
   def connect(address: UnixAddress, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket file
-    * already there; any other kind of file there fails the op with an `IOException`, and is left.
+    * already there, as a restarted server's would be, and one a running server uses too; any other kind of file there
+    * fails the op with an `IOException`, and is left. Checked, then replaced: a file put there between the two, a few
+    * microseconds, is replaced as well.
     */
   def listen(address: UnixAddress, into: Slot[Listener]): Op
 }
