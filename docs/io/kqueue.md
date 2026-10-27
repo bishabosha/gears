@@ -317,6 +317,18 @@ can be reused; an event that arrives for the old generation is recognised as sta
 descriptor's filters itself, so a close costs only the `close`. How a descriptor moves between reactors is in
 [`runtime.md`](runtime.md).
 
+## Another facility's ops on the same reactor
+
+A backend built on kqueue's reactors runs ops of another I/O facility beside kqueue's: the Network.framework backend's
+connections (see [`nwframework.md`](nwframework.md)). Such an op is a `Notified`: attempted as it is submitted, and
+again each time its facility notifies the reactor for its submission's token (`KqueueReactor.notified`), until it
+finishes; cancelled, timed out and dropped on close as a command is. The facility's events come on its own threads and
+are taken in on the loop's by its `ReactorExtension`, made with the first such op, which wakes a blocked poll with a
+user event of its own (`ExtensionEvent`), triggered once until the reactor drains it; the reactor asks it for events
+each turn, a load of an atomic flag when there are none. A reactor that never runs one pays nothing: no extension, and
+no event registered. Its handle is a kqueue handle with a `foreign` object and no descriptor, which kqueue's own ops
+refuse.
+
 ## What is open
 
 - **Cancelling a gears `Future` is expensive on Scala Native**, which `timers` shows now that it arms each timer by a

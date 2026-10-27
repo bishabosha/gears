@@ -45,21 +45,25 @@ object KqueueBackend
     * that no use starts after, and the descriptor itself once no use is in progress, by the closer if none is, and
     * otherwise by the last use to end, on its own thread, so that the number is not reused under a use and nobody waits
     * for one (`close`).
+    *
+    * A handle with a `foreign` object is not a descriptor but another facility's I/O object, which a backend built on
+    * kqueue's reactors adds (see `Notified`): Network.framework's connections, in `NWFrameworkBackend`. Its `fd` is -1,
+    * kqueue's ops refuse it, and only its own backend's ops use it.
     */
-  final class Handle private[kqueue] (private[kqueue] val fd: Int) {
+  final class Handle private[kqueue] (private[kqueue] val fd: Int, private[io] val foreign: AnyRef | Null = null) {
     // The sign bit: closed. The rest: how many uses of the descriptor are in progress.
     private val state = new java.util.concurrent.atomic.AtomicInteger(0)
 
     // The ops pending on it, at most one reading and one writing, on any submitter: each claims its direction as it is
     // submitted, and lets it go as its completion is taken (see `Ops.alreadyPending`).
-    private[kqueue] val reader = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
-    private[kqueue] val writer = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+    private[io] val reader = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+    private[io] val writer = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
 
     // What the last use to end runs, once the handle is closed while uses were in progress.
     @volatile private var finisher: Runnable | Null = null
 
     /** Whether it has not been closed. */
-    private[kqueue] def isOpen: Boolean = state.get() >= 0
+    private[io] def isOpen: Boolean = state.get() >= 0
 
     /** Starts a use of the descriptor; false, starting none, if the handle is closed. */
     private[kqueue] def acquire(): Boolean = {
@@ -80,7 +84,7 @@ object KqueueBackend
       * `Handle.Idle` if none was in progress, so that the caller closes the descriptor now, and `finish` never runs;
       * `Handle.InUse` if some were, the last of which runs `finish`; `Handle.AlreadyClosed` if it was.
       */
-    private[kqueue] def close(finish: Runnable): Int = {
+    private[io] def close(finish: Runnable): Int = {
       var current = state.get()
       while current >= 0 && !state.compareAndSet(current, (current + 1) | Int.MinValue) do current = state.get()
       if current < 0 then Handle.AlreadyClosed
@@ -108,10 +112,10 @@ object KqueueBackend
       peerAddress
     }
 
-    override def toString: String = s"Handle($fd)"
+    override def toString: String = if foreign == null then s"Handle($fd)" else s"Handle($foreign)"
   }
 
-  private[kqueue] object Handle {
+  private[io] object Handle {
     inline val Idle = 0
     inline val InUse = 1
     inline val AlreadyClosed = 2

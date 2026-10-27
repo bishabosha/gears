@@ -64,6 +64,16 @@ object KqueueHandles {
     */
   def handle(fd: Int): Handle = new Handle(fd)
 
+  /** A handle for another facility's I/O object, `target`, for a backend built on kqueue's reactors (see
+    * `Handle.foreign`).
+    */
+  private[io] def foreign(target: AnyRef): Handle = new Handle(-1, target)
+
+  /** Refuses a handle that is not kqueue's: another facility's (see `Handle.foreign`). */
+  private[kqueue] def checkOwn(handle: Handle): Unit =
+    if handle.foreign != null then
+      throw new IllegalArgumentException(s"$handle is not kqueue's: use the ops of the backend that opened it")
+
   /** The handle of a connected stream socket's descriptor `fd`, as a connection, for kqueue-specific code that accepts
     * or connects one itself.
     */

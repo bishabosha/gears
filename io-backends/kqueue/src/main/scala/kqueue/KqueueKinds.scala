@@ -16,11 +16,11 @@ object KqueueKinds {
   opaque type UnixDatagram <: Handle = Handle
   opaque type File <: Readable & Writable = Handle
 
-  private[kqueue] def readable(handle: Handle): Readable = handle
-  private[kqueue] def writable(handle: Handle): Writable = handle
-  private[kqueue] def connection(handle: Handle): Connection = handle
-  private[kqueue] def listener(handle: Handle): Listener = handle
-  private[kqueue] def datagram(handle: Handle): Datagram = handle
-  private[kqueue] def unixDatagram(handle: Handle): UnixDatagram = handle
-  private[kqueue] def file(handle: Handle): File = handle
+  private[io] def readable(handle: Handle): Readable = handle
+  private[io] def writable(handle: Handle): Writable = handle
+  private[io] def connection(handle: Handle): Connection = handle
+  private[io] def listener(handle: Handle): Listener = handle
+  private[io] def datagram(handle: Handle): Datagram = handle
+  private[io] def unixDatagram(handle: Handle): UnixDatagram = handle
+  private[io] def file(handle: Handle): File = handle
 }

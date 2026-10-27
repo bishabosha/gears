@@ -13,7 +13,7 @@ import java.io.IOException
   */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends KqueueBlocking {
   gears.async.io.Ops.checkHost(host)
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   override protected def detachable: Boolean = true // its cancel need not wait for the lookup
   def block(): Unit = PosixResolver.lookup(host) match {
     case Right(addresses) => publish(into, gears.async.io.Ops.resolved(host, addresses)) // not if cancelled meanwhile

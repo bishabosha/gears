@@ -23,7 +23,7 @@ import KqueueBackend.Handle
   */
 final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File]) extends KqueueBlocking {
   gears.async.io.Ops.checkPath(path)
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     val handle = KqueueHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then KqueueHandles.close(handle)

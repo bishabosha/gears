@@ -42,7 +42,7 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   * the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
 final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   private var read = 0
   private var filled = false
@@ -84,7 +84,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
 final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Command {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
@@ -100,7 +100,7 @@ final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Com
   * `SocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], max: Int) extends Command {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   private var count = 0
@@ -142,7 +142,7 @@ final case class Connect(fd: Int) extends Command {
   * otherwise. Done once a packet has arrived.
   */
 final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress], unix: Boolean) extends Command {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
   def interest: Interest = Interest.Read
   override def refusal: Throwable | Null = if buf.capacity() > 0 then null else gears.async.io.Ops.noCapacity(buf)
   private var received = -1

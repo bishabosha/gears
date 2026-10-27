@@ -52,14 +52,14 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
   /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
     * it does anything; null if its slots are empty.
     */
-  private[kqueue] def slotRefusal: Throwable | Null = null
+  private[io] def slotRefusal: Throwable | Null = null
 
   /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
     */
-  private[kqueue] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+  private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
 
   /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
-  private[kqueue] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
+  private[io] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
 
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[kqueue] var attachment: AnyRef | Null = null
@@ -131,7 +131,10 @@ object KqueueOps
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
   def read(handle: Readable, pool: BufferPool, into: Slot[Received]): PooledRead =
     on(handle)(PooledRead(fd(handle), KqueueOps.native(pool), into))
-  def close(handle: Handle): KqueueOp = new Close(handle)
+  def close(handle: Handle): KqueueOp = {
+    KqueueHandles.checkOwn(handle)
+    new Close(handle)
+  }
   def shutdownOutput(handle: Connection): KqueueOp = new ShutdownOutput(handle)
   def open(path: String, write: Boolean, into: Slot[File]): KqueueOp = new OpenFile(path, write, into)
   def read(handle: File, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
@@ -161,6 +164,7 @@ object KqueueOps
 
   /** `command`, carrying `handle`, which the reactor takes for each use of the descriptor (see `Command.handle`). */
   private def on[C <: Command](handle: Handle)(command: C): C = {
+    KqueueHandles.checkOwn(handle)
     command.handle = handle
     command
   }
@@ -190,7 +194,7 @@ sealed trait Opens extends KqueueOp {
   * pipes and FIFOs are: `opened` is what it opened, written into `into` by the time the op completes.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K) extends KqueueAtOnce with Opens {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened = -1
   protected def open(): Int
   def perform(): Unit = {
@@ -231,7 +235,7 @@ final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], k
 final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.Writable])
     extends KqueueAtOnce
     with Opens {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
   private var ends: (Int, Int) | Null = null
   def perform(): Unit = {
     val (in, out) = KqueueHandles.pipeDescriptors()
@@ -255,8 +259,8 @@ final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.W
   * `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]) extends Command with Opens {
-  override private[kqueue] def oneShot: Boolean = true // it opens its socket
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def oneShot: Boolean = true // it opens its socket
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket = -1
   private var connected = false
   def fd: Int = socket
@@ -324,7 +328,7 @@ trait Command extends KqueueOp with Repeatable {
   def interest: Interest
   def perform(): Boolean
 
-  override private[kqueue] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = {
+  override private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = {
     val h = handle
     if h == null then null else if interest == Interest.Read then h.reader else h.writer
   }
@@ -373,6 +377,53 @@ trait Command extends KqueueOp with Repeatable {
 final class Ready(val fd: Int, val interest: Interest) extends Command {
   def perform(): Boolean = true
   override def tryFirst: Boolean = false // the wait is the point: only kqueue says the descriptor is ready
+}
+
+/** An op for another I/O facility than kqueue's, driven by a kqueue reactor (see `ReactorExtension`), such as
+  * Network.framework's, whose outcome comes as a notification rather than as a descriptor's readiness: attempted on the
+  * loop thread as it is submitted, and again each time the facility notifies the reactor for its submission's token
+  * (`KqueueReactor.notified`), until it finishes. A backend built on kqueue's reactors subclasses it, so that its ops
+  * and kqueue's run on the same reactor. Repeatable, unless `oneShot` says otherwise.
+  */
+abstract class Notified extends KqueueOp with Repeatable {
+
+  /** The current submission's token, which a notification names. Loop thread only. */
+  private[io] var token = 0L
+
+  /** Readies a submission before its first attempt, such as by opening what it waits on; a throw fails the op. */
+  private[io] def begin(): Unit = ()
+
+  /** Tries to finish, on `reactor`'s thread, `first` as it is submitted: true once done, its results in the caller's
+    * buffers and slots; false having arranged for the facility to notify `reactor` with `token`. A failure is thrown.
+    */
+  private[io] def attempt(reactor: KqueueReactor, first: Boolean): Boolean
+
+  /** Withdraws the arrangement of a submission cancelled, timed out, or dropped as its reactor closes. */
+  private[io] def withdraw(): Unit
+
+  /** After a submission withdrawn: closes what it opened, which never reaches the caller. */
+  private[io] def abandon(): Unit = ()
+
+  /** Whether it closes a handle, so that its completion runs after the failures that causes (see `Ops.close`). */
+  private[io] def closes: Boolean = false
+}
+
+/** Another I/O facility a kqueue reactor drives, besides kqueue: one whose events come on threads of its own, such as
+  * Network.framework's on Dispatch's, which queue them and wake the reactor with its extension event
+  * (`KqueueReactor.ExtensionEvent`, a user event on its kqueue, triggered from anywhere). The reactor takes them in on
+  * its thread each turn, and the ops they finish (`Notified`) are notified there.
+  */
+trait ReactorExtension {
+
+  /** On the loop thread, each turn: takes in what the facility delivered, notifying the ops it finishes. Returns
+    * whether anything came.
+    */
+  def deliver(): Boolean
+
+  /** On the loop thread as the reactor closes, once none of the facility's ops is pending there, before its kqueue
+    * closes: nothing may trigger the extension event after this returns.
+    */
+  def close(): Unit
 }
 
 /** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */
@@ -447,7 +498,7 @@ final class BlockingTask(body: () => Unit) extends KqueueBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends KqueueBlocking {
-  override private[kqueue] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def block(): Unit = {
     publish(into, body())
   }
