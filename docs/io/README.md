@@ -137,6 +137,8 @@ future to feed its channel, as a `Future` is the gears way to turn a loop of ops
   and how it compares with cats-effect.
 - [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend` on the pool: why each waits as it does, what
   was measured, and what was tried and dropped.
+- [`hosts.md`](hosts.md): what each capability, and each planned addition, would be on the backends built and those
+  discussed (io_uring, Node, Deno, Workers, a browser, WASI), and what that asks of the interface.
 - [`nwframework.md`](nwframework.md): kqueue's reactors with Network.framework for TCP and connected UDP off
   loopback, as Apple advises, and kqueue's code for the rest: an experiment, and the reference for a completion-based
   facility under a reactor.
