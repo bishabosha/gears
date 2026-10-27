@@ -97,8 +97,19 @@ jobs:
         distribution: temurin
         java-version: 27
     - uses: sbt/setup-sbt@v1
-    - name: Test
-      run: sbt 'rootNative/test; ioKqueue/test; ioNWFramework/test; ioDemosNative/test; ioDemosTests/test'
+    # The core's I/O on Darwin; the rest of the core runs on Linux, its timing tests' bounds too tight for these
+    # runners. Each step runs whether or not the one before passed, so that every suite reports.
+    - name: Test the core's I/O
+      run: sbt 'rootNative/testOnly gears.async.io.* callers.*'
+    - name: Test kqueue
+      if: ${{ !cancelled() }}
+      run: sbt ioKqueue/test
+    - name: Test Network.framework
+      if: ${{ !cancelled() }}
+      run: sbt ioNWFramework/test
+    - name: Test the demos
+      if: ${{ !cancelled() }}
+      run: sbt 'ioDemosNative/test; ioDemosTests/test'
   test-js:
     strategy:
       fail-fast: false
