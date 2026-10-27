@@ -67,10 +67,11 @@ private[nwframework] final class NWFrameworkHandle(
   private var receiving = false
   private var eof = false
 
-  // A waiting pooled read's receive outstanding into a buffer of the pool's, and one that completed, waiting to be
-  // taken by the next pooled read, or copied by a plain one (its position is what a plain read took): only once the
-  // read that took it was cancelled is that a read not yet made, the framework having the buffer until it completes.
-  private var pooledSlot: NativePool#Slot | Null = null
+  // The pool of the pooled read waiting, whose receive's content (`nwf_receive_held`) is copied into a buffer taken
+  // from it as the content comes, if that read still waits: a read cancelled meanwhile holds no buffer, the content
+  // going to the stash. And a buffer so filled, waiting to be taken by the read, or copied by a plain one (its
+  // position is what a plain read took).
+  private var pooledFor: NativePool | Null = null
   private var pooledReady: NativePool#Slot | Null = null
 
   // The close op waiting for the connection's cancelled state, if any.
@@ -171,14 +172,19 @@ private[nwframework] final class NWFrameworkHandle(
       e.kind match {
         case Received =>
           receiving = false
-          if e.intoBuffer != null then { // straight into a pool buffer, for a pooled read
-            val slot = pooledSlot.nn
-            pooledSlot = null
-            if e.len > 0 && !closed then {
+          if e.held != null then { // a pooled read's: into a pool buffer if that read still waits, else the stash
+            val pool = pooledFor
+            pooledFor = null
+            val slot = if pool != null && readReactor != null && !closed then pool.take() else null
+            if slot != null then {
+              NWFrameworkIo.nwf_data_copy(e.held, slot.address)
               slot.buffer.limit(e.len)
               pooledReady = slot
-            } else slot.release() // nothing came, or the handle is closing: the buffer goes back to the pool
-            if closed && state == 3 && closeReactor != null then finishClose() // the cancelled state came first
+            } else if !closed then { // the pool empty: the read, tried again, finds the bytes and fails as kqueue's
+              stashReserve(e.len)
+              NWFrameworkIo.nwf_data_copy(e.held, stash + stashLength)
+              stashLength += e.len
+            }
           } else if e.len > 0 then stashAppend(e.bytes, e.len)
           if e.complete && e.isFinal then eof = true
           if e.error != 0 then readError = e.error
@@ -207,9 +213,7 @@ private[nwframework] final class NWFrameworkHandle(
           take(Write)
         case Cancelled =>
           state = 3
-          // The close op waiting for it; unless a receive into a pool buffer is still outstanding, whose completion
-          // the framework may deliver after the cancelled state: finished when it comes, so the buffer is given back.
-          if closeReactor != null && pooledSlot == null then finishClose()
+          if closeReactor != null then finishClose() // the close op waiting for it
         case Accepted =>
           accepted.add(e.accepted)
           take(Read)
@@ -266,15 +270,19 @@ private[nwframework] final class NWFrameworkHandle(
   }
 
   private def stashAppend(bytes: Ptr[Byte], len: Int): Unit = {
+    stashReserve(len)
+    string.memcpy(stash + stashLength, bytes, len.toCSize)
+    stashLength += len
+  }
+
+  /** Room for `len` more bytes in the stash. */
+  private def stashReserve(len: Int): Unit =
     if stashLength + len > stashCapacity then {
       var capacity = if stashCapacity == 0 then 4096 else stashCapacity
       while capacity < stashLength + len do capacity *= 2
       stash = stdlib.realloc(stash, capacity.toCSize)
       stashCapacity = capacity
     }
-    string.memcpy(stash + stashLength, bytes, len.toCSize)
-    stashLength += len
-  }
 
   /** Tells the op waiting for `kind`, if any, taking it off, and sets the watcher accordingly. Under the lock: a
     * reactor told from another thread queues the token and wakes, which takes no lock of the handle's.
@@ -326,7 +334,11 @@ private[nwframework] final class NWFrameworkHandle(
   /** Withdraws the waiter for `kind` if it is still `token`'s (a cancelled op). */
   def unwait(kind: Int, token: Long): Unit = synchronized {
     kind match {
-      case Read    => if readReactor != null && readToken == token then readReactor = null
+      case Read =>
+        if readReactor != null && readToken == token then {
+          readReactor = null
+          pooledFor = null // a pooled read's content to come goes to the stash, holding no buffer
+        }
       case Write   => if writeReactor != null && writeToken == token then writeReactor = null
       case Connect => if connectReactor != null && connectToken == token then connectReactor = null
       case Close   => if closeReactor != null && closeToken == token then closeReactor = null
@@ -395,14 +407,15 @@ private[nwframework] final class NWFrameworkHandle(
     else if readError != 0 then throw failure("read", readError)
     else {
       await(Read, reactor, token)
+      pooledFor = null // a plain read takes what comes from the stash
       if !receiving then receive(cap)
       -1
     }
   }
 
   /** A pooled read: a buffer of `pool`'s with what was received, its limit at the bytes, or null with the read waiter
-    * registered and a receive outstanding straight into a buffer of the pool's. Bytes already received, into the stash
-    * by a plain read or a pool buffer by an earlier pooled read, are handed over first. Fails if the pool has no buffer
+    * registered and a receive outstanding whose content is copied into a buffer of the pool's as it comes, taken then.
+    * Bytes already received, into the stash or a pool buffer, are handed over first. Fails if the pool has no buffer
     * free when one is needed.
     */
   def readPooled(pool: NativePool, reactor: NWFrameworkReactor, token: Long): Received | Null = synchronized {
@@ -433,9 +446,12 @@ private[nwframework] final class NWFrameworkHandle(
       slot
     } else if readError != 0 then throw failure("read", readError)
     else {
-      val slot = if receiving then null else takeFrom(pool) // before waiting, so that a refusal leaves no waiter
       await(Read, reactor, token)
-      if slot != null then receiveInto(slot.nn)
+      if !receiving then {
+        pooledFor = pool
+        receiving = true
+        NWFrameworkIo.nwf_receive_held(ptr, pool.bufferSize.toUInt)
+      }
       null
     }
   }
@@ -452,12 +468,6 @@ private[nwframework] final class NWFrameworkHandle(
     */
   private def prefetchPooled(pool: NativePool): Unit =
     if NWFrameworkHandle.Prefetch && !eof && readError == 0 && !receiving && state == 1 then receive(pool.bufferSize)
-
-  private def receiveInto(slot: NativePool#Slot): Unit = {
-    receiving = true
-    pooledSlot = slot
-    NWFrameworkIo.nwf_receive_into(ptr, slot.address, slot.buffer.capacity().toUInt)
-  }
 
   private def receive(cap: Int): Unit = {
     receiving = true
@@ -646,10 +656,7 @@ private[nwframework] final class NWFrameworkHandle(
   /** Whether the close op is done: the connection's cancelled state came (see `closeAsync`). */
   def closeDone: Boolean = synchronized(released)
 
-  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock. A
-    * receive outstanding into a pool buffer keeps that buffer, since the framework may still write it: the close op
-    * waits for the cancelled state, by when that receive has completed and given the buffer back; the synchronous
-    * `close` does not, and leaks it to the pool, which is why the interface's way is the op.
+  /** Lets the C side go, once nothing more is to come from it, telling the close op waiting for that. Under the lock.
     */
   private def finishClose(): Unit = {
     if !released then {

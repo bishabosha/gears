@@ -56,8 +56,8 @@ typedef struct nwf_event {
   int complete;   /* a receive's `is_complete` */
   int final;      /* its context is the stream's final one, so `complete` means the end of the stream */
   size_t len;     /* bytes received, or sent */
-  void *data;     /* unused */
-  void *map;      /* the caller's buffer `bytes` points into (`nwf_receive_into`), which is not freed; else NULL */
+  void *data;     /* the framework's content, held for the reactor to copy (`nwf_receive_held`), else NULL */
+  void *map;      /* unused */
   uint8_t *bytes; /* the received bytes, `len` of them, copied in the callback; freed by `nwf_event_done` */
   nwf_handle_t *flow;    /* the flow of a bound datagram socket the event is for, else NULL */
   nwf_handle_t *accepted;
@@ -264,7 +264,8 @@ static nwf_handle_t *nwf_handle_new(int kind) {
 static void nwf_handle_retain(nwf_handle_t *h) { atomic_fetch_add(&h->refs, 1); }
 
 static void nwf_event_free(nwf_event_t *e) {
-  if (e->map == NULL) free(e->bytes); /* bytes received into the caller's buffer are the caller's */
+  free(e->bytes);
+  if (e->data) dispatch_release((dispatch_data_t)e->data);
   free(e);
 }
 
@@ -375,9 +376,10 @@ int nwf_handle_next(nwf_handle_t *h, nwf_event_t *out) {
 }
 
 void nwf_event_done(nwf_event_t *e) {
-  if (e->map == NULL) free(e->bytes);
+  free(e->bytes);
   e->bytes = NULL;
-  e->map = NULL;
+  if (e->data) dispatch_release((dispatch_data_t)e->data);
+  e->data = NULL;
 }
 
 /* The errno of a Network.framework error; `EIO` for one of another domain. */
@@ -464,25 +466,20 @@ void nwf_receive(nwf_handle_t *h, uint32_t max) {
                         });
 }
 
-/* Issues a receive of 1 to `cap` bytes straight into `into`, a buffer the caller owns, such as a pool's: the
- * `NWF_EV_RECEIVED` event's `bytes` is `into`, and `map` is set to it to say so, so that nothing is freed. */
-void nwf_receive_into(nwf_handle_t *h, uint8_t *into, uint32_t cap) {
+/* Issues a receive of 1 to `max` bytes for a pooled read: the `NWF_EV_RECEIVED` event holds the framework's own
+ * content as `data`, uncopied, so that the reactor copies it once into a pool buffer it takes only if a pooled read
+ * still waits (`nwf_data_copy`); the content is let go with the event (`nwf_event_done`). */
+void nwf_receive_held(nwf_handle_t *h, uint32_t max) {
   nwf_handle_retain(h);
-  nw_connection_receive(h->connection, 1, cap,
+  nw_connection_receive(h->connection, 1, max,
                         ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t error) {
                           uint64_t entered = nwf_tracing() ? mach_absolute_time() : 0;
                           nwf_event_t *e = nwf_event(NWF_EV_RECEIVED);
-                          if (content) {
-                            __block size_t at = 0;
-                            dispatch_data_apply(content, ^bool(dispatch_data_t region, size_t offset, const void *buffer, size_t length) {
-                              memcpy(into + at, buffer, length);
-                              at += length;
-                              return true;
-                            });
-                            e->len = at;
+                          if (content && dispatch_data_get_size(content) > 0) {
+                            dispatch_retain(content);
+                            e->data = (void *)content;
+                            e->len = dispatch_data_get_size(content);
                           }
-                          e->bytes = into;
-                          e->map = into;
                           e->complete = is_complete;
                           e->final = context != NULL && nw_content_context_get_is_final(context);
                           e->error = nwf_errno(error);
@@ -490,6 +487,16 @@ void nwf_receive_into(nwf_handle_t *h, uint8_t *into, uint32_t cap) {
                           if (entered) nwf_trace_callback(entered);
                           nwf_handle_release(h);
                         });
+}
+
+/* Copies the content an event holds (`nwf_receive_held`) into `into`, which has room for all of it. */
+void nwf_data_copy(void *data, uint8_t *into) {
+  __block size_t at = 0;
+  dispatch_data_apply((dispatch_data_t)data, ^bool(dispatch_data_t region, size_t offset, const void *buffer, size_t length) {
+    memcpy(into + at, buffer, length);
+    at += length;
+    return true;
+  });
 }
 
 /* Issues a receive of one datagram; it is a `NWF_EV_PACKET` event, with the flow's peer as its sender. */
@@ -645,6 +652,8 @@ static nwf_handle_t *nwf_flow(nwf_handle_t *bound, nw_connection_t connection) {
 nwf_handle_t *nwf_datagram_bind(const char *host, int port) {
   nwf_handle_t *h = nwf_handle_new(NWF_DGRAM_BOUND);
   h->parameters = nwf_udp_parameters();
+  /* So its outbound flows, made with these parameters, share its port. Probed on macOS 27.0, it shares no port with
+   * another socket, a kernel one or Network.framework's, whatever their flags. */
   nw_parameters_set_reuse_local_address(h->parameters, true);
   nwf_restrict_family(h->parameters, host);
   h->local_endpoint = nwf_endpoint(host, port);

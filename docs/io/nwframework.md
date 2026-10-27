@@ -66,13 +66,15 @@ measuring; the defaults are the measured best.
   finishes a read without suspending the caller.
 - **A FIFO's read is watched by `select` too.** Dispatch's read source is a kqueue filter, which macOS never fires for
   a FIFO whose writer closes, so a read waiting on a FIFO is also watched by `FifoWatcher` (see [`kqueue.md`](kqueue.md)).
-- **A pooled read skips the stash.** `ops.read(handle, pool, into)` receives straight into a buffer of the pool's on
-  Dispatch's thread (`nwf_receive_into`), and the reactor hands that buffer over as a `Received`: one copy, the
-  framework's own, where a read into the caller's buffer costs the stash copy and another into the caller's. A plain
-  read after a pooled one takes what the pooled receive brought first. Only a read that waits receives into a pool
-  buffer: the receive issued after a pooled read that took bytes goes to the stash, which the next pooled read copies,
-  since a buffer held for a read not yet made would leave a pool shared by many connections with none for the reads
-  that are.
+- **A pooled read skips the stash, and takes its buffer only when bytes come.** `ops.read(handle, pool, into)` that
+  waits issues a receive whose event holds the framework's own content (`nwf_receive_held`), uncopied; as the reactor
+  applies it, it takes a buffer of the pool's and copies the content in, once, and hands that buffer over as a
+  `Received`: one copy, where a read into the caller's buffer costs the stash copy and another into the caller's. A
+  pooled read cancelled or timed out before its bytes come holds no buffer, its bytes going to the stash for the next
+  read, so idle connections with time limits never drain a shared pool (they held one each until 2026-10-27, when
+  the receive wrote straight into a pool buffer taken as the read waited); a pool empty when the bytes come fails the
+  read, as on kqueue. A plain read after a pooled one takes what the pooled receive brought first. The receive issued
+  after a pooled read that took bytes goes to the stash, which the next pooled read copies.
 - **Cancelling a read runs `onCancel` at once, and the op can be performed again.** A receive once issued cannot be
   withdrawn, so a cancelled read leaves it outstanding, and its bytes land in the stash for the next read. The op's
   buffer is written only on the loop thread, when the read is delivered, so cancel does not race a callback: it takes

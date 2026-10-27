@@ -3,6 +3,7 @@ package testkit
 
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.TimeoutException
 
 /** What a backend with IP sockets must do (see `ReactorContract`). */
 trait SocketContract extends ReactorContract {
@@ -462,6 +463,36 @@ trait SocketContract extends ReactorContract {
           assertEquals(textOf(held), "first")
           held.release()
           assertEquals(pool.available, 2, "no buffer is kept for reads not yet made")
+        }
+      }
+    finally pool.close()
+  }
+
+  test("a pooled read that timed out holds no buffer: another connection's read takes the pool's one") {
+    val pool = backend.pool(bufferSize = 16, buffers = 1)
+    try
+      withReactor { r =>
+        withConnections(r, 2) { case Seq((client1, server1), (client2, server2)) =>
+          val idle = Outcome()
+          r.submit(backend.ops.read(server1, pool, Slot[Received]()), idle, timeoutMillis = 20)
+          turnUntil(r)(idle.finished)
+          assert(idle.failure.isInstanceOf[TimeoutException], String.valueOf(idle.failure))
+          assertEquals(pool.available, 1, "the read that timed out holds no buffer")
+          r.submit(backend.ops.write(client2, bytes("busy")), Outcome())
+          readPooled(r, server2, pool) match {
+            case received: Received =>
+              assertEquals(textOf(received), "busy")
+              received.release()
+            case failure: Throwable => fail("the other connection's read found no buffer free", failure)
+          }
+          r.submit(backend.ops.write(client1, bytes("late")), Outcome())
+          readPooled(r, server1, pool) match {
+            case received: Received =>
+              assertEquals(textOf(received), "late", "what came for the read that timed out is the next read's")
+              received.release()
+            case failure: Throwable => fail("the read after the timeout failed", failure)
+          }
+          assertEquals(pool.available, 1)
         }
       }
     finally pool.close()

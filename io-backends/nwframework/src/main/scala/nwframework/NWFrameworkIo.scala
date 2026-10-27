@@ -15,8 +15,8 @@ private[nwframework] object NWFrameworkIo {
   type Reactor = Ptr[Byte]
   type Handle = Ptr[Byte]
 
-  /** An event as the C side copies it out (`nwf_event`): next (unused), kind, error, complete, final, len, data, map,
-    * bytes, flow, accepted, from_len, from.
+  /** An event as the C side copies it out (`nwf_event`): next (unused), kind, error, complete, final, len, data, map
+    * (unused), bytes, flow, accepted, from_len, from.
     */
   type Event = CStruct13[
     Ptr[Byte],
@@ -51,7 +51,8 @@ private[nwframework] object NWFrameworkIo {
   def nwf_connect(host: CString, port: CInt): Handle = extern
   def nwf_receive(handle: Handle, max: CUnsignedInt): Unit = extern
   def nwf_receive_message(handle: Handle): Unit = extern
-  def nwf_receive_into(handle: Handle, into: Ptr[Byte], cap: CUnsignedInt): Unit = extern
+  def nwf_receive_held(handle: Handle, max: CUnsignedInt): Unit = extern
+  def nwf_data_copy(data: Ptr[Byte], into: Ptr[Byte]): Unit = extern
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
   def nwf_send_final(handle: Handle): Unit = extern
 
@@ -95,8 +96,8 @@ private[nwframework] object NWFrameworkEvent {
     inline def len: Int = e._6.toInt
     inline def bytes: Ptr[Byte] = e._9
 
-    /** Non-null for bytes received straight into a buffer the caller gave (`nwf_receive_into`). */
-    inline def intoBuffer: Ptr[Byte] = e._8
+    /** Non-null for content held for the reactor to copy (`nwf_receive_held`), `len` bytes of it. */
+    inline def held: Ptr[Byte] = e._7
     inline def flow: NWFrameworkIo.Handle = e._10
     inline def accepted: NWFrameworkIo.Handle = e._11
     inline def fromLength: socket.socklen_t = e._12
