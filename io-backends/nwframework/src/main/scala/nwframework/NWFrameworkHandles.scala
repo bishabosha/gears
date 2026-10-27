@@ -875,8 +875,12 @@ object NWFrameworkHandles {
   }
 
   /** Fails if `address` cannot be bound without `SO_REUSEADDR`, such as while a connection from an earlier listener on
-    * it is in `TIME_WAIT`: Network.framework binds such an address all the same, so a listener without `reuseAddr` asks
-    * the kernel first, with a socket bound and closed again, and is refused as one on the other backends is.
+    * it is in `TIME_WAIT`. Network.framework refuses a port a kernel socket holds or left in `TIME_WAIT`, but binds one
+    * whose connections were its own, from any process, which only a `bind` sees: they are not in the kernel's TCP table
+    * (`net.inet.tcp.pcblist64`). So a listener without `reuseAddr` asks the kernel first, with a socket bound and
+    * closed again. Between that close and Network.framework's bind, a Network.framework connection on the port that
+    * ends in the meantime is not seen; no public call closes the window, as a socket held bound fails
+    * Network.framework's own bind (probed on macOS 27.0, see "Known limits" in nwframework.md).
     */
   private def refuseInUse(address: IpAddress): Unit = {
     import gears.async.io.internal.{PosixSockets, Sockets}
