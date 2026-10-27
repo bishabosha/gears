@@ -27,12 +27,13 @@ program can neither forge one nor pass one backend's handle to another, whose `H
 
 Three axes, chosen independently of one another:
 
-- **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpSockets`,
-  `Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
+- **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpStreams`,
+  `IpDatagrams`, `UnixStreams`, `UnixDatagrams`, `Files`, `Pipes`, `Resolving`, `Blocking`, `Fifos`; `IpSockets` is
+  both IP ones. Each is a
   `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
-  nothing. IP and Unix sockets are independent: `IpSockets` and `UnixStreams` each imply `StreamSockets`, the ops of a
-  stream socket once open (`accept`, `shutdownOutput`), which code serving connections of either family asks for, and
-  neither implies the other. Every handle is opened by an op of the capability that has it (`connect`, `listen`,
+  nothing. Sockets go by address family and transport, one capability each, none implying another: `IpStreams` and
+  `UnixStreams` each imply `StreamSockets`, the ops of a stream socket once open (`accept`, `shutdownOutput`,
+  addresses), which code serving connections of either family asks for. Every handle is opened by an op of the capability that has it (`connect`, `listen`,
   `bindDatagram`, `connectDatagram`, `pipe`,
   `openFifoForReading`, `openFifoForWriting`, `open`), which writes it into a slot as it completes and leaves the
   slot empty, with nothing open, if it fails or is cancelled: opening may wait, for a connection, a bind or the disk,

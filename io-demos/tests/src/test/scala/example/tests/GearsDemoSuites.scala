@@ -68,7 +68,7 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
 }
 
 /** The gears demos on Scala Native. No gears backend sends an empty datagram on a connected socket, since the JDK's
-  * cannot (see `SocketOps.send`); empty packets to the server, from Java's own clients, are still echoed.
+  * cannot (see `IpDatagramOps.send`); empty packets to the server, from Java's own clients, are still echoed.
   */
 class GearsSocketDemoSuite extends SocketDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")

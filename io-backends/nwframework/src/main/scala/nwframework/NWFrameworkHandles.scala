@@ -453,7 +453,7 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
-  /** Ends a connected stream's sending side (see `SocketOps.shutdownOutput`), after the sends before it. */
+  /** Ends a connected stream's sending side (see `StreamSocketOps.shutdownOutput`), after the sends before it. */
   def shutdownOutput(): Unit = synchronized {
     checkOpen()
     if kind != NWFrameworkHandle.Stream || state != 1 then throw new IOException("Not a connected stream socket")

@@ -5,7 +5,8 @@ import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Files
-import gears.async.io.IpSockets
+import gears.async.io.IpDatagrams
+import gears.async.io.IpStreams
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
@@ -23,7 +24,8 @@ import gears.async.io.UnixStreams
 object KqueueBackend
     extends ReactorBackend
     with Blocking
-    with IpSockets
+    with IpStreams
+    with IpDatagrams
     with UnixStreams
     with UnixDatagrams
     with Fifos

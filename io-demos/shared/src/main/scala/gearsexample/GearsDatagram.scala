@@ -5,9 +5,9 @@ import gears.async.Future
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpAddress
+import gears.async.io.IpDatagramBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
-import gears.async.io.SocketBackend
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramBackend
 import gears.async.io.testkit.BufferArena
@@ -43,7 +43,7 @@ object GearsDatagram {
   }
 
   /** Exchanges a packet with an IP datagram server; connecting the socket also assigns it an ephemeral local port. */
-  def run(address: IpAddress, message: String)(using SocketBackend): Unit = {
+  def run(address: IpAddress, message: String)(using IpDatagramBackend): Unit = {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
@@ -101,7 +101,7 @@ object GearsDatagram {
     }
 
   /** Echoes each packet on an IP datagram socket to its sender. */
-  def serve(address: IpAddress)(using SocketBackend): Unit =
+  def serve(address: IpAddress)(using IpDatagramBackend): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { io ?=>

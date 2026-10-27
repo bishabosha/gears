@@ -180,7 +180,7 @@ object Main {
       backend: String = "kqueue"
   ): Unit = {
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
-    def run[B <: IpSockets](endpoint: Endpoint[B])(using B): Unit =
+    def run[B <: gears.async.io.StreamSockets](endpoint: Endpoint[B])(using B): Unit =
       GearsBench.run(names, scale, connections, endpoint, workers, takePolicy(policy), server = !noServer.value)
     withBackend(backend) { b =>
       if tcp.value then run(Endpoint.Ip(IpAddress.IPv4(host, port)))(using b)
@@ -221,7 +221,9 @@ object Main {
         )
     }
 
-  private def withReactorBackend(backend: String)(body: gears.async.io.ReactorBackend & IpSockets => Unit): Unit =
+  private def withReactorBackend(backend: String)(
+      body: gears.async.io.ReactorBackend & gears.async.io.IpStreams => Unit
+  ): Unit =
     withBackend(backend)(body)
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)

@@ -2,9 +2,9 @@ package gearsexample
 
 import gears.async.io.AddressFamily
 import gears.async.io.IpAddress
+import gears.async.io.IpStreamBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.ResolveBackend
-import gears.async.io.SocketBackend
 import gears.async.io.testkit.BufferArena
 
 import java.nio.charset.StandardCharsets
@@ -17,7 +17,7 @@ import higherlevel.HigherLevel
   * `read` the bytes received.
   */
 object GearsWhois {
-  def run(host: String, port: Int, query: String)(using SocketBackend & ResolveBackend): Unit = {
+  def run(host: String, port: Int, query: String)(using IpStreamBackend & ResolveBackend): Unit = {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
       ReactorFutures.run { io ?=>

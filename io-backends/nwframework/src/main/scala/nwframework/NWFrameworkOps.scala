@@ -6,13 +6,14 @@ import gears.async.io.BufferPool
 import gears.async.io.FifoOps
 import gears.async.io.FileOps
 import gears.async.io.IpAddress
+import gears.async.io.IpDatagramOps
+import gears.async.io.IpStreamOps
 import gears.async.io.PipeOps
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
-import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
@@ -43,7 +44,8 @@ import NWFrameworkHandles.owns
   * kqueue's to these; underneath, kqueue's openers write the same handles into its slots.
   */
 final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
-    extends SocketOps[KqueueOp, Handle]
+    extends IpStreamOps[KqueueOp, Handle]
+    with IpDatagramOps[KqueueOp, Handle]
     with UnixStreamOps[KqueueOp, Handle]
     with UnixDatagramOps[KqueueOp, Handle]
     with PipeOps[KqueueOp, Handle]
@@ -342,7 +344,7 @@ sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Han
   }
 }
 
-/** A connection to `address` (see `SocketOps.connect`): ready once Network.framework has it ready, failing with its
+/** A connection to `address` (see `IpStreamOps.connect`): ready once Network.framework has it ready, failing with its
   * error if it failed.
   */
 final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds.Connection])
@@ -350,13 +352,13 @@ final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds
   protected def make(): Handle = NWFrameworkHandles.connect(address)
 }
 
-/** A listener on `address` (see `SocketOps.listen`): ready once it is listening, failing if it cannot. */
+/** A listener on `address` (see `IpStreamOps.listen`): ready once it is listening, failing if it cannot. */
 final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Listener])
     extends NWFrameworkOpening(into, NWFrameworkKinds.listener) {
   protected def make(): Handle = NWFrameworkHandles.listener(address)
 }
 
-/** A datagram socket connected to `remote` (see `SocketOps.datagram`), bound to `local` if given: ready once
+/** A datagram socket connected to `remote` (see `IpDatagramOps.connectDatagram`), bound to `local` if given: ready once
   * Network.framework has its connection ready, failing if it cannot be.
   */
 final class NWFrameworkOpenDatagram(
@@ -389,8 +391,8 @@ final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
   }
 }
 
-/** Ends a connected stream's sending side (see `SocketOps.shutdownOutput`): at once, the end queued after the sends
-  * before it.
+/** Ends a connected stream's sending side (see `StreamSocketOps.shutdownOutput`): at once, the end queued after the
+  * sends before it.
   */
 final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCommand {
   override private[io] def oneShot: Boolean = true
@@ -450,7 +452,7 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
 }
 
 /** Sends `buf` as one datagram to the socket's peer, consuming it; never an empty one, as on every backend (see
-  * `SocketOps.send`).
+  * `IpDatagramOps.send`).
   */
 final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write

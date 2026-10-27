@@ -44,7 +44,7 @@ trait Repeatable
   * handle is closed with `close`. The opener of each kind writes a handle of that kind into its slot, so a program
   * holds the kind it opened.
   *
-  * Handles are opened by ops too, each kind by the capability that has it (`SocketOps.connect`, `PipeOps.pipe`,
+  * Handles are opened by ops too, each kind by the capability that has it (`IpStreamOps.connect`, `PipeOps.pipe`,
   * `FileOps.open` and the rest), since opening may wait, for a connection, a bind or the disk, and some environments
   * can only open asynchronously. Such an op writes what it opened into a slot when it completes; one that fails, is
   * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
@@ -120,7 +120,7 @@ trait Ops[Op, H <: AnyRef] {
   def close(handle: H): Op
 }
 
-/** The ops of stream sockets, IP or Unix, once opened (see `SocketOps` and `UnixStreamOps`, which open them). */
+/** The ops of stream sockets, IP or Unix, once opened (see `IpStreamOps` and `UnixStreamOps`, which open them). */
 trait StreamSocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
@@ -156,11 +156,10 @@ trait StreamSocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def peerAddress(handle: Connection): IpAddress | UnixAddress
 }
 
-/** The ops of IP sockets, stream and datagram, for a backend that has them (see `IpSockets`). A datagram socket is
-  * bound, receiving from and sending to anyone (`bindDatagram`), or connected, to one peer (`connectDatagram`): two
-  * kinds, so that sending a connected socket's packet elsewhere, or a bound socket's to nobody, does not compile.
+/** The ops that open IP stream sockets, for a backend that has them (see `IpStreams`), used once open as any stream
+  * socket is (`StreamSocketOps`, and `read` and `write`).
   */
-trait SocketOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
+trait IpStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
     * `into`, which must be empty; fails if the connection is refused or cannot be made.
@@ -174,6 +173,13 @@ trait SocketOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
     * cannot refuse such a port.
     */
   def listen(address: IpAddress, into: Slot[Listener]): Op
+}
+
+/** The ops of IP datagram sockets, for a backend that has them (see `IpDatagrams`). A datagram socket is bound,
+  * receiving from and sending to anyone (`bindDatagram`), or connected, to one peer (`connectDatagram`): two kinds, so
+  * that sending a connected socket's packet elsewhere, or a bound socket's to nobody, does not compile.
+  */
+trait IpDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Opens a datagram socket bound to `local`, port 0 for any. Completes once it is bound, after writing it into
     * `into`, which must be empty; fails if `local` is in use or cannot be bound.
@@ -309,13 +315,13 @@ trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
   */
 trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
 
-  /** Opens a stream socket and connects it to `address`, as `SocketOps.connect` does to an IP address. */
+  /** Opens a stream socket and connects it to `address`, as `IpStreamOps.connect` does to an IP address. */
   def connect(address: UnixAddress, into: Slot[Connection]): Op
 
-  /** Opens a stream socket listening on `address`, as `SocketOps.listen` does on an IP address, replacing a socket file
-    * already there, as a restarted server's would be, and one a running server uses too; any other kind of file there
-    * fails the op with an `IOException`, and is left. Checked, then replaced: a file put there between the two, a few
-    * microseconds, is replaced as well.
+  /** Opens a stream socket listening on `address`, as `IpStreamOps.listen` does on an IP address, replacing a socket
+    * file already there, as a restarted server's would be, and one a running server uses too; any other kind of file
+    * there fails the op with an `IOException`, and is left. Checked, then replaced: a file put there between the two, a
+    * few microseconds, is replaced as well.
     */
   def listen(address: UnixAddress, into: Slot[Listener]): Op
 }
@@ -336,21 +342,21 @@ trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }
 
-/** The ops of Unix domain datagram sockets, for a backend that has them (see `UnixDatagrams`), as `SocketOps`' datagram
-  * ops are for IP ones: bound, or connected to one peer.
+/** The ops of Unix domain datagram sockets, for a backend that has them (see `UnixDatagrams`), as `IpDatagramOps` are
+  * for IP ones: bound, or connected to one peer.
   */
 trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Opens a datagram socket bound to `local`, as `SocketOps.bindDatagram` does. */
+  /** Opens a datagram socket bound to `local`, as `IpDatagramOps.bindDatagram` does. */
   def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): Op
 
-  /** Opens a datagram socket connected to `remote`, bound to `local` if given, as `SocketOps.connectDatagram` does. A
-    * client that wants replies on a socket of its own, rather than this one, binds a `local` path.
+  /** Opens a datagram socket connected to `remote`, bound to `local` if given, as `IpDatagramOps.connectDatagram` does.
+    * A client that wants replies on a socket of its own, rather than this one, binds a `local` path.
     */
   def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): Op
 
-  /** Receives one packet on a bound Unix datagram socket, as `SocketOps.receive` does on an IP one; an unnamed sender
-    * has the empty path.
+  /** Receives one packet on a bound Unix datagram socket, as `IpDatagramOps.receive` does on an IP one; an unnamed
+    * sender has the empty path.
     */
   @annotation.targetName("receiveUnix")
   def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
@@ -359,10 +365,10 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
   @annotation.targetName("receiveUnixConnected")
   def receive(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 
-  /** Sends one packet on a bound Unix datagram socket, to `to`, as `SocketOps.send` does on an IP one. */
+  /** Sends one packet on a bound Unix datagram socket, to `to`, as `IpDatagramOps.send` does on an IP one. */
   def send(handle: UnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
 
-  /** Sends one packet on a connected Unix datagram socket, to its peer, as `SocketOps.send` does on an IP one. */
+  /** Sends one packet on a connected Unix datagram socket, to its peer, as `IpDatagramOps.send` does on an IP one. */
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 
@@ -442,7 +448,7 @@ private[io] object Ops {
     new IllegalArgumentException(s"The buffer has no capacity, so a packet received into it would be dropped: $buf")
 
   /** The failure of a send of an empty packet on a connected socket, where not every backend can send one (see
-    * `SocketOps.send`).
+    * `IpDatagramOps.send`).
     */
   def emptyPacket(buf: ByteBuffer): IllegalArgumentException =
     new IllegalArgumentException(s"The buffer is empty, and an empty packet is not sent on a connected socket: $buf")

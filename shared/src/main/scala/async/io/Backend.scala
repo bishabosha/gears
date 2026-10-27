@@ -14,12 +14,12 @@ import _root_.gears.async.Async
   * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes
   * asynchronously, such as Network.framework or io_uring, reports a close done through a completion rather than by
   * blocking the caller. Where the streams come from is a capability the backend mixes in, with the ops that open its
-  * handles and use them: IP sockets (`IpSockets`), regular files (`Files`), pipes (`Pipes`), name resolution
-  * (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams` and `Fifos`; its kind is a reactor
-  * (`ReactorBackend`) or the caller (`CallerBackend`). Code that needs a capability asks for a backend that has it
-  * (`SocketBackend`, a `Backend & IpSockets`, and the other aliases below), or for an `Io` over one
-  * (`Io[SocketBackend]`), so a backend without it, such as one in a browser, which has no sockets or files of these
-  * kinds, is refused when compiling, not when running.
+  * handles and use them: IP stream and datagram sockets (`IpStreams`, `IpDatagrams`, both `IpSockets`), regular files
+  * (`Files`), pipes (`Pipes`), name resolution (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams`
+  * and `Fifos`; its kind is a reactor (`ReactorBackend`) or the caller (`CallerBackend`). Code that needs a capability
+  * asks for a backend that has it (`SocketBackend`, a `Backend & IpSockets`, and the other aliases below), or for an
+  * `Io` over one (`Io[SocketBackend]`), so a backend without it, such as one in a browser, which has no sockets or
+  * files of these kinds, is refused when compiling, not when running.
   */
 trait Backend {
 
@@ -98,19 +98,31 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 }
 
 /** Stream sockets of some family, IP or Unix, once opened (see `StreamSocketOps`): what code that accepts, reads,
-  * writes and shuts down connections needs, whichever family opened them. A backend has it through `IpSockets` or
+  * writes and shuts down connections needs, whichever family opened them. A backend has it through `IpStreams` or
   * `UnixStreams`, neither of which implies the other.
+  *
+  * The socket capabilities go by address family and transport, one each: `IpStreams`, `IpDatagrams`, `UnixStreams` and
+  * `UnixDatagrams`, so that a host with some of them, such as one with TCP and no UDP, offers just those, and code asks
+  * for just what it uses; `IpSockets` is both IP ones.
   */
 trait StreamSockets extends Backend {
   def ops: Kinded[StreamSocketOps[Op, Handle]]
 }
 
-/** IP sockets, stream and datagram (see `SocketOps`): an operating system's, or a host's, such as Node's; a browser has
-  * none.
+/** IP stream sockets, TCP (see `IpStreamOps`): an operating system's, or a host's, such as Node's; a browser has none.
   */
-trait IpSockets extends StreamSockets {
-  def ops: Kinded[SocketOps[Op, Handle]]
+trait IpStreams extends StreamSockets {
+  def ops: Kinded[IpStreamOps[Op, Handle]]
 }
+
+/** IP datagram sockets, UDP (see `IpDatagramOps`), apart from IP stream sockets: some hosts have one and not the other.
+  */
+trait IpDatagrams extends Backend {
+  def ops: Kinded[IpDatagramOps[Op, Handle]]
+}
+
+/** IP sockets of both transports, for code that uses both. */
+type IpSockets = IpStreams & IpDatagrams
 
 /** Regular files, opened, read, written and synced as ops (see `FileOps`): on a thread pool where the operating
   * system's file I/O blocks, as kqueue's, NIO's and Network.framework's do, asynchronously at the device where it does
@@ -140,7 +152,7 @@ trait Blocking extends Backend {
 }
 
 /** Unix domain stream sockets (see `UnixStreamOps`), on which the stream socket ops run (`StreamSocketOps`). Apart from
-  * IP sockets: code that uses both asks for both, `IpSockets & UnixStreams`.
+  * IP sockets: code that uses both asks for both, `IpStreams & UnixStreams`.
   */
 trait UnixStreams extends StreamSockets {
   def ops: Kinded[UnixStreamOps[Op, Handle]]
@@ -156,8 +168,10 @@ trait Fifos extends Backend {
   def ops: Kinded[FifoOps[Op, Handle]]
 }
 
-/** A backend with IP sockets: what a program asks for, and the other aliases likewise. */
+/** A backend with IP sockets of both transports: what a program asks for, and the other aliases likewise. */
 type SocketBackend = Backend & IpSockets
+type IpStreamBackend = Backend & IpStreams
+type IpDatagramBackend = Backend & IpDatagrams
 type StreamSocketBackend = Backend & StreamSockets
 type FileBackend = Backend & Files
 type ResolveBackend = Backend & Resolving

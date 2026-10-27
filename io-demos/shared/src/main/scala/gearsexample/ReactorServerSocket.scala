@@ -2,7 +2,7 @@ package gearsexample
 
 import gears.async.io.Completion
 import gears.async.io.IpAddress
-import gears.async.io.IpSockets
+import gears.async.io.IpStreams
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
 import gears.async.io.Repeatable
@@ -33,7 +33,7 @@ object ReactorServerSocket {
       def listen(into: Slot[b.Listener]): b.Op = b.ops.listen(address, into)
     }.run()
 
-  def run(address: IpAddress)(using backend: ReactorBackend & IpSockets): Unit =
+  def run(address: IpAddress)(using backend: ReactorBackend & IpStreams): Unit =
     new Serving(backend) {
       def listen(into: Slot[b.Listener]): b.Op = b.ops.listen(address, into)
     }.run()

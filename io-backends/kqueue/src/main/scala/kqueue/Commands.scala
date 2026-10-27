@@ -97,7 +97,7 @@ final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Com
 }
 
 /** Accepts the connections pending on a listening socket, at most `max`, writing their handles into `into` (see
-  * `SocketOps.acceptAll`). Done once at least one has been accepted.
+  * `StreamSocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], max: Int) extends Command {
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
@@ -174,7 +174,7 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
 
 /** Sends one packet, consuming `buf`: from a bound socket to `to`, or from a connected one, `to` null, to its peer,
   * without an address, as the JDK sends it, since macOS refuses one there (`EISCONN`). An empty packet is refused on a
-  * connected socket, since the JDK cannot send one (see `SocketOps.send`). Done once it has gone.
+  * connected socket, since the JDK cannot send one (see `IpDatagramOps.send`). Done once it has gone.
   */
 final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) extends Command {
   def interest: Interest = Interest.Write

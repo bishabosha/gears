@@ -350,7 +350,7 @@ object NioHandles {
     handle.entry.close()
   }
 
-  /** Shuts a connected stream socket down for writing (see `SocketOps.shutdownOutput`). */
+  /** Shuts a connected stream socket down for writing (see `StreamSocketOps.shutdownOutput`). */
   def shutdownOutput(handle: Handle): Unit = entry(handle) match {
     case entry: Selectable =>
       entry.channel match {

@@ -9,7 +9,8 @@ import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Io
 import gears.async.io.IpAddress
-import gears.async.io.IpSockets
+import gears.async.io.IpDatagrams
+import gears.async.io.IpStreams
 import gears.async.io.Pipes
 import gears.async.io.Received
 import gears.async.io.ResolvedAddress
@@ -42,7 +43,7 @@ object HigherLevel {
   }
 
   /** Connects a stream socket to `address` and returns it. */
-  def connect(address: IpAddress)(using io: Io[IpSockets], async: Async): io.Connection =
+  def connect(address: IpAddress)(using io: Io[IpStreams], async: Async): io.Connection =
     opened[io.Connection](io.backend.ops.connect(address, _))
 
   /** Connects a stream socket to a Unix socket path and returns it. */
@@ -50,7 +51,7 @@ object HigherLevel {
     opened[io.Connection](io.backend.ops.connect(address, _))
 
   /** Listens on `address` and returns the listener. */
-  def listen(address: IpAddress)(using io: Io[IpSockets], async: Async): io.Listener =
+  def listen(address: IpAddress)(using io: Io[IpStreams], async: Async): io.Listener =
     opened[io.Listener](io.backend.ops.listen(address, _))
 
   /** Listens on a Unix socket path and returns the listener. */
@@ -58,12 +59,12 @@ object HigherLevel {
     opened[io.Listener](io.backend.ops.listen(address, _))
 
   /** Opens a datagram socket bound to `local` and returns it. */
-  def bindDatagram(local: IpAddress)(using io: Io[IpSockets], async: Async): io.BoundDatagram =
+  def bindDatagram(local: IpAddress)(using io: Io[IpDatagrams], async: Async): io.BoundDatagram =
     opened[io.BoundDatagram](io.backend.ops.bindDatagram(local, _))
 
   /** Opens a datagram socket connected to `remote`, bound to `local` if given, and returns it. */
   def connectDatagram(local: IpAddress | Null, remote: IpAddress)(using
-      io: Io[IpSockets],
+      io: Io[IpDatagrams],
       async: Async
   ): io.ConnectedDatagram =
     opened[io.ConnectedDatagram](io.backend.ops.connectDatagram(local, remote, _))
@@ -109,7 +110,7 @@ object HigherLevel {
   }
 
   /** Shuts a connected stream down for writing: the peer reads what was written, then the end of the stream, and this
-    * side may still read (see `SocketOps.shutdownOutput`).
+    * side may still read (see `StreamSocketOps.shutdownOutput`).
     */
   def shutdownOutput(using io: Io[StreamSockets])(handle: io.Connection)(using Async): Unit =
     io.perform(io.backend.ops.shutdownOutput(handle))

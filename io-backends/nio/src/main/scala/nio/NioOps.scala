@@ -7,13 +7,14 @@ import gears.async.io.BufferPool
 import gears.async.io.Completion
 import gears.async.io.FileOps
 import gears.async.io.IpAddress
+import gears.async.io.IpDatagramOps
+import gears.async.io.IpStreamOps
 import gears.async.io.PipeOps
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
-import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.Blockers
@@ -72,7 +73,8 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps
-    extends SocketOps[NioOp, Handle]
+    extends IpStreamOps[NioOp, Handle]
+    with IpDatagramOps[NioOp, Handle]
     with UnixStreamOps[NioOp, Handle]
     with PipeOps[NioOp, Handle]
     with BlockingOps[NioOp, Handle]
@@ -179,7 +181,7 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce 
   }
 }
 
-/** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
+/** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
 final class Listen(address: SocketAddress, into: Slot[NioKinds.Listener]) extends OpensAtOnce(into) {
   protected def open(): NioKinds.Listener = address match {
     case ip: IpAddress     => NioHandles.listen(ip)
@@ -187,7 +189,7 @@ final class Listen(address: SocketAddress, into: Slot[NioKinds.Listener]) extend
   }
 }
 
-/** A datagram socket, bound to `local` and connected to `remote` where given (see `SocketOps.bindDatagram` and
+/** A datagram socket, bound to `local` and connected to `remote` where given (see `IpDatagramOps.bindDatagram` and
   * `connectDatagram`), written into `into` as the kind `kind` makes.
   */
 final class OpenDatagram[K <: Handle](
@@ -224,7 +226,8 @@ final class Close(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.close(handle)
 }
 
-/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, as `SocketChannel.shutdownOutput` does.
+/** Shuts a socket down for writing (see `StreamSocketOps.shutdownOutput`): at once, as `SocketChannel.shutdownOutput`
+  * does.
   */
 final class ShutdownOutput(val handle: Handle) extends NioAtOnce {
   def perform(): Unit = NioHandles.shutdownOutput(handle)
@@ -331,7 +334,7 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
 }
 
 /** Accepts the connections pending on a listener, at most `max`, writing their handles into `into` (see
-  * `SocketOps.acceptAll`). Done once at least one has been accepted.
+  * `StreamSocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]], max: Int) extends Command {
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
@@ -364,9 +367,9 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   }
 }
 
-/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking connect
-  * started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect to
-  * finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as a
+/** A stream socket connected to `address` (see `IpStreamOps.connect`): the socket is opened, and its non-blocking
+  * connect started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect
+  * to finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as a
   * Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times out
   * first, the socket is closed and `into` left empty.
   */
@@ -443,7 +446,7 @@ final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) exte
     val size = buf.remaining()
     if target == null then {
       // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
-      // so no backend sends an empty packet on a connected socket (see `SocketOps.send`).
+      // so no backend sends an empty packet on a connected socket (see `IpDatagramOps.send`).
       if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
       channel.write(buf) > 0 // a datagram goes whole or not at all
     } else channel.send(buf, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes

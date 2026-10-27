@@ -57,6 +57,23 @@ trait ReactorContract extends FunSuite {
   protected type UnixConnectedDatagram = backend.UnixConnectedDatagram
   protected type File = backend.File
 
+  /** Opens something on a free port: no interface tells which port was bound, so it tries a few. */
+  protected def onFreePort[K <: Handle](open: Int => K): (K, Int) = {
+    val random = new java.util.Random()
+    var attempts = 0
+    var result: (K, Int) | Null = null
+    while result == null do {
+      val port = 20000 + random.nextInt(30000)
+      try result = (open(port), port)
+      catch {
+        case e: IOException =>
+          attempts += 1
+          if attempts > 10 then throw e
+      }
+    }
+    result
+  }
+
   protected def withReactor(body: R => Unit): Unit = {
     val reactor = backend.open()
     try body(reactor)

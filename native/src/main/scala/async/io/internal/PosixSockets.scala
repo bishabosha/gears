@@ -361,7 +361,7 @@ object PosixSockets {
   def withIPv6SocketAddr[A](host: String, port: Int)(use: (Ptr[socket.sockaddr], socket.socklen_t) => A): A =
     Zone.acquire { implicit z => use(createIPv6SocketAddr(host, port), sizeOf[in.sockaddr_in6].toUInt) }
 
-  /** Shuts down `fd` for writing, leaving it open for reading (see `SocketOps.shutdownOutput`). */
+  /** Shuts down `fd` for writing, leaving it open for reading (see `StreamSocketOps.shutdownOutput`). */
   def shutdownOutput(fd: Int): Unit = {
     if (socket.shutdown(fd, socket.SHUT_WR) < 0) {
       throw new IOException(

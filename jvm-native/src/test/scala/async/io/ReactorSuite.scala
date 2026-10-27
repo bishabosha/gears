@@ -132,6 +132,34 @@ class ReactorSuite extends FunSuite {
     assertEquals(compileErrors("def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, null)"), "")
   }
 
+  test("each address family and transport is a capability of its own: IP streams need not bring IP datagrams") {
+    assert(
+      compileErrors(
+        "def d(b: IpStreamBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+      ).nonEmpty
+    )
+    assert(
+      compileErrors(
+        "def c(b: IpDatagramBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
+      ).nonEmpty
+    )
+    assertEquals(
+      compileErrors("def c(b: IpStreamBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"),
+      ""
+    )
+    assertEquals(
+      compileErrors(
+        "def d(b: IpDatagramBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+      ),
+      ""
+    )
+    assertEquals(
+      compileErrors("def a(b: StreamSocketBackend)(l: b.Listener) = b.ops.accept(l, Slot[b.Connection]())"),
+      ""
+    )
+    assertEquals(compileErrors("def s(b: SocketBackend): IpStreamBackend & IpDatagramBackend = b"), "")
+  }
+
   test("Unix and IP sockets are separate capabilities: a backend with one need not have the other") {
     assert(
       compileErrors(

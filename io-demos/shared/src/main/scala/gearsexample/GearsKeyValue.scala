@@ -6,8 +6,8 @@ import gears.async.Future
 import gears.async.Future.awaitAllOrCancel
 import gears.async.io.Backend
 import gears.async.io.Io
+import gears.async.io.IpStreamBackend
 import gears.async.io.ReactorFutures
-import gears.async.io.SocketBackend
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
@@ -141,7 +141,7 @@ object GearsKeyValue {
     }
   }
 
-  def serve(address: StreamAddress)(using UnixStreamBackend & SocketBackend): Unit = {
+  def serve(address: StreamAddress)(using UnixStreamBackend & IpStreamBackend): Unit = {
     val store = new Store
     ReactorFutures.run { io ?=>
       val server = Sockets.listen(address)
@@ -155,7 +155,7 @@ object GearsKeyValue {
   /** Sets a counter, increments it `count` times, then reads it back, all in one pipelined batch: a sender future
     * writes commands while a receiver future reads replies.
     */
-  def run(address: StreamAddress, count: Int)(using UnixStreamBackend & SocketBackend): Unit = {
+  def run(address: StreamAddress, count: Int)(using UnixStreamBackend & IpStreamBackend): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
     BufferArena.scoped { arena =>

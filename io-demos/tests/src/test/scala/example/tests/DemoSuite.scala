@@ -34,7 +34,7 @@ abstract class DemoSuite extends FunSuite {
   def hasUnixDatagrams: Boolean = true
 
   /** Whether a connected datagram socket can send an empty packet: the plain kqueue demos can, through the system; no
-    * gears backend does, since the JDK's cannot (see `SocketOps.send`).
+    * gears backend does, since the JDK's cannot (see `IpDatagramOps.send`).
     */
   def sendsEmptyConnectedDatagrams: Boolean = true
 

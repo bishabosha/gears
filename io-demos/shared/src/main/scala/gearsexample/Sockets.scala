@@ -4,7 +4,7 @@ import gears.async.Async
 import gears.async.Future
 import gears.async.io.Io
 import gears.async.io.IpAddress
-import gears.async.io.IpSockets
+import gears.async.io.IpStreams
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
@@ -21,14 +21,14 @@ type StreamAddress = IpAddress | UnixAddress
 object Sockets {
 
   /** A stream socket connected to `address`, of either family, on a backend with both. */
-  def connect(address: StreamAddress)(using io: Io[IpSockets & UnixStreams], async: Async): io.Connection =
+  def connect(address: StreamAddress)(using io: Io[IpStreams & UnixStreams], async: Async): io.Connection =
     address match {
       case unix: UnixAddress => HigherLevel.connect(unix)
       case ip: IpAddress     => HigherLevel.connect(ip)
     }
 
   /** A listener on `address`, of either family, listening, on a backend with both. */
-  def listen(address: StreamAddress)(using io: Io[IpSockets & UnixStreams], async: Async): io.Listener =
+  def listen(address: StreamAddress)(using io: Io[IpStreams & UnixStreams], async: Async): io.Listener =
     address match {
       case unix: UnixAddress => HigherLevel.listen(unix)
       case ip: IpAddress     => HigherLevel.listen(ip)
@@ -72,7 +72,7 @@ object Sockets {
   }
 }
 
-/** A stream address with the capability its sockets need, `B`: `IpSockets` for an IP address, `UnixStreams` for a Unix
+/** A stream address with the capability its sockets need, `B`: `IpStreams` for an IP address, `UnixStreams` for a Unix
   * path, so that a program over a backend without Unix stream sockets cannot be given a Unix path, nor one without IP
   * sockets an IP address. For code whose address is chosen when it runs, such as the bench's.
   */
@@ -87,9 +87,9 @@ sealed trait Endpoint[-B <: StreamSockets] {
 }
 
 object Endpoint {
-  final case class Ip(address: IpAddress) extends Endpoint[IpSockets] {
-    def connect()(using io: Io[IpSockets], async: Async): io.Connection = HigherLevel.connect(address)
-    def listen()(using io: Io[IpSockets], async: Async): io.Listener = HigherLevel.listen(address)
+  final case class Ip(address: IpAddress) extends Endpoint[IpStreams] {
+    def connect()(using io: Io[IpStreams], async: Async): io.Connection = HigherLevel.connect(address)
+    def listen()(using io: Io[IpStreams], async: Async): io.Listener = HigherLevel.listen(address)
   }
 
   final case class Unix(address: UnixAddress) extends Endpoint[UnixStreams] {

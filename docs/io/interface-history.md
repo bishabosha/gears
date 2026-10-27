@@ -247,5 +247,13 @@ kqueue's, a connected one Network.framework's off this host.
 taking a Unix connection asked for IP sockets to accept or shut it down. Each family is now its own capability. The ops
 a stream socket of either family has once open (`accept`, `acceptAll`, `shutdownOutput`) are `StreamSocketOps`, the
 capability `StreamSockets`, which `IpSockets` and `UnixStreams` both extend: code serving connections of either family
-asks for that, and code opening sockets of both asks for both, `IpSockets & UnixStreams`.
+asks for that, and code opening sockets of both asks for both, `IpStreams & UnixStreams`.
+
+IP sockets were still one capability, TCP and UDP together, as BSD sockets bundle them; but hosts differ there too:
+Deno has TCP and puts UDP behind a flag, Cloudflare Workers have outbound TCP and no UDP. So the capabilities now go by
+address family and transport, one each, none implying another: `IpStreams` (`IpStreamOps`: `connect`, `listen`),
+`IpDatagrams` (`IpDatagramOps`), `UnixStreams` and `UnixDatagrams`, with `IpSockets` the alias for both IP ones, and
+`SocketBackend` for a backend with both. The contracts split alike: `IpStreamContract`, `IpDatagramContract`, and
+`SocketContract` for both with the checks that use both. Whether a host can listen as well as connect, which Workers
+cannot, is not split until a backend needs it.
 

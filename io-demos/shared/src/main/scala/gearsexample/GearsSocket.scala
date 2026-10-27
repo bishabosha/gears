@@ -1,8 +1,8 @@
 package gearsexample
 
 import gears.async.io.Backend
+import gears.async.io.IpStreamBackend
 import gears.async.io.ReactorFutures
-import gears.async.io.SocketBackend
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
@@ -18,9 +18,9 @@ import higherlevel.HigherLevel
   * error. The client shuts its side down once the request is out, so that the server sees where it ends.
   */
 object GearsSocket {
-  def run(sock: String)(using UnixStreamBackend & SocketBackend): Unit = run(UnixAddress(sock))
+  def run(sock: String)(using UnixStreamBackend & IpStreamBackend): Unit = run(UnixAddress(sock))
 
-  def run(address: StreamAddress)(using UnixStreamBackend & SocketBackend): Unit = {
+  def run(address: StreamAddress)(using UnixStreamBackend & IpStreamBackend): Unit = {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
       ReactorFutures.run { io ?=>

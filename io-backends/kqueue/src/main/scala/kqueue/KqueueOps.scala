@@ -7,13 +7,14 @@ import gears.async.io.Completion
 import gears.async.io.FifoOps
 import gears.async.io.FileOps
 import gears.async.io.IpAddress
+import gears.async.io.IpDatagramOps
+import gears.async.io.IpStreamOps
 import gears.async.io.PipeOps
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
-import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
@@ -68,7 +69,8 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `KqueueReactor` understands. */
 object KqueueOps
-    extends SocketOps[KqueueOp, Handle]
+    extends IpStreamOps[KqueueOp, Handle]
+    with IpDatagramOps[KqueueOp, Handle]
     with UnixStreamOps[KqueueOp, Handle]
     with UnixDatagramOps[KqueueOp, Handle]
     with PipeOps[KqueueOp, Handle]
@@ -241,13 +243,13 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K)
   }
 }
 
-/** A stream socket bound and listening on `address` (see `SocketOps.listen`). */
+/** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
 final class Listen(address: SocketAddress, into: Slot[KqueueKinds.Listener])
     extends OpensAtOnce(into, KqueueKinds.listener) {
   protected def open(): Int = KqueueHandles.listenStream(address)
 }
 
-/** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */
+/** A datagram socket, bound and connected where given (see `IpDatagramOps.connectDatagram`). */
 final class OpenDatagram[K <: Handle](
     local: SocketAddress | Null,
     remote: SocketAddress | Null,
@@ -286,10 +288,10 @@ final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.W
   }
 }
 
-/** A stream socket connected to `address` (see `SocketOps.connect`): the socket is opened, and its non-blocking connect
-  * started, when the op is submitted (`open`), and the op then waits as `Connect` does. Done once connected, after
-  * writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is closed and
-  * `into` left empty.
+/** A stream socket connected to `address` (see `IpStreamOps.connect`): the socket is opened, and its non-blocking
+  * connect started, when the op is submitted (`open`), and the op then waits as `Connect` does. Done once connected,
+  * after writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is
+  * closed and `into` left empty.
   */
 final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]) extends Command with Opens {
   override private[io] def oneShot: Boolean = true // it opens its socket
@@ -345,8 +347,8 @@ final class Close(val handle: Handle) extends KqueuePromise {
     }
 }
 
-/** Shuts a socket down for writing (see `SocketOps.shutdownOutput`): at once, since the kernel sends what is queued,
-  * then the end of the stream, after the call returns.
+/** Shuts a socket down for writing (see `StreamSocketOps.shutdownOutput`): at once, since the kernel sends what is
+  * queued, then the end of the stream, after the call returns.
   */
 final class ShutdownOutput(val handle: Handle) extends KqueueAtOnce {
   def perform(): Unit = KqueueHandles.using(handle)(gears.async.io.internal.PosixSockets.shutdownOutput(handle.fd))

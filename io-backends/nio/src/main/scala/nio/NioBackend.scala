@@ -4,7 +4,8 @@ package nio
 import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Files
-import gears.async.io.IpSockets
+import gears.async.io.IpDatagrams
+import gears.async.io.IpStreams
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
@@ -15,7 +16,14 @@ import gears.async.io.UnixStreams
   * pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK cannot wait on, nor
   * readiness. A handle holds the channel it names.
   */
-trait NioCapabilities extends Blocking with IpSockets with UnixStreams with Files with Resolving with Pipes {
+trait NioCapabilities
+    extends Blocking
+    with IpStreams
+    with IpDatagrams
+    with UnixStreams
+    with Files
+    with Resolving
+    with Pipes {
   type Op = NioOp
   type Handle = NioCapabilities.Handle
   type Readable = NioKinds.Readable
