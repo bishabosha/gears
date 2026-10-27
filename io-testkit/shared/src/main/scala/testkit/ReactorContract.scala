@@ -1000,6 +1000,37 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a one-shot op submitted on two reactors at once opens once, the other submission refused") {
+    for _ <- 1 to 100 do {
+      val read = Slot[Readable]()
+      val write = Slot[Writable]()
+      val opening = backend.ops.pipe(read, write)
+      val start = new CountDownLatch(1)
+      val refused = new java.util.concurrent.atomic.AtomicInteger()
+      val opened = new java.util.concurrent.atomic.AtomicInteger()
+      val threads = Seq.fill(2)(new Thread(() => {
+        val r = backend.open()
+        try {
+          start.await()
+          val outcome = Outcome()
+          try {
+            r.submit(opening, outcome)
+            turnUntil(r)(outcome.finished)
+            if outcome.completed == 1 then opened.incrementAndGet(): Unit
+          } catch case _: IllegalStateException => refused.incrementAndGet(): Unit
+        } finally r.close()
+      }))
+      threads.foreach(_.start())
+      start.countDown()
+      threads.foreach(_.join())
+      assertEquals((opened.get, refused.get), (1, 1))
+      withReactor { r =>
+        close(r, read.clear())
+        close(r, write.clear())
+      }
+    }
+  }
+
   test("a close op completes once the handle is closed, and fails the op pending on it") {
     withReactor { r =>
       val (in, out) = pipe(r)

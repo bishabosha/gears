@@ -37,8 +37,13 @@ import NioCapabilities.Handle
 sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
   // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
-  /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
-  @volatile private[nio] var submitted = false
+  // Whether this op has been submitted before, so a one-shot op is run once though submitted on two threads at once.
+  private val submissions = new java.util.concurrent.atomic.AtomicBoolean()
+
+  /** Records a submission, refusing a one-shot op submitted before with `IllegalStateException`. */
+  private[nio] final def markSubmitted(): Unit =
+    if submissions.getAndSet(true) && oneShot then
+      throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
 
   /** While the op is pending in the reactor: its completion, so the op is its own record. Taken off just before the
     * completion runs, which may then submit the op again. Loop thread only.
@@ -489,16 +494,10 @@ abstract class NioBlocking extends NioPromise with BlockingRun {
   protected def settled(failure: Throwable | Null): Unit =
     if failure != null then fail(failure) else signal()
 
-  /** Readies this op to run on the calling thread instead of the blocker pool (see `NioOnCaller`): as a submission
-    * would, once for a one-shot op.
+  /** Readies this op to run on the calling thread instead of the blocker pool (see `NioOnCaller`, which has recorded
+    * the submission).
     */
   private[nio] def here(): BlockingHere = {
-    this match {
-      case _: Repeatable => ()
-      case _             =>
-        if submitted then throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
-    }
-    submitted = true
     reset()
     restart()
     new BlockingHere(this)

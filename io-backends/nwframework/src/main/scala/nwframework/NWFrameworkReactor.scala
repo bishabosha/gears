@@ -134,8 +134,7 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
     if closed then throw new IllegalStateException(s"The reactor is closed: $op")
     var finished = false
     var waits = false
-    if op.oneShot && op.submitted then
-      throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
+    op.markSubmitted()
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[NWFrameworkOp]] // only ever called with `op`, which is a C
     val slotRefusal = op.slotRefusal
@@ -195,7 +194,6 @@ final class NWFrameworkReactor private (spinChecks: Int, maxDrained: Int) extend
           Blockers.run(blocking)
           waits = true
       }
-    op.submitted = true
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called

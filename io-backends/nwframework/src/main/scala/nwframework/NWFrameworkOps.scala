@@ -34,8 +34,13 @@ import NWFrameworkBackend.Handle
 sealed trait NWFrameworkOp extends TimerHeap.Entry {
   // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
 
-  /** Whether this op has been submitted before, so the reactor can refuse to run a one-shot op twice. */
-  @volatile private[nwframework] var submitted = false
+  // Whether this op has been submitted before, so a one-shot op is run once though submitted on two threads at once.
+  private val submissions = new java.util.concurrent.atomic.AtomicBoolean()
+
+  /** Records a submission, refusing a one-shot op submitted before with `IllegalStateException`. */
+  private[nwframework] final def markSubmitted(): Unit =
+    if submissions.getAndSet(true) && oneShot then
+      throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
 
   /** While the op is pending in the reactor: its completion, so the op is its own record and submitting it allocates
     * nothing. Taken off just before the completion runs, which may then submit the op again. Loop thread only.

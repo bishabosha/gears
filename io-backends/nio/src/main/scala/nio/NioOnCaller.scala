@@ -37,15 +37,12 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
 
   private[io] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
-    if op.oneShot && op.submitted then
-      throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
+    op.markSubmitted()
     val slotRefusal = op.slotRefusal // before anything is opened, so nothing is abandoned into the caller's slot
     if slotRefusal != null then throw slotRefusal
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
       case connect: ConnectTo =>
-        if connect.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
-        connect.submitted = true
         connect.open()
         try performCommand(connect, deadline)
         catch {
@@ -64,8 +61,6 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
         performTimer(timer, if timeoutMillis >= 0 && timeoutMillis < timer.milliseconds then deadline else -1L)
       case blocking: NioBlocking => performBlocking(blocking, deadline)
       case atOnce: NioAtOnce     =>
-        if atOnce.submitted then throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
-        atOnce.submitted = true
         atOnce.perform()
     }
   }
@@ -140,7 +135,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
   }
 
   private def performBlocking(blocking: NioBlocking, deadline: Long)(using ac: Async): Unit = {
-    val here = blocking.here() // refuses a one-shot op performed before
+    val here = blocking.here()
     val expiry =
       if deadline < 0 then null
       else WaitsHere.timeouts.schedule((() => here.cancel()): Runnable, remaining(deadline), TimeUnit.NANOSECONDS)

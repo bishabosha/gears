@@ -198,8 +198,7 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
     if closed then throw new IllegalStateException(s"The reactor is closed: $op")
     var finished = false
     var waits = false
-    if op.oneShot && op.submitted then
-      throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
+    op.markSubmitted()
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     val slotRefusal = op.slotRefusal
@@ -301,7 +300,6 @@ final class KqueueReactor private (val kq: Int, maxEvents: Int, spinPolls: Int) 
           catch case t: Throwable => atOnce.atOnceFailure = t
           if finishNow then finished = true else ready.add(atOnce)
       }
-    op.submitted = true
     if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
     if finished then {
       op.completion = null // finished here, so the completion is never called
