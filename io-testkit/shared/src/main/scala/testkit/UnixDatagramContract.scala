@@ -44,4 +44,34 @@ trait UnixDatagramContract extends SocketContract {
       }
     finally deleteAll(dir)
   }
+
+  test(
+    "Unix datagrams follow the IP rules: an unnamed sender, a connected socket's peer alone, no empty packet there"
+  ) {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val serverPath = UnixAddress(dir.resolve("server.sock").toString)
+        val server = unixDatagram(r, serverPath, null)
+        try {
+          val unnamed = unixDatagram(r, null, serverPath) // connected, with no path of its own
+          try {
+            def refused(failure: Throwable | Null)(using munit.Location): Unit =
+              assert(failure.isInstanceOf[IllegalArgumentException], String.valueOf(failure))
+            val empty = allocate(4)
+            empty.limit(0)
+            refused(run(r, backend.ops.send(unnamed, empty)))
+            refused(run(r, backend.ops.send(unnamed, bytes("elsewhere"), UnixAddress(dir.resolve("other").toString))))
+            assertEquals(run(r, backend.ops.send(unnamed, bytes("anonymous"))), null)
+            val buf = allocate(64)
+            val from = Slot[UnixAddress]()
+            assertEquals(run(r, backend.ops.receive(server, buf, from)), null)
+            assertEquals(StandardCharsets.UTF_8.decode(buf).toString, "anonymous")
+            assertEquals(from.clear(), UnixAddress(""), "an unnamed sender has the empty path")
+            intercept[IllegalArgumentException](backend.ops.send(server, bytes("x"), UnixAddress("")))
+          } finally close(r, unnamed)
+        } finally close(r, server)
+      }
+    finally deleteAll(dir)
+  }
 }

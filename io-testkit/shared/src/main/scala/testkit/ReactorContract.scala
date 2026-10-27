@@ -317,6 +317,17 @@ trait ReactorContract extends FunSuite {
     text(buf)
   }
 
+  test("a write to a pipe whose reader has closed fails with an IOException, not a signal that ends the process") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      close(r, in)
+      try {
+        val failure = run(r, backend.ops.write(out, bytes("nobody reads this")))
+        assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+      } finally close(r, out)
+    }
+  }
+
   test("a pipe's reads end after the bytes written before its writer closed") {
     withReactor { r =>
       val (in, out) = pipe(r)

@@ -84,8 +84,9 @@ class KQueueDemoSuite extends DemoSuite {
         "concurrent",
         "connections",
         "pipelined",
-        "blocking"
-      ) ++ (if (hasReactors) Seq("timers") else Nil) ++ gearsOnly // `timers` is looked for on a reactor backend only
+        "blocking",
+        "timers"
+      ) ++ gearsOnly
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }

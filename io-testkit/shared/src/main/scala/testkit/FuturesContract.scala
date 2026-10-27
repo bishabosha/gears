@@ -145,6 +145,113 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(echoed, clients)
   }
 
+  test("an op performed with a slot not yet cleared fails with IllegalArgumentException, opening nothing") {
+    val outcome = running { io ?=>
+      val (in, out) = pipe(io)
+      val read = Slot[Readable]()
+      val write = Slot[Writable]()
+      io.perform(io.backend.ops.pipe(read, write))
+      val first = read.clear() // `write` still holds the first pipe's end
+      val refused =
+        try {
+          io.perform(io.backend.ops.pipe(read, write))
+          "performed"
+        } catch case e: IllegalArgumentException => "refused"
+      val nothingOpened =
+        try {
+          read.clear()
+          false
+        } catch case _: IllegalStateException => true
+      for h <- List[Handle](in, out, first, write.clear()) do io.perform(io.backend.ops.close(h))
+      s"$refused $nothingOpened"
+    }
+    assertEquals(outcome, "refused true")
+  }
+
+  test("a read performed while another future's read waits on the handle fails with IllegalArgumentException") {
+    val outcome = running { io ?=>
+      val (in, out) = pipe(io)
+      try {
+        val buf = arena.allocate(16)
+        val waiting = Future(io.perform(io.backend.ops.read(in, buf)))
+        io.perform(io.backend.ops.timer(20)) // so that the first read is pending
+        val second =
+          try {
+            io.perform(io.backend.ops.read(in, arena.allocate(16)))
+            "performed"
+          } catch case _: IllegalArgumentException => "refused"
+        io.perform(io.backend.ops.write(out, arena.of("first".getBytes(StandardCharsets.UTF_8))))
+        waiting.await
+        s"$second ${text(buf)}"
+      } finally {
+        io.perform(io.backend.ops.close(in))
+        io.perform(io.backend.ops.close(out))
+      }
+    }
+    assertEquals(outcome, "refused first")
+  }
+
+  test("a connect is performed only once, and a listener's port is free once its close is performed") {
+    val port = freePort()
+    val outcome = running { io ?=>
+      val address = IpAddress.IPv4("127.0.0.1", port)
+      val listening = Slot[Listener]()
+      val listener = opening(io, listening, io.backend.ops.listen(address, listening))
+      val accepted = Slot[Connection]()
+      val accepting = Future(io.perform(io.backend.ops.accept(listener, accepted)))
+      val into = Slot[Connection]()
+      val connect = io.backend.ops.connect(address, into)
+      io.perform(connect)
+      val again =
+        try {
+          io.perform(connect)
+          "performed"
+        } catch case _: IllegalStateException => "refused"
+      accepting.await
+      io.perform(io.backend.ops.close(into.clear()))
+      io.perform(io.backend.ops.close(accepted.clear()))
+      val waiting = Future(io.perform(io.backend.ops.accept(listener, Slot[Connection]())))
+      io.perform(io.backend.ops.timer(20)) // so that the accept is waiting on the listener
+      io.perform(io.backend.ops.close(listener))
+      waiting.awaitResult
+      val relisten = Slot[Listener]()
+      io.perform(io.backend.ops.close(opening(io, relisten, io.backend.ops.listen(address, relisten))))
+      again
+    }
+    assertEquals(outcome, "refused")
+  }
+
+  test("a datagram socket refuses an empty packet or another address when connected, and a receive with no room") {
+    val port = freePort()
+    val outcome = running { io ?=>
+      val boundInto = Slot[Datagram]()
+      val server = opening(io, boundInto, io.backend.ops.datagram(IpAddress.IPv4("127.0.0.1", port), null, boundInto))
+      val clientInto = Slot[Datagram]()
+      val client =
+        opening(io, clientInto, io.backend.ops.datagram(null, IpAddress.IPv4("127.0.0.1", port), clientInto))
+      try {
+        def refused(op: io.Op): Boolean =
+          try {
+            io.perform(op)
+            false
+          } catch case _: IllegalArgumentException => true
+        val empty = arena.allocate(4)
+        empty.limit(0)
+        val none = arena.allocate(4)
+        none.limit(0)
+        List(
+          refused(io.backend.ops.send(client, empty)),
+          refused(io.backend.ops.send(client, arena.of(Array[Byte](1)), IpAddress.IPv4("127.0.0.1", port + 1))),
+          refused(io.backend.ops.receive(server, none.slice(), Slot[IpAddress]()))
+        ).mkString(" ")
+      } finally {
+        io.perform(io.backend.ops.close(client))
+        io.perform(io.backend.ops.close(server))
+      }
+    }
+    assertEquals(outcome, "true true true")
+  }
+
   test("cancelling a future cancels the op it waits on, which may then be performed again") {
     val outcome = running { io ?=>
       val (in, out) = pipe(io)

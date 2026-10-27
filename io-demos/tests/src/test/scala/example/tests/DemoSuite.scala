@@ -34,8 +34,6 @@ abstract class DemoSuite extends FunSuite {
   /** Whether the backend has readiness, which the cancel demo uses. */
   def hasReadiness: Boolean = true
 
-  /** Whether the backend has reactors; only then do the bench checks look for the `timers` scenario. */
-  def hasReactors: Boolean = true
   def hasUnixDatagrams: Boolean = true
 
   /** Whether a connected datagram socket can send an empty packet: the plain kqueue demos can, through the system; no

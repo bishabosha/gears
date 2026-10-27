@@ -588,6 +588,20 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("an accept on a closed listener fails, as does one waiting when it is closed") {
+    withReactor { r =>
+      val (listener, _) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      val waiting = Outcome()
+      r.submit(backend.ops.accept(listener, Slot[Connection]()), waiting)
+      r.runOnce(block = false)
+      close(r, listener)
+      turnUntil(r)(waiting.finished)
+      assert(waiting.failure.isInstanceOf[IOException], String.valueOf(waiting.failure))
+      val after = run(r, backend.ops.accept(listener, Slot[Connection]()))
+      assert(after.isInstanceOf[IOException], String.valueOf(after))
+    }
+  }
+
   test("a closed listener's port can be listened on again once its close op completes") {
     withReactor { r =>
       val (first, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))

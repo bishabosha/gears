@@ -21,8 +21,9 @@ trait GearsBenchCheck extends KQueueDemoSuite {
         "fairness",
         "fairness-tick",
         "mixed",
-        "mixed-compute"
-      ) ++ (if (hasReactors) Seq("timers") else Nil) // `timers` is looked for on a reactor backend only
+        "mixed-compute",
+        "timers"
+      )
     )
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
     assert(!output.contains("Exception"), output)
@@ -97,7 +98,6 @@ trait OnJvm extends DemoSuite {
   override def hasFifos: Boolean = false
   override def hasUnixDatagrams: Boolean = false
   override def hasReadiness: Boolean = false
-  override def hasReactors: Boolean = backend == "reactors"
   override def sendsEmptyConnectedDatagrams: Boolean = false
 }
 

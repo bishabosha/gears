@@ -37,6 +37,8 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
 
   private[io] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
+    if op.oneShot && op.submitted then
+      throw new IllegalStateException(s"$op is not Repeatable and was already submitted")
     val slotRefusal = op.slotRefusal // before anything is opened, so nothing is abandoned into the caller's slot
     if slotRefusal != null then throw slotRefusal
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L

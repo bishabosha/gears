@@ -144,6 +144,33 @@ trait FileContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  test("a file written as a stream is written from its start, each write after the last, and read the same way") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("stream.txt")
+        Files.write(path, "0123456789".getBytes(StandardCharsets.UTF_8))
+        val writing = open(r, path, write = true)
+        try {
+          for part <- List("ab", "cd") do {
+            val buf = bytes(part)
+            while buf.hasRemaining do assertEquals(run(r, backend.ops.write(writing, buf)), null)
+          }
+        } finally close(r, writing)
+        assertEquals(Files.readString(path), "abcd456789", "neither truncated nor appended to")
+        val reading = open(r, path, write = false)
+        try {
+          val first = allocate(4)
+          assertEquals(run(r, backend.ops.read(reading, first)), null)
+          assertEquals(text(first), "abcd")
+          val rest = allocate(16)
+          assertEquals(run(r, backend.ops.read(reading, rest)), null)
+          assertEquals(text(rest), "456789")
+        } finally close(r, reading)
+      }
+    finally deleteAll(dir)
+  }
+
   test("a positional write lands at its offset, and sync completes") {
     val dir = tempDir()
     try
