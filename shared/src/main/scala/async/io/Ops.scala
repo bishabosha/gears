@@ -143,6 +143,17 @@ trait StreamSocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * server sees where it ends.
     */
   def shutdownOutput(handle: Connection): Op
+
+  /** The address a listener or a connection is bound to, an IP one with the port it got if it asked for port 0, or the
+    * path a Unix one is bound to, empty for one with none. Not an op: every backend answers at once, since opening was
+    * the op, completed once the socket was bound. Fails with an `IOException` on a closed handle.
+    */
+  def localAddress(handle: Listener | Connection): IpAddress | UnixAddress
+
+  /** The address of a connection's peer: the address connected to, or for one accepted, the client's, the empty path
+    * for a Unix client with none. Not an op, as `localAddress`. Fails with an `IOException` on a closed handle.
+    */
+  def peerAddress(handle: Connection): IpAddress | UnixAddress
 }
 
 /** The ops of IP sockets, stream and datagram, for a backend that has them (see `IpSockets`). A datagram socket is
@@ -201,6 +212,16 @@ trait SocketOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
     * socket, since the JDK cannot.
     */
   def send(handle: ConnectedDatagram, buf: ByteBuffer): Op & Repeatable
+
+  /** The address a datagram socket is bound to, with the port it got if it asked for port 0, or, for one connected with
+    * no local address, the ephemeral port connecting gave it. Not an op, as `StreamSocketOps.localAddress`.
+    */
+  @annotation.targetName("datagramLocalAddress")
+  def localAddress(handle: BoundDatagram | ConnectedDatagram): IpAddress
+
+  /** The peer a datagram socket is connected to, the only sender it hears. Not an op. */
+  @annotation.targetName("datagramPeerAddress")
+  def peerAddress(handle: ConnectedDatagram): IpAddress
 }
 
 /** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
@@ -344,6 +365,14 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
   /** Sends one packet on a connected Unix datagram socket, to its peer, as `SocketOps.send` does on an IP one. */
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
+
+  /** The path a Unix datagram socket is bound to, the empty path for one with none. Not an op. */
+  @annotation.targetName("unixDatagramLocalAddress")
+  def localAddress(handle: UnixBoundDatagram | UnixConnectedDatagram): UnixAddress
+
+  /** The path a Unix datagram socket is connected to. Not an op. */
+  @annotation.targetName("unixDatagramPeerAddress")
+  def peerAddress(handle: UnixConnectedDatagram): UnixAddress
 }
 
 private[io] object Ops {

@@ -96,6 +96,26 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   def shutdownOutput(handle: Connection): KqueueOp =
     if owns(handle) then new NWFrameworkShutdownOutput(handle)
     else KqueueOps.shutdownOutput(KqueueKinds.connection(handle))
+  def localAddress(handle: Listener | Connection): IpAddress | UnixAddress =
+    if owns(handle) then NWFrameworkHandles.get(handle).address(peer = false)
+    else KqueueOps.localAddress(KqueueKinds.connection(handle))
+  def peerAddress(handle: Connection): IpAddress | UnixAddress =
+    if owns(handle) then NWFrameworkHandles.get(handle).address(peer = true)
+    else KqueueOps.peerAddress(KqueueKinds.connection(handle))
+  @annotation.targetName("datagramLocalAddress")
+  def localAddress(handle: BoundDatagram | ConnectedDatagram): IpAddress =
+    if owns(handle) then NWFrameworkHandles.get(handle).address(peer = false)
+    else KqueueOps.localAddress(KqueueKinds.connectedDatagram(handle))
+  @annotation.targetName("datagramPeerAddress")
+  def peerAddress(handle: ConnectedDatagram): IpAddress =
+    if owns(handle) then NWFrameworkHandles.get(handle).address(peer = true)
+    else KqueueOps.peerAddress(KqueueKinds.connectedDatagram(handle))
+  @annotation.targetName("unixDatagramLocalAddress")
+  def localAddress(handle: UnixBoundDatagram | UnixConnectedDatagram): UnixAddress =
+    KqueueOps.localAddress(KqueueKinds.unixConnectedDatagram(handle))
+  @annotation.targetName("unixDatagramPeerAddress")
+  def peerAddress(handle: UnixConnectedDatagram): UnixAddress =
+    KqueueOps.peerAddress(KqueueKinds.unixConnectedDatagram(handle))
   def close(handle: Handle): KqueueOp =
     if owns(handle) then new NWFrameworkClose(handle) else KqueueOps.close(handle)
 

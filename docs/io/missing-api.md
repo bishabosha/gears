@@ -10,15 +10,12 @@ Network.framework's options are from its headers, not yet probed.
 
 ## Gaps that block a correct implementation
 
-**A socket's local and peer addresses.** There is no way to ask for either.
-
-- `listen` and `bindDatagram` on port 0 cannot tell the program which port they got; the contract suites work round it by
-  finding a free port first, which races.
-- `accept` hands back a connection but not who connected, which an HTTP server needs for logs, rate limits and proxy
-  headers.
-- Proposed: `localAddress(handle)` and `peerAddress(handle)` as ops, and `accept` and `acceptAll` writing the peer
-  beside each connection. Every backend can: `getsockname` and `getpeername` on kqueue, the channels' addresses on
-  NIO, a connection's endpoints on Network.framework.
+**A socket's local and peer addresses.** Done (2026-10-27): `localAddress` and `peerAddress`, on stream sockets of
+either family and on datagram sockets of each, plain methods rather than ops, since every backend answers at once once
+the socket is open (`getsockname` and `getpeername` on kqueue, the channels' addresses on NIO, the path's endpoints and
+the listener's port on Network.framework). A listener or bound socket on port 0 tells its port, and `peerAddress` of an
+accepted connection tells who connected, so `accept` writes nothing more. Contract checks on every backend. The
+contract suites still find free ports for the checks that need a fixed one.
 
 **Socket options.** None is exposed. The only ones set are `SO_REUSEADDR`, always on listeners, and dual stack
 on `::`, which is fixed on since the JDK cannot clear it.
@@ -117,7 +114,7 @@ Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-si
 
 | Step | Change | What it unblocks |
 | --- | --- | --- |
-| 1 | Local and peer addresses | correctness for every server |
+| 1 | Local and peer addresses (done) | correctness for every server |
 | 2 | Options as a socket opens, starting with no-delay, keepalive, buffer sizes and don't-fragment | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
 | 3 | Nanosecond timers re-armed in place | QUIC |
 | 4 | Vectored reads and writes | throughput for everything that frames its data |

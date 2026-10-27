@@ -149,6 +149,26 @@ object KqueueOps
     new Close(handle)
   }
   def shutdownOutput(handle: Connection): KqueueOp = new ShutdownOutput(handle)
+  def localAddress(handle: Listener | Connection): IpAddress | UnixAddress =
+    KqueueHandles.addressOf(handle, peer = false)
+  def peerAddress(handle: Connection): IpAddress | UnixAddress = KqueueHandles.addressOf(handle, peer = true)
+  @annotation.targetName("datagramLocalAddress")
+  def localAddress(handle: BoundDatagram | ConnectedDatagram): IpAddress = ip(handle, peer = false)
+  @annotation.targetName("datagramPeerAddress")
+  def peerAddress(handle: ConnectedDatagram): IpAddress = ip(handle, peer = true)
+  @annotation.targetName("unixDatagramLocalAddress")
+  def localAddress(handle: UnixBoundDatagram | UnixConnectedDatagram): UnixAddress = unix(handle, peer = false)
+  @annotation.targetName("unixDatagramPeerAddress")
+  def peerAddress(handle: UnixConnectedDatagram): UnixAddress = unix(handle, peer = true)
+
+  private def ip(handle: Handle, peer: Boolean): IpAddress = KqueueHandles.addressOf(handle, peer) match {
+    case ip: IpAddress => ip
+    case other         => throw new java.io.IOException(s"$handle is not an IP socket: $other")
+  }
+  private def unix(handle: Handle, peer: Boolean): UnixAddress = KqueueHandles.addressOf(handle, peer) match {
+    case unix: UnixAddress => unix
+    case other             => throw new java.io.IOException(s"$handle is not a Unix socket: $other")
+  }
   def open(path: String, write: Boolean, into: Slot[File]): KqueueOp = new OpenFile(path, write, into)
   def read(handle: File, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: File, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)

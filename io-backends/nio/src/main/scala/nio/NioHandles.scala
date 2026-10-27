@@ -412,6 +412,27 @@ object NioHandles {
     port
   }
 
+  /** The address `handle`'s socket is bound to, or with `peer` its peer's, as its channel reports it: a Unix one's
+    * path, empty for a socket with none, and an IP one's address as `ipAddress` gives it.
+    */
+  private[nio] def addressOf(handle: Handle, peer: Boolean): SocketAddress = {
+    val address: java.net.SocketAddress | Null = entry(handle) match {
+      case s: Selectable =>
+        s.channel match {
+          case c: SocketChannel       => if peer then c.getRemoteAddress else c.getLocalAddress
+          case c: ServerSocketChannel => if peer then null else c.getLocalAddress
+          case c: DatagramChannel     => if peer then c.getRemoteAddress else c.getLocalAddress
+          case _                      => null
+        }
+      case _ => null
+    }
+    address match {
+      case null => throw new IOException(s"$handle has no ${if peer then "peer" else "address"}")
+      case unix: UnixDomainSocketAddress => UnixAddress(unix.getPath.toString)
+      case ip                            => ipAddress(ip.nn)
+    }
+  }
+
   /** A failed connection, with the kqueue backend's message. */
   private[nio] def connectFailed(e: IOException): IOException =
     new IOException(s"Failed to connect socket: ${e.getMessage}", e)

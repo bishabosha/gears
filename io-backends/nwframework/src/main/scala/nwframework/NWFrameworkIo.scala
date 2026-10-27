@@ -1,6 +1,7 @@
 package gears.async.io
 package nwframework
 
+import scala.scalanative.posix.sys.socket
 import scala.scalanative.unsafe.*
 
 /** The C side of the backend, `nwframework_io.c` beside this project's resources: the blocks Network.framework calls,
@@ -45,6 +46,8 @@ private[nwframework] object NWFrameworkIo {
   def nwf_udp_receive_buffer(): CInt = extern
 
   def nwf_is_host_address(host: CString): CInt = extern
+  def nwf_connection_address(handle: Handle, peer: CInt, out: Ptr[socket.sockaddr_storage]): CInt = extern
+  def nwf_listener_port(handle: Handle): CInt = extern
 }
 
 /** The kinds of event the C side queues, and the fields of one. */

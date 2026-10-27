@@ -86,4 +86,28 @@ trait UnixDatagramContract extends ReactorContract {
       }
     finally deleteAll(dir)
   }
+
+  test("Unix datagram sockets know their paths: a bound one its own, a connected one its peer and its own") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val serverPath = UnixAddress(dir.resolve("bound.sock").toString)
+        val server = bindUnixDatagram(r, serverPath)
+        try {
+          assertEquals(backend.ops.localAddress(server), serverPath)
+          val clientPath = UnixAddress(dir.resolve("client.sock").toString)
+          val named = connectUnixDatagram(r, clientPath, serverPath)
+          val unnamed = connectUnixDatagram(r, null, serverPath)
+          try {
+            assertEquals(backend.ops.peerAddress(named), serverPath)
+            assertEquals(backend.ops.localAddress(named), clientPath)
+            assertEquals(backend.ops.localAddress(unnamed), UnixAddress(""))
+          } finally {
+            close(r, named)
+            close(r, unnamed)
+          }
+        } finally close(r, server)
+      }
+    finally deleteAll(dir)
+  }
 }

@@ -11,6 +11,11 @@ import gears.async.io.kqueue.KqueueReactor
 import java.io.IOException
 import scala.scalanative.libc.stdlib
 import scala.scalanative.libc.string
+import scala.scalanative.posix.arpa.inet
+import scala.scalanative.posix.netinet.in
+import scala.scalanative.posix.netinet.inOps.{*, given}
+import scala.scalanative.posix.sys.socket
+import scala.scalanative.posix.sys.socketOps.{*, given}
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -35,6 +40,28 @@ private[nwframework] final class NWFrameworkHandle(
 
   /** Its index in `NWFrameworkHandles`' table, set as it is added. */
   private[nwframework] var number = -1
+
+  /** A listener's address as it was asked for, whose port, if 0, `address` replaces with the one it got. */
+  private[nwframework] var listenedOn: IpAddress | Null = null
+
+  /** The local address, or with `peer` the peer's (see `StreamSocketOps.localAddress`). */
+  def address(peer: Boolean): IpAddress = synchronized {
+    checkOpen()
+    if kind == NWFrameworkHandle.Listener then {
+      if peer then throw new IOException(s"A listener has no peer: $this")
+      val port = NWFrameworkIo.nwf_listener_port(ptr)
+      listenedOn.nn match {
+        case IpAddress.IPv4(host, _) => IpAddress.IPv4(host, port)
+        case IpAddress.IPv6(host, _) => IpAddress.IPv6(host, port)
+      }
+    } else {
+      val storage = stackalloc[socket.sockaddr_storage]()
+      if NWFrameworkIo.nwf_connection_address(ptr, if peer then 1 else 0, storage) > 0 then
+        NWFrameworkHandles.decode(storage)
+      else if peer && remote != null then remote.nn
+      else throw new IOException(s"The ${if peer then "peer" else "address"} of $this is not known")
+    }
+  }
 
   /** What the handle shows, `Handle(nw connection 3)`: its kind and its number in the table. */
   override def toString: String = {
@@ -680,7 +707,9 @@ private[nwframework] object NWFrameworkHandles {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen(toCString(host), port) }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
-    add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, null))
+    val listener = new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, null)
+    listener.listenedOn = address
+    add(listener)
   }
 
   /** A datagram socket connected to `remote`, bound to `local` if given. */
@@ -711,4 +740,19 @@ private[nwframework] object NWFrameworkHandles {
   }
 
   def errorText(errno: Int): String = fromCString(scala.scalanative.posix.string.strerror(errno))
+
+  /** Decodes an IP socket address filled in by the C side, an IPv4-mapped one as the IPv4 address it maps. */
+  def decode(addr: Ptr[socket.sockaddr_storage]): IpAddress = {
+    val family = addr.asInstanceOf[Ptr[socket.sockaddr]].sa_family.toInt
+    val text = stackalloc[Byte](64)
+    if family == socket.AF_INET then {
+      val v4 = addr.asInstanceOf[Ptr[in.sockaddr_in]]
+      inet.inet_ntop(family, v4.at3.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
+      IpAddress.IPv4(fromCString(text), inet.ntohs(v4.sin_port).toInt)
+    } else if family == socket.AF_INET6 then {
+      val v6 = addr.asInstanceOf[Ptr[in.sockaddr_in6]]
+      inet.inet_ntop(family, v6.at4.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
+      gears.async.io.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
+    } else throw new IOException(s"Unsupported address family $family")
+  }
 }

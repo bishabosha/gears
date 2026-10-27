@@ -123,6 +123,17 @@ object NioOps
     new PooledRead(handle, NioOps.direct(pool), into)
   def close(handle: Handle): NioOp = new Close(handle)
   def shutdownOutput(handle: Connection): NioOp = new ShutdownOutput(handle)
+  def localAddress(handle: Listener | Connection): IpAddress | UnixAddress = NioHandles.addressOf(handle, peer = false)
+  def peerAddress(handle: Connection): IpAddress | UnixAddress = NioHandles.addressOf(handle, peer = true)
+  @annotation.targetName("datagramLocalAddress")
+  def localAddress(handle: BoundDatagram | ConnectedDatagram): IpAddress = ip(handle, peer = false)
+  @annotation.targetName("datagramPeerAddress")
+  def peerAddress(handle: ConnectedDatagram): IpAddress = ip(handle, peer = true)
+
+  private def ip(handle: Handle, peer: Boolean): IpAddress = NioHandles.addressOf(handle, peer) match {
+    case ip: IpAddress => ip
+    case other         => throw new java.io.IOException(s"$handle is not an IP socket: $other")
+  }
   def open(path: String, write: Boolean, into: Slot[File]): NioOp = new OpenFile(path, write, into)
   def read(handle: File, buf: ByteBuffer, offset: Long): PositionalRead = new PositionalRead(handle, buf, offset)
   def write(handle: File, buf: ByteBuffer, offset: Long): PositionalWrite = new PositionalWrite(handle, buf, offset)

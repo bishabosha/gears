@@ -142,4 +142,31 @@ trait UnixStreamContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  test("Unix stream sockets know their paths: the listener's, the client's peer, and an unnamed client's empty one") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val address = UnixAddress(dir.resolve("named.sock").toString)
+        val listener = listen(r, address)
+        try {
+          assertEquals(backend.ops.localAddress(listener), address)
+          val (connected, into) = startConnect(r, address)
+          val accepted = Slot[Connection]()
+          assertEquals(run(r, backend.ops.accept(listener, accepted)), null)
+          turnUntil(r)(connected.finished)
+          val client = into.clear()
+          val server = accepted.clear()
+          try {
+            assertEquals(backend.ops.peerAddress(client), address)
+            assertEquals(backend.ops.localAddress(client), UnixAddress(""), "a client with no path of its own")
+            assertEquals(backend.ops.peerAddress(server), UnixAddress(""))
+            assertEquals(backend.ops.localAddress(server), address)
+          } finally {
+            close(r, client)
+            close(r, server)
+          }
+        } finally close(r, listener)
+      }
+    finally deleteAll(dir)
+  }
 }

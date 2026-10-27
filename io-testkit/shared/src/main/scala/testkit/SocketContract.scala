@@ -801,4 +801,76 @@ trait SocketContract extends ReactorContract {
       } finally close(r, listener)
     }
   }
+
+  test("sockets know their addresses: a listener on port 0 its port, a connection both ends, as its peer sees them") {
+    withReactor { r =>
+      val listener = listen(r, IpAddress.IPv4("127.0.0.1", 0))
+      try {
+        val local = backend.ops.localAddress(listener)
+        val port = local match {
+          case IpAddress.IPv4("127.0.0.1", port) if port > 0 => port
+          case other                                         => fail(s"a listener on port 0's address: $other")
+        }
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        val accepted = Slot[Connection]()
+        assertEquals(run(r, backend.ops.accept(listener, accepted)), null)
+        turnUntil(r)(connected.finished)
+        assertEquals(connected.failure, null)
+        val client = into.clear()
+        val server = accepted.clear()
+        try {
+          assertEquals(backend.ops.peerAddress(client), local)
+          assertEquals(backend.ops.localAddress(server), local)
+          assertEquals(
+            backend.ops.peerAddress(server),
+            backend.ops.localAddress(client),
+            "the client, as the server sees it"
+          )
+          backend.ops.localAddress(client) match {
+            case IpAddress.IPv4("127.0.0.1", port) => assert(port > 0)
+            case other                             => fail(s"a client's address: $other")
+          }
+        } finally {
+          close(r, client)
+          close(r, server)
+        }
+      } finally close(r, listener)
+      intercept[IOException](backend.ops.localAddress(listener))
+    }
+  }
+
+  test("datagram sockets know their addresses: a bound one on port 0 its port, a connected one its own and its peer") {
+    withReactor { r =>
+      val bound = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
+      try {
+        val local = backend.ops.localAddress(bound)
+        local match {
+          case IpAddress.IPv4("127.0.0.1", port) => assert(port > 0, local)
+          case other                             => fail(s"a bound socket on port 0's address: $other")
+        }
+        val client = connectDatagram(r, null, local)
+        try {
+          assertEquals(backend.ops.peerAddress(client), local)
+          val clientAddress = backend.ops.localAddress(client)
+          assertEquals(run(r, backend.ops.send(client, bytes("who"))), null)
+          val from = Slot[IpAddress]()
+          assertEquals(run(r, backend.ops.receive(bound, allocate(16), from)), null)
+          assertEquals(from.clear(), clientAddress, "its sender is the address it reports")
+        } finally close(r, client)
+      } finally close(r, bound)
+      intercept[IOException](backend.ops.localAddress(bound))
+    }
+  }
+
+  test("an IPv6 listener on port 0 reports an IPv6 address") {
+    withReactor { r =>
+      val listener = listen(r, IpAddress.IPv6("::1", 0))
+      try
+        backend.ops.localAddress(listener) match {
+          case IpAddress.IPv6("::1", port) => assert(port > 0)
+          case other                       => fail(s"an IPv6 listener's address: $other")
+        }
+      finally close(r, listener)
+    }
+  }
 }

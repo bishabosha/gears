@@ -591,6 +591,41 @@ int nwf_udp_receive_buffer(void) {
   return space;
 }
 
+/* ---- A socket's addresses ---- */
+
+/* Copies `endpoint`'s socket address into `*out`: its length, or 0 if it has none (a host or other kind). */
+static int nwf_copy_address(nw_endpoint_t endpoint, struct sockaddr_storage *out) {
+  if (endpoint == NULL) return 0;
+  const struct sockaddr *address = nw_endpoint_get_address(endpoint);
+  if (address == NULL) return 0;
+  int len = address->sa_family == AF_INET6 ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+  memcpy(out, address, len);
+  return len;
+}
+
+/* A connection's local address, or its peer's with `peer`, into `*out`: its length, 0 if not known. From the path the
+ * connection uses, or for the peer, the endpoint it was made with, as an accepted connection's is. */
+int nwf_connection_address(nwf_handle_t *h, int peer, struct sockaddr_storage *out) {
+  int len = 0;
+  nw_path_t path = nw_connection_copy_current_path(h->connection);
+  if (path) {
+    nw_endpoint_t endpoint =
+        peer ? nw_path_copy_effective_remote_endpoint(path) : nw_path_copy_effective_local_endpoint(path);
+    len = nwf_copy_address(endpoint, out);
+    if (endpoint) nw_release(endpoint);
+    nw_release(path);
+  }
+  if (len == 0 && peer) {
+    nw_endpoint_t endpoint = nw_connection_copy_endpoint(h->connection);
+    len = nwf_copy_address(endpoint, out);
+    if (endpoint) nw_release(endpoint);
+  }
+  return len;
+}
+
+/* The port a listener listens on, which it got if it asked for 0; 0 if not known yet. */
+int nwf_listener_port(nwf_handle_t *h) { return nw_listener_get_port(h->listener); }
+
 /* ---- This host's addresses ---- */
 
 /* Whether `host`, numeric, is an address of one of this host's interfaces: traffic to it never leaves the host. */

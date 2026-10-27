@@ -220,6 +220,26 @@ object KqueueHandles {
 
   private[kqueue] def notOpen(handle: Handle): IOException = new IOException(s"Not an open handle: $handle")
 
+  /** The address `handle`'s socket is bound to, or with `peer` its peer's, as the system has it (`getsockname`,
+    * `getpeername`): an IPv4 peer of a dual-stack socket as IPv4, as `decode` gives it.
+    */
+  private[kqueue] def addressOf(handle: Handle, peer: Boolean): SocketAddress = {
+    checkOwn(handle)
+    using(handle) {
+      val storage = stackalloc[socket.sockaddr_storage]()
+      val length = stackalloc[socket.socklen_t]()
+      !length = sizeOf[socket.sockaddr_storage].toUInt
+      val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
+      val fd = handle.fd
+      val result = if peer then socket.getpeername(fd, address, length) else socket.getsockname(fd, address, length)
+      if result != 0 then
+        throw new IOException(
+          s"Failed to find the ${if peer then "peer" else "address"} of descriptor $fd: ${cError()}"
+        )
+      decode(address, !length)
+    }
+  }
+
   /** `close` on a descriptor number, for the backend's own code. */
   private[kqueue] def closeDescriptor(handle: Int): Unit = {
     removeBoundPath(handle) // before closing, while the number is still ours
