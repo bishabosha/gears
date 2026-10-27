@@ -529,6 +529,7 @@ final class NWFrameworkBlockingResultTask[A <: AnyRef](body: () => A, into: Slot
 final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) extends NWFrameworkBlocking {
   gears.async.io.Ops.checkHost(host)
   override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override protected def detachable: Boolean = true // its cancel need not wait for the lookup
   def block(): Unit = PosixResolver.lookup(host) match {
     case Right(addresses) => publish(into, gears.async.io.Ops.resolved(host, addresses))
     case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")

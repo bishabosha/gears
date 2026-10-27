@@ -38,6 +38,14 @@ trait BlockingRun {
     */
   protected def interruptible: Boolean = true
 
+  /** Whether a cancel is delivered without waiting for `block` to return: for a one-shot task that touches nothing of
+    * the op's but through `publish`, which a cancel already keeps from writing, such as a resolve, so that a cancel or
+    * a time limit is not held up by a native call that cannot be interrupted (`getaddrinfo`, which can take tens of
+    * seconds). Its `block` runs on to its end on the blocker thread, its outcome discarded; one-shot, so it is never
+    * restarted meanwhile.
+    */
+  protected def detachable: Boolean = false
+
   // Guarded by `this`: the thread running `block`, whether the task was cancelled, and whether `block` has returned.
   private var runner: Thread | Null = null
   private var cancelled = false
@@ -122,14 +130,14 @@ trait BlockingRun {
   /** Marks the task cancelled and interrupts its thread if it is running. Returns true if the pool still holds it,
     * running `block`, which may touch the op's buffers and slots until it returns, or queued to run it, which it will
     * skip: either way the blocker thread reports through `settled` when it has let go, and `awaitEnd` waits for that.
-    * False once it has ended. For a task given to the pool, or run with `runHere`: one never submitted has not ended
-    * either, and a reactor only cancels what it holds pending.
+    * False once it has ended, or for a `detachable` task, whose cancel need not wait. For a task given to the pool, or
+    * run with `runHere`: one never submitted has not ended either, and a reactor only cancels what it holds pending.
     */
   def interrupt(): Boolean = synchronized {
     cancelled = true
     val running = runner
     if running != null && interruptible then running.interrupt()
-    !ended
+    !ended && !detachable
   }
 
   /** Writes `value` into `into` unless the task has been cancelled. It holds the lock `interrupt` takes, so the write

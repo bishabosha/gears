@@ -519,6 +519,7 @@ final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extend
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
   gears.async.io.Ops.checkHost(host)
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override protected def detachable: Boolean = true // its cancel need not wait for the lookup
   def block(): Unit = publish(into, Resolve.addresses(host))
 }
 

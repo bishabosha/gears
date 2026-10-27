@@ -241,8 +241,9 @@ trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
   /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form
     * (an IPv6 one as `inet_ntop` writes it), into `into`, which must be empty; fails with an `IOException` if the name
     * cannot be resolved, or has no IPv4 or IPv6 address. An empty name, or one with a NUL in it, is refused as the op
-    * is built, with an `IllegalArgumentException`. A cancel that arrives before the write leaves `into` empty; one
-    * after it is too late, and the op completes.
+    * is built, with an `IllegalArgumentException`. A cancel that arrives before the write leaves `into` empty, and is
+    * delivered at once, though the lookup, which cannot be interrupted, runs on to its end off the reactor, its result
+    * dropped; one after the write is too late, and the op completes. A time limit is a cancel, so it holds to its time.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
