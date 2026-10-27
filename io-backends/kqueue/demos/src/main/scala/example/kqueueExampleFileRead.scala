@@ -5,6 +5,7 @@ import gears.async.io.internal.Interest
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.kqueue.Command
 import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.KqueueTimer
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -20,6 +21,10 @@ object KQueueExampleFileRead {
   private final class Reader(r: KqueueReactor, fd: Int)(using Zone) extends Completion[Command] {
     private val chunk = NativeBuffer.allocate(1024)
     private val contents = new ByteArrayOutputStream()
+    private var heard = false // bytes came since the last end reported: a writer has been
+
+    // With no writer the FIFO stays at its end, and nothing reports one opening it: look again after this.
+    private val pause = new KqueueTimer(50)
 
     inline val ReadAgain = true
     inline val Stop = false
@@ -47,6 +52,7 @@ object KQueueExampleFileRead {
           Stop
         } else {
           println(s"actually read $read bytes")
+          heard = true
           chunk.flip()
           drainTo(chunk, contents)
           ReadAgain
@@ -55,17 +61,18 @@ object KQueueExampleFileRead {
       isEOF
     }
 
-    def report(): Unit = {
+    def report(): Unit = if heard then {
       println(s"End of file reached. Contents are ${contents.size} long.")
       println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
       contents.reset() // Start over for the next writer
+      heard = false
     }
 
     def start(): Unit = r.submit(drainCommand, this)
 
     def onComplete(command: Command): Unit = {
       report()
-      r.submit(command, this)
+      r.submit(pause, (_: KqueueTimer) => r.submit(command, this))
     }
   }
 

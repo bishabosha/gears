@@ -91,13 +91,19 @@ class KQueueDemoSuite extends DemoSuite {
       assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
   }
 
-  if (hasFifos) demoTest("FIFO read readiness and EOF") {
+  if (hasFifos) demoTest("FIFO read readiness and EOF, each writer in turn reported once, with no spinning between") {
     withFifo { fifo =>
       withDemo("file-read", "--fifo", fifo.toString) { reader =>
         reader.waitFor("Event registered for file read.", 5.seconds)
+        Thread.sleep(300) // the reader at the end of a FIFO no writer has opened, which it must not report, nor spin on
         Using.resource(new FileOutputStream(fifo.toFile))(_.write(message))
-        val output = reader.waitFor(s"File contents: `${new String(message, StandardCharsets.UTF_8)}`", 5.seconds)
+        reader.waitFor(s"File contents: `${new String(message, StandardCharsets.UTF_8)}`", 5.seconds)
+        Thread.sleep(300)
+        Using.resource(new FileOutputStream(fifo.toFile))(_.write("second".getBytes(StandardCharsets.UTF_8)))
+        val output = reader.waitFor("File contents: `second`", 5.seconds)
         assert(!output.contains("Exception"), output.takeRight(4096))
+        assertEquals(output.linesIterator.count(_.startsWith("End of file reached.")), 2, output.takeRight(4096))
+        assert(output.linesIterator.size < 100, s"${output.linesIterator.size} lines: it spun")
       }
     }
   }

@@ -28,14 +28,21 @@ object GearsFileRead {
           val read = io.backend.ops.read(file, chunk)
           println("Event registered for file read.") // the plain demo's words, for which its checks wait
           println("starting to poll...")
+          var heard = false // bytes came since the last end reported: a writer has been
           while true do {
             chunk.clear()
             io.perform(read)
-            if chunk.position() == 0 then { // end of file: everything the writer sent is in `contents`
-              println(s"End of file reached. Contents are ${contents.size} long.")
-              println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
-              contents.reset() // Start over for the next writer
+            if chunk.position() == 0 then { // the end: no writer has the FIFO open
+              if heard then { // everything the writer sent is in `contents`
+                println(s"End of file reached. Contents are ${contents.size} long.")
+                println(s"File contents: `${contents.toString(StandardCharsets.UTF_8)}`")
+                contents.reset() // Start over for the next writer
+                heard = false
+              }
+              // With no writer the FIFO stays at its end, and nothing reports one opening it: look again shortly.
+              io.sleep(50)
             } else {
+              heard = true
               println(s"actually read ${chunk.position()} bytes")
               chunk.flip()
               drainTo(chunk, contents)
