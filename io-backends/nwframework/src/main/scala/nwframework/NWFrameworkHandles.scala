@@ -484,6 +484,33 @@ private[nwframework] final class NWFrameworkHandle(
     sendOn(ptr, bytes, len, reactor, token)
   }
 
+  /** A stream write of up to `len` bytes: as many as the window has room for, copied and sent now, returned, so that a
+    * write hands over no more than a kernel socket's send buffer would take; 0, sending nothing, with the write waiter
+    * registered, told once a send has been processed, if it has none. A write that waited has sent nothing, so its
+    * cancel leaves the buffer as it was, as on a readiness backend. With no window (`SendWindow` 0, for measuring),
+    * everything is sent and the waiter registered, returned negated.
+    */
+  def write(bytes: Ptr[Byte], len: Int, reactor: NWFrameworkReactor, token: Long): Int = synchronized {
+    checkOpen()
+    if writeError != 0 then throw failure("write", writeError)
+    if outputShut then throw new IOException("The connection was shut down for writing")
+    if NWFrameworkHandle.SendWindow == 0 then {
+      sendOn(ptr, bytes, len, reactor, token): Unit
+      -len
+    } else {
+      val room = NWFrameworkHandle.SendWindow - sentBytes
+      if room <= 0 then {
+        await(Write, reactor, token)
+        0
+      } else {
+        val n = math.min(len.toLong, room).toInt
+        sentBytes += n
+        NWFrameworkIo.nwf_send(ptr, bytes, n)
+        n
+      }
+    }
+  }
+
   /** Ends a connected stream's sending side (see `SocketOps.shutdownOutput`), after the sends before it. */
   def shutdownOutput(): Unit = synchronized {
     checkOpen()
@@ -615,12 +642,14 @@ private[nwframework] final class NWFrameworkHandle(
     if !closed then take(Read)
   }
 
-  /** The close op: begins closing, as `close` does, but the framework's cancellation is not waited for here: false,
-    * with the close waiter registered, told once the cancelled state has come, when `closeDone` is true. For a
-    * connection that is once its sends have gone; for a listener, or a bound datagram socket, once the framework has
-    * let its port go, so that a port whose listener's close op has completed can be listened on again at once, which
-    * completing the op before the cancelled state did not guarantee. A descriptor or a file is closed at once, true,
-    * unless a use of it is in its system call: then once that ends, the close waiter told.
+  /** The close op: begins closing, as `close` does. A connection is closed at once, true: the C side, which holds its
+    * own reference until the cancelled state, sends what was written and then cancels it, as a kernel socket's close
+    * leaves unsent bytes to the kernel, so a close never waits on a peer that stopped reading. A listener, or a bound
+    * datagram socket, is false, with the close waiter registered, told once the cancelled state has come, when
+    * `closeDone` is true: once the framework has let its port go, so that a port whose listener's close op has
+    * completed can be listened on again at once, which completing the op before the cancelled state did not guarantee.
+    * A descriptor or a file is closed at once, true, unless a use of it is in its system call: then once that ends, the
+    * close waiter told.
     */
   def closeAsync(reactor: NWFrameworkReactor, token: Long): Boolean = synchronized {
     if closed then throw closedFailure
@@ -643,8 +672,12 @@ private[nwframework] final class NWFrameworkHandle(
         closeToken = token
       }
       now
+    } else if kind == NWFrameworkHandle.Stream || kind == NWFrameworkHandle.Datagram then {
+      NWFrameworkIo.nwf_cancel_async(ptr)
+      finishClose() // its events to come are freed with the C side, unread
+      true
     } else {
-      if kind == NWFrameworkHandle.Listener || kind == NWFrameworkHandle.BoundDatagram then cancelChildren()
+      cancelChildren()
       closeReactor = reactor
       closeToken = token
       updateWatcher()
@@ -743,9 +776,10 @@ private[nwframework] object NWFrameworkHandle {
     case Close   => "close"
   }
 
-  /** How many bytes of sends a handle may have outstanding before a write waits for a completion: the pacing
-    * Network.framework asks for, as a kernel socket's send buffer paces writes. `GEARS_IO_NWFRAMEWORK_SEND_WINDOW` in
-    * the environment overrides it, in bytes; 0 makes every write wait for its send, for measuring.
+  /** How many bytes of sends a handle may have outstanding before a write waits for a completion, and the most one
+    * write hands over: the pacing Network.framework asks for, as a kernel socket's send buffer paces writes.
+    * `GEARS_IO_NWFRAMEWORK_SEND_WINDOW` in the environment overrides it, in bytes; 0 makes every write wait for its
+    * send, for measuring.
     */
   val SendWindow: Long = sys.env.get("GEARS_IO_NWFRAMEWORK_SEND_WINDOW").map(_.toLong).getOrElse(256L * 1024)
 

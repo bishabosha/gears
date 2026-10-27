@@ -80,19 +80,24 @@ measuring; the defaults are the measured best.
   buffer is written only on the loop thread, when the read is delivered, so cancel does not race a callback: it takes
   the op out of the reactor's waiting map and withdraws the waiter if it has not been told; a notification already
   queued is dropped when drained, by its token.
-- **A write completes once at least one byte has been written.** The bytes remaining are copied into a
-  `dispatch_data_t` and sent at submission, and the buffer's position advanced. While the handle has less than the send
-  window outstanding the write completes at once; beyond it, when a send's completion reports the stack has processed
-  the bytes. Completions pace sends rather than serialise them, as Network.framework advises and as a kernel socket's
-  send buffer does for kqueue. Cancelling a write leaves the buffer alone, the bytes being with the stack.
-- **Closing sends what was written.** `nw_connection_cancel` drops sends still queued, where a kernel socket's close
-  sends its buffer first; so the C side cancels a closed connection once its last send has completed.
+- **A write completes once at least one byte has been written, and hands over no more than the window has room
+  for.** As many of the bytes remaining as the send window has room for are copied into a `dispatch_data_t` and sent
+  at submission, the buffer's position advanced, and the write completes at once; with the window full it sends
+  nothing and waits for a send's completion to report the stack has processed bytes, then tries again. Completions
+  pace sends rather than serialise them, as Network.framework advises and as a kernel socket's send buffer does for
+  kqueue. So a write that waited and was cancelled, or timed out, sent nothing, its buffer as it was, as on kqueue;
+  until 2026-10-27 a write sent everything remaining at once, however large, a cancel finding it already sent.
+- **Closing sends what was written, without waiting for it.** `nw_connection_cancel` drops sends still queued, where a
+  kernel socket's close sends its buffer first; so the C side, which holds its own reference to the connection until
+  its cancelled state, cancels a closed connection once its last send has completed, or after
+  `NWF_LINGER_SECONDS` (60) if the peer stopped reading. The close op completes at once, as a kernel socket's close
+  returns; until 2026-10-27 it waited for the cancelled state, for ever if the peer never read.
 - **A connect completes once connected, or fails.** Network.framework keeps a refused or unreachable connection in its
   `waiting` state for a path to appear, rather than failing it; the backend takes `waiting` with an error as the
   failure, as POSIX `connect` reports it.
 - **Opening and closing are ops that complete when the framework is done.** The `listen` op completes once the
-  listener is ready, or fails with the address in use. The `close` op completes, for a connection, at its cancelled
-  state; for a listener or a bound datagram socket, at its cancelled state too, so that a port whose listener's close
+  listener is ready, or fails with the address in use. The `close` op completes, for a connection, at once (above);
+  for a listener or a bound datagram socket, at its cancelled state, so that a port whose listener's close
   op has completed can be listened on again at once (completing it after `nwf_cancel_async` alone failed the contract
   now and then with "Address already in use"); for a descriptor or a file, at once. A bound
   datagram socket is opened as a listener is, ready or failed as an event, so no opener waits on the reactor's thread.

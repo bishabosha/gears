@@ -498,6 +498,63 @@ trait SocketContract extends ReactorContract {
     finally pool.close()
   }
 
+  test("a write that timed out, its peer not reading, wrote nothing: the buffer is as it was") {
+    withReactor { r =>
+      withConnections(r, 1) { case Seq((client, _)) =>
+        val big = allocate(16 << 20)
+        val write = backend.ops.write(client, big)
+        var timedOut = false
+        while !timedOut && big.hasRemaining() do {
+          val before = big.position()
+          val outcome = Outcome()
+          r.submit(write, outcome, timeoutMillis = 50)
+          turnUntil(r)(outcome.finished)
+          if outcome.failure != null then {
+            assert(outcome.failure.isInstanceOf[TimeoutException], String.valueOf(outcome.failure))
+            assertEquals(big.position(), before, "a write that timed out wrote nothing")
+            timedOut = true
+          }
+        }
+        assert(timedOut, "the peer's buffers took everything")
+      }
+    }
+  }
+
+  test("closing a connection whose peer stopped reading completes at once, though bytes written have not gone") {
+    withReactor { r =>
+      val (listener, port) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      try {
+        val accepted = Slot[Connection]()
+        val acceptedOutcome = Outcome()
+        r.submit(backend.ops.accept(listener, accepted), acceptedOutcome)
+        val (connected, into) = startConnect(r, IpAddress.IPv4("127.0.0.1", port))
+        turnUntil(r)(connected.finished && acceptedOutcome.finished)
+        val (client, server) = (into.clear(), accepted.clear())
+        try {
+          // More than the kernel's and the framework's buffers hold, to a peer that never reads.
+          val big = allocate(16 << 20)
+          big.limit(big.capacity())
+          val write = backend.ops.write(client, big)
+          var written = Outcome()
+          r.submit(write, written)
+          val until = System.nanoTime() + 200_000_000L
+          while System.nanoTime() < until do {
+            r.runOnce(block = false)
+            if written.finished && written.failure == null && big.hasRemaining() then {
+              written = Outcome()
+              r.submit(write, written)
+            }
+          }
+          assert(big.hasRemaining(), "the peer's buffers took everything")
+          val closed = Outcome()
+          r.submit(backend.ops.close(client), closed)
+          turnUntil(r)(closed.finished && written.finished)
+          assertEquals(closed.completed, 1, String.valueOf(closed.failure))
+        } finally close(r, server)
+      } finally close(r, listener)
+    }
+  }
+
   // ---- Opening and closing as ops
 
   test("a listener listens once its listen op completes, and accepts") {

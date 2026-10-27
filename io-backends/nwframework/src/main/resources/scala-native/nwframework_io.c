@@ -769,11 +769,15 @@ void nwf_fd_arm(nwf_handle_t *h, int read) {
 
 /* ---- Cancelling ---- */
 
+/* How long a closed connection's sends may take to go before it is cancelled all the same, dropping what is left,
+ * as when a peer stops reading: the bytes a kernel socket's close leaves to the kernel, bounded. */
+#define NWF_LINGER_SECONDS 60
+
 /* Cancels a handle's connection, listener or sources, from any thread. A connection's outstanding receives and
  * sends then complete with errors, and its cancelled state is its last event; a listener's close waits for that
  * state, so that its port is free when this returns; a descriptor is closed once its sources are cancelled. The
  * caller still holds its reference, released with `nwf_handle_release`. A connection with sends outstanding is
- * cancelled once they have gone, since cancelling drops sends still queued. */
+ * cancelled once they have gone, since cancelling drops sends still queued, or after `NWF_LINGER_SECONDS`. */
 static void nwf_cancel_waiting(nwf_handle_t *h, int wait) {
   if (h->connection) {
     pthread_mutex_lock(&h->lock);
@@ -781,6 +785,17 @@ static void nwf_cancel_waiting(nwf_handle_t *h, int wait) {
     if (!now) h->cancel_pending = 1;
     pthread_mutex_unlock(&h->lock);
     if (now) nw_connection_cancel(h->connection);
+    else {
+      nwf_handle_retain(h);
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NWF_LINGER_SECONDS * NSEC_PER_SEC), nwf_queue(), ^{
+        pthread_mutex_lock(&h->lock);
+        int cancel = h->cancel_pending;
+        h->cancel_pending = 0;
+        pthread_mutex_unlock(&h->lock);
+        if (cancel) nw_connection_cancel(h->connection);
+        nwf_handle_release(h);
+      });
+    }
   }
   if (h->listener) {
     if (wait) {

@@ -388,14 +388,14 @@ final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCom
   }
 }
 
-/** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once what
-  * remained has been copied and sent, which is at once while the handle's outstanding sends are within its window, and
-  * otherwise once a send has been processed by the stack (see `NWFrameworkHandle.send`). With nothing remaining, done
-  * at once, with no system call.
+/** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once as
+  * much as the handle's send window has room for has been copied and sent, at once if it has room, else once a send has
+  * been processed by the stack, having sent nothing until then (see `NWFrameworkHandle.write`). With nothing remaining,
+  * done at once, with no system call.
   */
 final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
-  private var sent = false // the bytes were handed over, and the handle tells once a send is processed
+  private var sent = false // with no window: the bytes were handed over, and the handle tells once one is processed
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
     if !buf.hasRemaining() && !sent then true // nothing to write: done, with no system call
@@ -407,11 +407,16 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
       h.sent()
     } else if !buf.hasRemaining() then true
     else {
-      val remaining = buf.remaining()
-      val done = h.send(NativeBuffer.atPosition(buf), remaining, reactor, token)
-      NativeBuffer.advance(buf, remaining)
-      sent = !done
-      done
+      val n = h.write(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
+      if n > 0 then {
+        NativeBuffer.advance(buf, n)
+        true
+      } else if n == 0 then false // the window is full: told once a send is processed, then tried again
+      else {
+        NativeBuffer.advance(buf, -n)
+        sent = true
+        false
+      }
     }
 
   private[nwframework] def reset(): Unit = sent = false
