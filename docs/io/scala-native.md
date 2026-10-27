@@ -86,8 +86,10 @@ pointer, as optimised code can hold across a suspension, was collected while liv
 
 `io-backends/kqueue/src/main/resources/scala-native/setjmp_override.S` defines `setjmp` and `longjmp` as branches to
 `_setjmp` and `_longjmp`, for macOS on arm64. It is a native resource of the kqueue backend, so it applies to every
-program that links `gears-io-kqueue`, and only to those: gears' core links libc's `setjmp` as upstream does, and the
-Network.framework backend, which does not link it, goes without the gain. References within the binary bind to these
+program that links `gears-io-kqueue`, and only to those: gears' core links libc's `setjmp` as upstream does. The
+Network.framework backend runs on kqueue's reactors and depends on `gears-io-kqueue`, so its programs link the override
+too (since 2026-10-27; its test binary defines `_setjmp` and `_longjmp` as branches to `__setjmp` and `__longjmp`, as
+kqueue's does). References within the binary bind to these
 definitions before libc's, so Scala Native's continuation resume, its exceptions and the GC's register capture all skip
 the mask and the alternate stack. Affine pool, without → with it (`bench/results/pool-setjmp-override.json`):
 

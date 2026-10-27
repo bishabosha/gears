@@ -98,7 +98,8 @@ lazy val ioTestkit =
     .dependsOn(root)
 
 // The kqueue backend (macOS, Scala Native). Its native resources override `setjmp` and `longjmp` in every program that
-// links it with `_setjmp` and `_longjmp`, which leave the signal mask alone (see setjmp_override.S).
+// links it with `_setjmp` and `_longjmp`, which leave the signal mask alone (see setjmp_override.S): the
+// Network.framework backend's programs too, which link it.
 lazy val ioKqueue =
   (project in file("io-backends/kqueue"))
     .enablePlugins(ScalaNativePlugin)
