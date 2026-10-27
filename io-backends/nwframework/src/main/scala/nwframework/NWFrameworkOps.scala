@@ -270,7 +270,7 @@ sealed abstract class NWFrameworkCommand extends Notified {
   /** What the command waits for (`NWFrameworkHandle.Read`, `Write`, `Connect` or `Close`). */
   def kind: Int
 
-  override private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+  override private[io] def claim: gears.async.io.internal.Turns | Null =
     if kind == NWFrameworkHandle.Read then handle.reader
     else if kind == NWFrameworkHandle.Write then handle.writer
     else null
@@ -368,6 +368,7 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
 /** Accepts the connections waiting on a listener, at most `max`, writing their handles into `into`. */
 final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFrameworkKinds.Connection]], max: Int)
     extends NWFrameworkCommand {
+  override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
@@ -383,6 +384,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
 
 /** Accepts one connection on a listener, writing its handle into `into`. */
 final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
+  override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
@@ -534,6 +536,7 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
 
 /** Receives one datagram, from the peer, into `buf`, which is left flipped for reading. */
 final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
+  override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
@@ -554,6 +557,7 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
   * backend (see `IpDatagramOps.send`).
   */
 final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 

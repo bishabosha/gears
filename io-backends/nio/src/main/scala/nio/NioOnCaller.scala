@@ -51,11 +51,14 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
             throw t
         }
       case command: Command =>
-        // Its handle's read or write, claimed while it is performed, as a reactor claims it (`Command.claim`).
+        // Its handle's turn to read or write, held while it is performed, as on a reactor (`Command.claim`): waited for,
+        // by an op that may wait for it, else refused.
         val claim = command.claim
-        if claim != null && !claim.compareAndSet(null, command) then throw gears.async.io.Ops.alreadyPending(command)
+        if claim != null && !claim.take(command) then
+          if command.waitsItsTurn then awaitTurn(claim, command, deadline)
+          else throw gears.async.io.Ops.alreadyPending(command)
         try performCommand(command, deadline)
-        finally if claim != null then claim.compareAndSet(command, null): Unit
+        finally if claim != null then claim.release(command)
       case timer: NioTimer =>
         // A limit no shorter than the timer leaves it to complete, as a reactor does, rather than racing it.
         performTimer(timer, timeoutMillis)
@@ -63,6 +66,27 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
       case atOnce: NioAtOnce     =>
         atOnce.perform()
     }
+  }
+
+  /** Waits on the caller for `command`'s turn on its handle, held by another op, until `deadline`, failing with a
+    * `TimeoutException` after it, or a `CancellationException` once the caller is cancelled, leaving the queue either
+    * way.
+    */
+  private def awaitTurn(turns: gears.async.io.internal.Turns, command: Command, deadline: Long)(using Async): Unit = {
+    val wait = new TurnWait(turns, command)
+    turns.await(command, () => wait.wake())
+    var holds = false
+    try
+      cancellationScope(wait) {
+        while !holds do {
+          holds = wait.await(remaining(deadline))
+          if !holds then {
+            checkCancelled()
+            if expired(deadline) then throw new TimeoutException(s"$command timed out")
+          }
+        }
+      }
+    finally if !holds && !turns.withdraw(command) then turns.release(command) // given it as it gave up: passed on
   }
 
   private def expired(deadline: Long): Boolean = deadline >= 0 && System.nanoTime() >= deadline

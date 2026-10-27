@@ -250,6 +250,115 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(outcome, "true true")
   }
 
+  test(
+    "futures receiving on one datagram socket at once take turns, each its own packet, one cancelled leaving the queue"
+  ) {
+    val port = freePort()
+    val outcome = running { io ?=>
+      val boundInto = Slot[BoundDatagram]()
+      val server = opening(io, boundInto, io.backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", port), boundInto))
+      val clientInto = Slot[ConnectedDatagram]()
+      val client =
+        opening(io, clientInto, io.backend.ops.connectDatagram(null, IpAddress.IPv4("127.0.0.1", port), clientInto))
+      try {
+        def receiving(): Future[String] = {
+          val buf = arena.allocate(16)
+          val receiver = Future {
+            io.perform(io.backend.ops.receive(server, buf, Slot[IpAddress]()))
+            StandardCharsets.UTF_8.decode(buf).toString
+          }
+          io.perform(io.backend.ops.timer(20)) // so that it waits, behind those before it
+          receiver
+        }
+        val first = receiving()
+        val leaving = receiving()
+        val second = receiving()
+        leaving.cancel()
+        leaving.awaitResult
+        for packet <- List("one", "two") do
+          io.perform(io.backend.ops.send(client, arena.of(packet.getBytes(StandardCharsets.UTF_8))))
+        s"${first.await} ${second.await}"
+      } finally {
+        io.perform(io.backend.ops.close(client))
+        io.perform(io.backend.ops.close(server))
+      }
+    }
+    assertEquals(outcome, "one two")
+  }
+
+  test("futures sending on one datagram socket at once each send every packet, whole") {
+    val port = freePort()
+    val outcome = running { io ?=>
+      val boundInto = Slot[BoundDatagram]()
+      val server = opening(io, boundInto, io.backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", port), boundInto))
+      val clientInto = Slot[ConnectedDatagram]()
+      val client =
+        opening(io, clientInto, io.backend.ops.connectDatagram(null, IpAddress.IPv4("127.0.0.1", port), clientInto))
+      try {
+        val senders = 4
+        val each = 25
+        val received = Future {
+          val buf = arena.allocate(32)
+          val from = Slot[IpAddress]()
+          val receive = io.backend.ops.receive(server, buf, from)
+          (1 to senders * each).map { _ =>
+            buf.clear()
+            io.perform(receive)
+            from.clear()
+            StandardCharsets.UTF_8.decode(buf).toString
+          }
+        }
+        val sending = (1 to senders).map { s =>
+          Future {
+            val buf = arena.allocate(32)
+            for i <- 1 to each do {
+              buf.clear()
+              buf.put(s"sender $s packet $i".getBytes(StandardCharsets.UTF_8)).flip()
+              io.perform(io.backend.ops.send(client, buf))
+            }
+          }
+        }
+        sending.awaitAll
+        val packets = received.await
+        val expected = for s <- 1 to senders; i <- 1 to each yield s"sender $s packet $i"
+        s"${packets.size} ${packets.sorted == expected.sorted}"
+      } finally {
+        io.perform(io.backend.ops.close(client))
+        io.perform(io.backend.ops.close(server))
+      }
+    }
+    assertEquals(outcome, "100 true")
+  }
+
+  test("futures accepting on one listener at once each take their own connection") {
+    val port = freePort()
+    val outcome = running { io ?=>
+      val address = IpAddress.IPv4("127.0.0.1", port)
+      val listening = Slot[Listener]()
+      val listener = opening(io, listening, io.backend.ops.listen(address, listening))
+      try {
+        val accepting = (1 to 3).map { _ =>
+          val into = Slot[Connection]()
+          val accepter = Future {
+            io.perform(io.backend.ops.accept(listener, into))
+            into.clear()
+          }
+          io.perform(io.backend.ops.timer(20)) // so that it waits, behind those before it
+          accepter
+        }
+        val clients = (1 to 3).map { _ =>
+          val into = Slot[Connection]()
+          io.perform(io.backend.ops.connect(address, into))
+          into.clear()
+        }
+        val accepted = accepting.awaitAll
+        for connection <- accepted ++ clients do io.perform(io.backend.ops.close(connection))
+        accepted.distinct.size
+      } finally io.perform(io.backend.ops.close(listener))
+    }
+    assertEquals(outcome, 3)
+  }
+
   test("cancelling a future cancels the op it waits on, which may then be performed again") {
     val outcome = running { io ?=>
       val (in, out) = pipe(io)

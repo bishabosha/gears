@@ -60,10 +60,10 @@ object KqueueBackend
     // The sign bit: closed. The rest: how many uses of the descriptor are in progress.
     private val state = new java.util.concurrent.atomic.AtomicInteger(0)
 
-    // The ops pending on it, at most one reading and one writing, on any submitter: each claims its direction as it is
-    // submitted, and lets it go as its completion is taken (see `Ops.alreadyPending`).
-    private[io] val reader = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
-    private[io] val writer = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+    // The turns of the ops pending on it, one reading and one writing at a time, on any submitter: each takes its
+    // direction's as it is submitted, or waits for it if it may, and lets it go as its completion is taken (`Turns`).
+    private[io] val reader = new gears.async.io.internal.Turns
+    private[io] val writer = new gears.async.io.internal.Turns
 
     // What the last use to end runs, once the handle is closed while uses were in progress.
     @volatile private var finisher: Runnable | Null = null

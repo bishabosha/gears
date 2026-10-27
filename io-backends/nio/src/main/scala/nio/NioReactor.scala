@@ -51,7 +51,49 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
   private def release(op: NioOp): Unit = {
     val claim = op.claim
-    if claim != null then claim.compareAndSet(op, null): Unit
+    if claim != null then claim.release(op)
+  }
+
+  // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
+  // to go on submitting (`deliverGiven`).
+  private val awaiting = scala.collection.mutable.HashSet.empty[NioOp]
+  private val givenQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioOp]()
+
+  /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
+  private def awaitTurn(
+      op: NioOp,
+      turns: gears.async.io.internal.Turns,
+      pending: Completion[NioOp],
+      timeoutMillis: Int
+  ): Unit = {
+    op.completion = pending
+    if timeoutMillis >= 0 then schedule(op, timeoutMillis)
+    awaiting += op
+    turns.await(
+      op,
+      () => {
+        givenQueue.add(op)
+        if !(Thread.currentThread() eq loopThread) then wakeup()
+      }
+    )
+  }
+
+  /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
+  private def deliverGiven(): Boolean = {
+    var any = false
+    var op = givenQueue.poll()
+    while op != null do {
+      val claim = op.claim
+      // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
+      if claim != null && claim.holds(op) && awaiting.remove(op) then {
+        any = true
+        val pending = op.completion.nn
+        op.completion = null
+        submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
+      }
+      op = givenQueue.poll()
+    }
+    any
   }
 
   private def take(op: NioOp): Completion[NioOp] = {
@@ -218,17 +260,33 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
       timeoutMillis: Int
   ): Boolean = {
     if closed then throw new IllegalStateException(s"The reactor is closed: $op")
-    var finished = false
-    var waits = false
     op.markSubmitted()
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[NioOp]] // only ever called with `op`, which is a C
     val slotRefusal = op.slotRefusal
     val claim = op.claim
-    val refusal =
-      if slotRefusal != null then slotRefusal
-      else if claim != null && !claim.compareAndSet(null, op) then gears.async.io.Ops.alreadyPending(op)
-      else null
+    if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
+      awaitTurn(op, claim, pending, timeoutMillis)
+      false
+    } else {
+      val refusal =
+        if slotRefusal != null then slotRefusal
+        else if claim != null && !claim.holds(op) then gears.async.io.Ops.alreadyPending(op)
+        else null
+      submitHolding(op, pending, refusal, finishNow, timeoutMillis)
+    }
+  }
+
+  /** Goes on submitting `op`, which holds its handle's turn if it takes one, failing it with `refusal` if not null. */
+  private def submitHolding(
+      op: NioOp,
+      pending: Completion[NioOp],
+      refusal: Throwable | Null,
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
+    var finished = false
+    var waits = false
     if refusal != null then {
       op.completion = pending
       op.atOnceFailure = refusal
@@ -559,6 +617,13 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
         waiting.write = null
       }
       while !again.isEmpty do drop(again.poll())
+      for op <- awaiting do {
+        val claim = op.claim
+        if claim != null then claim.withdraw(op): Unit
+        drop(op)
+      }
+      awaiting.clear()
+      givenQueue.clear()
       while !ready.isEmpty do { // finished, but their completions have not run
         val op = ready.poll().nn
         val failure = op.atOnceFailure
@@ -654,32 +719,38 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
     * pending here.
     */
   private def withdraw(op: NioOp): Completion[NioOp] | Null =
-    op match {
-      case command: Command =>
-        if command.completion == null then null
-        else
-          command.entry match {
-            case _: Selectable =>
-              val key = command.key
-              if key == null || !(key.selector() eq selector) then null
-              else {
-                val waiting = key.attachment().asInstanceOf[Waiting]
-                val pending = (waiting.read eq command) || (waiting.write eq command)
-                if !pending then null // finished when submitted, or not submitted here
+    if awaiting.remove(op) then {
+      // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
+      val claim = op.claim
+      if claim != null then claim.withdraw(op): Unit
+      take(op)
+    } else
+      op match {
+        case command: Command =>
+          if command.completion == null then null
+          else
+            command.entry match {
+              case _: Selectable =>
+                val key = command.key
+                if key == null || !(key.selector() eq selector) then null
                 else {
-                  if waiting.read eq command then waiting.read = null else waiting.write = null
-                  markChanged(key, waiting)
-                  take(command)
+                  val waiting = key.attachment().asInstanceOf[Waiting]
+                  val pending = (waiting.read eq command) || (waiting.write eq command)
+                  if !pending then null // finished when submitted, or not submitted here
+                  else {
+                    if waiting.read eq command then waiting.read = null else waiting.write = null
+                    markChanged(key, waiting)
+                    take(command)
+                  }
                 }
-              }
-            case _: RegularFile => if again.remove(command) then take(command) else null
-            case _              => null // never submitted
-          }
-      case timer: NioTimer => if timer.heapIndex < 0 then null else take(timer)
-      case blocking: NioBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
-      case promise: NioPromise                                        => detach(promise)
-      case _: NioAtOnce                                               => null // performed when submitted, so finished
-    }
+              case _: RegularFile => if again.remove(command) then take(command) else null
+              case _              => null // never submitted
+            }
+        case timer: NioTimer => if timer.heapIndex < 0 then null else take(timer)
+        case blocking: NioBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
+        case promise: NioPromise                                        => detach(promise)
+        case _: NioAtOnce                                               => null // performed when submitted, so finished
+      }
 
   /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
     * out; for a blocking task that was running, from the loop once `block` has returned.
@@ -735,7 +806,8 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   def runOnce(block: Boolean): Unit = {
     deliverMoved()
     val closingDue = closing.size
-    val delivered = deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
+    val delivered =
+      deliverGiven() | deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
     updateInterest()
     val select =
       if !delivered then {

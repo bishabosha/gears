@@ -56,9 +56,14 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[io] def slotRefusal: Throwable | Null = null
 
-  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
+  /** The turn this op holds on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
     */
-  private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+  private[io] def claim: gears.async.io.internal.Turns | Null = null
+
+  /** Whether, finding its handle's turn held, it waits for it rather than failing (see `Turns`): a datagram socket's
+    * receive or send, or a listener's accept.
+    */
+  private[io] def waitsItsTurn: Boolean = false
 
   /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
   private[io] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
@@ -435,7 +440,7 @@ trait Command extends KqueueOp with Repeatable {
   def interest: Interest
   def perform(): Boolean
 
-  override private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = {
+  override private[io] def claim: gears.async.io.internal.Turns | Null = {
     val h = handle
     if h == null then null else if interest == Interest.Read then h.reader else h.writer
   }

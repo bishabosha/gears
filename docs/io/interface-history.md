@@ -301,3 +301,15 @@ already the least, nor on the Network.framework backend, which copies received c
 holds it in, into one pool buffer in one pass (`nwf_data_copy`), so that nothing of Dispatch's reaches the reactor. It
 would pay on io_uring, whose receive bundles fill several provided buffers in one completion: to settle with an
 io_uring backend, with pooled writes.
+
+## A datagram socket's and a listener's ops take turns
+
+One op reading a handle and one writing it could be pending at a time, a second refused: the rule streams need, since
+two reads would take a stream's bytes in no order and two writes interleave theirs. It held for datagram sockets and
+listeners too, where nothing calls for it: a receive, a send and an accept are each whole, and a QUIC endpoint's
+connections all send on one socket. A program had to funnel them through one task of its own. Their ops now take turns,
+as Go's fd lock queues a socket's concurrent callers: one submitted while another is pending waits behind it, on any
+submitter, in the order they came, its time limit running and a cancel taking it out of the queue (`Turns`, which each
+backend's handle has one of per direction). They take turns rather than wait at once: on kqueue, one reactor at a time
+owns a descriptor's read filter, so receives waiting on several reactors would leave all but one unwoken. Streams keep
+the refusal.

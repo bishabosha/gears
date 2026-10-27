@@ -415,4 +415,73 @@ trait IpDatagramContract extends ReactorContract {
       }
     }
   }
+
+  test(
+    "receives pending at once on a datagram socket take turns, on any reactor, each its own packet; one cancelled, " +
+      "or timed out, waiting gives up its place"
+  ) {
+    withReactor { a =>
+      withReactor { b =>
+        val server = bindDatagram(a, IpAddress.IPv4("127.0.0.1", 0))
+        val client = connectDatagram(a, null, backend.ops.localAddress(server))
+        try {
+          // Not a tuple: matching one with a `ByteBuffer` in it has the compiler look into JDK 27's sealed buffers.
+          final class Receiving(r: R, timeoutMillis: Int) {
+            val buf = allocate(16)
+            val op = backend.ops.receive(server, buf, Slot[IpAddress]())
+            val outcome = Outcome()
+            r.submit(op, outcome, timeoutMillis)
+            r.runOnce(block = false)
+          }
+          val first = Receiving(a, -1)
+          val leaving = Receiving(b, -1)
+          val late = Receiving(a, 30)
+          val second = Receiving(b, -1)
+          assert(List(first, leaving, late, second).forall(!_.outcome.finished), "all four wait")
+          assert(b.cancel(leaving.op), "a receive waiting its turn is pending, and cancelled")
+          turnUntil(a, b)(leaving.outcome.finished && late.outcome.finished)
+          assertEquals(leaving.outcome.cancelled, 1)
+          assert(late.outcome.failure.isInstanceOf[TimeoutException], s"timed out: ${late.outcome.failure}")
+          for packet <- List("one", "two") do assertEquals(run(a, backend.ops.send(client, bytes(packet))), null)
+          turnUntil(a, b)(first.outcome.finished && second.outcome.finished)
+          assertEquals(first.outcome.completed, 1, String.valueOf(first.outcome.failure))
+          assertEquals(second.outcome.completed, 1, String.valueOf(second.outcome.failure))
+          def received(at: Receiving): String = StandardCharsets.UTF_8.decode(at.buf).toString
+          assertEquals((received(first), received(second)), ("one", "two"))
+        } finally {
+          close(a, client)
+          close(a, server)
+        }
+      }
+    }
+  }
+
+  test("sends submitted at once on a datagram socket, on any reactor, take turns, each its whole packet, in order") {
+    withReactor { a =>
+      withReactor { b =>
+        val receiver = bindDatagram(a, IpAddress.IPv4("127.0.0.1", 0))
+        val to = backend.ops.localAddress(receiver)
+        val sender = bindDatagram(a, IpAddress.IPv4("127.0.0.1", 0))
+        try {
+          val packets = (1 to 6).map(i => s"packet $i")
+          val sent = packets.zipWithIndex.map { (packet, i) =>
+            val outcome = Outcome()
+            (if i % 2 == 0 then a else b).submit(backend.ops.send(sender, bytes(packet), to), outcome)
+            outcome
+          }
+          turnUntil(a, b)(sent.forall(_.finished))
+          for outcome <- sent do assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+          val received = packets.map { _ =>
+            val buf = allocate(16)
+            assertEquals(run(a, backend.ops.receive(receiver, buf, Slot[IpAddress]())), null)
+            StandardCharsets.UTF_8.decode(buf).toString
+          }
+          assertEquals(received, packets)
+        } finally {
+          close(a, receiver)
+          close(a, sender)
+        }
+      }
+    }
+  }
 }

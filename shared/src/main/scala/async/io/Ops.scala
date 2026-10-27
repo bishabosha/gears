@@ -50,10 +50,14 @@ trait Repeatable
   * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
   * taken from the slot, and the caller closes it with `close`. Failures are `java.io.IOException`s.
   *
-  * At most one op reading a handle (a read, a receive, or an accept) and one writing it is pending at a time, on
-  * whichever submitter: another submitted meanwhile fails with an `IllegalArgumentException`, doing nothing, since two
-  * reads would take the stream's bytes in no order. An op that is not `Repeatable`, every opener and `close` among
-  * them, is submitted once; submitted again it throws `IllegalStateException`.
+  * At most one op reading a stream (a read) and one writing it is pending at a time, on whichever submitter: another
+  * submitted meanwhile fails with an `IllegalArgumentException`, doing nothing, since two reads would take the stream's
+  * bytes in no order, and two writes would interleave theirs. A datagram socket's receives and sends, each a whole
+  * packet, and a listener's accepts, each a whole connection, take turns instead, as Go queues a socket's concurrent
+  * callers: one submitted while another receiving, sending or accepting is pending on the handle, on any submitter,
+  * waits behind it, in the order they came, and goes on once it finishes, its time limit running meanwhile, and a
+  * cancel taking it out of the queue. An op that is not `Repeatable`, every opener and `close` among them, is submitted
+  * once; submitted again it throws `IllegalStateException`.
   */
 trait Ops[Op, H <: AnyRef] {
 
@@ -548,9 +552,9 @@ private[io] object Ops {
   def emptyPacket(buf: ByteBuffer): IllegalArgumentException =
     new IllegalArgumentException(s"The buffer is empty, and an empty packet is not sent on a connected socket: $buf")
 
-  /** The failure of `op`, submitted while another op reading, or writing, is pending on its handle, on any submitter:
+  /** The failure of `op`, submitted while another op reading, or writing, is pending on its stream, on any submitter:
     * one of each at a time, since two reads would take the stream's bytes in no order, and two writes interleave
-    * theirs.
+    * theirs. A datagram socket's or a listener's ops take turns instead (see `Ops`).
     */
   def alreadyPending(op: AnyRef): IllegalArgumentException =
     new IllegalArgumentException(s"An op reading, or writing, as $op does, is already pending on its handle")

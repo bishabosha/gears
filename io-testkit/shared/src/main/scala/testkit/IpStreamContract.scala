@@ -641,4 +641,28 @@ trait IpStreamContract extends ReactorContract {
       }
     }
   }
+
+  test("accepts pending at once on a listener take turns, on any reactor, each its own connection") {
+    withReactor { a =>
+      withReactor { b =>
+        val (listener, port) = onFreePort(port => listen(a, IpAddress.IPv4("127.0.0.1", port)))
+        try {
+          val accepts = List(a, b, a).map { r =>
+            val into = Slot[Connection]()
+            val outcome = Outcome()
+            r.submit(backend.ops.accept(listener, into), outcome)
+            r.runOnce(block = false)
+            (outcome, into)
+          }
+          assert(accepts.forall(!_._1.finished), "all three wait")
+          val clients = accepts.map(_ => startConnect(a, IpAddress.IPv4("127.0.0.1", port)))
+          turnUntil(a, b)(accepts.forall(_._1.finished) && clients.forall(_._1.finished))
+          for (outcome, _) <- accepts ++ clients do assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
+          val accepted = accepts.map(_._2.clear())
+          assertEquals(accepted.distinct.size, 3, "each accept took its own connection")
+          for connection <- accepted ++ clients.map(_._2.clear()) do close(a, connection)
+        } finally close(a, listener)
+      }
+    }
+  }
 }

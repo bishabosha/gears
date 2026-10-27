@@ -107,6 +107,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   * accepted. The same command may be submitted again, after `into` is cleared, to accept the next connection.
   */
 final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Command {
+  override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
@@ -123,6 +124,7 @@ final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Com
   * `StreamSocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], max: Int) extends Command {
+  override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
@@ -167,6 +169,7 @@ final case class Connect(fd: Int) extends Command {
   */
 final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress] | Null, unix: Boolean)
     extends Command {
+  override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
   def interest: Interest = Interest.Read
@@ -201,6 +204,7 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
   * connected socket, since the JDK cannot send one (see `IpDatagramOps.send`). Done once it has gone.
   */
 final class SendTo(val fd: Int, bufs: Array[ByteBuffer], to: SocketAddress | Null) extends Command {
+  override private[io] def waitsItsTurn: Boolean = true
   def this(fd: Int, buf: ByteBuffer, to: SocketAddress | Null) = this(fd, Array(buf), to)
   def interest: Interest = Interest.Write
 

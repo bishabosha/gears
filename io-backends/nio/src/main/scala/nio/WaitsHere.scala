@@ -132,3 +132,30 @@ private[nio] final class BlockingHere(task: NioBlocking) extends Cancellable {
   def run(): Unit = task.runHere()
   def cancel(): Unit = if task.cancelUnlessCommitted() then task.interrupt(): Unit // else it wrote its result
 }
+
+/** A wait on the calling thread for an op's turn on its handle (see `Turns`), which the op holding it passes on as it
+  * lets go, waking the caller (`wake`).
+  */
+private[nio] final class TurnWait(turns: gears.async.io.internal.Turns, op: AnyRef) extends WaitHere {
+  @volatile private var cancelled = false
+  private val caller = Thread.currentThread()
+
+  /** Parks until `op` holds the turn, a cancel, or `timeoutNanos` have passed; true if it holds it. */
+  def await(timeoutNanos: Long): Boolean = {
+    val deadline = if timeoutNanos < 0 then -1L else System.nanoTime() + timeoutNanos
+    var left = timeoutNanos
+    while !turns.holds(op) && !cancelled && left != 0 do {
+      if deadline < 0 then LockSupport.park(this) else LockSupport.parkNanos(this, left)
+      if deadline >= 0 then left = math.max(deadline - System.nanoTime(), 0L)
+    }
+    turns.holds(op)
+  }
+
+  /** The turn passed to `op`: the caller goes on. */
+  def wake(): Unit = LockSupport.unpark(caller)
+
+  def cancel(): Unit = {
+    cancelled = true
+    LockSupport.unpark(caller)
+  }
+}

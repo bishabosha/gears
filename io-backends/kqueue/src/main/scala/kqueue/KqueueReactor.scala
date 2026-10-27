@@ -54,7 +54,49 @@ final class KqueueReactor private (
   /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
   private def release(op: KqueueOp): Unit = {
     val claim = op.claim
-    if claim != null then claim.compareAndSet(op, null): Unit
+    if claim != null then claim.release(op)
+  }
+
+  // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
+  // to go on submitting (`deliverGiven`).
+  private val awaiting = scala.collection.mutable.HashSet.empty[KqueueOp]
+  private val givenQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueueOp]()
+
+  /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
+  private def awaitTurn(
+      op: KqueueOp,
+      turns: gears.async.io.internal.Turns,
+      pending: Completion[KqueueOp],
+      timeoutMillis: Int
+  ): Unit = {
+    op.completion = pending
+    if timeoutMillis >= 0 then schedule(op, timeoutMillis)
+    awaiting += op
+    turns.await(
+      op,
+      () => {
+        givenQueue.add(op)
+        if !(Thread.currentThread() eq loopThread) then wakeup()
+      }
+    )
+  }
+
+  /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
+  private def deliverGiven(): Boolean = {
+    var any = false
+    var op = givenQueue.poll()
+    while op != null do {
+      val claim = op.claim
+      // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
+      if claim != null && claim.holds(op) && awaiting.remove(op) then {
+        any = true
+        val pending = op.completion.nn
+        op.completion = null
+        submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
+      }
+      op = givenQueue.poll()
+    }
+    any
   }
 
   private def take(op: KqueueOp): Completion[KqueueOp] = {
@@ -323,17 +365,33 @@ final class KqueueReactor private (
       timeoutMillis: Int
   ): Boolean = {
     if closed then throw new IllegalStateException(s"The reactor is closed: $op")
-    var finished = false
-    var waits = false
     op.markSubmitted()
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[KqueueOp]] // only ever called with `op`, which is a C
     val slotRefusal = op.slotRefusal
     val claim = op.claim
-    val refusal =
-      if slotRefusal != null then slotRefusal
-      else if claim != null && !claim.compareAndSet(null, op) then gears.async.io.Ops.alreadyPending(op)
-      else null
+    if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
+      awaitTurn(op, claim, pending, timeoutMillis)
+      false
+    } else {
+      val refusal =
+        if slotRefusal != null then slotRefusal
+        else if claim != null && !claim.holds(op) then gears.async.io.Ops.alreadyPending(op)
+        else null
+      submitHolding(op, pending, refusal, finishNow, timeoutMillis)
+    }
+  }
+
+  /** Goes on submitting `op`, which holds its handle's turn if it takes one, failing it with `refusal` if not null. */
+  private def submitHolding(
+      op: KqueueOp,
+      pending: Completion[KqueueOp],
+      refusal: Throwable | Null,
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
+    var finished = false
+    var waits = false
     if refusal != null then {
       op.completion = pending
       op.atOnceFailure = refusal
@@ -735,6 +793,13 @@ final class KqueueReactor private (
         if slot.nn.write != null then drop(slot.nn.write.nn)
       }
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
+      for op <- awaiting do {
+        val claim = op.claim
+        if claim != null then claim.withdraw(op): Unit
+        drop(op)
+      }
+      awaiting.clear()
+      givenQueue.clear()
       for (_, op) <- waiting.toList do {
         op.withdraw()
         drop(op)
@@ -851,36 +916,42 @@ final class KqueueReactor private (
     * pending here.
     */
   private def withdraw(op: KqueueOp): Completion[KqueueOp] | Null =
-    op match {
-      case command: Command =>
-        val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
-        if slot == null then null
-        else {
-          val read = command.interest == Interest.Read
-          val p = if read then slot.read else slot.write
-          if p == null || !(p eq command) then null
+    if awaiting.remove(op) then {
+      // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
+      val claim = op.claim
+      if claim != null then claim.withdraw(op): Unit
+      take(op)
+    } else
+      op match {
+        case command: Command =>
+          val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
+          if slot == null then null
           else {
-            // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
-            if read then slot.read = null else slot.write = null
-            if !(read && command.edgeTriggered) then {
-              if read then slot.readRegistered = false
-              deleteFilter(command.fd, read)
+            val read = command.interest == Interest.Read
+            val p = if read then slot.read else slot.write
+            if p == null || !(p eq command) then null
+            else {
+              // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
+              if read then slot.read = null else slot.write = null
+              if !(read && command.edgeTriggered) then {
+                if read then slot.readRegistered = false
+                deleteFilter(command.fd, read)
+              }
+              take(command)
             }
-            take(command)
           }
-        }
-      case notified: Notified =>
-        if notified.completion == null || waiting.getOrNull(notified.token) == null then null // finished, or not here
-        else {
-          waiting -= notified.token
-          notified.withdraw() // a notification already queued for it is dropped when delivered
-          take(notified)
-        }
-      case timer: KqueueTimer => if timer.heapIndex < 0 then null else take(timer)
-      case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
-      case promise: KqueuePromise                                        => detach(promise)
-      case _: KqueueAtOnce => null // performed when submitted, so finished
-    }
+        case notified: Notified =>
+          if notified.completion == null || waiting.getOrNull(notified.token) == null then null // finished, or not here
+          else {
+            waiting -= notified.token
+            notified.withdraw() // a notification already queued for it is dropped when delivered
+            take(notified)
+          }
+        case timer: KqueueTimer => if timer.heapIndex < 0 then null else take(timer)
+        case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
+        case promise: KqueuePromise                                        => detach(promise)
+        case _: KqueueAtOnce => null // performed when submitted, so finished
+      }
 
   /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
     * out; for a blocking task that was running, from the loop once `block` has returned.
@@ -1096,7 +1167,8 @@ final class KqueueReactor private (
     val closingDue = closing.size
     deliverMoved()
     val delivered = // no short-circuiting
-      deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() | closingDue > 0
+      deliverGiven() | deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() |
+        closingDue > 0
     val polled =
       if !delivered then {
         turnsWithoutPoll = 0

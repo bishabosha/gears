@@ -60,9 +60,14 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[nio] def slotRefusal: Throwable | Null = null
 
-  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
+  /** The turn this op holds on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
     */
-  private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
+  private[nio] def claim: gears.async.io.internal.Turns | Null = null
+
+  /** Whether, finding its handle's turn held, it waits for it rather than failing (see `Turns`): a datagram socket's
+    * receive or send, or a listener's accept.
+    */
+  private[nio] def waitsItsTurn: Boolean = false
 
   /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
   private[nio] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
@@ -326,7 +331,7 @@ abstract class Command extends NioOp with Repeatable {
   def interest: Interest
   def perform(): Boolean
 
-  override private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+  override private[nio] def claim: gears.async.io.internal.Turns | Null =
     if interest == Interest.Read then handle.reader else handle.writer
 
   /** The interest ops to wait for on `channel`: reading a listener is accepting. */
@@ -414,6 +419,7 @@ final class WriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Comma
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
 final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends Command {
+  override private[nio] def waitsItsTurn: Boolean = true
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
@@ -436,6 +442,7 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
   * `StreamSocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]], max: Int) extends Command {
+  override private[nio] def waitsItsTurn: Boolean = true
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
@@ -480,7 +487,7 @@ final class ConnectTo(
 ) extends Command
     with Opens {
   override private[nio] def oneShot: Boolean = true // it opens its socket
-  override private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+  override private[nio] def claim: gears.async.io.internal.Turns | Null =
     null // on a socket of its own
   override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket: Handle | Null = null
@@ -525,6 +532,7 @@ final class ConnectTo(
   * whose sender is its peer, `from` is null.
   */
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] | Null) extends Command {
+  override private[nio] def waitsItsTurn: Boolean = true
   override private[nio] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
   def interest: Interest = Interest.Read
@@ -544,6 +552,7 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] |
   * null, to its peer, never an empty one.
   */
 final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Null) extends Command {
+  override private[nio] def waitsItsTurn: Boolean = true
   def this(handle: Handle, buf: ByteBuffer, to: IpAddress | Null) = this(handle, Array(buf), to)
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)
