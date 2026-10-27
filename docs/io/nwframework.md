@@ -92,8 +92,9 @@ measuring; the defaults are the measured best.
   listener is ready, or fails with the address in use. The `close` op completes, for a connection, at its cancelled
   state; for a listener or a bound datagram socket, at its cancelled state too, so that a port whose listener's close
   op has completed can be listened on again at once (completing it after `nwf_cancel_async` alone failed the contract
-  now and then with "Address already in use"); for a descriptor or a file, at once. The synchronous
-  `NWFrameworkHandles.listen` and `close`, which wait on a semaphore, are kept only for code with no reactor.
+  now and then with "Address already in use"); for a descriptor or a file, at once. A bound
+  datagram socket is opened as a listener is, ready or failed as an event, so no opener waits on the reactor's thread.
+  The synchronous `NWFrameworkHandles.close`, which waits on a semaphore, is kept only for code with no reactor.
 - **Closing a handle fails the ops pending on it, on whichever reactor.** The handle takes its waiters and tells each
   one's reactor, where the op fails with "The handle was closed"; then it cancels the connection, whose outstanding
   receives and sends complete with errors and find no waiter. The C side is freed by the framework's last callback,

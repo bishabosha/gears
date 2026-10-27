@@ -544,30 +544,18 @@ void nwf_send_final(nwf_handle_t *h) {
 
 /* ---- Listeners ---- */
 
-/* Starts `h`'s listener. With `wait`, waits until it is ready, or failed, and returns 0 or the errno; without,
- * returns 0 at once and the ready or failed state is an event, for a `listening` op. Its new connections, and a
- * bound datagram socket's new flows, are started and become events. */
-static int nwf_listener_start(nwf_handle_t *h, int wait) {
-  dispatch_semaphore_t settled = wait ? dispatch_semaphore_create(0) : NULL;
-  __block int outcome = -1;
+/* Starts `h`'s listener without waiting: its ready or failed state is an event, for the op opening it. Its new
+ * connections, and a bound datagram socket's new flows, are started and become events. */
+static void nwf_listener_start(nwf_handle_t *h) {
   nwf_handle_retain(h);
   nw_listener_set_queue(h->listener, nwf_queue());
   nw_listener_set_state_changed_handler(h->listener, ^(nw_listener_state_t state, nw_error_t error) {
-    if (state == nw_listener_state_ready) {
-      if (settled && outcome < 0) {
-        outcome = 0;
-        dispatch_semaphore_signal(settled);
-      } else if (!settled) nwf_enqueue(h, nwf_event(NWF_EV_READY));
-    } else if (state == nw_listener_state_failed) {
+    if (state == nw_listener_state_ready) nwf_enqueue(h, nwf_event(NWF_EV_READY));
+    else if (state == nw_listener_state_failed) {
       int code = nwf_errno(error);
-      if (settled && outcome < 0) {
-        outcome = code ? code : EIO;
-        dispatch_semaphore_signal(settled);
-      } else {
-        nwf_event_t *e = nwf_event(NWF_EV_FAILED);
-        e->error = code ? code : EIO;
-        nwf_enqueue(h, e);
-      }
+      nwf_event_t *e = nwf_event(NWF_EV_FAILED);
+      e->error = code ? code : EIO;
+      nwf_enqueue(h, e);
     } else if (state == nw_listener_state_cancelled) {
       nwf_enqueue(h, nwf_event(NWF_EV_CANCELLED));
       if (h->cancelled) dispatch_semaphore_signal(h->cancelled);
@@ -575,15 +563,11 @@ static int nwf_listener_start(nwf_handle_t *h, int wait) {
     }
   });
   nw_listener_start(h->listener);
-  if (!settled) return 0;
-  dispatch_semaphore_wait(settled, DISPATCH_TIME_FOREVER);
-  dispatch_release(settled);
-  return outcome;
 }
 
-/* A stream listener on `host`:`port`: with `wait`, ready, or NULL with `*error` set; without, started, its ready or
- * failed state to come as an event. */
-static nwf_handle_t *nwf_listen_on(const char *host, int port, int wait, int *error) {
+/* A stream listener on `host`:`port`, started, its ready or failed state to come as an event; NULL if it cannot be
+ * made. */
+nwf_handle_t *nwf_listen(const char *host, int port) {
   nwf_handle_t *h = nwf_handle_new(NWF_LISTENER);
   nw_parameters_t parameters = nwf_tcp_parameters();
   nw_parameters_set_reuse_local_address(parameters, true); /* as SO_REUSEADDR, on every backend */
@@ -594,7 +578,6 @@ static nwf_handle_t *nwf_listen_on(const char *host, int port, int wait, int *er
   h->listener = nw_listener_create(parameters);
   nw_release(parameters);
   if (h->listener == NULL) {
-    *error = EINVAL;
     nwf_handle_release(h);
     return NULL;
   }
@@ -607,22 +590,8 @@ static nwf_handle_t *nwf_listen_on(const char *host, int port, int wait, int *er
     e->accepted = accepted;
     nwf_enqueue(h, e);
   });
-  *error = nwf_listener_start(h, wait);
-  if (*error) {
-    nw_listener_cancel(h->listener);
-    nwf_handle_release(h);
-    return NULL;
-  }
+  nwf_listener_start(h);
   return h;
-}
-
-nwf_handle_t *nwf_listen(const char *host, int port, int *error) {
-  return nwf_listen_on(host, port, 1, error);
-}
-
-nwf_handle_t *nwf_listen_async(const char *host, int port) {
-  int error = 0;
-  return nwf_listen_on(host, port, 0, &error);
 }
 
 /* ---- Datagrams ---- */
@@ -671,8 +640,9 @@ static nwf_handle_t *nwf_flow(nwf_handle_t *bound, nw_connection_t connection) {
 }
 
 /* A datagram socket bound to `host`:`port`, receiving from anyone and sending to anyone, as Network.framework has it:
- * a listener whose inbound flows, one per peer, are `NWF_EV_FLOW` events. */
-nwf_handle_t *nwf_datagram_bind(const char *host, int port, int *error) {
+ * a listener whose inbound flows, one per peer, are `NWF_EV_FLOW` events. Started, its ready or failed state to come
+ * as an event, as a stream listener's; NULL if it cannot be made. */
+nwf_handle_t *nwf_datagram_bind(const char *host, int port) {
   nwf_handle_t *h = nwf_handle_new(NWF_DGRAM_BOUND);
   h->parameters = nwf_udp_parameters();
   nw_parameters_set_reuse_local_address(h->parameters, true);
@@ -681,7 +651,6 @@ nwf_handle_t *nwf_datagram_bind(const char *host, int port, int *error) {
   nw_parameters_set_local_endpoint(h->parameters, h->local_endpoint);
   h->listener = nw_listener_create(h->parameters);
   if (h->listener == NULL) {
-    *error = EINVAL;
     nwf_handle_release(h);
     return NULL;
   }
@@ -692,12 +661,7 @@ nwf_handle_t *nwf_datagram_bind(const char *host, int port, int *error) {
     e->flow = flow;
     nwf_enqueue(h, e);
   });
-  *error = nwf_listener_start(h, 1);
-  if (*error) {
-    nw_listener_cancel(h->listener);
-    nwf_handle_release(h);
-    return NULL;
-  }
+  nwf_listener_start(h);
   return h;
 }
 

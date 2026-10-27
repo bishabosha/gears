@@ -821,19 +821,9 @@ object NWFrameworkHandles {
   private[nwframework] def listener(address: IpAddress): Handle = {
     val (host, port) = hostAndPort(address)
     val ptr = Zone.acquire { implicit z =>
-      NWFrameworkIo.nwf_listen_async(toCString(host), port)
+      NWFrameworkIo.nwf_listen(toCString(host), port)
     }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
-    add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
-  }
-
-  def listen(address: IpAddress): Handle = {
-    val (host, port) = hostAndPort(address)
-    val error = stackalloc[CInt]()
-    val ptr = Zone.acquire { implicit z =>
-      NWFrameworkIo.nwf_listen(toCString(host), port, error)
-    }
-    if ptr == null then throw new IOException(s"Failed to listen on $host:$port: ${errorText(!error)}")
     add(new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, -1, null))
   }
 
@@ -853,10 +843,10 @@ object NWFrameworkHandles {
       }
       add(new NWFrameworkHandle(NWFrameworkHandle.Datagram, ptr, -1, remote))
     } else {
+      // Bound once Network.framework has it ready, which `NWFrameworkOpenDatagram` waits for, as a listener.
       val (host, port) = hostAndPort(local.nn)
-      val error = stackalloc[CInt]()
-      val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_datagram_bind(toCString(host), port, error) }
-      if ptr == null then throw new IOException(s"Failed to bind $host:$port: ${errorText(!error)}")
+      val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_datagram_bind(toCString(host), port) }
+      if ptr == null then throw new IOException(s"Failed to create a datagram socket for $host:$port")
       add(new NWFrameworkHandle(NWFrameworkHandle.BoundDatagram, ptr, -1, null))
     }
   }

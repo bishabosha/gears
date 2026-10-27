@@ -304,8 +304,8 @@ final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Li
   protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
-/** A datagram socket (see `SocketOps.datagram`): a bound one is bound when made, and a connected one ready with its
-  * connection.
+/** A datagram socket (see `SocketOps.datagram`): ready once Network.framework has it ready, a bound one's listener or a
+  * connected one's connection, failing if it cannot be.
   */
 final class NWFrameworkOpenDatagram(
     local: IpAddress | Null,
@@ -313,8 +313,7 @@ final class NWFrameworkOpenDatagram(
     into: Slot[NWFrameworkKinds.Datagram]
 ) extends NWFrameworkOpening(into, NWFrameworkKinds.datagram) {
   protected def make(): Handle = NWFrameworkHandles.datagram(local, remote)
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
-    h.kind == NWFrameworkHandle.BoundDatagram || h.connected(reactor, token)
+  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`): a

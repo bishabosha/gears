@@ -7,9 +7,8 @@ import scala.scalanative.unsafe.*
 /** The C side of the backend, `nwframework_io.c` beside this project's resources: the blocks Network.framework and
   * Dispatch call, each a trampoline that queues an event on its handle and wakes the reactor watching it; the queue a
   * reactor parks on; and the framework calls themselves. Everything returns at once, except `nwf_reactor_wait`, which
-  * parks the reactor's thread, `nwf_listen` and `nwf_datagram_bind`, which wait for the listener to be ready or to
-  * fail, and `nwf_cancel` of a listener, which waits for its cancelled state. What the events mean is
-  * `NWFrameworkHandle`'s business.
+  * parks the reactor's thread, and `nwf_cancel` of a listener, which waits for its cancelled state. What the events
+  * mean is `NWFrameworkHandle`'s business.
   */
 @extern
 private[nwframework] object NWFrameworkIo {
@@ -56,11 +55,10 @@ private[nwframework] object NWFrameworkIo {
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
   def nwf_send_final(handle: Handle): Unit = extern
 
-  def nwf_listen(host: CString, port: CInt, error: Ptr[CInt]): Handle = extern
-  def nwf_listen_async(host: CString, port: CInt): Handle = extern
+  def nwf_listen(host: CString, port: CInt): Handle = extern
 
   def nwf_datagram_connect(host: CString, port: CInt, localHost: CString, localPort: CInt): Handle = extern
-  def nwf_datagram_bind(host: CString, port: CInt, error: Ptr[CInt]): Handle = extern
+  def nwf_datagram_bind(host: CString, port: CInt): Handle = extern
   def nwf_flow_open(bound: Handle, host: CString, port: CInt): Handle = extern
   def nwf_flow_remote(flow: Handle, from: Ptr[socket.sockaddr_storage]): CInt = extern
 
