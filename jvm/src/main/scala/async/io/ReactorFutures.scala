@@ -9,8 +9,6 @@ import gears.async.VThreadSupport
 import gears.async.io.Backend
 import gears.async.io.CallerBackend
 import gears.async.io.Io
-import gears.async.io.OnCaller
-import gears.async.io.OnPool
 import gears.async.io.ReactorBackend
 import gears.async.io.internal.*
 
@@ -48,7 +46,7 @@ object ReactorFutures {
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend
-  )(program: OnPool[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
+  )(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
     VirtualCarriers.check()
     ReactorPool.run(backend, workers, policy, newPool = new CarriedPool(_, _, _)) { pool =>
       val factory = VirtualCarriers.factory(pool.execute(_))

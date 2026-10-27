@@ -7,7 +7,6 @@ import gears.async.Future
 import gears.async.Listener
 import gears.async.io.Backend
 import gears.async.io.Io
-import gears.async.io.OnPool
 import gears.async.io.ReactorBackend
 import gears.async.io.internal.*
 import gears.async.native.NativeSuspend
@@ -17,7 +16,9 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
   type Scheduler = ReactorPool
 }
 
-/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is `OnPool`'s. */
+/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is its `Io`'s
+  * (`internal.OnPool`).
+  */
 object ReactorFutures {
 
   /** Runs `program` on one worker, the calling thread, and returns what it returns (see the other `run`). Scala Native
@@ -40,7 +41,7 @@ object ReactorFutures {
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
       backend: ReactorBackend
   )(
-      program: OnPool[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T
+      program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T
   ): T = {
     FileLimit.raised: Unit // as the JVM does, so that a server's sockets are not capped at a shell's 256
     val stats = sys.env.get("GEARS_POOL_STATS").contains("1")

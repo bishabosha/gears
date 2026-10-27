@@ -5,7 +5,8 @@ projects of their own:
 
 | where | holds | depends on |
 | --- | --- | --- |
-| `gears.async.io` (core, `shared/`) | the interface: `Submitter`, `Reactor`, `Backend` and its kinds and capabilities, `Io` and its kinds, `Ops`, `Handle`, `Slot`, addresses, `BufferPool`, `TakePolicy` | the rest of gears |
+| `gears.async.io` (core, `shared/`) | the interface: `Backend` and its kinds and capabilities, `Io`, `Ops`, `Handle`, `Slot`, addresses, socket options, `BufferPool`, `TakePolicy` | the rest of gears |
+| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, and `Io`'s kinds `OnPool` and `OnCaller` | the interface |
 | `gears.async.io` (core, `jvm/` and `native/`) | the runner, `ReactorFutures`, one per platform | the runtime |
 | `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
 | `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
@@ -15,6 +16,11 @@ projects of their own:
 The interface lives in `shared/`, so it compiles on every platform gears does, Scala.js included; the runtime and the
 runners only on the JVM and Scala Native, which have threads to drive reactors with. Nothing in the interface refers
 to the runtime: the runner, in the interface's package, starts it.
+
+The public interface is `Backend` and `Io`, with the ops, handles and options they use, and the runner: a program
+performs ops with the `Io` the runner gives it. Reactors, their submissions and completions, and the kinds of `Io` are
+internal: submitting an op to a reactor directly is possible, for the runtime, the backends, their contract suites and
+a demo of it (`ReactorServerSocket`), but unsupported.
 
 What the build does not enforce: what the interface hides from programs it hides by package (`private[io]`:
 `CallerBackend.performHere`, `Slot.set`), which `gears.async.io.internal` and every backend's package are subpackages
@@ -49,9 +55,9 @@ Three axes, chosen independently of one another:
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
   thread, which may block. A backend is one kind, with any set of capabilities.
 - **`Io`**: where a program's ops run. An `Io[B]` has a backend, `backend: B`, and adds only `perform`: it has no
-  ops or handles of its own, and it is not a `Backend`. Its kinds are `OnPool`, on a pool of workers driving a
-  reactor backend's reactors, which the runtime implements and the runner gives the program it starts, and
-  `OnCaller`, over a caller backend, which anyone may make. The type names the backend, and is covariant in it, so
+  ops or handles of its own, and it is not a `Backend`. The runner gives it to the program it starts; its kinds,
+  internal, are `OnPool`, on a pool of workers driving a reactor backend's reactors, which the runtime implements,
+  and `OnCaller`, over a caller backend. The type names the backend, and is covariant in it, so
   a program over a `SocketBackend & FileBackend` is given an `Io` over that backend, which a helper asking for
   `Io[IpSockets]` takes. `Io` is also the program's gears `AsyncOperations`.
 

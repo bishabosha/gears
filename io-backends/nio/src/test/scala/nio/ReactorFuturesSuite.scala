@@ -7,7 +7,7 @@ import gears.async.Future
 import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
 import gears.async.io.Io
-import gears.async.io.OnCaller
+import gears.async.io.internal.OnCaller
 import gears.async.io.internal.ReactorScheduler
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
@@ -30,7 +30,7 @@ class NioOnCallerSuite extends FuturesContract {
     assertEquals(compileErrors("def k(c: NioBackend.Connection): NioBackend.Readable = c"), "")
   }
 
-  test("a program over NioOnCaller needs no runner: its Io is an OnCaller anyone may make, on the calling thread") {
+  test("a program over NioOnCaller needs no pool: its Io, an OnCaller, performs on the calling thread") {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler
     var outcome = ""

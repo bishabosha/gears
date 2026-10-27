@@ -29,9 +29,9 @@ backends do: `NioOnCaller` on a selector of each handle's own, `NioBackend` on i
 ## `NioOnCaller`, the default
 
 `NioOnCaller` is a `CallerBackend`: each op is done on the calling thread, which is a virtual thread for any future of
-the program. It needs nothing of the JDK beyond its public interface, and no runner: `OnCaller(NioOnCaller)` works
-from any `Async` context, and `ReactorFutures.run(using NioOnCaller)` only runs the program on gears' own virtual
-threads, on the JDK's scheduler, and hands it that `Io`. Per kind of op (`NioOnCaller.performHere`):
+the program. It needs nothing of the JDK beyond its public interface: `ReactorFutures.run(using NioOnCaller)` runs the
+program on gears' own virtual threads, on the JDK's scheduler, and hands it an `Io` that performs on the calling thread
+(internally an `OnCaller`, which works from any `Async` context). Per kind of op (`NioOnCaller.performHere`):
 
 - **A command** (read, write, accept, connect, send, receive) is tried at once, since a non-blocking channel may be
   used from any thread. If it would block it is tried again after a `Thread.yield`, up to `gears.io.nio.retries` times

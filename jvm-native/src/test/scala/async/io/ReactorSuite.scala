@@ -2,6 +2,7 @@ package gears.async.io
 
 import gears.async.io.internal.Completion
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.Submitter
 
 import munit.FunSuite
 
@@ -269,6 +270,15 @@ class ReactorSuite extends FunSuite {
     assertEquals(compileErrors("def a(s: Submitter)(op: s.Op) = s.attachment(op)"), "")
     assert(compileErrors("def a(b: ReactorBackend)(op: b.Op) = b.attachment(op)").nonEmpty)
     assert(compileErrors("def o(b: Backend) = b.open()").nonEmpty)
+  }
+
+  test("the public interface is Backend and Io: reactors, submissions and the kinds of Io are internal") {
+    assert(compileErrors("def f(x: _root_.gears.async.io.Reactor) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.Submitter) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.Completion[Any]) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.OnPool[ReactorBackend]) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.OnCaller[CallerBackend]) = x").nonEmpty)
+    assertEquals(compileErrors("def f(x: _root_.gears.async.io.internal.OnPool[ReactorBackend]) = x"), "")
   }
 
   test("blocking ops are a capability a backend has, not every backend; readiness is no backend's, only kqueue's own") {

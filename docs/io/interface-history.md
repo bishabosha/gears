@@ -313,3 +313,15 @@ submitter, in the order they came, its time limit running and a cancel taking it
 backend's handle has one of per direction). They take turns rather than wait at once: on kqueue, one reactor at a time
 owns a descriptor's read filter, so receives waiting on several reactors would leave all but one unwoken. Streams keep
 the refusal.
+
+## The public interface is `Backend` and `Io`
+
+`Submitter`, `Reactor` and `Completion`, and `Io`'s kinds `OnPool` and `OnCaller`, were in `gears.async.io`, beside
+`Backend` and `Io`, as if a program might submit ops to reactors itself or make its own `Io`. A program performs ops
+with the `Io` the runner gives it, and nothing more is supported, so they are in `gears.async.io.internal` now: what
+the runtime, the backends and their contract suites use. Submitting to a reactor directly is still possible, as
+`ReactorServerSocket` shows, but unsupported. `ReactorBackend` and `CallerBackend` stay public, as a backend's kind,
+which runners and programs choosing a backend name; `ReactorFutures.run` gives a pool's program an `Io`, no longer an
+`OnPool`. One reason for queueing a datagram socket's ops in the backends (see above) was that a program submitting to
+reactors itself should have the same rule; that reason is gone with this, the others stand: a backend may do better
+than queue, and an op's time limit and cancel cover its wait.

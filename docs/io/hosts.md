@@ -25,7 +25,7 @@ API; nothing here about the unbuilt backends has been run.
 
 What this says about the interface:
 
-- **The JavaScript hosts need a third kind.** `Submitter` already says a backend may have "no loop of its own, such as
+- **The JavaScript hosts need a third kind.** `internal.Submitter` already says a backend may have "no loop of its own, such as
   one over a JavaScript host": neither a `ReactorBackend`, whose loop the caller drives, nor a `CallerBackend`, which
   blocks. No trait or `Io` for it exists yet; Node, Deno and Workers each need one before they can be backends.
   WASI 0.2 does not: one instance's thread polls `wasi:io/poll`, a reactor; 0.3's native async would be the host's

@@ -78,12 +78,12 @@ object Backend {
 }
 
 /** A backend that performs each op on the calling thread, which may block, as a virtual thread may: NIO's
-  * `NioOnCaller`. Its ops may be performed from anywhere, so a program over it needs no runner: its `Io` is an
-  * `OnCaller` over it, which anyone may make.
+  * `NioOnCaller`. Its ops may be performed from anywhere, so a program over it needs no runner: its `Io` is an `Io`
+  * from the runner (`ReactorFutures.run`) performs them on the calling thread.
   */
 trait CallerBackend extends Backend {
 
-  /** Performs `op` on the calling thread, as `Io.perform` says: what `OnCaller.perform` calls. */
+  /** Performs `op` on the calling thread, as `Io.perform` says: what its `Io` calls. */
   private[io] def performHere(op: Op, timeoutMillis: Int)(using Async): Unit
 }
 
@@ -91,7 +91,7 @@ trait CallerBackend extends Backend {
   * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
   * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
   * over this backend runs on a pool of workers driving its reactors, started by the platform's runner, and performs its
-  * ops with the `OnPool` the runner gives it, which submits each to the reactor of the worker running the caller.
+  * ops with the `Io` the runner gives it, which submits each to the reactor of the worker running the caller.
   */
 trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
 
