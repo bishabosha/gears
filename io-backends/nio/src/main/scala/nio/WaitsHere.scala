@@ -87,25 +87,33 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
 /** A timer waited for on the calling thread, parked until its time has passed: no reactor thread to fire it and resume
   * the caller, which the OS may keep from running while the cores are busy. Cancelled with an unpark.
   */
-private[nio] final class TimerWait(milliseconds: Int) extends WaitHere {
-  private val deadline = System.nanoTime() + milliseconds * 1_000_000L
+private[nio] final class TimerWait(timer: NioTimer) extends WaitHere with gears.async.io.internal.TimerWaiter {
   @volatile private var cancelled = false
   @volatile private var parked: Thread | Null = null
 
-  /** Parks until the deadline, a cancel, or the end of `timeoutNanos` if not negative; true once the timer's time has
-    * passed.
+  /** Parks until the timer's key, its deadline or time limit, a cancel, or its deadline moving earlier (`moved`); true
+    * if its deadline has come. The timer carries its own time limit, so `timeoutNanos` is not used.
     */
   def await(timeoutNanos: Long): Boolean = {
     parked = Thread.currentThread()
+    timer.waiter = this
     try {
-      val until = if timeoutNanos < 0 then deadline else math.min(deadline, System.nanoTime() + timeoutNanos)
-      var remaining = until - System.nanoTime()
+      var remaining = timer.key - System.nanoTime()
       while remaining > 0 && !cancelled do {
+        timer.filed = timer.key
         LockSupport.parkNanos(this, remaining)
-        remaining = until - System.nanoTime()
+        remaining = timer.key - System.nanoTime()
       }
-      deadline - System.nanoTime() <= 0
-    } finally parked = null
+    } finally {
+      timer.waiter = null
+      parked = null
+    }
+    timer.due(System.nanoTime()) == gears.async.io.internal.TimerState.Complete
+  }
+
+  def moved(t: gears.async.io.internal.TimerState): Unit = {
+    val thread = parked
+    if thread != null then LockSupport.unpark(thread)
   }
 
   def cancel(): Unit = {

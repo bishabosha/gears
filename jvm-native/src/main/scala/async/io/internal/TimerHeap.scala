@@ -41,7 +41,7 @@ final class TimerHeap[T <: TimerHeap.Entry] {
   }
 
   private def before(a: TimerHeap.Entry, b: TimerHeap.Entry): Boolean =
-    a.deadline < b.deadline || (a.deadline == b.deadline && a.order < b.order)
+    a.when < b.when || (a.when == b.when && a.order < b.order)
 
   private def place(timer: TimerHeap.Entry, index: Int): Unit = {
     heap(index) = timer
@@ -88,7 +88,7 @@ object TimerHeap {
     * the heap, -1 when not in it.
     */
   trait Entry {
-    var deadline = 0L
+    var when = 0L
     var order = 0L
     var heapIndex = -1
   }

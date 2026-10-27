@@ -96,8 +96,26 @@ trait Ops[Op, H <: AnyRef] {
     */
   def write(handle: Writable, buf: ByteBuffer): Op & Repeatable
 
-  /** Completes once `milliseconds` have passed. */
-  def timer(milliseconds: Int): Op & Repeatable
+  /** Completes once `milliseconds` have passed (see the other `timer`). */
+  final def timer(milliseconds: Int): Op & Repeatable = {
+    require(milliseconds >= 0, s"A timer's time is not negative: $milliseconds ms")
+    timer(scala.concurrent.duration.Duration(milliseconds.toLong, java.util.concurrent.TimeUnit.MILLISECONDS))
+  }
+
+  /** Completes once `duration` has passed since each submission, never before: to the nanosecond the backend can wait,
+    * which on kqueue is what `kevent` takes, and on NIO's reactors the millisecond its selector waits in. A time limit
+    * on its submission shorter than `duration` fails it with `TimeoutException` when the limit comes, as any op's does;
+    * one no shorter leaves it to complete. Not negative.
+    */
+  def timer(duration: scala.concurrent.duration.FiniteDuration): Op & Repeatable
+
+  /** A timer that completes at `nanoTime`, on `System.nanoTime`'s clock, a deadline that may be moved while it is
+    * pending (`Deadline.moveTo`), from any thread, so that a timer re-armed again and again, as QUIC's loss and pacing
+    * timers are for almost every packet, is one op performed once rather than one cancelled and performed anew each
+    * time. Performed again, it completes at its deadline as it stands then, at once if that has passed. Its time limit
+    * is as `timer`'s.
+    */
+  def deadlineTimer(nanoTime: Long): Op & Repeatable & Deadline
 
   /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
     * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a

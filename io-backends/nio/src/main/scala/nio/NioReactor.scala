@@ -25,7 +25,7 @@ import java.util.concurrent.TimeoutException
   * The selector's keys belong to the channels: closing a handle cancels its keys, and the commands pending on it here
   * fail with a `ClosedChannelException` from the loop (`closed`), as `Ops.close` says and as on the kqueue backend.
   */
-final class NioReactor private (selector: Selector) extends Reactor {
+final class NioReactor private (selector: Selector) extends Reactor with gears.async.io.internal.TimerWaiter {
 
   type Op = NioOp
   type Handle = NioCapabilities.Handle
@@ -59,7 +59,51 @@ final class NioReactor private (selector: Selector) extends Reactor {
     op.completion = null
     release(op)
     if op.heapIndex >= 0 then timers.remove(op)
+    op match {
+      case timer: NioTimer => timer.waiter = null // a move no longer concerns this reactor
+      case _               => ()
+    }
     completion
+  }
+
+  // Timers whose deadline moved earlier, told from another thread, for the loop to file again (`moved`).
+  private val movedQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioTimer]()
+
+  /** A pending timer's deadline moved earlier than it is filed under: filed again here, or by the loop, woken. */
+  def moved(timer: gears.async.io.internal.TimerState): Unit = timer match {
+    case t: NioTimer =>
+      if Thread.currentThread() eq loopThread then refile(t)
+      else {
+        movedQueue.add(t)
+        wakeup()
+      }
+    case _ => ()
+  }
+
+  /** Files `timer` again under its key, if it is still pending here. Loop thread only. */
+  private def refile(timer: NioTimer): Unit =
+    if timer.heapIndex >= 0 && timer.completion != null then {
+      timers.remove(timer)
+      file(timer)
+    }
+
+  /** Files the timers moved earlier from other threads since the last turn. */
+  private def deliverMoved(): Unit = {
+    var timer = movedQueue.poll()
+    while timer != null do {
+      refile(timer)
+      timer = movedQueue.poll()
+    }
+  }
+
+  /** Puts `timer` in the heap under its key (see `TimerState`). */
+  private def file(timer: NioTimer): Unit = {
+    val key = timer.key
+    timer.when = key
+    timer.filed = key
+    timer.order = nextTimerOrder
+    nextTimerOrder += 1
+    timers.add(timer)
   }
 
   private def complete(op: NioOp): Unit = deliverComplete(take(op), op)
@@ -251,10 +295,11 @@ final class NioReactor private (selector: Selector) extends Reactor {
           }
         case timer: NioTimer =>
           require(timer.heapIndex < 0, "This timer is already pending")
-          // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
-          timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
+          // Due at its time, or failed at its time limit if that comes first (see `TimerState`).
+          timer.start(System.nanoTime(), timeoutMillis)
           timer.completion = pending
-          schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+          timer.waiter = this
+          file(timer)
         case blocking: NioBlocking =>
           if blocking.cancelling != null then
             throw new IllegalStateException(s"$op is still running after being cancelled")
@@ -293,7 +338,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     * out then (see `fireDueTimers`).
     */
   private def schedule(op: NioOp, milliseconds: Int): Unit = {
-    op.deadline = System.nanoTime() + milliseconds * 1_000_000L
+    op.when = System.nanoTime() + milliseconds * 1_000_000L
     op.order = nextTimerOrder
     nextTimerOrder += 1
     timers.add(op)
@@ -688,6 +733,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
     * after delivering something, except every `NioReactor.PollEvery` turns.
     */
   def runOnce(block: Boolean): Unit = {
+    deliverMoved()
     val closingDue = closing.size
     val delivered = deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
     updateInterest()
@@ -714,7 +760,7 @@ final class NioReactor private (selector: Selector) extends Reactor {
           else if timers.isEmpty then selector.select(collect)
           else {
             // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
-            val wait = timers.peek.deadline - System.nanoTime()
+            val wait = timers.peek.when - System.nanoTime()
             if wait <= 0 then selector.selectNow(collect)
             else selector.select(collect, (wait + 999_999L) / 1_000_000L)
           }
@@ -742,10 +788,14 @@ final class NioReactor private (selector: Selector) extends Reactor {
     if !timers.isEmpty then {
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
-      while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
+      while !timers.isEmpty && timers.peek.when <= now && timers.peek.order < submittedBefore do
         timers.poll() match {
           case timer: NioTimer =>
-            if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+            timer.due(now) match {
+              case gears.async.io.internal.TimerState.Complete => complete(timer)
+              case gears.async.io.internal.TimerState.Expire   => fail(timer, new TimeoutException(s"$timer timed out"))
+              case _                                           => file(timer) // its deadline moved later
+            }
           case op => timedOut(op)
         }
     }

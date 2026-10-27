@@ -152,7 +152,11 @@ object KqueueOps
     on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.unix(to)))
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
-  def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
+  def timer(duration: scala.concurrent.duration.FiniteDuration): KqueueTimer = {
+    require(duration.length >= 0, s"A timer's time is not negative: $duration")
+    new KqueueTimer(duration.toNanos)
+  }
+  def deadlineTimer(nanoTime: Long): KqueueDeadlineTimer = new KqueueDeadlineTimer(nanoTime)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
@@ -504,12 +508,27 @@ trait ReactorExtension {
   def close(): Unit
 }
 
-/** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */
-final class KqueueTimer(val milliseconds: Int) extends KqueueOp with Repeatable {
-  require(milliseconds >= 0, "Timer duration must not be negative")
+/** A one-shot timer, `nanos` from each submission, kept in the reactor's heap while pending (`TimerState`). */
+sealed class KqueueTimer private[kqueue] (protected val nanos: Long)
+    extends KqueueOp
+    with Repeatable
+    with gears.async.io.internal.TimerState {
 
-  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
-  private[kqueue] var expires = false
+  /** A timer of `milliseconds`, for kqueue-specific code. */
+  def this(milliseconds: Int) = {
+    this(milliseconds * 1_000_000L)
+    require(milliseconds >= 0, "Timer duration must not be negative")
+  }
+
+  /** Its time, in whole milliseconds, for kqueue-specific code; a deadline timer's is negative. */
+  def milliseconds: Int = if nanos < 0 then -1 else (nanos / 1_000_000L).toInt
+}
+
+/** A timer at a deadline that may move while it is pending (see `Ops.deadlineTimer`). */
+final class KqueueDeadlineTimer private[kqueue] (initially: Long) extends KqueueTimer(-1L) with Deadline {
+  at = initially
+  def deadline: Long = at
+  def moveTo(nanoTime: Long): Unit = move(nanoTime)
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop

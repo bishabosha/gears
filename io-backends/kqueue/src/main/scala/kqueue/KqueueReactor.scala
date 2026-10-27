@@ -36,7 +36,8 @@ final class KqueueReactor private (
     maxEvents: Int,
     spinPolls: Int,
     builtBy: Ops[KqueueOp, KqueueBackend.Handle]
-) extends Reactor {
+) extends Reactor
+    with gears.async.io.internal.TimerWaiter {
 
   /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go
     * to any kqueue reactor in turn (see `KqueueBackend`).
@@ -61,7 +62,51 @@ final class KqueueReactor private (
     op.completion = null
     release(op)
     if op.heapIndex >= 0 then timers.remove(op)
+    op match {
+      case timer: KqueueTimer => timer.waiter = null // a move no longer concerns this reactor
+      case _                  => ()
+    }
     completion
+  }
+
+  // Timers whose deadline moved earlier, told from another thread, for the loop to file again (`moved`).
+  private val movedQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueueTimer]()
+
+  /** A pending timer's deadline moved earlier than it is filed under: filed again here, or by the loop, woken. */
+  def moved(timer: gears.async.io.internal.TimerState): Unit = timer match {
+    case t: KqueueTimer =>
+      if Thread.currentThread() eq loopThread then refile(t)
+      else {
+        movedQueue.add(t)
+        wakeup()
+      }
+    case _ => ()
+  }
+
+  /** Files `timer` again under its key, if it is still pending here. Loop thread only. */
+  private def refile(timer: KqueueTimer): Unit =
+    if timer.heapIndex >= 0 && timer.completion != null then {
+      timers.remove(timer)
+      file(timer)
+    }
+
+  /** Files the timers moved earlier from other threads since the last turn. */
+  private def deliverMoved(): Unit = {
+    var timer = movedQueue.poll()
+    while timer != null do {
+      refile(timer)
+      timer = movedQueue.poll()
+    }
+  }
+
+  /** Puts `timer` in the heap under its key (see `TimerState`). */
+  private def file(timer: KqueueTimer): Unit = {
+    val key = timer.key
+    timer.when = key
+    timer.filed = key
+    timer.order = nextTimerOrder
+    nextTimerOrder += 1
+    timers.add(timer)
   }
 
   private def complete(op: KqueueOp): Unit = deliverComplete(take(op), op)
@@ -364,10 +409,11 @@ final class KqueueReactor private (
           else ready.add(notified)
         case timer: KqueueTimer =>
           require(timer.heapIndex < 0, "This timer is already pending")
-          // A time limit shorter than the timer's own time is when it fires, failed instead of completed.
-          timer.expires = timeoutMillis >= 0 && timeoutMillis < timer.milliseconds
+          // Due at its time, or failed at its time limit if that comes first (see `TimerState`).
+          timer.start(System.nanoTime(), timeoutMillis)
           timer.completion = pending
-          schedule(timer, if timer.expires then timeoutMillis else timer.milliseconds)
+          timer.waiter = this
+          file(timer)
         case close: Close =>
           // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
           // until the last use ends and closes it.
@@ -433,7 +479,7 @@ final class KqueueReactor private (
     * out then (see `fireDueTimers`).
     */
   private def schedule(op: KqueueOp, milliseconds: Int): Unit = {
-    op.deadline = System.nanoTime() + milliseconds * 1_000_000L
+    op.when = System.nanoTime() + milliseconds * 1_000_000L
     op.order = nextTimerOrder
     nextTimerOrder += 1
     timers.add(op)
@@ -1048,6 +1094,7 @@ final class KqueueReactor private (
     */
   def runOnce(block: Boolean): Unit = {
     val closingDue = closing.size
+    deliverMoved()
     val delivered = // no short-circuiting
       deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() | closingDue > 0
     val polled =
@@ -1081,7 +1128,7 @@ final class KqueueReactor private (
     * thread with little else to do, as an otherwise idle worker waiting on a timer is.
     */
   private def pollBeforeBlocking(events: KqueueLoop.EventQueue): Int = {
-    if !timers.isEmpty && timers.peek.deadline <= System.nanoTime() then
+    if !timers.isEmpty && timers.peek.when <= System.nanoTime() then
       return KqueueLoop.pollEventsNow(kq, events, maxEvents)
     var polled = 0
     var spins = 0
@@ -1093,7 +1140,7 @@ final class KqueueReactor private (
     else if timers.isEmpty then KqueueLoop.pollEventsForever(kq, events, maxEvents)
     else {
       // Block no longer than until the earliest timer is due, or not at all if it already is.
-      val wait = timers.peek.deadline - System.nanoTime()
+      val wait = timers.peek.when - System.nanoTime()
       if wait <= 0 then KqueueLoop.pollEventsNow(kq, events, maxEvents)
       else
         KqueueLoop.pollEventsTimeout(
@@ -1113,10 +1160,14 @@ final class KqueueReactor private (
     if !timers.isEmpty then {
       val now = System.nanoTime()
       val submittedBefore = nextTimerOrder
-      while !timers.isEmpty && timers.peek.deadline <= now && timers.peek.order < submittedBefore do
+      while !timers.isEmpty && timers.peek.when <= now && timers.peek.order < submittedBefore do
         timers.poll() match {
           case timer: KqueueTimer =>
-            if timer.expires then fail(timer, new TimeoutException(s"$timer timed out")) else complete(timer)
+            timer.due(now) match {
+              case gears.async.io.internal.TimerState.Complete => complete(timer)
+              case gears.async.io.internal.TimerState.Expire   => fail(timer, new TimeoutException(s"$timer timed out"))
+              case _                                           => file(timer) // its deadline moved later
+            }
           case op => timedOut(op)
         }
     }

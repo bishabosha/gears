@@ -168,7 +168,11 @@ object NioOps
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): Send =
     new Send(handle, buf, gears.async.io.Ops.ip(to))
   def send(handle: ConnectedDatagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
-  def timer(milliseconds: Int): NioTimer = new NioTimer(milliseconds)
+  def timer(duration: scala.concurrent.duration.FiniteDuration): NioTimer = {
+    require(duration.length >= 0, s"A timer's time is not negative: $duration")
+    new NioTimer(duration.toNanos)
+  }
+  def deadlineTimer(nanoTime: Long): NioDeadlineTimer = new NioDeadlineTimer(nanoTime)
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioBlocking = new BlockingResultTask(body, into)
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Resolve = new Resolve(host, into)
@@ -517,11 +521,16 @@ final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) exte
 }
 
 /** A one-shot timer, kept in its reactor's heap while pending (`TimerHeap.Entry`). */
-final class NioTimer(val milliseconds: Int) extends NioOp with Repeatable {
-  require(milliseconds >= 0, "Timer duration must not be negative")
+sealed class NioTimer private[nio] (protected val nanos: Long)
+    extends NioOp
+    with Repeatable
+    with gears.async.io.internal.TimerState
 
-  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
-  private[nio] var expires = false
+/** A timer at a deadline that may move while it is pending (see `Ops.deadlineTimer`). */
+final class NioDeadlineTimer private[nio] (initially: Long) extends NioTimer(-1L) with Deadline {
+  at = initially
+  def deadline: Long = at
+  def moveTo(nanoTime: Long): Unit = move(nanoTime)
 }
 
 /** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop

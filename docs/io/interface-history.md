@@ -269,3 +269,12 @@ capability. `NoDelay` is on unless set off, on every backend, as Go has it: TLS 
 messages are small writes, which Nagle's algorithm with delayed acknowledgements can hold back by tens of milliseconds;
 each backend left it off before, as its system does.
 
+## Timers take a duration, and a deadline timer moves
+
+`timer` took whole milliseconds, and the only way to re-arm a pending timer was to cancel what performed it and perform
+it anew, which through a future costs a thrown cancellation, about 20 µs on Scala Native. QUIC re-arms its loss,
+acknowledgement and pacing timers for almost every packet. So `timer` takes a `FiniteDuration`, to what the backend can
+wait for, and `deadlineTimer` is a timer whose deadline moves while it is pending, from any thread: later for nothing
+but a store, the reactor filing it again when the old deadline comes, as Go's runtime and Netty do; earlier by filing it
+again, or waking its reactor. A time limit on a timer's submission still fails it when it comes first.
+

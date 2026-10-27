@@ -58,7 +58,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
         finally if claim != null then claim.compareAndSet(command, null): Unit
       case timer: NioTimer =>
         // A limit no shorter than the timer leaves it to complete, as a reactor does, rather than racing it.
-        performTimer(timer, if timeoutMillis >= 0 && timeoutMillis < timer.milliseconds then deadline else -1L)
+        performTimer(timer, timeoutMillis)
       case blocking: NioBlocking => performBlocking(blocking, deadline)
       case atOnce: NioAtOnce     =>
         atOnce.perform()
@@ -116,21 +116,23 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
       }
   }
 
-  private def performTimer(timer: NioTimer, deadline: Long)(using ac: Async): Unit = {
+  private def performTimer(timer: NioTimer, timeoutMillis: Int)(using ac: Async): Unit = {
     require(timer.completion == null, s"$timer is already pending")
-    // A timer of no time is due now. It yields first, so that, as on a reactor, where its completion runs a turn
-    // later, the other threads ready to run get their turn: a loop of them stays fair.
-    if timer.milliseconds == 0 then Thread.`yield`()
+    timer.start(System.nanoTime(), timeoutMillis)
+    // A timer already due yields first, so that, as on a reactor, where its completion runs a turn later, the other
+    // threads ready to run get their turn: a loop of them stays fair.
+    if timer.due(System.nanoTime()) == gears.async.io.internal.TimerState.Complete then Thread.`yield`()
     else {
-      val wait = new TimerWait(timer.milliseconds)
-      var done = false
+      val wait = new TimerWait(timer)
+      var outcome = gears.async.io.internal.TimerState.Again
       cancellationScope(wait) {
-        while !done do {
-          done = wait.await(remaining(deadline))
+        while outcome == gears.async.io.internal.TimerState.Again do {
+          wait.await(-1L): Unit
           checkCancelled()
-          if !done && expired(deadline) then throw new TimeoutException(s"$timer timed out")
+          outcome = timer.due(System.nanoTime())
         }
       }
+      if outcome == gears.async.io.internal.TimerState.Expire then throw new TimeoutException(s"$timer timed out")
     }
   }
 

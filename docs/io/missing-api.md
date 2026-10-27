@@ -43,11 +43,17 @@ datagram and a chosen source address on each send (`IP_PKTINFO`, `IPV6_RECVPKTIN
 ancillary data, and the portable workaround is a socket bound to each local address. Proposed: an optional packet-info
 capability on kqueue and Network.framework, absent on NIO.
 
-**Timer resolution and cost.** `timer(milliseconds: Int)` is too coarse for QUIC's pacing and acknowledgement-delay
-timers, and QUIC re-arms or cancels a timer for almost every packet. Today that is cancelling a `Future`, measured at
-about 20 µs a timer on kqueue (see "What is open" in [`runtime.md`](runtime.md)). Proposed: a timer in nanoseconds, or to a deadline on a
-monotonic clock, re-armed in place as one repeatable op given a new deadline, with no future to cancel. An op as a
-passive future (`performAsync`, in the [README](README.md)) would remove the cost too.
+**Timer resolution and cost.** Done (2026-10-27). `timer(milliseconds: Int)` was too coarse for QUIC's pacing and
+acknowledgement-delay timers, and QUIC re-arms a timer for almost every packet, which was cancelling a `Future`, about
+20 µs a timer on kqueue (see "What is open" in [`runtime.md`](runtime.md)). Now `timer(duration: FiniteDuration)`
+completes no earlier than its duration, to what the backend can wait for: the nanosecond `kevent` takes on kqueue, the
+millisecond NIO's selector waits in; the `Int` form stays, a shorthand. And `deadlineTimer(nanoTime)` is a timer at a
+deadline on `System.nanoTime`'s clock that may be moved while it is pending (`Deadline.moveTo`), from any thread, with
+no cancel and nothing thrown: a move later stores the new deadline, which the reactor finds when the old one comes, and
+files the timer again, as Go's runtime and Netty do; a move earlier files it again on the reactor's thread, or wakes the
+reactor from another. The arithmetic is one trait every backend's timer mixes in (`internal.TimerState`). Contract
+checks on every backend: a timer finer than a millisecond, moves later and earlier, from another thread to a reactor
+blocked waiting, a deadline passed, and a time limit coming first.
 
 ## Gaps that make them slow, not impossible
 
@@ -122,7 +128,7 @@ Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-si
 | --- | --- | --- |
 | 1 | Local and peer addresses (done) | correctness for every server |
 | 2 | Options as a socket opens (done: no-delay, keepalive, buffer sizes, don't-fragment, reuse-port) | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
-| 3 | Nanosecond timers re-armed in place | QUIC |
+| 3 | Nanosecond timers re-armed in place (done) | QUIC |
 | 4 | Vectored reads and writes | throughput for everything that frames its data |
 | 5 | Optional capabilities: packet info, batched datagrams, files sent without copying | fast QUIC and HTTP on the backends that can |
 

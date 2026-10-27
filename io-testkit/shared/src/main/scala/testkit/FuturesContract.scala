@@ -442,6 +442,22 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(outcome, "true true")
   }
 
+  test("a future waiting on a deadline timer is released when another moves its deadline earlier, with no cancel") {
+    val outcome = running { io ?=>
+      val timer = io.backend.ops.deadlineTimer(System.nanoTime() + 60_000_000_000L)
+      val waiting = Future(io.perform(timer))
+      io.perform(io.backend.ops.timer(20)) // so that the timer is waiting
+      val started = System.nanoTime()
+      timer.moveTo(System.nanoTime() + 1_000_000L)
+      val completed = waiting.awaitResult.isSuccess
+      val waited = System.nanoTime() - started
+      timer.moveTo(System.nanoTime() + 2_000_000L) // and again, later than now
+      io.perform(timer)
+      s"$completed ${waited < 10_000_000_000L}"
+    }
+    assertEquals(outcome, "true true")
+  }
+
   test("a read waiting on a socket is cancelled with the connection left open") {
     val outcome = withTempDir { dir =>
       running { io ?=>

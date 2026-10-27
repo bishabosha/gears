@@ -184,6 +184,81 @@ trait ReactorContract extends FunSuite {
     }
   }
 
+  test("a timer of a duration finer than a millisecond completes no earlier than it") {
+    withReactor { r =>
+      val outcome = Outcome()
+      val started = System.nanoTime()
+      r.submit(
+        backend.ops.timer(scala.concurrent.duration.Duration(1500, java.util.concurrent.TimeUnit.MICROSECONDS)),
+        outcome
+      )
+      turnUntil(r)(outcome.completed > 0)
+      assert(System.nanoTime() - started >= 1_500_000L, "the timer fired early")
+    }
+  }
+
+  test("a deadline timer moved later completes at the new deadline, with no cancel, its first deadline passing") {
+    withReactor { r =>
+      val start = System.nanoTime()
+      val timer = backend.ops.deadlineTimer(start + 20_000_000L)
+      val outcome = Outcome()
+      r.submit(timer, outcome)
+      timer.moveTo(start + 80_000_000L)
+      timer.moveTo(start + 120_000_000L) // moved again, as QUIC's timers are for almost every packet
+      turnUntil(r)(outcome.finished)
+      assertEquals(outcome.completed, 1)
+      assert(System.nanoTime() - start >= 120_000_000L, "it fired at a deadline it had left")
+      assertEquals(timer.deadline, start + 120_000_000L)
+    }
+  }
+
+  test("a deadline timer moved earlier from another thread wakes a reactor blocked waiting for it") {
+    withReactor { r =>
+      val timer = backend.ops.deadlineTimer(System.nanoTime() + 60_000_000_000L)
+      val outcome = Outcome()
+      r.submit(timer, outcome)
+      val mover = new Thread(() => {
+        Thread.sleep(50)
+        timer.moveTo(System.nanoTime())
+      })
+      val started = System.nanoTime()
+      mover.start()
+      turnUntil(r)(outcome.finished) // blocks in the reactor until the move wakes it
+      mover.join()
+      assertEquals(outcome.completed, 1)
+      assert(System.nanoTime() - started < 10_000_000_000L, "it waited for its first deadline")
+    }
+  }
+
+  test("a deadline timer completes at once for a deadline passed, and performed again at its deadline as it stands") {
+    withReactor { r =>
+      val timer = backend.ops.deadlineTimer(System.nanoTime() - 1_000_000L)
+      val first = Outcome()
+      r.submit(timer, first)
+      assertEquals(first.completed, 0, "never inside submit")
+      turnUntil(r)(first.finished)
+      assertEquals(first.completed, 1)
+      val start = System.nanoTime()
+      timer.moveTo(start + 30_000_000L) // not pending: the next submission starts from it
+      val second = Outcome()
+      r.submit(timer, second)
+      turnUntil(r)(second.finished)
+      assertEquals(second.completed, 1)
+      assert(System.nanoTime() - start >= 30_000_000L)
+    }
+  }
+
+  test("a deadline timer's time limit fails it if the limit comes first, the deadline moved past it or not") {
+    withReactor { r =>
+      val timer = backend.ops.deadlineTimer(System.nanoTime() + 10_000_000L)
+      val outcome = Outcome()
+      r.submit(timer, outcome, timeoutMillis = 40)
+      timer.moveTo(System.nanoTime() + 60_000_000_000L)
+      turnUntil(r)(outcome.finished)
+      assert(outcome.failure.isInstanceOf[TimeoutException], String.valueOf(outcome.failure))
+    }
+  }
+
   test("a completion that throws is reported, with its op, and the turn goes on to the other completions") {
     withReactor { r =>
       val reported = scala.collection.mutable.ArrayBuffer.empty[Throwable]
