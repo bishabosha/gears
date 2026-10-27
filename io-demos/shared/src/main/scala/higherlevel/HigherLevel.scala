@@ -15,6 +15,7 @@ import gears.async.io.Received
 import gears.async.io.ResolvedAddress
 import gears.async.io.Resolving
 import gears.async.io.Slot
+import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagrams
 import gears.async.io.UnixStreams
@@ -56,16 +57,27 @@ object HigherLevel {
   def listen(address: UnixAddress)(using io: Io[UnixStreams], async: Async): io.Listener =
     opened[io.Listener](io.backend.ops.listen(address, _))
 
-  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, and returns it. */
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null)(using io: Io[IpSockets], async: Async): io.Datagram =
-    opened[io.Datagram](io.backend.ops.datagram(local, remote, _))
+  /** Opens a datagram socket bound to `local` and returns it. */
+  def bindDatagram(local: IpAddress)(using io: Io[IpSockets], async: Async): io.BoundDatagram =
+    opened[io.BoundDatagram](io.backend.ops.bindDatagram(local, _))
 
-  /** Opens a Unix datagram socket, bound to `local` and connected to `remote` where given, and returns it. */
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null)(using
+  /** Opens a datagram socket connected to `remote`, bound to `local` if given, and returns it. */
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress)(using
+      io: Io[IpSockets],
+      async: Async
+  ): io.ConnectedDatagram =
+    opened[io.ConnectedDatagram](io.backend.ops.connectDatagram(local, remote, _))
+
+  /** Opens a Unix datagram socket bound to `local` and returns it. */
+  def bindDatagram(local: UnixAddress)(using io: Io[UnixDatagrams], async: Async): io.UnixBoundDatagram =
+    opened[io.UnixBoundDatagram](io.backend.ops.bindDatagram(local, _))
+
+  /** Opens a Unix datagram socket connected to `remote`, bound to `local` if given, and returns it. */
+  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress)(using
       io: Io[UnixDatagrams],
       async: Async
-  ): io.UnixDatagram =
-    opened[io.UnixDatagram](io.backend.ops.datagram(local, remote, _))
+  ): io.UnixConnectedDatagram =
+    opened[io.UnixConnectedDatagram](io.backend.ops.connectDatagram(local, remote, _))
 
   /** Opens a pipe and returns its read end and its write end. */
   def pipe()(using io: Io[Pipes], async: Async): (io.Readable, io.Writable) = {
@@ -99,7 +111,7 @@ object HigherLevel {
   /** Shuts a connected stream down for writing: the peer reads what was written, then the end of the stream, and this
     * side may still read (see `SocketOps.shutdownOutput`).
     */
-  def shutdownOutput(using io: Io[IpSockets])(handle: io.Connection)(using Async): Unit =
+  def shutdownOutput(using io: Io[StreamSockets])(handle: io.Connection)(using Async): Unit =
     io.perform(io.backend.ops.shutdownOutput(handle))
 
   /** Closes a connected stream without resetting it: shuts it down for writing, so that the peer reads all that was
@@ -108,7 +120,7 @@ object HigherLevel {
     * peer has not read yet. A peer that resets or never ends its side is closed on anyway.
     */
   def closeGracefully(using
-      io: Io[IpSockets]
+      io: Io[StreamSockets]
   )(handle: io.Connection, scratch: ByteBuffer, timeoutMillis: Int = 2000)(using
       Async
   ): Unit =
@@ -131,7 +143,7 @@ object HigherLevel {
     } finally io.perform(io.backend.ops.close(handle))
 
   /** Accepts one connection and returns it. */
-  def accept(using io: Io[IpSockets])(listener: io.Listener)(using Async): io.Connection = {
+  def accept(using io: Io[StreamSockets])(listener: io.Listener)(using Async): io.Connection = {
     val into = Slot[io.Connection]()
     io.perform(io.backend.ops.accept(listener, into))
     into.clear()

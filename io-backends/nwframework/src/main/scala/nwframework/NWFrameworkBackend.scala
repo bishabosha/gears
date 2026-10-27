@@ -5,6 +5,7 @@ import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Files
+import gears.async.io.IpSockets
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
@@ -25,6 +26,7 @@ import gears.async.io.kqueue.KqueueReactor
 sealed abstract class NWFrameworkBackends private[nwframework] (loopbackOnKqueue: Boolean)
     extends ReactorBackend
     with Blocking
+    with IpSockets
     with UnixStreams
     with UnixDatagrams
     with Fifos
@@ -39,8 +41,10 @@ sealed abstract class NWFrameworkBackends private[nwframework] (loopbackOnKqueue
   type Writable = NWFrameworkKinds.Writable
   type Connection = NWFrameworkKinds.Connection
   type Listener = NWFrameworkKinds.Listener
-  type Datagram = NWFrameworkKinds.Datagram
-  type UnixDatagram = NWFrameworkKinds.UnixDatagram
+  type BoundDatagram = NWFrameworkKinds.BoundDatagram
+  type ConnectedDatagram = NWFrameworkKinds.ConnectedDatagram
+  type UnixBoundDatagram = NWFrameworkKinds.UnixBoundDatagram
+  type UnixConnectedDatagram = NWFrameworkKinds.UnixConnectedDatagram
   type File = NWFrameworkKinds.File
 
   val ops: NWFrameworkOps = new NWFrameworkOps(loopbackOnKqueue)

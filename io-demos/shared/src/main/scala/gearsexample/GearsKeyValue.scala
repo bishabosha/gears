@@ -7,6 +7,8 @@ import gears.async.Future.awaitAllOrCancel
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.ReactorFutures
+import gears.async.io.SocketBackend
+import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
@@ -59,7 +61,7 @@ object GearsKeyValue {
     * marks the end.
     */
   private def readCommands(
-      io: Io[UnixStreams],
+      io: Io[StreamSockets],
       fd: io.Connection,
       inbox: ByteBuffer,
       store: Store,
@@ -91,7 +93,7 @@ object GearsKeyValue {
 
   /** Writes reply batches in order, one buffer at a time, until the end marker. */
   private def writeReplies(
-      io: Io[UnixStreams],
+      io: Io[StreamSockets],
       fd: io.Connection,
       outbox: ByteBuffer,
       replies: BufferedChannel[Array[Byte]]
@@ -118,7 +120,7 @@ object GearsKeyValue {
   }
 
   /** One client connection: reading and writing run at the same time on the same socket. */
-  private def session(io: Io[UnixStreams], fd: io.Connection, store: Store)(using Async): Unit = {
+  private def session(io: Io[StreamSockets], fd: io.Connection, store: Store)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val inbox = arena.allocate(BufferSize)
@@ -139,7 +141,7 @@ object GearsKeyValue {
     }
   }
 
-  def serve(address: StreamAddress)(using UnixStreamBackend): Unit = {
+  def serve(address: StreamAddress)(using UnixStreamBackend & SocketBackend): Unit = {
     val store = new Store
     ReactorFutures.run { io ?=>
       val server = Sockets.listen(address)
@@ -153,7 +155,7 @@ object GearsKeyValue {
   /** Sets a counter, increments it `count` times, then reads it back, all in one pipelined batch: a sender future
     * writes commands while a receiver future reads replies.
     */
-  def run(address: StreamAddress, count: Int)(using UnixStreamBackend): Unit = {
+  def run(address: StreamAddress, count: Int)(using UnixStreamBackend & SocketBackend): Unit = {
     require(count > 0, "count must be positive")
     val batch = "SET counter 0" +: Vector.fill(count)("INCR counter") :+ "GET counter"
     BufferArena.scoped { arena =>

@@ -361,9 +361,10 @@ Proposal 4 for programs, and proposal 3, now built, under it:
 Proposal 3 made a handle its backend's type; it still did not say what kind of I/O object it named, so a stream op on
 a listener, a datagram op on a stream, an IP send on a Unix datagram socket or `shutdownOutput` on a pipe compiled, and
 each backend then did something of its own: Network.framework called its framework on a null connection, kqueue read a
-stream's bytes as a datagram, NIO failed with an `IOException`. Now the kind is in the type. `Backend` declares seven
-subtypes of its `Handle`, `Readable`, `Writable`, `Connection` (both), `Listener`, `Datagram`, `UnixDatagram` and
-`File` (both), which the ops traits declare too and `Backend.Kinded` ties together; each opener writes its kind into
+stream's bytes as a datagram, NIO failed with an `IOException`. Now the kind is in the type. `Backend` declares
+subtypes of its `Handle`, `Readable`, `Writable`, `Connection` (both), `Listener`, the datagram kinds (bound and
+connected, IP and Unix, since 2026-10-27: see "Datagram sockets are bound or connected" in
+[`interface-history.md`](interface-history.md)) and `File` (both), which the ops traits declare too and `Backend.Kinded` ties together; each opener writes its kind into
 its slot (`connect` and `accept` a `Connection`, `pipe` a `Readable` and a `Writable`, the FIFO openers one each, now
 two ops since the direction picks the type), and each op takes the kind it works on, so the wrong kind does not
 compile (`ReactorSuite`). A program names them through its `Io` (`io.Connection`), as it names `io.Op`.

@@ -5,6 +5,7 @@ import gears.async.Future
 import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.IpSockets
+import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
 
@@ -19,17 +20,19 @@ type StreamAddress = IpAddress | UnixAddress
 /** The stream demos' sockets, for either family of address. */
 object Sockets {
 
-  /** A stream socket connected to `address`, of either family, on a backend with Unix stream sockets. */
-  def connect(address: StreamAddress)(using io: Io[UnixStreams], async: Async): io.Connection = address match {
-    case unix: UnixAddress => HigherLevel.connect(unix)
-    case ip: IpAddress     => HigherLevel.connect(ip)
-  }
+  /** A stream socket connected to `address`, of either family, on a backend with both. */
+  def connect(address: StreamAddress)(using io: Io[IpSockets & UnixStreams], async: Async): io.Connection =
+    address match {
+      case unix: UnixAddress => HigherLevel.connect(unix)
+      case ip: IpAddress     => HigherLevel.connect(ip)
+    }
 
-  /** A listener on `address`, of either family, listening, on a backend with Unix stream sockets. */
-  def listen(address: StreamAddress)(using io: Io[UnixStreams], async: Async): io.Listener = address match {
-    case unix: UnixAddress => HigherLevel.listen(unix)
-    case ip: IpAddress     => HigherLevel.listen(ip)
-  }
+  /** A listener on `address`, of either family, listening, on a backend with both. */
+  def listen(address: StreamAddress)(using io: Io[IpSockets & UnixStreams], async: Async): io.Listener =
+    address match {
+      case unix: UnixAddress => HigherLevel.listen(unix)
+      case ip: IpAddress     => HigherLevel.listen(ip)
+    }
 
   /** Accepts connections on `listener` until the program ends, handing each to `serve` in a future of its own. A failed
     * accept leaves the server running: the connection it was for is gone, and running out of descriptors (`EMFILE`)
@@ -38,7 +41,7 @@ object Sockets {
     * connections already being served while the listen queue fills.
     */
   def serve(using
-      io: Io[IpSockets]
+      io: Io[StreamSockets]
   )(listener: io.Listener)(serve: io.Connection => Async.Spawn ?=> Unit)(using
       Async.Spawn
   ): Unit = {
@@ -70,10 +73,10 @@ object Sockets {
 }
 
 /** A stream address with the capability its sockets need, `B`: `IpSockets` for an IP address, `UnixStreams` for a Unix
-  * path, so that a program over a backend without Unix stream sockets cannot be given a Unix path. For code whose
-  * address is chosen when it runs, such as the bench's.
+  * path, so that a program over a backend without Unix stream sockets cannot be given a Unix path, nor one without IP
+  * sockets an IP address. For code whose address is chosen when it runs, such as the bench's.
   */
-sealed trait Endpoint[-B <: IpSockets] {
+sealed trait Endpoint[-B <: StreamSockets] {
   def address: StreamAddress
 
   /** A stream socket connected to `address`. */

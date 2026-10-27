@@ -33,9 +33,9 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { io ?=>
-        val socket = HigherLevel.datagram(UnixAddress(localSock), UnixAddress(sock))
+        val socket = HigherLevel.connectDatagram(UnixAddress(localSock), UnixAddress(sock))
         val ops = io.backend.ops
-        val receive = ops.receive(socket, response, Slot[UnixAddress]())
+        val receive = ops.receive(socket, response)
         try exchange(io, sock, ops.send(socket, request), receive, request, response)
         finally io.perform(ops.close(socket))
       }
@@ -48,9 +48,9 @@ object GearsDatagram {
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
       ReactorFutures.run { io ?=>
-        val socket = HigherLevel.datagram(null, address)
+        val socket = HigherLevel.connectDatagram(null, address)
         val ops = io.backend.ops
-        val receive = ops.receive(socket, response, Slot[IpAddress]())
+        val receive = ops.receive(socket, response)
         try exchange(io, address, ops.send(socket, request), receive, request, response)
         finally io.perform(ops.close(socket))
       }
@@ -92,7 +92,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { io ?=>
-        val socket = HigherLevel.datagram(address, null)
+        val socket = HigherLevel.bindDatagram(address)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
         val ops = io.backend.ops
         try echo(io, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))
@@ -105,7 +105,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { io ?=>
-        val socket = HigherLevel.datagram(address, null)
+        val socket = HigherLevel.bindDatagram(address)
         val sender = Slot[IpAddress]()
         val ops = io.backend.ops
         try echo(io, ops.receive(socket, packet, sender), packet, () => ops.send(socket, packet, sender.clear()))

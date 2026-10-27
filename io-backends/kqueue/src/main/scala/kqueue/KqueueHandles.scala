@@ -127,16 +127,24 @@ object KqueueHandles {
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): KqueueKinds.Datagram = {
+  /** A datagram socket bound to `local`. */
+  def bindDatagram(local: IpAddress): KqueueKinds.BoundDatagram =
+    KqueueKinds.boundDatagram(wrap(datagramSocket(local, null)))
+
+  /** A datagram socket connected to `remote`, bound to `local` if given. */
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress): KqueueKinds.ConnectedDatagram = {
     require(
-      local == null || remote == null || flavorOf(local) == flavorOf(remote),
+      local == null || flavorOf(local) == flavorOf(remote),
       "Local and remote addresses must be of the same family"
     )
-    KqueueKinds.datagram(wrap(datagramSocket(local, remote)))
+    KqueueKinds.connectedDatagram(wrap(datagramSocket(local, remote)))
   }
 
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null): KqueueKinds.UnixDatagram =
-    KqueueKinds.unixDatagram(wrap(datagramSocket(local, remote)))
+  def bindDatagram(local: UnixAddress): KqueueKinds.UnixBoundDatagram =
+    KqueueKinds.unixBoundDatagram(wrap(datagramSocket(local, null)))
+
+  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress): KqueueKinds.UnixConnectedDatagram =
+    KqueueKinds.unixConnectedDatagram(wrap(datagramSocket(local, remote)))
 
   private[kqueue] def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
     val either = if local != null then local else remote
@@ -296,17 +304,6 @@ object KqueueHandles {
         }) =>
       IpAddress.IPv6(s"::ffff:$host", port)
     case other => other
-  }
-
-  /** The peer `fd` is connected to, or null if it is not connected. */
-  private[kqueue] def peerOf(fd: Int): SocketAddress | Null = {
-    val storage = stackalloc[socket.sockaddr_storage]()
-    val length = stackalloc[socket.socklen_t]()
-    !length = sizeOf[socket.sockaddr_storage].toUInt
-    val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
-    if socket.getpeername(fd, address, length) == 0 then decode(address, !length)
-    else if scala.scalanative.posix.errno.errno == scala.scalanative.posix.errno.ENOTCONN then null
-    else throw new IOException(s"Failed to find the peer of descriptor $fd: ${cError()}")
   }
 
   /** Decodes a socket address filled in by the kernel. An unnamed Unix socket has the empty path. */

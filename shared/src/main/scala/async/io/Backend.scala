@@ -41,8 +41,10 @@ trait Backend {
   type Writable <: Handle
   type Connection <: Readable & Writable
   type Listener <: Handle
-  type Datagram <: Handle
-  type UnixDatagram <: Handle
+  type BoundDatagram <: Handle
+  type ConnectedDatagram <: Handle
+  type UnixBoundDatagram <: Handle
+  type UnixConnectedDatagram <: Handle
   type File <: Readable & Writable
 
   /** `O`, a kind of ops, building ops on this backend's kinds of handle. */
@@ -51,8 +53,10 @@ trait Backend {
     type Writable = Backend.this.Writable
     type Connection = Backend.this.Connection
     type Listener = Backend.this.Listener
-    type Datagram = Backend.this.Datagram
-    type UnixDatagram = Backend.this.UnixDatagram
+    type BoundDatagram = Backend.this.BoundDatagram
+    type ConnectedDatagram = Backend.this.ConnectedDatagram
+    type UnixBoundDatagram = Backend.this.UnixBoundDatagram
+    type UnixConnectedDatagram = Backend.this.UnixConnectedDatagram
     type File = Backend.this.File
   }
 
@@ -93,10 +97,18 @@ trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
   def open(): Reactor.Of[Op, Handle]
 }
 
+/** Stream sockets of some family, IP or Unix, once opened (see `StreamSocketOps`): what code that accepts, reads,
+  * writes and shuts down connections needs, whichever family opened them. A backend has it through `IpSockets` or
+  * `UnixStreams`, neither of which implies the other.
+  */
+trait StreamSockets extends Backend {
+  def ops: Kinded[StreamSocketOps[Op, Handle]]
+}
+
 /** IP sockets, stream and datagram (see `SocketOps`): an operating system's, or a host's, such as Node's; a browser has
   * none.
   */
-trait IpSockets extends Backend {
+trait IpSockets extends StreamSockets {
   def ops: Kinded[SocketOps[Op, Handle]]
 }
 
@@ -127,13 +139,15 @@ trait Blocking extends Backend {
   def ops: Kinded[BlockingOps[Op, Handle]]
 }
 
-/** Unix domain stream sockets (see `UnixStreamOps`), on which the socket ops run. */
-trait UnixStreams extends IpSockets {
+/** Unix domain stream sockets (see `UnixStreamOps`), on which the stream socket ops run (`StreamSocketOps`). Apart from
+  * IP sockets: code that uses both asks for both, `IpSockets & UnixStreams`.
+  */
+trait UnixStreams extends StreamSockets {
   def ops: Kinded[UnixStreamOps[Op, Handle]]
 }
 
-/** Unix domain datagram sockets (see `UnixDatagramOps`). */
-trait UnixDatagrams extends IpSockets {
+/** Unix domain datagram sockets (see `UnixDatagramOps`), apart from IP sockets, as `UnixStreams` are. */
+trait UnixDatagrams extends Backend {
   def ops: Kinded[UnixDatagramOps[Op, Handle]]
 }
 
@@ -144,6 +158,7 @@ trait Fifos extends Backend {
 
 /** A backend with IP sockets: what a program asks for, and the other aliases likewise. */
 type SocketBackend = Backend & IpSockets
+type StreamSocketBackend = Backend & StreamSockets
 type FileBackend = Backend & Files
 type ResolveBackend = Backend & Resolving
 type PipeBackend = Backend & Pipes

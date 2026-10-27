@@ -4,6 +4,7 @@ package kqueue
 import gears.async.io.internal.Interest
 import gears.async.io.testkit.FifoContract
 import gears.async.io.testkit.ResolveContract
+import gears.async.io.testkit.SocketContract
 import gears.async.io.testkit.UnixDatagramContract
 import gears.async.io.testkit.UnixStreamContract
 
@@ -12,6 +13,7 @@ import java.nio.file.Files
 
 class KqueueContractSuite
     extends KqueueReadinessChecks
+    with SocketContract
     with UnixStreamContract
     with UnixDatagramContract
     with FifoContract

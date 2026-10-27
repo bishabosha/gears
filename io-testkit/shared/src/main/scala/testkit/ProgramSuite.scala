@@ -44,7 +44,8 @@ trait ProgramSuite extends FunSuite {
   protected type Writable = backend.Writable
   protected type Connection = backend.Connection
   protected type Listener = backend.Listener
-  protected type Datagram = backend.Datagram
+  protected type BoundDatagram = backend.BoundDatagram
+  protected type ConnectedDatagram = backend.ConnectedDatagram
   protected type File = backend.File
 
   /** Performs `op`, which opens a handle into `into`, and returns the handle. */

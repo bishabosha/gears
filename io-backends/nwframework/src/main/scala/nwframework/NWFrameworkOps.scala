@@ -12,6 +12,7 @@ import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
+import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
@@ -42,7 +43,8 @@ import NWFrameworkHandles.owns
   * kqueue's to these; underneath, kqueue's openers write the same handles into its slots.
   */
 final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
-    extends UnixStreamOps[KqueueOp, Handle]
+    extends SocketOps[KqueueOp, Handle]
+    with UnixStreamOps[KqueueOp, Handle]
     with UnixDatagramOps[KqueueOp, Handle]
     with PipeOps[KqueueOp, Handle]
     with FifoOps[KqueueOp, Handle]
@@ -53,8 +55,10 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   type Writable = NWFrameworkKinds.Writable
   type Connection = NWFrameworkKinds.Connection
   type Listener = NWFrameworkKinds.Listener
-  type Datagram = NWFrameworkKinds.Datagram
-  type UnixDatagram = NWFrameworkKinds.UnixDatagram
+  type BoundDatagram = NWFrameworkKinds.BoundDatagram
+  type ConnectedDatagram = NWFrameworkKinds.ConnectedDatagram
+  type UnixBoundDatagram = NWFrameworkKinds.UnixBoundDatagram
+  type UnixConnectedDatagram = NWFrameworkKinds.UnixConnectedDatagram
   type File = NWFrameworkKinds.File
 
   /** Whether a listener on `address` goes to kqueue rather than Network.framework: one on loopback. One on another
@@ -104,37 +108,47 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if listensOnKqueue(ip) then KqueueOps.listen(ip, forKqueue(into)) else new NWFrameworkListen(ip, into)
   }
 
-  /** A connected socket is Network.framework's, unless its peer is on this host; a bound one, which sends to and hears
-    * from anyone, is kqueue's, Network.framework having no such socket (see `NWFrameworkOps`).
-    */
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
+  /** A connected datagram socket is Network.framework's, unless its peer is on this host (see `connectsOnKqueue`). */
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): KqueueOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    if r == null || connectsOnKqueue(r.nn) then KqueueOps.datagram(l, r, forKqueue(into))
+    if connectsOnKqueue(r.nn) then KqueueOps.connectDatagram(l, r.nn, forKqueue(into))
     else new NWFrameworkOpenDatagram(l, r.nn, into)
   }
-  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
-    if owns(handle) then new NWFrameworkReceive(handle, buf, from)
-    else KqueueOps.receive(KqueueKinds.datagram(handle), buf, from)
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
-    if owns(handle) then new NWFrameworkSend(handle, buf, gears.async.io.Ops.ip(to))
-    else KqueueOps.send(KqueueKinds.datagram(handle), buf, to)
-  def send(handle: Datagram, buf: ByteBuffer): KqueueOp & Repeatable =
-    if owns(handle) then new NWFrameworkSend(handle, buf, null)
-    else KqueueOps.send(KqueueKinds.datagram(handle), buf)
+  def receive(handle: ConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkReceive(handle, buf)
+    else KqueueOps.receive(KqueueKinds.connectedDatagram(handle), buf)
+  def send(handle: ConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkSend(handle, buf)
+    else KqueueOps.send(KqueueKinds.connectedDatagram(handle), buf)
+
+  /** A bound datagram socket, which sends to and hears from anyone, is kqueue's: Network.framework has no such socket
+    * (see `NWFrameworkOps`).
+    */
+  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): KqueueOp =
+    KqueueOps.bindDatagram(local, forKqueue(into))
+  def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
+    KqueueOps.receive(KqueueKinds.boundDatagram(handle), buf, from)
+  def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.boundDatagram(handle), buf, to)
 
   // Kqueue's alone.
   def connect(address: UnixAddress, into: Slot[Connection]): KqueueOp = KqueueOps.connect(address, forKqueue(into))
   def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp = KqueueOps.listen(address, forKqueue(into))
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): KqueueOp =
-    KqueueOps.datagram(local, remote, forKqueue(into))
+  def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): KqueueOp =
+    KqueueOps.bindDatagram(local, forKqueue(into))
+  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): KqueueOp =
+    KqueueOps.connectDatagram(local, remote, forKqueue(into))
   @annotation.targetName("receiveUnix")
-  def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): KqueueOp & Repeatable =
-    KqueueOps.receive(KqueueKinds.unixDatagram(handle), buf, from)
-  def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): KqueueOp & Repeatable =
-    KqueueOps.send(KqueueKinds.unixDatagram(handle), buf, to)
-  @annotation.targetName("sendUnix")
-  def send(handle: UnixDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
-    KqueueOps.send(KqueueKinds.unixDatagram(handle), buf)
+  def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): KqueueOp & Repeatable =
+    KqueueOps.receive(KqueueKinds.unixBoundDatagram(handle), buf, from)
+  @annotation.targetName("receiveUnixConnected")
+  def receive(handle: UnixConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    KqueueOps.receive(KqueueKinds.unixConnectedDatagram(handle), buf)
+  def send(handle: UnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixBoundDatagram(handle), buf, to)
+  @annotation.targetName("sendUnixConnected")
+  def send(handle: UnixConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixConnectedDatagram(handle), buf)
   def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = KqueueOps.pipe(forKqueue(read), forKqueue(write))
   def openFifoForReading(path: String, into: Slot[Readable]): KqueueOp =
     KqueueOps.openFifoForReading(path, forKqueue(into))
@@ -325,8 +339,11 @@ final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Li
 /** A datagram socket connected to `remote` (see `SocketOps.datagram`), bound to `local` if given: ready once
   * Network.framework has its connection ready, failing if it cannot be.
   */
-final class NWFrameworkOpenDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[NWFrameworkKinds.Datagram])
-    extends NWFrameworkOpening(into, NWFrameworkKinds.datagram) {
+final class NWFrameworkOpenDatagram(
+    local: IpAddress | Null,
+    remote: IpAddress,
+    into: Slot[NWFrameworkKinds.ConnectedDatagram]
+) extends NWFrameworkOpening(into, NWFrameworkKinds.connectedDatagram) {
   protected def make(): Handle = NWFrameworkHandles.datagram(local, remote)
 }
 
@@ -394,10 +411,8 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
   override protected def reset(): Unit = sent = false
 }
 
-/** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender, the peer, into `from`.
-  */
-final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends NWFrameworkCommand {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
+/** Receives one datagram, from the peer, into `buf`, which is left flipped for reading. */
+final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
@@ -406,19 +421,18 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[I
     val packet = h.receivePacket(reactor, token)
     if packet == null then false
     else {
-      val n = math.min(packet.bytes.length, buf.remaining()) // truncated beyond the buffer, as a datagram is
-      buf.put(packet.bytes, 0, n)
+      val n = math.min(packet.length, buf.remaining()) // truncated beyond the buffer, as a datagram is
+      buf.put(packet, 0, n)
       buf.flip()
-      from.set(packet.from)
       true
     }
   }
 }
 
-/** Sends `buf` as one datagram to the socket's peer, consuming it: `to`, if given, must be the peer, and the datagram
-  * must not be empty, as on every backend (see `SocketOps.send`).
+/** Sends `buf` as one datagram to the socket's peer, consuming it; never an empty one, as on every backend (see
+  * `SocketOps.send`).
   */
-final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends NWFrameworkCommand {
+final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 
@@ -428,7 +442,6 @@ final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress |
       h.sent()
     } else {
       val size = buf.remaining()
-      if to != null && to != h.remote then throw gears.async.io.Ops.notThePeer(to.nn, h.remote.nn)
       if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
       val done = h.send(NativeBuffer.atPosition(buf), size, reactor, token)
       buf.position(buf.limit()) // a datagram goes whole or not at all

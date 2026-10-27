@@ -12,7 +12,7 @@ Network.framework's options are from its headers, not yet probed.
 
 **A socket's local and peer addresses.** There is no way to ask for either.
 
-- `listen` and `datagram` on port 0 cannot tell the program which port they got; the contract suites work round it by
+- `listen` and `bindDatagram` on port 0 cannot tell the program which port they got; the contract suites work round it by
   finding a free port first, which races.
 - `accept` hands back a connection but not who connected, which an HTTP server needs for logs, rate limits and proxy
   headers.
@@ -30,7 +30,7 @@ on `::`, which is fixed on since the JDK cannot clear it.
 - Keepalive and its timings (long-lived HTTP/1.1, HTTP/2 and WebSocket connections); receive and send buffer sizes
   (QUIC's throughput); `SO_REUSEPORT` (a listener per worker); ECN (QUIC's congestion control, recommended rather than
   required).
-- Proposed shape: options given as a socket is opened (`connect`, `listen`, `datagram`), since Network.framework takes
+- Proposed shape: options given as a socket is opened (`connect`, `listen`, `bindDatagram`, `connectDatagram`), since Network.framework takes
   them only on its parameters at creation; and a `setOption` op for the few that can change later, such as no-delay and
   keepalive.
 

@@ -4,27 +4,35 @@ package testkit
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-/** What a backend with Unix datagram sockets must do (see `ReactorContract`). */
-trait UnixDatagramContract extends SocketContract {
+/** What a backend with Unix datagram sockets must do (see `ReactorContract`), with or without IP sockets. */
+trait UnixDatagramContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixDatagramBackend
 
-  /** A Unix datagram socket from the `datagram` op, whose failure is thrown. */
-  protected def unixDatagram(r: R, local: UnixAddress | Null, remote: UnixAddress | Null)(using
-      munit.Location
-  ): UnixDatagram = {
-    val into = Slot[UnixDatagram]()
-    opened(r, into, backend.ops.datagram(local, remote, into))
+  /** A Unix datagram socket bound to `local`, from the `bindDatagram` op, whose failure is thrown. */
+  protected def bindUnixDatagram(r: R, local: UnixAddress)(using munit.Location): UnixBoundDatagram = {
+    val into = Slot[UnixBoundDatagram]()
+    opened(r, into, backend.ops.bindDatagram(local, into))
   }
 
-  test("a Unix datagram goes to a bound socket, which learns its sender's path") {
+  /** A Unix datagram socket connected to `remote`, from the `connectDatagram` op, whose failure is thrown. */
+  protected def connectUnixDatagram(r: R, local: UnixAddress | Null, remote: UnixAddress)(using
+      munit.Location
+  ): UnixConnectedDatagram = {
+    val into = Slot[UnixConnectedDatagram]()
+    opened(r, into, backend.ops.connectDatagram(local, remote, into))
+  }
+
+  test(
+    "a Unix datagram goes to a bound socket, which learns its sender's path, and its reply to the connected client"
+  ) {
     val dir = tempDir()
     try
       withReactor { r =>
         val serverPath = dir.resolve("server.sock").toString
         val clientPath = dir.resolve("client.sock").toString
-        val server = unixDatagram(r, UnixAddress(serverPath), null)
+        val server = bindUnixDatagram(r, UnixAddress(serverPath))
         try {
-          val client = unixDatagram(r, UnixAddress(clientPath), UnixAddress(serverPath))
+          val client = connectUnixDatagram(r, UnixAddress(clientPath), UnixAddress(serverPath))
           try {
             val buf = allocate(64)
             val from = Slot[UnixAddress]()
@@ -37,7 +45,12 @@ trait UnixDatagramContract extends SocketContract {
             val copy = new Array[Byte](buf.remaining())
             buf.get(copy)
             assertEquals(new String(copy, StandardCharsets.UTF_8), "unix datagram")
-            assertEquals(from.clear(), UnixAddress(clientPath))
+            val sender = from.clear()
+            assertEquals(sender, UnixAddress(clientPath))
+            assertEquals(run(r, backend.ops.send(server, bytes("reply"), sender)), null)
+            val reply = allocate(64)
+            assertEquals(run(r, backend.ops.receive(client, reply)), null)
+            assertEquals(StandardCharsets.UTF_8.decode(reply).toString, "reply")
           } finally closeAlone(client)
         } finally closeAlone(server)
         assert(!Files.exists(java.nio.file.Path.of(serverPath)), "closing a bound datagram socket removes its path")
@@ -46,22 +59,21 @@ trait UnixDatagramContract extends SocketContract {
   }
 
   test(
-    "Unix datagrams follow the IP rules: an unnamed sender, a connected socket's peer alone, no empty packet there"
+    "Unix datagrams follow the IP rules: an unnamed sender, and no empty packet on a connected socket"
   ) {
     val dir = tempDir()
     try
       withReactor { r =>
         val serverPath = UnixAddress(dir.resolve("server.sock").toString)
-        val server = unixDatagram(r, serverPath, null)
+        val server = bindUnixDatagram(r, serverPath)
         try {
-          val unnamed = unixDatagram(r, null, serverPath) // connected, with no path of its own
+          val unnamed = connectUnixDatagram(r, null, serverPath) // with no path of its own
           try {
             def refused(failure: Throwable | Null)(using munit.Location): Unit =
               assert(failure.isInstanceOf[IllegalArgumentException], String.valueOf(failure))
             val empty = allocate(4)
             empty.limit(0)
             refused(run(r, backend.ops.send(unnamed, empty)))
-            refused(run(r, backend.ops.send(unnamed, bytes("elsewhere"), UnixAddress(dir.resolve("other").toString))))
             assertEquals(run(r, backend.ops.send(unnamed, bytes("anonymous"))), null)
             val buf = allocate(64)
             val from = Slot[UnixAddress]()

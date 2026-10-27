@@ -15,10 +15,18 @@ trait SocketContract extends ReactorContract {
     opened(r, into, backend.ops.listen(address, into))
   }
 
-  /** A datagram socket from the `datagram` op, whose failure is thrown. */
-  protected def datagram(r: R, local: IpAddress | Null, remote: IpAddress | Null)(using munit.Location): Datagram = {
-    val into = Slot[Datagram]()
-    opened(r, into, backend.ops.datagram(local, remote, into))
+  /** A datagram socket bound to `local`, from the `bindDatagram` op, whose failure is thrown. */
+  protected def bindDatagram(r: R, local: IpAddress)(using munit.Location): BoundDatagram = {
+    val into = Slot[BoundDatagram]()
+    opened(r, into, backend.ops.bindDatagram(local, into))
+  }
+
+  /** A datagram socket connected to `remote`, from the `connectDatagram` op, whose failure is thrown. */
+  protected def connectDatagram(r: R, local: IpAddress | Null, remote: IpAddress)(using
+      munit.Location
+  ): ConnectedDatagram = {
+    val into = Slot[ConnectedDatagram]()
+    opened(r, into, backend.ops.connectDatagram(local, remote, into))
   }
 
   /** Submits a `connect` op to `address` on `r`: what it reports, and the slot the socket is written into. */
@@ -115,11 +123,11 @@ trait SocketContract extends ReactorContract {
     }
   }
 
-  test("an IPv4 datagram goes to a bound socket, which learns its sender") {
+  test("an IPv4 datagram goes to a bound socket, which learns its sender, and its reply to the connected client") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        val client = connectDatagram(r, null, IpAddress.IPv4("127.0.0.1", port))
         try {
           val buf = allocate(64)
           val from = Slot[IpAddress]()
@@ -132,24 +140,29 @@ trait SocketContract extends ReactorContract {
           val copy = new Array[Byte](buf.remaining())
           buf.get(copy)
           assertEquals(new String(copy, StandardCharsets.UTF_8), "datagram")
-          from.clear() match {
+          val sender = from.clear()
+          sender match {
             case IpAddress.IPv4(host, senderPort) =>
               assertEquals(host, "127.0.0.1")
               assert(senderPort > 0)
             case other => fail(s"unexpected sender $other")
           }
+          assertEquals(run(r, backend.ops.send(server, bytes("reply"), sender)), null)
+          val reply = allocate(64)
+          assertEquals(run(r, backend.ops.receive(client, reply)), null)
+          assertEquals(StandardCharsets.UTF_8.decode(reply).toString, "reply")
         } finally close(r, client)
       } finally close(r, server)
     }
   }
 
-  test("datagram sends: to the peer alone and never empty when connected, empty ones when not, and no lost packets") {
+  test("datagram sends: never empty when connected, empty ones from a bound socket, and no lost packets") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       val serverAddress = IpAddress.IPv4("127.0.0.1", port)
       try {
-        val connected = datagram(r, null, serverAddress)
-        val unconnected = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        val connected = connectDatagram(r, null, serverAddress)
+        val unconnected = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
         try {
           def refused(failure: Throwable | Null)(using munit.Location): Unit =
             assert(failure.isInstanceOf[IllegalArgumentException], String.valueOf(failure))
@@ -165,10 +178,7 @@ trait SocketContract extends ReactorContract {
           val empty = allocate(4)
           empty.limit(0)
           refused(run(r, backend.ops.send(connected, empty)))
-          refused(run(r, backend.ops.send(connected, empty, serverAddress)))
-          refused(run(r, backend.ops.send(connected, bytes("elsewhere"), IpAddress.IPv4("127.0.0.1", port + 1))))
-          refused(run(r, backend.ops.send(unconnected, bytes("nowhere"))))
-          assertEquals(run(r, backend.ops.send(connected, bytes("to-peer"), serverAddress)), null)
+          assertEquals(run(r, backend.ops.send(connected, bytes("to-peer"))), null)
           assertEquals(received(), "to-peer")
           assertEquals(run(r, backend.ops.send(unconnected, empty, serverAddress)), null)
           assertEquals(received(), "", "an empty packet from a socket that is not connected")
@@ -187,10 +197,10 @@ trait SocketContract extends ReactorContract {
 
   test("a bound socket sends to peers that have not sent first from its own port, on its own port 0 or not") {
     withReactor { r =>
-      val (first, firstPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
-      val (second, secondPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (first, firstPort) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
+      val (second, secondPort) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        def senderOf(to: Datagram)(using munit.Location): Int = {
+        def senderOf(to: BoundDatagram)(using munit.Location): Int = {
           val buf = allocate(16)
           val from = Slot[IpAddress]()
           assertEquals(run(r, backend.ops.receive(to, buf, from)), null)
@@ -199,14 +209,14 @@ trait SocketContract extends ReactorContract {
             case other                   => fail(s"unexpected sender $other")
           }
         }
-        val (fixed, fixedPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+        val (fixed, fixedPort) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
         try {
           assertEquals(run(r, backend.ops.send(fixed, bytes("one"), IpAddress.IPv4("127.0.0.1", firstPort))), null)
           assertEquals(senderOf(first), fixedPort)
           assertEquals(run(r, backend.ops.send(fixed, bytes("two"), IpAddress.IPv4("127.0.0.1", secondPort))), null)
           assertEquals(senderOf(second), fixedPort)
         } finally close(r, fixed)
-        val any = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        val any = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
         try {
           assertEquals(run(r, backend.ops.send(any, bytes("one"), IpAddress.IPv4("127.0.0.1", firstPort))), null)
           val port = senderOf(first)
@@ -222,13 +232,13 @@ trait SocketContract extends ReactorContract {
 
   test("a packet lost on a socket that is not connected fails no send, to its peer or another") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
         // A port nothing listens on, which loopback answers with port unreachable.
-        val (gone, gonePort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+        val (gone, gonePort) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
         close(r, gone)
         val nowhere = IpAddress.IPv4("127.0.0.1", gonePort)
-        val unconnected = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        val unconnected = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
         try {
           for _ <- 1 to 3 do {
             assertEquals(run(r, backend.ops.send(unconnected, bytes("lost"), nowhere)), null)
@@ -260,22 +270,23 @@ trait SocketContract extends ReactorContract {
     for address <- bad do {
       intercept[IllegalArgumentException](ops.connect(address, Slot[Connection]()))
       intercept[IllegalArgumentException](ops.listen(address, Slot[Listener]()))
-      intercept[IllegalArgumentException](ops.datagram(address, null, Slot[Datagram]()))
+      intercept[IllegalArgumentException](ops.bindDatagram(address, Slot[BoundDatagram]()))
+      intercept[IllegalArgumentException](ops.connectDatagram(null, address, Slot[ConnectedDatagram]()))
     }
     intercept[IllegalArgumentException](
-      ops.datagram(IpAddress.IPv4("127.0.0.1", 0), IpAddress.IPv6("::1", 9), Slot[Datagram]())
+      ops.connectDatagram(IpAddress.IPv4("127.0.0.1", 0), IpAddress.IPv6("::1", 9), Slot[ConnectedDatagram]())
     )
   }
 
   test(
-    "over IPv6 a datagram's sender is written as inet_ntop does, and a connected socket's peer compared by meaning"
+    "over IPv6 a datagram's sender is written as inet_ntop does, whatever the spelling its peer was connected by"
   ) {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv6("::1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv6("::1", port)))
       try {
-        val client = datagram(r, null, IpAddress.IPv6("0:0:0:0:0:0:0:1", port))
+        val client = connectDatagram(r, null, IpAddress.IPv6("0:0:0:0:0:0:0:1", port))
         try {
-          assertEquals(run(r, backend.ops.send(client, bytes("v6"), IpAddress.IPv6("::0:1", port))), null)
+          assertEquals(run(r, backend.ops.send(client, bytes("v6"))), null)
           val buf = allocate(16)
           val from = Slot[IpAddress]()
           assertEquals(run(r, backend.ops.receive(server, buf, from)), null)
@@ -305,9 +316,9 @@ trait SocketContract extends ReactorContract {
         close(r, accepted.clear())
       } finally close(r, listener)
 
-      val (server, serverPort) = onFreePort(port => datagram(r, IpAddress.IPv6("::", port), null))
+      val (server, serverPort) = onFreePort(port => bindDatagram(r, IpAddress.IPv6("::", port)))
       try {
-        val client = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        val client = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
         try {
           assertEquals(run(r, backend.ops.send(client, bytes("v4"), IpAddress.IPv4("127.0.0.1", serverPort))), null)
           val from = Slot[IpAddress]()
@@ -328,9 +339,9 @@ trait SocketContract extends ReactorContract {
 
   test("a packet larger than the receive buffer fills it, the rest dropped, and the next packet arrives whole") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        val client = connectDatagram(r, null, IpAddress.IPv4("127.0.0.1", port))
         try {
           assertEquals(run(r, backend.ops.send(client, bytes("0123456789abcdef"))), null)
           assertEquals(run(r, backend.ops.send(client, bytes("next"))), null)
@@ -350,9 +361,9 @@ trait SocketContract extends ReactorContract {
 
   test("datagrams not received are dropped once the socket's buffer is full, not queued without bound") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        val client = connectDatagram(r, null, IpAddress.IPv4("127.0.0.1", port))
         try {
           val sent = 2000 // of 8 KiB: 16 MiB, beyond any socket's receive buffer
           val packet = allocate(8192)
@@ -385,13 +396,13 @@ trait SocketContract extends ReactorContract {
 
   test("a datagram socket's op completes once it is bound, and fails, leaving its slot empty, on an address in use") {
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4("127.0.0.1", port)))
       try {
-        val into = Slot[Datagram]()
-        val failure = run(r, backend.ops.datagram(IpAddress.IPv4("127.0.0.1", port), null, into))
+        val into = Slot[BoundDatagram]()
+        val failure = run(r, backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", port), into))
         assert(failure.isInstanceOf[IOException], String.valueOf(failure))
         intercept[IllegalStateException](into.clear())
-        val client = datagram(r, null, IpAddress.IPv4("127.0.0.1", port))
+        val client = connectDatagram(r, null, IpAddress.IPv4("127.0.0.1", port))
         close(r, client)
       } finally close(r, server)
     }
@@ -730,8 +741,8 @@ trait SocketContract extends ReactorContract {
       val shutting = backend.ops.shutdownOutput(client)
       assertEquals(run(r, shutting), null)
       intercept[IllegalStateException](r.submit(shutting, Outcome()))
-      val bound = Slot[Datagram]()
-      val binding = backend.ops.datagram(IpAddress.IPv4("127.0.0.1", 0), null, bound)
+      val bound = Slot[BoundDatagram]()
+      val binding = backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", 0), bound)
       assertEquals(run(r, binding), null)
       intercept[IllegalStateException](r.submit(binding, Outcome()))
       close(r, bound.clear())

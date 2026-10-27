@@ -13,6 +13,7 @@ import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
+import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.Blockers
@@ -71,7 +72,8 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps
-    extends UnixStreamOps[NioOp, Handle]
+    extends SocketOps[NioOp, Handle]
+    with UnixStreamOps[NioOp, Handle]
     with PipeOps[NioOp, Handle]
     with BlockingOps[NioOp, Handle]
     with FileOps[NioOp, Handle]
@@ -80,8 +82,10 @@ object NioOps
   type Writable = NioKinds.Writable
   type Connection = NioKinds.Connection
   type Listener = NioKinds.Listener
-  type Datagram = NioKinds.Datagram
-  type UnixDatagram = NioKinds.UnixDatagram
+  type BoundDatagram = NioKinds.BoundDatagram
+  type ConnectedDatagram = NioKinds.ConnectedDatagram
+  type UnixBoundDatagram = NioKinds.UnixBoundDatagram
+  type UnixConnectedDatagram = NioKinds.UnixConnectedDatagram
   type File = NioKinds.File
 
   def read(handle: Readable, buf: ByteBuffer): Read = new Read(handle, buf)
@@ -99,14 +103,18 @@ object NioOps
     new Listen(gears.async.io.Ops.ip(address), into)
   def listen(address: UnixAddress, into: Slot[Listener]): NioOp =
     new Listen(gears.async.io.Ops.unix(address), into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NioOp = {
+  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): NioOp =
+    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, NioKinds.boundDatagram)
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): NioOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    new OpenDatagram(l, r, into)
+    new OpenDatagram(l, r, into, NioKinds.connectedDatagram)
   }
   def pipe(read: Slot[Readable], write: Slot[Writable]): NioOp = new OpenPipe(read, write)
-  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Send = new Send(handle, buf, gears.async.io.Ops.ip(to))
-  def send(handle: Datagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
+  def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
+  def receive(handle: ConnectedDatagram, buf: ByteBuffer): Receive = new Receive(handle, buf, null)
+  def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): Send =
+    new Send(handle, buf, gears.async.io.Ops.ip(to))
+  def send(handle: ConnectedDatagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
   def timer(milliseconds: Int): NioTimer = new NioTimer(milliseconds)
   def blocking(body: () => Unit): NioBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioBlocking = new BlockingResultTask(body, into)
@@ -168,10 +176,16 @@ final class Listen(address: SocketAddress, into: Slot[NioKinds.Listener]) extend
   }
 }
 
-/** A datagram socket, bound and connected where given (see `SocketOps.datagram`). */
-final class OpenDatagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[NioKinds.Datagram])
-    extends OpensAtOnce(into) {
-  protected def open(): NioKinds.Datagram = NioHandles.datagram(local, remote)
+/** A datagram socket, bound to `local` and connected to `remote` where given (see `SocketOps.bindDatagram` and
+  * `connectDatagram`), written into `into` as the kind `kind` makes.
+  */
+final class OpenDatagram[K <: Handle](
+    local: IpAddress | Null,
+    remote: IpAddress | Null,
+    into: Slot[K],
+    kind: Handle => K
+) extends OpensAtOnce(into) {
+  protected def open(): K = kind(NioHandles.datagram(local, remote))
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
@@ -388,9 +402,12 @@ final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) e
   }
 }
 
-/** Receives one packet into `buf`, left flipped for reading, and writes its sender into `from`. */
-final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends Command {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
+/** Receives one packet into `buf`, left flipped for reading, and writes its sender into `from`; on a connected socket,
+  * whose sender is its peer, `from` is null.
+  */
+final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] | Null) extends Command {
+  override private[nio] def slotRefusal: Throwable | Null =
+    if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the JDK would drop the whole packet
@@ -398,14 +415,14 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) 
     val sender = selectable(classOf[DatagramChannel], "Receiving").receive(buf)
     if sender != null then {
       buf.flip()
-      from.set(NioHandles.ipAddress(sender))
+      if from != null then from.nn.set(NioHandles.ipAddress(sender))
     }
     sender != null
   }
 }
 
-/** Sends `buf` as one packet, consuming it: on a connected socket to its peer, which `to`, if given, must be, and never
-  * an empty one; on an unconnected socket to `to`, without which it fails.
+/** Sends `buf` as one packet, consuming it: from a bound socket to `to`, an empty one too; from a connected one, `to`
+  * null, to its peer, never an empty one.
   */
 final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends Command {
   def interest: Interest = Interest.Write
@@ -413,17 +430,12 @@ final class Send(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) exte
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
     val size = buf.remaining()
-    if channel.isConnected then {
-      val peer = channel.getRemoteAddress
-      if target != null && target != peer then throw gears.async.io.Ops.notThePeer(to.nn, NioHandles.ipAddress(peer))
+    if target == null then {
       // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
       // so no backend sends an empty packet on a connected socket (see `SocketOps.send`).
       if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
       channel.write(buf) > 0 // a datagram goes whole or not at all
-    } else {
-      if target == null then throw gears.async.io.Ops.notConnected()
-      channel.send(buf, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes
-    }
+    } else channel.send(buf, target) > 0 || size == 0 // an empty one goes, and reports 0 bytes
   }
 }
 

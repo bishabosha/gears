@@ -231,3 +231,21 @@ kqueue's code for the rest: Unix domain sockets, which it gained, bound datagram
 files. The interface did not change: what goes where is the backend's choice, made by each opener's address and each
 op's handle, and `NWFrameworkBackend.Everywhere` keeps loopback on Network.framework for checking it.
 
+## Datagram sockets are bound or connected, and Unix sockets need no IP
+
+A datagram socket was one kind, `Datagram`, opened by `datagram(local, remote)` with either address optional, so
+whether it was bound or connected was known only at run time: a connected socket's send to another address, a bound
+one's send with no address, and a receive asking a connected socket for a sender it can only have one of, all compiled
+and failed with an `IllegalArgumentException` (`notThePeer`, `notConnected`). They are now two kinds, as stream sockets
+are a `Listener` and a `Connection`: `bindDatagram(local)` opens a `BoundDatagram`, which sends to an address and
+receives with its sender, and `connectDatagram(local | null, remote)` a `ConnectedDatagram`, which sends and receives
+with no address; Unix datagram sockets likewise (`UnixBoundDatagram`, `UnixConnectedDatagram`). The refusals are gone,
+compile errors in their place. The Network.framework backend made the split a matter of routing too: a bound socket is
+kqueue's, a connected one Network.framework's off this host.
+
+`UnixStreams` and `UnixDatagrams` extended `IpSockets`, so a backend with Unix sockets had to have IP ones, and code
+taking a Unix connection asked for IP sockets to accept or shut it down. Each family is now its own capability. The ops
+a stream socket of either family has once open (`accept`, `acceptAll`, `shutdownOutput`) are `StreamSocketOps`, the
+capability `StreamSockets`, which `IpSockets` and `UnixStreams` both extend: code serving connections of either family
+asks for that, and code opening sockets of both asks for both, `IpSockets & UnixStreams`.
+

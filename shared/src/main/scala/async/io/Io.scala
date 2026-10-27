@@ -34,8 +34,10 @@ trait Io[+B <: Backend] extends AsyncOperations {
   type Writable = backend.Writable
   type Connection = backend.Connection
   type Listener = backend.Listener
-  type Datagram = backend.Datagram
-  type UnixDatagram = backend.UnixDatagram
+  type BoundDatagram = backend.BoundDatagram
+  type ConnectedDatagram = backend.ConnectedDatagram
+  type UnixBoundDatagram = backend.UnixBoundDatagram
+  type UnixConnectedDatagram = backend.UnixConnectedDatagram
   type File = backend.File
 
   /** Performs `op` with no time limit (see the other `perform`). */

@@ -12,14 +12,17 @@ object NioKinds {
   opaque type Writable <: Handle = Handle
   opaque type Connection <: Readable & Writable = Handle
   opaque type Listener <: Handle = Handle
-  opaque type Datagram <: Handle = Handle
-  opaque type UnixDatagram <: Handle = Handle
+  opaque type BoundDatagram <: Handle = Handle
+  opaque type ConnectedDatagram <: Handle = Handle
+  opaque type UnixBoundDatagram <: Handle = Handle
+  opaque type UnixConnectedDatagram <: Handle = Handle
   opaque type File <: Readable & Writable = Handle
 
   private[nio] def readable(handle: Handle): Readable = handle
   private[nio] def writable(handle: Handle): Writable = handle
   private[nio] def connection(handle: Handle): Connection = handle
   private[nio] def listener(handle: Handle): Listener = handle
-  private[nio] def datagram(handle: Handle): Datagram = handle
+  private[nio] def boundDatagram(handle: Handle): BoundDatagram = handle
+  private[nio] def connectedDatagram(handle: Handle): ConnectedDatagram = handle
   private[nio] def file(handle: Handle): File = handle
 }

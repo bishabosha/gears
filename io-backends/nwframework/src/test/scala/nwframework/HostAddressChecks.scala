@@ -28,9 +28,9 @@ trait HostAddressChecks extends SocketContract {
     val host = hostAddress
     assume(host != null, "this host has no IPv4 address on an en interface")
     withReactor { r =>
-      val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4(host.nn, port), null))
+      val (server, port) = onFreePort(port => bindDatagram(r, IpAddress.IPv4(host.nn, port)))
       try {
-        val client = datagram(r, IpAddress.IPv4(host.nn, 0), IpAddress.IPv4(host.nn, port))
+        val client = connectDatagram(r, IpAddress.IPv4(host.nn, 0), IpAddress.IPv4(host.nn, port))
         try {
           assertEquals(NWFrameworkHandles.owns(client), !hostAddressesOnKqueue, "which facility has it")
           assertEquals(run(r, backend.ops.send(client, bytes("across"))), null)

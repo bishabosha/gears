@@ -5,6 +5,7 @@ import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Files
+import gears.async.io.IpSockets
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
@@ -22,6 +23,7 @@ import gears.async.io.UnixStreams
 object KqueueBackend
     extends ReactorBackend
     with Blocking
+    with IpSockets
     with UnixStreams
     with UnixDatagrams
     with Fifos
@@ -33,8 +35,10 @@ object KqueueBackend
   type Writable = KqueueKinds.Writable
   type Connection = KqueueKinds.Connection
   type Listener = KqueueKinds.Listener
-  type Datagram = KqueueKinds.Datagram
-  type UnixDatagram = KqueueKinds.UnixDatagram
+  type BoundDatagram = KqueueKinds.BoundDatagram
+  type ConnectedDatagram = KqueueKinds.ConnectedDatagram
+  type UnixBoundDatagram = KqueueKinds.UnixBoundDatagram
+  type UnixConnectedDatagram = KqueueKinds.UnixConnectedDatagram
   type File = KqueueKinds.File
 
   /** An open descriptor, as this backend's ops name it: made only by the ops that open one (and `KqueueHandles`, for
@@ -95,21 +99,6 @@ object KqueueBackend
           Handle.Idle
         } else Handle.InUse
       }
-    }
-
-    // A socket's peer, looked up by `peer` the first time it is asked for.
-    @volatile private var peerLookedUp = false
-    @volatile private var peerAddress: SocketAddress | Null = null
-
-    /** The peer of a connected socket, or null if it is not connected, asked of the system once: a datagram socket is
-      * connected, if ever, as it is made, so the answer holds for as long as the handle is open.
-      */
-    private[kqueue] def peer: SocketAddress | Null = {
-      if !peerLookedUp then {
-        peerAddress = KqueueHandles.peerOf(fd)
-        peerLookedUp = true
-      }
-      peerAddress
     }
 
     override def toString: String = if foreign == null then s"Handle($fd)" else s"Handle($foreign)"

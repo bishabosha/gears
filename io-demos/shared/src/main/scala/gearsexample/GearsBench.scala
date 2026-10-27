@@ -8,12 +8,12 @@ import gears.async.io.Backend
 import gears.async.io.Blocking
 import gears.async.io.BlockingBackend
 import gears.async.io.Io
-import gears.async.io.IpSockets
 import gears.async.io.ReactorBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.Received
 import gears.async.io.Slot
-import gears.async.io.SocketBackend
+import gears.async.io.StreamSocketBackend
+import gears.async.io.StreamSockets
 import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.testkit.BufferArena
@@ -55,7 +55,9 @@ object GearsBench {
   }
 
   trait Client {
-    def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using Async.Spawn): Unit
+    def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        Async.Spawn
+    ): Unit
   }
 
   val scenarios: Seq[Scenario] = Seq(
@@ -64,7 +66,7 @@ object GearsBench {
       "one message in flight: a resume and a readiness wait per message on each side",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pingPong(io, connect, count, deadline = false)
@@ -75,7 +77,7 @@ object GearsBench {
       "as pingpong, but building the write and read ops anew for every message, as code that does not keep them does",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pingPong(io, connect, count, deadline = false, freshOps = true)
@@ -87,7 +89,7 @@ object GearsBench {
         + "over without a copy",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pingPong(io, connect, count, deadline = false, pooled = true)
@@ -99,7 +101,7 @@ object GearsBench {
         + "at a size where they count",
       2_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pipelined(io, connect, count, messageSize = LargeMessage)
@@ -110,7 +112,7 @@ object GearsBench {
       "as large, reading into the backend's pool, whose buffers fit one message too",
       2_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pipelined(io, connect, count, messageSize = LargeMessage, pooled = true)
@@ -121,7 +123,7 @@ object GearsBench {
       "as pingpong, with a time limit on every op of the round trip, as a request with a timeout has",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pingPong(io, connect, count, deadline = true)
@@ -132,7 +134,7 @@ object GearsBench {
       "many connections ping-ponging at once: many events and registrations per turn",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit = {
           val each = math.max(1, count / connections)
@@ -145,7 +147,7 @@ object GearsBench {
       "as concurrent, with a slice of computation after each round trip, in the connection's own future",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit = {
           val each = math.max(1, count / connections)
@@ -160,7 +162,7 @@ object GearsBench {
       "as concurrent-compute, with each slice in a future of its own, awaited before the next round trip",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit = {
           val each = math.max(1, count / connections)
@@ -175,7 +177,7 @@ object GearsBench {
       "a new connection for each round trip: connect, one message and its echo, close; the server accepts each",
       20_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit = {
           var i = 0
@@ -191,7 +193,7 @@ object GearsBench {
       "one connection, each message its own write while replies are read at the same time",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pipelined(io, connect, count)
@@ -202,7 +204,7 @@ object GearsBench {
       "trivial blocking tasks one after another: a wake-up from a worker thread for each",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit = {
           val b: Blocking & io.backend.type = blocking(io)
@@ -220,7 +222,7 @@ object GearsBench {
       "a trivial blocking task and a round trip in turn on one connection: moving between blocking work and I/O",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           pingPong(io, connect, count, deadline = false, blockingFirst = true)
@@ -233,7 +235,7 @@ object GearsBench {
         + "the cost of many pending timers",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           timerStress(io, count)
@@ -245,7 +247,7 @@ object GearsBench {
         + "the time between ticks, which rises if busy futures stop yielding",
       200_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           fairness(io, connect, count)
@@ -258,7 +260,7 @@ object GearsBench {
         + "and -max: how late, in µs, the checker woke",
       100_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           starvation(io, connect, count, connections)
@@ -270,7 +272,7 @@ object GearsBench {
         + "mixed-compute, the time per slice meanwhile",
       50_000,
       new Client {
-        def apply(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+        def apply(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
             Async.Spawn
         ): Unit =
           mixed(io, connect, count)
@@ -282,7 +284,7 @@ object GearsBench {
     * caller backend runs it on gears' own threads.
     */
   private def runOn(workers: Int, policy: TakePolicy)(using
-      backend: SocketBackend
+      backend: StreamSocketBackend
   )(
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend match {
@@ -348,7 +350,7 @@ object GearsBench {
     * done. Between slices it yields to the scheduler with `io.yield`, so that the ping-pong continuations run in
     * between. Reports the compute side as `mixed-compute`: the time per slice over the same period.
     */
-  private def mixed(io: Io[IpSockets], connect: Connect[io.Connection], count: Int)(using Async.Spawn): Unit = {
+  private def mixed(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int)(using Async.Spawn): Unit = {
     val pingPongDone =
       new java.util.concurrent.atomic.AtomicBoolean // read by the other future, maybe on another worker
     var slices = 0L
@@ -379,7 +381,7 @@ object GearsBench {
     * lateness is how long the program takes to respond, whatever else it is doing. Reports the median, 99th percentile
     * and worst lateness, in µs, as `starvation-p50`, `-p99` and `-max`.
     */
-  private def starvation(io: Io[IpSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
+  private def starvation(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int, connections: Int)(using
       Async.Spawn
   ): Unit = {
     val done = new java.util.concurrent.atomic.AtomicBoolean // read by the other futures, maybe on other threads
@@ -419,7 +421,7 @@ object GearsBench {
   }
 
   /** Opens a connection with `connect`, runs `body` on it, and closes it. */
-  private def withConnection(io: Io[IpSockets], connect: Connect[io.Connection])(body: io.Connection => Unit)(using
+  private def withConnection(io: Io[StreamSockets], connect: Connect[io.Connection])(body: io.Connection => Unit)(using
       Async
   ): Unit = {
     val fd = connect()
@@ -439,7 +441,7 @@ object GearsBench {
     * before each round trip; `work` says whether a slice of computation follows each, and where.
     */
   private def pingPong(
-      io: Io[IpSockets],
+      io: Io[StreamSockets],
       connect: Connect[io.Connection],
       count: Int,
       deadline: Boolean,
@@ -508,7 +510,7 @@ object GearsBench {
     * another, into a buffer of 8 KB, or, with `pooled`, into the backend's pool of buffers the size of a message.
     */
   private def pipelined(
-      io: Io[IpSockets],
+      io: Io[StreamSockets],
       connect: Connect[io.Connection],
       count: Int,
       messageSize: Int = MessageSize,
@@ -562,7 +564,7 @@ object GearsBench {
     * and reports the ticker as `fairness-tick`: the time between ticks over the same period. Futures whose operations
     * rarely wait must still let it run.
     */
-  private def fairness(io: Io[IpSockets], connect: Connect[io.Connection], count: Int)(using Async.Spawn): Unit = {
+  private def fairness(io: Io[StreamSockets], connect: Connect[io.Connection], count: Int)(using Async.Spawn): Unit = {
     val trafficDone = new java.util.concurrent.atomic.AtomicBoolean // read by the ticker, maybe on another worker
     var ticks = 0L
     val start = System.nanoTime()
@@ -580,7 +582,7 @@ object GearsBench {
   }
 
   /** Echoes everything a connection sends until it closes. */
-  private def echo(io: Io[IpSockets], client: io.Connection)(using Async): Unit = {
+  private def echo(io: Io[StreamSockets], client: io.Connection)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -604,7 +606,11 @@ object GearsBench {
   }
 
   /** Starts the echo server on a pool of `workers` reactor threads of its own and returns once it is listening. */
-  private def startServer[B <: IpSockets](endpoint: Endpoint[B], workers: Int, policy: TakePolicy)(using B): Unit = {
+  private def startServer[B <: StreamSockets](
+      endpoint: Endpoint[B],
+      workers: Int,
+      policy: TakePolicy
+  )(using B): Unit = {
     val listening = new CountDownLatch(1)
     val failure = new AtomicReference[Throwable | Null](null)
     val thread = new Thread(() => serve(endpoint, listening, failure, workers, policy), "bench-server")
@@ -618,7 +624,7 @@ object GearsBench {
   /** Listens on `endpoint`, counts down `listening`, then echoes every connection until the process exits. A failure to
     * listen is recorded in `failure`.
     */
-  private def serve[B <: IpSockets](
+  private def serve[B <: StreamSockets](
       endpoint: Endpoint[B],
       listening: CountDownLatch,
       failure: AtomicReference[Throwable | Null],
@@ -641,7 +647,7 @@ object GearsBench {
   /** Runs the echo server alone, on a pool of `workers` workers, until the process ends: for a bench on another
     * machine, which connects to it over the network (`run` with `server = false`).
     */
-  def serveForever[B <: IpSockets](endpoint: Endpoint[B], workers: Int = 1, policy: TakePolicy = TakePolicy.Affine)(
+  def serveForever[B <: StreamSockets](endpoint: Endpoint[B], workers: Int = 1, policy: TakePolicy = TakePolicy.Affine)(
       using B
   ): Unit = {
     val listening = new CountDownLatch(1)
@@ -656,7 +662,7 @@ object GearsBench {
     * each runs first at a fifth of its count, for the JVM's JIT. Without `server`, the echo server is expected to be
     * listening at `endpoint` already, such as `serveForever` on another machine.
     */
-  def run[B <: IpSockets](
+  def run[B <: StreamSockets](
       names: Seq[String],
       scale: Double,
       connections: Int,

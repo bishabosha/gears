@@ -311,14 +311,20 @@ object NioHandles {
     }
   }
 
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null): NioKinds.Datagram = NioKinds.datagram {
-    val either = if local != null then local else remote
-    require(either != null, "A datagram socket needs a local or a remote address")
+  /** A datagram socket bound to `local`. */
+  def bindDatagram(local: IpAddress): NioKinds.BoundDatagram = NioKinds.boundDatagram(datagram(local, null))
+
+  /** A datagram socket connected to `remote`, bound to `local` if given. */
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress): NioKinds.ConnectedDatagram = {
     require(
-      local == null || remote == null || familyOf(local) == familyOf(remote),
+      local == null || familyOf(local) == familyOf(remote),
       "Local and remote addresses must be of the same family"
     )
-    val channel = DatagramChannel.open(familyOf(either))
+    NioKinds.connectedDatagram(datagram(local, remote))
+  }
+
+  private[nio] def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
+    val channel = DatagramChannel.open(familyOf(if local != null then local else remote.nn))
     selectable(channel, null) {
       channel.configureBlocking(false)
       if local != null then channel.bind(socketAddress(local))

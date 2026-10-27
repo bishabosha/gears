@@ -7,6 +7,7 @@ import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
 import gears.async.io.Repeatable
 import gears.async.io.Slot
+import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
 import gears.async.io.testkit.BufferArena
@@ -38,7 +39,7 @@ object ReactorServerSocket {
     }.run()
 
   /** A server on a reactor of `b`'s, whose listener `listen` opens. */
-  private abstract class Serving[B <: ReactorBackend & IpSockets](val b: B) {
+  private abstract class Serving[B <: ReactorBackend & StreamSockets](val b: B) {
     def listen(into: Slot[b.Listener]): b.Op
 
     private val r: Reactor.Of[b.Op, b.Handle] = b.open()

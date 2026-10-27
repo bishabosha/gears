@@ -12,11 +12,13 @@ object NWFrameworkKinds {
   opaque type Writable <: Handle = Handle
   opaque type Connection <: Readable & Writable = Handle
   opaque type Listener <: Handle = Handle
-  opaque type Datagram <: Handle = Handle
-  opaque type UnixDatagram <: Handle = Handle
+  opaque type BoundDatagram <: Handle = Handle
+  opaque type ConnectedDatagram <: Handle = Handle
+  opaque type UnixBoundDatagram <: Handle = Handle
+  opaque type UnixConnectedDatagram <: Handle = Handle
   opaque type File <: Readable & Writable = Handle
 
   private[nwframework] def connection(handle: Handle): Connection = handle
   private[nwframework] def listener(handle: Handle): Listener = handle
-  private[nwframework] def datagram(handle: Handle): Datagram = handle
+  private[nwframework] def connectedDatagram(handle: Handle): ConnectedDatagram = handle
 }

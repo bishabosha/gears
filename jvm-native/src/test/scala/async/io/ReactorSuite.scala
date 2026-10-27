@@ -84,13 +84,13 @@ class ReactorSuite extends FunSuite {
 
   test("an op on the wrong kind of handle does not compile") {
     assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.read(l, null)").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(d: b.Datagram) = b.ops.write(d, null)").nonEmpty)
+    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.write(d, null)").nonEmpty)
     assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.accept(c, Slot[b.Connection]())").nonEmpty)
     assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.shutdownOutput(l)").nonEmpty)
     assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.send(c, null)").nonEmpty)
     assert(
       compileErrors(
-        "def a(b: UnixDatagramBackend)(d: b.UnixDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"
+        "def a(b: UnixDatagramBackend)(d: b.UnixBoundDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"
       ).nonEmpty
     )
     assert(compileErrors("def a(b: FileBackend & SocketBackend)(c: b.Connection) = b.ops.read(c, null, 0L)").nonEmpty)
@@ -99,6 +99,54 @@ class ReactorSuite extends FunSuite {
     assertEquals(
       compileErrors(
         "def a(b: SocketBackend & FileBackend)(c: b.Connection, f: b.File) = { b.ops.read(c, null); b.ops.read(f, null) }"
+      ),
+      ""
+    )
+  }
+
+  test(
+    "a bound datagram socket sends to an address and hears from anyone; a connected one, to and from its peer alone"
+  ) {
+    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, null)").nonEmpty)
+    assert(
+      compileErrors(
+        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"
+      ).nonEmpty
+    )
+    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.receive(d, null)").nonEmpty)
+    assert(
+      compileErrors(
+        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.receive(d, null, Slot[IpAddress]())"
+      ).nonEmpty
+    )
+    assert(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram): b.BoundDatagram = d").nonEmpty)
+    assert(
+      compileErrors("def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, null, null)").nonEmpty
+    )
+    assertEquals(
+      compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, null, IpAddress.IPv4(\"h\", 1))"),
+      ""
+    )
+    assertEquals(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, null)"), "")
+    assertEquals(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.receive(d, null)"), "")
+    assertEquals(compileErrors("def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, null)"), "")
+  }
+
+  test("Unix and IP sockets are separate capabilities: a backend with one need not have the other") {
+    assert(
+      compileErrors(
+        "def u(b: UnixStreamBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
+      ).nonEmpty
+    )
+    assert(
+      compileErrors(
+        "def u(b: UnixDatagramBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+      ).nonEmpty
+    )
+    assert(compileErrors("def u(b: SocketBackend) = b.ops.bindDatagram(UnixAddress(\"p\"), Slot())").nonEmpty)
+    assertEquals(
+      compileErrors(
+        "def u(b: UnixStreamBackend & SocketBackend) = { b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]()); b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]()) }"
       ),
       ""
     )

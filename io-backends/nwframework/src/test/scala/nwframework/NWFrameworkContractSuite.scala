@@ -12,7 +12,8 @@ import gears.async.io.testkit.UnixStreamContract
   * kqueue's; `NWFrameworkEverywhereContractSuite` runs them on Network.framework's.
   */
 class NWFrameworkContractSuite
-    extends UnixStreamContract
+    extends SocketContract
+    with UnixStreamContract
     with UnixDatagramContract
     with FifoContract
     with ResolveContract

@@ -13,6 +13,7 @@ import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
+import gears.async.io.SocketOps
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
@@ -67,7 +68,8 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
 
 /** Builds the ops `KqueueReactor` understands. */
 object KqueueOps
-    extends UnixStreamOps[KqueueOp, Handle]
+    extends SocketOps[KqueueOp, Handle]
+    with UnixStreamOps[KqueueOp, Handle]
     with UnixDatagramOps[KqueueOp, Handle]
     with PipeOps[KqueueOp, Handle]
     with FifoOps[KqueueOp, Handle]
@@ -78,8 +80,10 @@ object KqueueOps
   type Writable = KqueueKinds.Writable
   type Connection = KqueueKinds.Connection
   type Listener = KqueueKinds.Listener
-  type Datagram = KqueueKinds.Datagram
-  type UnixDatagram = KqueueKinds.UnixDatagram
+  type BoundDatagram = KqueueKinds.BoundDatagram
+  type ConnectedDatagram = KqueueKinds.ConnectedDatagram
+  type UnixBoundDatagram = KqueueKinds.UnixBoundDatagram
+  type UnixConnectedDatagram = KqueueKinds.UnixConnectedDatagram
   type File = KqueueKinds.File
 
   def read(handle: Readable, buf: ByteBuffer): ReadIntoBuffer = on(handle)(ReadIntoBuffer(fd(handle), buf))
@@ -97,34 +101,43 @@ object KqueueOps
     new Listen(gears.async.io.Ops.ip(address), into)
   def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp =
     new Listen(gears.async.io.Ops.unix(address), into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
+  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): KqueueOp =
+    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, KqueueKinds.boundDatagram)
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): KqueueOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    new OpenDatagram(l, r, into, KqueueKinds.datagram)
+    new OpenDatagram(l, r, into, KqueueKinds.connectedDatagram)
   }
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): KqueueOp =
+  def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): KqueueOp =
+    new OpenDatagram(gears.async.io.Ops.unix(local), null, into, KqueueKinds.unixBoundDatagram)
+  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): KqueueOp =
     new OpenDatagram(
       if local == null then null else gears.async.io.Ops.unix(local),
-      if remote == null then null else gears.async.io.Ops.unix(remote),
+      gears.async.io.Ops.unix(remote),
       into,
-      KqueueKinds.unixDatagram
+      KqueueKinds.unixConnectedDatagram
     )
   def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = new OpenPipe(read, write)
   def openFifoForReading(path: String, into: Slot[Readable]): KqueueOp =
     new OpenFifo(path, write = false, into, KqueueKinds.readable)
   def openFifoForWriting(path: String, into: Slot[Writable]): KqueueOp =
     new OpenFifo(path, write = true, into, KqueueKinds.writable)
-  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
+  def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = false))
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): SendTo =
+  def receive(handle: ConnectedDatagram, buf: ByteBuffer): ReceiveFrom =
+    on(handle)(new ReceiveFrom(fd(handle), buf, null, unix = false))
+  def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): SendTo =
     on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.ip(to)))
-  def send(handle: Datagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
+  def send(handle: ConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   @annotation.targetName("receiveUnix")
-  def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
+  def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, from, unix = true))
-  def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): SendTo =
+  @annotation.targetName("receiveUnixConnected")
+  def receive(handle: UnixConnectedDatagram, buf: ByteBuffer): ReceiveFrom =
+    on(handle)(new ReceiveFrom(fd(handle), buf, null, unix = true))
+  def send(handle: UnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): SendTo =
     on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.unix(to)))
-  @annotation.targetName("sendUnix")
-  def send(handle: UnixDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
+  @annotation.targetName("sendUnixConnected")
+  def send(handle: UnixConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   def timer(milliseconds: Int): KqueueTimer = new KqueueTimer(milliseconds)
   def blocking(body: () => Unit): KqueueBlocking = new BlockingTask(body)
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueBlocking = new BlockingResultTask(body, into)

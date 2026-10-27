@@ -5,6 +5,8 @@ import gears.async.Future
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.ReactorFutures
+import gears.async.io.SocketBackend
+import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
@@ -25,7 +27,7 @@ object GearsServerSocket {
   /** Reads a length-framed request through one 8 KiB buffer, replies with a framed response, and closes the connection
     * gracefully, so that the client reads the whole reply however the request ended.
     */
-  private def serve(io: Io[UnixStreams], client: io.Connection)(using Async): Unit = {
+  private def serve(io: Io[StreamSockets], client: io.Connection)(using Async): Unit = {
     val arena = BufferArena.open()
     try {
       val buf = arena.allocate(8192)
@@ -55,9 +57,9 @@ object GearsServerSocket {
       finally arena.close()
   }
 
-  def run(sock: String)(using UnixStreamBackend): Unit = run(UnixAddress(sock))
+  def run(sock: String)(using UnixStreamBackend & SocketBackend): Unit = run(UnixAddress(sock))
 
-  def run(address: StreamAddress)(using UnixStreamBackend): Unit =
+  def run(address: StreamAddress)(using UnixStreamBackend & SocketBackend): Unit =
     ReactorFutures.run { io ?=>
       val server = Sockets.listen(address)
       try {

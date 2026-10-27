@@ -69,11 +69,17 @@ trait Ops[Op, H <: AnyRef] {
   /** A listening stream socket, IP or Unix, from `listen`, which accepts connections. */
   type Listener <: H
 
-  /** An IP datagram socket, from `datagram`, which sends and receives packets. */
-  type Datagram <: H
+  /** An IP datagram socket bound to a local address, from `bindDatagram`, which sends to and receives from anyone. */
+  type BoundDatagram <: H
 
-  /** A Unix domain datagram socket, from the Unix `datagram`, which sends and receives packets. */
-  type UnixDatagram <: H
+  /** An IP datagram socket connected to one peer, from `connectDatagram`, which sends to and receives from it alone. */
+  type ConnectedDatagram <: H
+
+  /** A Unix domain datagram socket bound to a path, from the Unix `bindDatagram`, as `BoundDatagram` is for IP. */
+  type UnixBoundDatagram <: H
+
+  /** A Unix domain datagram socket connected to one peer, from the Unix `connectDatagram`, as `ConnectedDatagram`. */
+  type UnixConnectedDatagram <: H
 
   /** A regular file, from `open`: read and written as a stream and at offsets, and synced. */
   type File <: Readable & Writable
@@ -114,10 +120,8 @@ trait Ops[Op, H <: AnyRef] {
   def close(handle: H): Op
 }
 
-/** The ops of IP sockets, for a backend that has them (see `SocketBackend`); `read` and `write` run on a stream socket
-  * as on any stream.
-  */
-trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
+/** The ops of stream sockets, IP or Unix, once opened (see `SocketOps` and `UnixStreamOps`, which open them). */
+trait StreamSocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Accepts one connection on a listening socket. Completes after writing the new connection into `into`, which must
     * be empty.
@@ -130,6 +134,22 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     * queue from filling, and the kernel from resetting what arrives meanwhile, while its other work runs.
     */
   def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): Op & Repeatable
+
+  /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading: what
+    * was written before is still sent, then the end of the stream, which the peer reads as it would a close. Completes
+    * once the end is queued; writes after it fail. A server that closes once it has replied shuts down first and reads
+    * until the client's end before closing, since closing with bytes from the peer unread resets the connection, and a
+    * reset can discard the reply the peer has not read yet; a client shuts down once its request is out, so that the
+    * server sees where it ends.
+    */
+  def shutdownOutput(handle: Connection): Op
+}
+
+/** The ops of IP sockets, stream and datagram, for a backend that has them (see `IpSockets`). A datagram socket is
+  * bound, receiving from and sending to anyone (`bindDatagram`), or connected, to one peer (`connectDatagram`): two
+  * kinds, so that sending a connected socket's packet elsewhere, or a bound socket's to nobody, does not compile.
+  */
+trait SocketOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
     * `into`, which must be empty; fails if the connection is refused or cannot be made.
@@ -144,47 +164,43 @@ trait SocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
     */
   def listen(address: IpAddress, into: Slot[Listener]): Op
 
-  /** Shuts down a connected stream socket for writing, as `shutdown(SHUT_WR)` does, leaving it open for reading: what
-    * was written before is still sent, then the end of the stream, which the peer reads as it would a close. Completes
-    * once the end is queued; writes after it fail. A server that closes once it has replied shuts down first and reads
-    * until the client's end before closing, since closing with bytes from the peer unread resets the connection, and a
-    * reset can discard the reply the peer has not read yet; a client shuts down once its request is out, so that the
-    * server sees where it ends.
+  /** Opens a datagram socket bound to `local`, port 0 for any. Completes once it is bound, after writing it into
+    * `into`, which must be empty; fails if `local` is in use or cannot be bound.
     */
-  def shutdownOutput(handle: Connection): Op
+  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): Op
 
-  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, which must be of the same family.
-    * Completes once it is bound, after writing it into `into`, which must be empty; fails if `local` is in use or
-    * cannot be bound.
+  /** Opens a datagram socket connected to `remote`, bound to `local` if given, of the same family, else to an ephemeral
+    * port. Completes once it is connected, after writing it into `into`, which must be empty; fails if `local` is in
+    * use or cannot be bound. Connecting sends nothing: it only fixes the peer, which alone it then hears.
     */
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): Op
+  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): Op
 
-  /** Receives one packet on an IP datagram socket into `buf`, which is cleared first and left flipped for reading, and
-    * writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
+  /** Receives one packet on a bound datagram socket into `buf`, which is cleared first and left flipped for reading,
+    * and writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
     * `buf.remaining`, the bytes beyond `buf`'s capacity being dropped, silently, as every system's `recvfrom` and the
     * JDK drop them: a protocol over datagrams fixes the largest packet it sends, and a receiver gives a buffer that
     * holds it. A buffer of no capacity fails the op with an `IllegalArgumentException`, receiving nothing, since it
     * would drop a whole packet.
     */
-  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
+  def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): Op & Repeatable
 
-  /** Sends `buf` as one packet on an IP datagram socket, to `to`. Completes once the whole packet has been sent,
-    * consuming `buf`; an empty `buf` sends an empty packet on a socket that is not connected. Sent means handed to the
-    * system, not delivered: as anywhere in UDP, a packet may still be lost, and on NIO an empty one counts as sent even
-    * if the socket had no room for it then, since the JDK reports both as 0 bytes (as Netty does, the same as a loss).
-    * On a connected socket, `to` must be its peer, and the packet goes as the other `send` sends it, so an empty one
-    * fails; any other address fails the op with an `IllegalArgumentException`, sending nothing, as the JDK does,
-    * whatever the system would do. On a socket that is not connected, a packet lost on the way, to a port nothing
-    * listens on say, fails neither this send nor a later one, to that peer or another, as no system tells such a socket
-    * of its packets' fate.
-    */
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): Op & Repeatable
+  /** Receives one packet on a connected datagram socket, from its peer, as the other `receive` does. */
+  def receive(handle: ConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 
-  /** Sends `buf` as one packet on a connected datagram socket, of any family, to its peer, as the other `send`. Fails
-    * with an `IllegalArgumentException`, sending nothing, on a socket that is not connected, or if `buf` is empty: no
-    * backend sends an empty packet on a connected socket, since the JDK cannot.
+  /** Sends `buf` as one packet on a bound datagram socket, to `to`. Completes once the whole packet has been sent,
+    * consuming `buf`; an empty `buf` sends an empty packet. Sent means handed to the system, not delivered: as anywhere
+    * in UDP, a packet may still be lost, and on NIO an empty one counts as sent even if the socket had no room for it
+    * then, since the JDK reports both as 0 bytes (as Netty does, the same as a loss). A packet lost on the way, to a
+    * port nothing listens on say, fails neither this send nor a later one, to that peer or another, as no system tells
+    * a socket that is not connected of its packets' fate.
     */
-  def send(handle: Datagram, buf: ByteBuffer): Op & Repeatable
+  def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): Op & Repeatable
+
+  /** Sends `buf` as one packet on a connected datagram socket, to its peer, as the other `send` does. Fails with an
+    * `IllegalArgumentException`, sending nothing, if `buf` is empty: no backend sends an empty packet on a connected
+    * socket, since the JDK cannot.
+    */
+  def send(handle: ConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 }
 
 /** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
@@ -267,14 +283,15 @@ trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def openFifoForWriting(path: String, into: Slot[Writable]): Op
 }
 
-/** The ops of Unix domain stream sockets, which the ops of IP stream sockets (`accept`, `read`, `write`) also run on.
+/** The ops of Unix domain stream sockets, for a backend that has them (see `UnixStreams`): opened here, and used as IP
+  * stream sockets are, by the stream ops (`StreamSocketOps`, and `read` and `write`).
   */
-trait UnixStreamOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
+trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
 
-  /** Opens a stream socket and connects it to `address`, as the other `connect` does to an IP address. */
+  /** Opens a stream socket and connects it to `address`, as `SocketOps.connect` does to an IP address. */
   def connect(address: UnixAddress, into: Slot[Connection]): Op
 
-  /** Opens a stream socket listening on `address`, as the other `listen` does on an IP address, replacing a socket file
+  /** Opens a stream socket listening on `address`, as `SocketOps.listen` does on an IP address, replacing a socket file
     * already there, as a restarted server's would be, and one a running server uses too; any other kind of file there
     * fails the op with an `IOException`, and is left. Checked, then replaced: a file put there between the two, a few
     * microseconds, is replaced as well.
@@ -298,26 +315,35 @@ trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }
 
-/** The ops of Unix domain datagram sockets, as `SocketOps.datagram`, `receive` and `send` are for IP ones. */
-trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOps[Op, H] {
+/** The ops of Unix domain datagram sockets, for a backend that has them (see `UnixDatagrams`), as `SocketOps`' datagram
+  * ops are for IP ones: bound, or connected to one peer.
+  */
+trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Opens a datagram socket, bound to `local` and connected to `remote` where given, as the other `datagram` does. A
-    * client needs a `local` path so that replies can reach it.
+  /** Opens a datagram socket bound to `local`, as `SocketOps.bindDatagram` does. */
+  def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): Op
+
+  /** Opens a datagram socket connected to `remote`, bound to `local` if given, as `SocketOps.connectDatagram` does. A
+    * client that wants replies on a socket of its own, rather than this one, binds a `local` path.
     */
-  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): Op
+  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): Op
 
-  /** Receives one packet on a Unix datagram socket, as `receive` does on an IP one; an unnamed sender has the empty
-    * path.
+  /** Receives one packet on a bound Unix datagram socket, as `SocketOps.receive` does on an IP one; an unnamed sender
+    * has the empty path.
     */
   @annotation.targetName("receiveUnix")
-  def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
+  def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): Op & Repeatable
 
-  /** Sends one packet on a Unix datagram socket, to `to`, as `send` does on an IP one. */
-  def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+  /** Receives one packet on a connected Unix datagram socket, from its peer. */
+  @annotation.targetName("receiveUnixConnected")
+  def receive(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 
-  /** Sends one packet on a connected Unix datagram socket to its peer, as the other `send` does on an IP one. */
-  @annotation.targetName("sendUnix")
-  def send(handle: UnixDatagram, buf: ByteBuffer): Op & Repeatable
+  /** Sends one packet on a bound Unix datagram socket, to `to`, as `SocketOps.send` does on an IP one. */
+  def send(handle: UnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): Op & Repeatable
+
+  /** Sends one packet on a connected Unix datagram socket, to its peer, as `SocketOps.send` does on an IP one. */
+  @annotation.targetName("sendUnixConnected")
+  def send(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 }
 
 private[io] object Ops {
@@ -392,18 +418,10 @@ private[io] object Ops {
   def emptyPacket(buf: ByteBuffer): IllegalArgumentException =
     new IllegalArgumentException(s"The buffer is empty, and an empty packet is not sent on a connected socket: $buf")
 
-  /** The failure of a send to `to` on a socket connected to another `peer` (see `SocketOps.send`). */
-  def notThePeer(to: AnyRef, peer: AnyRef): IllegalArgumentException =
-    new IllegalArgumentException(s"The socket is connected to $peer, so it cannot send to $to")
-
   /** The failure of `op`, submitted while another op reading, or writing, is pending on its handle, on any submitter:
     * one of each at a time, since two reads would take the stream's bytes in no order, and two writes interleave
     * theirs.
     */
   def alreadyPending(op: AnyRef): IllegalArgumentException =
     new IllegalArgumentException(s"An op reading, or writing, as $op does, is already pending on its handle")
-
-  /** The failure of a send with no address on a socket that is not connected (see `SocketOps.send`). */
-  def notConnected(): IllegalArgumentException =
-    new IllegalArgumentException("The datagram socket is not connected, so a packet needs an address")
 }

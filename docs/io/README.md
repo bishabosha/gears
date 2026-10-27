@@ -30,12 +30,17 @@ Three axes, chosen independently of one another:
 - **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpSockets`,
   `Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`. Each is a
   `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
-  nothing. Every handle is opened by an op of the capability that has it (`connect`, `listen`, `datagram`, `pipe`,
+  nothing. IP and Unix sockets are independent: `IpSockets` and `UnixStreams` each imply `StreamSockets`, the ops of a
+  stream socket once open (`accept`, `shutdownOutput`), which code serving connections of either family asks for, and
+  neither implies the other. Every handle is opened by an op of the capability that has it (`connect`, `listen`,
+  `bindDatagram`, `connectDatagram`, `pipe`,
   `openFifoForReading`, `openFifoForWriting`, `open`), which writes it into a slot as it completes and leaves the
   slot empty, with nothing open, if it fails or is cancelled: opening may wait, for a connection, a bind or the disk,
   and some environments, such as Network.framework, only open asynchronously. A handle's kind is in its type, a
   subtype of the backend's `Handle`: `Readable` and `Writable` streams, a `Connection` (both, and shut down for
-  writing), a `Listener`, an IP `Datagram` and a `UnixDatagram`, and a `File` (both, and read, written and synced at
+  writing), a `Listener`, datagram sockets bound (`BoundDatagram`, sending to an address and hearing anyone) or
+  connected (`ConnectedDatagram`, to and from its peer alone), each also Unix (`UnixBoundDatagram`,
+  `UnixConnectedDatagram`), and a `File` (both, and read, written and synced at
   offsets); each opener writes its kind, and each op takes the kind it works on, so an op on the wrong kind of handle
   does not compile. A program asks for a backend with one as `SocketBackend`, which is `Backend & IpSockets`, and
   likewise for the others.
@@ -104,7 +109,7 @@ can be written once over every backend.
 
 `higherlevel`, in `ioDemos`, is the API that wraps the lowest level: written over the interface's public contract
 alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
-`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `datagram`, `pipe`, `openFifoForReading`, `openFifoForWriting`), `read`,
+`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `bindDatagram`, `connectDatagram`, `pipe`, `openFifoForReading`, `openFifoForWriting`), `read`,
 `writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
 with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
 ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the

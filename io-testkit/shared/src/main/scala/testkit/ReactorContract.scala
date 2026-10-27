@@ -51,8 +51,10 @@ trait ReactorContract extends FunSuite {
   protected type Writable = backend.Writable
   protected type Connection = backend.Connection
   protected type Listener = backend.Listener
-  protected type Datagram = backend.Datagram
-  protected type UnixDatagram = backend.UnixDatagram
+  protected type BoundDatagram = backend.BoundDatagram
+  protected type ConnectedDatagram = backend.ConnectedDatagram
+  protected type UnixBoundDatagram = backend.UnixBoundDatagram
+  protected type UnixConnectedDatagram = backend.UnixConnectedDatagram
   protected type File = backend.File
 
   protected def withReactor(body: R => Unit): Unit = {

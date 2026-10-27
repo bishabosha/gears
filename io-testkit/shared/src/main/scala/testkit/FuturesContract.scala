@@ -220,14 +220,14 @@ trait FuturesContract extends ProgramSuite {
     assertEquals(outcome, "refused")
   }
 
-  test("a datagram socket refuses an empty packet or another address when connected, and a receive with no room") {
+  test("a datagram socket refuses an empty packet when connected, and a receive with no room") {
     val port = freePort()
     val outcome = running { io ?=>
-      val boundInto = Slot[Datagram]()
-      val server = opening(io, boundInto, io.backend.ops.datagram(IpAddress.IPv4("127.0.0.1", port), null, boundInto))
-      val clientInto = Slot[Datagram]()
+      val boundInto = Slot[BoundDatagram]()
+      val server = opening(io, boundInto, io.backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", port), boundInto))
+      val clientInto = Slot[ConnectedDatagram]()
       val client =
-        opening(io, clientInto, io.backend.ops.datagram(null, IpAddress.IPv4("127.0.0.1", port), clientInto))
+        opening(io, clientInto, io.backend.ops.connectDatagram(null, IpAddress.IPv4("127.0.0.1", port), clientInto))
       try {
         def refused(op: io.Op): Boolean =
           try {
@@ -240,7 +240,6 @@ trait FuturesContract extends ProgramSuite {
         none.limit(0)
         List(
           refused(io.backend.ops.send(client, empty)),
-          refused(io.backend.ops.send(client, arena.of(Array[Byte](1)), IpAddress.IPv4("127.0.0.1", port + 1))),
           refused(io.backend.ops.receive(server, none.slice(), Slot[IpAddress]()))
         ).mkString(" ")
       } finally {
@@ -248,7 +247,7 @@ trait FuturesContract extends ProgramSuite {
         io.perform(io.backend.ops.close(server))
       }
     }
-    assertEquals(outcome, "true true true")
+    assertEquals(outcome, "true true")
   }
 
   test("cancelling a future cancels the op it waits on, which may then be performed again") {

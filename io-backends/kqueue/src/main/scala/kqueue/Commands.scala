@@ -139,10 +139,12 @@ final case class Connect(fd: Int) extends Command {
 }
 
 /** Receives one packet and writes its sender into `from`, which holds a Unix address if `unix`, and an IP one
-  * otherwise. Done once a packet has arrived.
+  * otherwise; on a connected socket, whose sender is its peer, `from` is null. Done once a packet has arrived.
   */
-final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress], unix: Boolean) extends Command {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
+final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress] | Null, unix: Boolean)
+    extends Command {
+  override private[io] def slotRefusal: Throwable | Null =
+    if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
   def interest: Interest = Interest.Read
   override def refusal: Throwable | Null = if buf.capacity() > 0 then null else gears.async.io.Ops.noCapacity(buf)
   private var received = -1
@@ -159,40 +161,31 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
     if size >= 0 then {
       NativeBuffer.advance(buf, size)
       buf.flip()
-      val sender = KqueueHandles.decode(address, !length)
-      if sender.isInstanceOf[gears.async.io.UnixAddress] != unix then
-        throw new java.io.IOException(s"Received from $sender on a socket of the other family")
-      from.asInstanceOf[Slot[SocketAddress]].set(sender)
+      if from != null then {
+        val sender = KqueueHandles.decode(address, !length)
+        if sender.isInstanceOf[gears.async.io.UnixAddress] != unix then
+          throw new java.io.IOException(s"Received from $sender on a socket of the other family")
+        from.asInstanceOf[Slot[SocketAddress]].set(sender)
+      }
     }
     size >= 0
   }
 }
 
-/** Sends one packet, to `to` or to the connected peer when `to` is null, consuming `buf`. Done once it has gone. On a
-  * connected socket, `to` must be the peer, and the packet goes without an address, as the JDK sends it, since macOS
-  * refuses any address there (`EISCONN`) and Linux would send to another; an empty packet is refused there, since the
-  * JDK cannot send one (see `SocketOps.send`).
+/** Sends one packet, consuming `buf`: from a bound socket to `to`, or from a connected one, `to` null, to its peer,
+  * without an address, as the JDK sends it, since macOS refuses one there (`EISCONN`). An empty packet is refused on a
+  * connected socket, since the JDK cannot send one (see `SocketOps.send`). Done once it has gone.
   */
 final class SendTo(val fd: Int, buf: ByteBuffer, to: SocketAddress | Null) extends Command {
   def interest: Interest = Interest.Write
 
-  private def peer: SocketAddress | Null = {
-    val h = handle
-    if h != null then h.peer else KqueueHandles.peerOf(fd)
-  }
-
-  override def refusal: Throwable | Null = {
-    val connectedTo = peer // looked up once per handle
-    if connectedTo == null then (if to == null then gears.async.io.Ops.notConnected() else null)
-    else if to != null && to != connectedTo then gears.async.io.Ops.notThePeer(to, connectedTo)
-    else if !buf.hasRemaining() then gears.async.io.Ops.emptyPacket(buf)
-    else null
-  }
+  override def refusal: Throwable | Null =
+    if to == null && !buf.hasRemaining() then gears.async.io.Ops.emptyPacket(buf) else null
 
   def perform(): Boolean = {
     val size = buf.remaining()
     val sent =
-      if to == null || peer != null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
+      if to == null then PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size)
       else
         KqueueHandles.withSocketAddr(KqueueHandles.targetFor(fd, to)) { (address, length) =>
           PosixSockets.sendDatagram(fd, NativeBuffer.atPosition(buf), size, address, length)

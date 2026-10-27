@@ -5,6 +5,7 @@ import gears.async.io.FileBackend
 import gears.async.io.IpAddress
 import gears.async.io.PipeBackend
 import gears.async.io.ResolveBackend
+import gears.async.io.SocketBackend
 import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
@@ -22,7 +23,7 @@ import mainargs.{ParserForMethods, arg, main}
   * pool (see `gears.async.io.ReactorFutures`).
   */
 object Main {
-  given (UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
+  given (SocketBackend & UnixStreamBackend & BlockingBackend & FileBackend & ResolveBackend & PipeBackend) =
     sys.props.get("gears.io.nio.backend") match {
       case Some("reactors")      => NioBackend
       case None | Some("caller") => NioOnCaller

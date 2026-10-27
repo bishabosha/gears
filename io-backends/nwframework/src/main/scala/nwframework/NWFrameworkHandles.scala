@@ -17,9 +17,6 @@ import scala.scalanative.unsigned.*
 import NWFrameworkEvent.*
 import NWFrameworkHandle.{Close, Connect, Read, Write}
 
-/** A datagram taken in, with its sender. */
-private[nwframework] final class Datagram(val bytes: Array[Byte], val from: IpAddress)
-
 /** An open Network.framework connection, listener or connected datagram socket, and everything known about it, with its
   * C side (`NWFrameworkIo`). Its number is its index in `NWFrameworkHandles`' table, which the C side carries, and the
   * program's handle, a kqueue handle with this as its foreign object (`KqueueBackend.Handle.foreign`), holds it.
@@ -82,7 +79,7 @@ private[nwframework] final class NWFrameworkHandle(
   private var sentBytes = 0L
 
   private val accepted = new java.util.ArrayDeque[NWFrameworkIo.Handle]()
-  private val packets = new java.util.ArrayDeque[Datagram]()
+  private val packets = new java.util.ArrayDeque[Array[Byte]]() // from the peer, a connected socket's only sender
   private var packetBytes = 0L // in `packets`, at most `NWFrameworkHandle.ReceiveBuffer`, as a kernel socket's buffer
 
   // The ops waiting here, one per kind: the reactor to tell and the token of the submission there; no reactor, none.
@@ -164,7 +161,7 @@ private[nwframework] final class NWFrameworkHandle(
           readError = e.error
           take(Read)
         } else if queued(e) then {
-          packets.add(new Datagram(copy(e.bytes, e.len), remote.nn))
+          packets.add(copy(e.bytes, e.len))
           take(Read)
         }
       case _ => ()
@@ -498,11 +495,11 @@ private[nwframework] final class NWFrameworkHandle(
   /** The receive op: the next datagram, or null with the read waiter registered; a connected socket keeps one receive
     * outstanding.
     */
-  def receivePacket(reactor: KqueueReactor, token: Long): Datagram | Null = synchronized {
+  def receivePacket(reactor: KqueueReactor, token: Long): Array[Byte] | Null = synchronized {
     checkOpen()
     if !packets.isEmpty then {
       val packet = packets.poll()
-      packetBytes -= packet.bytes.length
+      packetBytes -= packet.length
       if kind == NWFrameworkHandle.Datagram && !receiving && readError == 0 then receiveMessage()
       packet
     } else if readError != 0 then throw failure("receive", readError)
