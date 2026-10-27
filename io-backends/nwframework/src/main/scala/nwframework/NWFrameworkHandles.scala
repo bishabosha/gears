@@ -39,6 +39,16 @@ private[nwframework] final class NWFrameworkHandle(
   /** Its index in `NWFrameworkHandles`' table, set as it is added. */
   private[nwframework] var number = -1
 
+  /** What the handle shows, `Handle(nw connection 3)`: its kind and its number in the table. */
+  override def toString: String = {
+    val what = kind match {
+      case NWFrameworkHandle.Stream   => "connection"
+      case NWFrameworkHandle.Listener => "listener"
+      case _                          => "datagram"
+    }
+    s"nw $what $number"
+  }
+
   // Guarded by `this`, from here on.
   private var closed = false // no more ops: closing, or closed
   private var released = false // the C side is let go: no more calls to it

@@ -25,4 +25,14 @@ class NWFrameworkContractSuite
 class NWFrameworkEverywhereContractSuite extends HostAddressChecks {
   val backend: NWFrameworkBackend.Everywhere.type = NWFrameworkBackend.Everywhere
   def hostAddressesOnKqueue: Boolean = false
+
+  test("a Network.framework handle shows its kind and number, as in the failure of an op on it once closed") {
+    withReactor { r =>
+      val (server, _) = onFreePort(port => listen(r, IpAddress.IPv4("127.0.0.1", port)))
+      assert(server.toString.matches("""Handle\(nw listener \d+\)"""), server.toString)
+      close(r, server)
+      val failure = run(r, backend.ops.accept(server, Slot[Connection]()))
+      assert(failure != null && failure.getMessage.contains(server.toString), String.valueOf(failure))
+    }
+  }
 }
