@@ -231,6 +231,11 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
     KqueueOps.send(KqueueKinds.unixConnectedDatagram(handle), buf)
+  def send(handle: UnixBoundDatagram, bufs: Array[ByteBuffer], to: UnixAddress): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixBoundDatagram(handle), bufs, to)
+  @annotation.targetName("sendUnixConnectedMany")
+  def send(handle: UnixConnectedDatagram, bufs: Array[ByteBuffer]): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixConnectedDatagram(handle), bufs)
   def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = KqueueOps.pipe(forKqueue(read), forKqueue(write))
   def openFifoForReading(path: String, into: Slot[Readable]): KqueueOp =
     KqueueOps.openFifoForReading(path, forKqueue(into))

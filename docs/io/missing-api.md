@@ -62,7 +62,7 @@ where the mover is often another worker's thread and wakes the timer's reactor.
 
 | Proposal | Who needs it | Backends |
 | --- | --- | --- |
-| Vectored reads and writes (`readv`, `writev`) | a TLS record's header with its payload, HTTP/2 and WebSocket frames, HTTP headers with a body, all without copying | kqueue `readv`/`writev`; NIO's scattering and gathering channels; Network.framework gathers a write into one buffer it owns, one copy as a single write has, and scatters what it received. All three, and the datagram sends. |
+| Vectored reads and writes (`readv`, `writev`) | a TLS record's header with its payload, HTTP/2 and WebSocket frames, HTTP headers with a body, all without copying | kqueue `readv`/`writev`; NIO's scattering and gathering channels; Network.framework gathers a write into one buffer it owns, one copy as a single write has, and scatters what it received. All three, and the datagram sends, IP and Unix. |
 | Batched datagrams, several packets a call, with segmentation offload | QUIC's throughput, dominated by system calls per packet | Linux `sendmmsg`/`recvmmsg`, macOS only private calls; none on the JDK; batched sends on Network.framework. An optional capability. |
 | A file sent to a socket without copying (`sendfile`, `transferTo`) | static files over HTTP/1 | kqueue and NIO; not Network.framework. An optional capability. |
 | Telling that a datagram was truncated (option B when truncation was settled) | mostly diagnostics, as QUIC fixes its packet size | all three, with a copy on NIO |

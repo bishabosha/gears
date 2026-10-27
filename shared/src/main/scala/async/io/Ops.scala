@@ -430,6 +430,13 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): Op & Repeatable
 
+  /** Sends `bufs`, in order, as one packet, to `to`, as the other `send` sends one buffer. */
+  def send(handle: UnixBoundDatagram, bufs: Array[ByteBuffer], to: UnixAddress): Op & Repeatable
+
+  /** Sends `bufs`, in order, as one packet, to the peer, as the other `send` sends one buffer: never an empty one. */
+  @annotation.targetName("sendUnixConnectedMany")
+  def send(handle: UnixConnectedDatagram, bufs: Array[ByteBuffer]): Op & Repeatable
+
   /** The path a Unix datagram socket is bound to, the empty path for one with none. Not an op. */
   @annotation.targetName("unixDatagramLocalAddress")
   def localAddress(handle: UnixBoundDatagram | UnixConnectedDatagram): UnixAddress

@@ -283,7 +283,7 @@ again, or waking its reactor. A time limit on a timer's submission still fails i
 
 A frame's header and its payload (a TLS record, an HTTP/2 or WebSocket frame, HTTP headers with a body) are written
 with one call rather than two or a copy into one buffer: `write(handle, bufs)` drains them in order, `read(handle, bufs)`
-fills them in order, and `send` takes several buffers as one packet, each with the rules of its one-buffer form (at
+fills them in order, and `send` takes several buffers as one packet, on IP and Unix datagram sockets alike, each with the rules of its one-buffer form (at
 least one byte, a read into buffers with no room refused, an empty write completing at once, a datagram never empty).
 kqueue uses `readv`, `writev` and `sendmsg`; NIO its scattering and gathering channels, joining the buffers of a bound
 datagram send, which has no gathering form; the Network.framework backend gathers a write into one buffer the framework

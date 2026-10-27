@@ -168,6 +168,15 @@ object KqueueOps
     on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.unix(to)))
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
+  def send(handle: UnixBoundDatagram, bufs: Array[ByteBuffer], to: UnixAddress): SendTo = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.Ops.unix(to)))
+  }
+  @annotation.targetName("sendUnixConnectedMany")
+  def send(handle: UnixConnectedDatagram, bufs: Array[ByteBuffer]): SendTo = {
+    gears.async.io.Ops.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, null))
+  }
   def timer(duration: scala.concurrent.duration.FiniteDuration): KqueueTimer = {
     require(duration.length >= 0, s"A timer's time is not negative: $duration")
     new KqueueTimer(duration.toNanos)

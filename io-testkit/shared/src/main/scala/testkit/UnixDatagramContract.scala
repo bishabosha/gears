@@ -110,4 +110,38 @@ trait UnixDatagramContract extends ReactorContract {
       }
     finally deleteAll(dir)
   }
+
+  test(
+    "a Unix datagram sent from several buffers is one packet, from a bound socket or a connected one, never empty there"
+  ) {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val to = UnixAddress(dir.resolve("receiver.sock").toString)
+        val receiver = bindUnixDatagram(r, to)
+        val bound = bindUnixDatagram(r, UnixAddress(dir.resolve("bound.sock").toString))
+        val connected = connectUnixDatagram(r, null, to)
+        try {
+          def received()(using munit.Location): String = {
+            val buf = allocate(64)
+            assertEquals(run(r, backend.ops.receive(receiver, buf, Slot[UnixAddress]())), null)
+            StandardCharsets.UTF_8.decode(buf).toString
+          }
+          assertEquals(run(r, backend.ops.send(bound, Array(bytes("one "), bytes("packet")), to)), null)
+          assertEquals(received(), "one packet")
+          assertEquals(run(r, backend.ops.send(connected, Array(bytes("two "), bytes(""), bytes("parts")))), null)
+          assertEquals(received(), "two parts")
+          val empty = allocate(1)
+          empty.limit(0)
+          assert(
+            run(r, backend.ops.send(connected, Array(empty, empty.duplicate()))).isInstanceOf[IllegalArgumentException]
+          )
+        } finally {
+          close(r, receiver)
+          close(r, bound)
+          close(r, connected)
+        }
+      }
+    finally deleteAll(dir)
+  }
 }
