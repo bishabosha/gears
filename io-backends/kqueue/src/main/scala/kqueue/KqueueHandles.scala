@@ -48,6 +48,7 @@ object KqueueHandles {
     @volatile var boundPath: String | Null = null
     @volatile var boundFile: PosixFileOps.FileId | Null = null // the socket file it bound there
     @volatile var ipv6 = false // an IPv6 socket, dual stack, which reaches an IPv4 peer by its IPv4-mapped address
+    @volatile var accepting: SocketOptions | Null = null // an IP listener's, for each connection it accepts
   }
 
   /** `fd`'s note, made if it has none. Only the thread opening or binding a socket sets one. */
@@ -63,6 +64,78 @@ object KqueueHandles {
     * come from the openers below.
     */
   def handle(fd: Int): Handle = new Handle(fd)
+
+  /** The handle of a connection `listener`'s descriptor accepted as `fd`, with the listener's options, if it is an IP
+    * one: the options of the connection it accepts, `NoDelay` on unless they set it off.
+    */
+  private[kqueue] def accepted(listener: Int, fd: Int): Handle = {
+    DescriptorTable.note(listener) match {
+      case note: SocketNote if note.accepting != null =>
+        // A connection its client reset at once refuses options (EINVAL on macOS): it is delivered all the same, and
+        // its first read fails, as a reset connection's does, rather than failing the accept and the others with it.
+        try applyOptions(fd, note.accepting.nn, stream = true, connectionOnly = true)
+        catch case _: IOException => ()
+      case _ => ()
+    }
+    handle(fd)
+  }
+
+  /** Applies `options` to the IP socket `fd`, as it opens: for a stream socket `NoDelay` on unless they set it off;
+    * with `connectionOnly`, for an accepted connection, all but the receive buffer, which it has from its listener.
+    */
+  private def applyOptions(fd: Int, options: SocketOptions, stream: Boolean, connectionOnly: Boolean = false): Unit = {
+    if stream then setOption(fd, SocketOption.NoDelay, gears.async.io.Ops.noDelay(options))
+    for option <- options.options if option != SocketOption.NoDelay do
+      if !(connectionOnly && option == SocketOption.ReceiveBuffer) then setOption(fd, option, options.get(option).nn)
+  }
+
+  /** Sets `option` on `fd`. */
+  private[kqueue] def setOption(fd: Int, option: SocketOption[?], value: Any): Unit = option match {
+    case SocketOption.NoDelay =>
+      val on = if value.asInstanceOf[Boolean] then 1 else 0
+      PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_NODELAY, on, "TCP_NODELAY")
+    case SocketOption.KeepAlive =>
+      value.asInstanceOf[KeepAlive] match {
+        case KeepAlive.Off => PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0, "SO_KEEPALIVE")
+        case KeepAlive.On(idle, interval, count) =>
+          PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1, "SO_KEEPALIVE")
+          PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPIDLE, idle, "TCP_KEEPIDLE")
+          PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPINTVL, interval, "TCP_KEEPINTVL")
+          PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPCNT, count, "TCP_KEEPCNT")
+      }
+    case SocketOption.ReceiveBuffer =>
+      PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_RCVBUF, value.asInstanceOf[Int], "SO_RCVBUF")
+    case SocketOption.SendBuffer =>
+      PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_SNDBUF, value.asInstanceOf[Int], "SO_SNDBUF")
+  }
+
+  /** `option`'s value on `fd`, as the system has it. */
+  private[kqueue] def optionOf(fd: Int, option: SocketOption[?]): Any = option match {
+    case SocketOption.NoDelay =>
+      PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_NODELAY, "TCP_NODELAY") != 0
+    case SocketOption.KeepAlive =>
+      if PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, "SO_KEEPALIVE") == 0 then KeepAlive.Off
+      else
+        KeepAlive.On(
+          PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPIDLE, "TCP_KEEPIDLE"),
+          PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPINTVL, "TCP_KEEPINTVL"),
+          PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPCNT, "TCP_KEEPCNT")
+        )
+    case SocketOption.ReceiveBuffer => PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_RCVBUF, "SO_RCVBUF")
+    case SocketOption.SendBuffer    => PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_SNDBUF, "SO_SNDBUF")
+  }
+
+  /** Whether `fd` is a stream socket, and whether an IP one, as an option on it asks. */
+  private[kqueue] def socketKind(fd: Int): (Boolean, Boolean) = {
+    val stream = PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_TYPE, "SO_TYPE") == socket.SOCK_STREAM
+    val storage = stackalloc[socket.sockaddr_storage]()
+    val length = stackalloc[socket.socklen_t]()
+    !length = sizeOf[socket.sockaddr_storage].toUInt
+    val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
+    if socket.getsockname(fd, address, length) != 0 then throw new IOException(s"Not a socket: descriptor $fd")
+    val family = address.sa_family.toInt
+    (stream, family == socket.AF_INET || family == socket.AF_INET6)
+  }
 
   /** A handle for another facility's I/O object, `target`, for a backend built on kqueue's reactors (see
     * `Handle.foreign`).
@@ -111,8 +184,11 @@ object KqueueHandles {
   def connect(address: IpAddress): KqueueKinds.Connection = KqueueKinds.connection(wrap(connectStream(address)))
   def connect(address: UnixAddress): KqueueKinds.Connection = KqueueKinds.connection(wrap(connectStream(address)))
 
-  private[kqueue] def connectStream(address: SocketAddress): Int =
-    socketFor(address, Transport.Stream)(fd => connectTo(fd, address))
+  private[kqueue] def connectStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Int =
+    socketFor(address, Transport.Stream) { fd =>
+      if address.isInstanceOf[IpAddress] then applyOptions(fd, options, stream = true)
+      connectTo(fd, address)
+    }
 
   /** A listening socket, bound and listening at once. */
   def listen(address: IpAddress): KqueueKinds.Listener = KqueueKinds.listener(wrap(listenStream(address)))
@@ -120,9 +196,13 @@ object KqueueHandles {
 
   /** Binds as `SO_REUSEADDR` does, an IP port whose earlier connections linger in `TIME_WAIT` taken (see `Ops.listen`).
     */
-  private[kqueue] def listenStream(address: SocketAddress): Int =
+  private[kqueue] def listenStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Int =
     socketFor(address, Transport.Stream) { fd =>
-      if address.isInstanceOf[IpAddress] then PosixSockets.setReuseAddress(fd)
+      if address.isInstanceOf[IpAddress] then {
+        PosixSockets.setReuseAddress(fd)
+        applyOptions(fd, options, stream = true) // the buffers before listening, so its connections' windows scale
+        noteOf(fd).accepting = options
+      }
       bindTo(fd, address)
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }
@@ -146,10 +226,15 @@ object KqueueHandles {
   def connectDatagram(local: UnixAddress | Null, remote: UnixAddress): KqueueKinds.UnixConnectedDatagram =
     KqueueKinds.unixConnectedDatagram(wrap(datagramSocket(local, remote)))
 
-  private[kqueue] def datagramSocket(local: SocketAddress | Null, remote: SocketAddress | Null): Int = {
+  private[kqueue] def datagramSocket(
+      local: SocketAddress | Null,
+      remote: SocketAddress | Null,
+      options: SocketOptions = SocketOptions.default
+  ): Int = {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
     socketFor(either, Transport.Datagram) { fd =>
+      if either.isInstanceOf[IpAddress] then applyOptions(fd, options, stream = false)
       if local != null then bindTo(fd, local)
       if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
     }

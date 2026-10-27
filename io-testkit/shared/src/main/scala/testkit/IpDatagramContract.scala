@@ -270,4 +270,29 @@ trait IpDatagramContract extends ReactorContract {
       intercept[IOException](backend.ops.localAddress(bound))
     }
   }
+
+  test("a datagram socket refuses a stream socket's options, and takes a buffer size where the backend has it") {
+    intercept[IllegalArgumentException](
+      backend.ops
+        .bindDatagram(IpAddress.IPv4("127.0.0.1", 0), SocketOptions.default.set(SocketOption.NoDelay, true), Slot())
+    )
+    if backend.ops.supports(SocketOption.ReceiveBuffer) then
+      withReactor { r =>
+        val into = Slot[BoundDatagram]()
+        val options = SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536)
+        val bound = opened(r, into, backend.ops.bindDatagram(IpAddress.IPv4("127.0.0.1", 0), options, into))
+        try {
+          assert(backend.ops.option(bound, SocketOption.ReceiveBuffer) >= 65536)
+          intercept[IllegalArgumentException](backend.ops.option(bound, SocketOption.NoDelay))
+        } finally close(r, bound)
+      }
+    else
+      intercept[IllegalArgumentException](
+        backend.ops.bindDatagram(
+          IpAddress.IPv4("127.0.0.1", 0),
+          SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536),
+          Slot()
+        )
+      )
+  }
 }

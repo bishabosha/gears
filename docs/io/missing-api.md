@@ -17,19 +17,16 @@ the listener's port on Network.framework). A listener or bound socket on port 0 
 accepted connection tells who connected, so `accept` writes nothing more. Contract checks on every backend. The
 contract suites still find free ports for the checks that need a fixed one.
 
-**Socket options.** None is exposed. The only ones set are `SO_REUSEADDR`, always on listeners, and dual stack
-on `::`, which is fixed on since the JDK cannot clear it.
-
-- `TCP_NODELAY`. Nagle's algorithm is on everywhere. TLS, HTTP/2 and WebSockets write small records, and Nagle with
-  delayed acknowledgements can stall each by tens of milliseconds.
-- Don't-fragment, for QUIC: RFC 9000 §14 requires its UDP datagrams not to be fragmented, with IPv4's DF bit set where
-  possible. The JDK has it through `jdk.net.ExtendedSocketOptions` since JDK 19.
-- Keepalive and its timings (long-lived HTTP/1.1, HTTP/2 and WebSocket connections); receive and send buffer sizes
-  (QUIC's throughput); `SO_REUSEPORT` (a listener per worker); ECN (QUIC's congestion control, recommended rather than
-  required).
-- Proposed shape: options given as a socket is opened (`connect`, `listen`, `bindDatagram`, `connectDatagram`), since Network.framework takes
-  them only on its parameters at creation; and a `setOption` op for the few that can change later, such as no-delay and
-  keepalive.
+**Socket options.** Begun (2026-10-27): `SocketOption` keys and `SocketOptions` given as an IP socket opens
+(`connect`, `listen`, `bindDatagram`, `connectDatagram`), `supports` and `canChange` asked of a backend's ops when the
+program runs, since support depends on the host as much as the backend (a JDK's version, macOS's), `option` to read one
+back and `setOption` to change one where the backend can; an option a backend lacks, or a stream socket's on a datagram
+socket, fails as the op is built. Done: `NoDelay`, on unless set off on every backend, as Go has it; `KeepAlive`, off or
+on with its timings; `ReceiveBuffer` and `SendBuffer`, requests the system may round. A listener's options are each
+connection's it accepts. kqueue and NIO have all four and change them at any time; the Network.framework backend has
+`NoDelay` and `KeepAlive`, on its own sockets as they open only, read back as they opened, since it neither changes
+nor reports them after, and no buffer sizes. Contract checks follow each backend's `supports` and `canChange`. Still
+to come: don't-fragment, for QUIC (RFC 9000 §14); `SO_REUSEPORT`; options on Unix sockets.
 
 **A QUIC server on a wildcard address.** On a host with several addresses, a server bound to `0.0.0.0` must reply from
 the address the client sent to, or the client drops the reply. That needs the destination address with each received
@@ -115,7 +112,7 @@ Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-si
 | Step | Change | What it unblocks |
 | --- | --- | --- |
 | 1 | Local and peer addresses (done) | correctness for every server |
-| 2 | Options as a socket opens, starting with no-delay, keepalive, buffer sizes and don't-fragment | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
+| 2 | Options as a socket opens: no-delay, keepalive and buffer sizes done; don't-fragment next | correct and fast TLS, HTTP and WebSockets; QUIC's compliance |
 | 3 | Nanosecond timers re-armed in place | QUIC |
 | 4 | Vectored reads and writes | throughput for everything that frames its data |
 | 5 | Optional capabilities: packet info, batched datagrams, files sent without copying | fast QUIC and HTTP on the backends that can |

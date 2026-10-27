@@ -95,19 +95,31 @@ object KqueueOps
     require(max > 0, s"max must be positive, not $max")
     on(handle)(new AcceptAll(fd(handle), into, max))
   }
-  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo =
-    new ConnectTo(gears.async.io.Ops.ip(address), into)
+  def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    new ConnectTo(gears.async.io.Ops.ip(address), into, options)
+  }
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
-  def listen(address: IpAddress, into: Slot[Listener]): KqueueOp =
-    new Listen(gears.async.io.Ops.ip(address), into)
+  def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    new Listen(gears.async.io.Ops.ip(address), into, options)
+  }
   def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp =
     new Listen(gears.async.io.Ops.unix(address), into)
-  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): KqueueOp =
-    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, KqueueKinds.boundDatagram)
-  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): KqueueOp = {
+  def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, KqueueKinds.boundDatagram, options)
+  }
+  def connectDatagram(
+      local: IpAddress | Null,
+      remote: IpAddress,
+      options: SocketOptions,
+      into: Slot[ConnectedDatagram]
+  ): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    new OpenDatagram(l, r, into, KqueueKinds.connectedDatagram)
+    new OpenDatagram(l, r, into, KqueueKinds.connectedDatagram, options)
   }
   def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): KqueueOp =
     new OpenDatagram(gears.async.io.Ops.unix(local), null, into, KqueueKinds.unixBoundDatagram)
@@ -151,6 +163,28 @@ object KqueueOps
     new Close(handle)
   }
   def shutdownOutput(handle: Connection): KqueueOp = new ShutdownOutput(handle)
+
+  // Socket options: every one, on macOS and Linux alike, changed at any time.
+  def supports(option: SocketOption[?]): Boolean = true
+  def canChange(option: SocketOption[?]): Boolean = true
+  def option[V](handle: Handle, option: SocketOption[V]): V =
+    onSocket(handle, option)(KqueueHandles.optionOf(_, option).asInstanceOf[V])
+  def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
+    option.check(value)
+    onSocket(handle, option)(KqueueHandles.setOption(_, option, value))
+  }
+
+  /** Runs `body` on `handle`'s descriptor, an IP socket `option` applies to; else an `IllegalArgumentException`. */
+  private def onSocket[A](handle: Handle, option: SocketOption[?])(body: Int => A): A = {
+    KqueueHandles.checkOwn(handle)
+    KqueueHandles.using(handle) {
+      val (stream, ip) = KqueueHandles.socketKind(handle.fd)
+      if !ip then throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
+      if option.streamsOnly && !stream then
+        throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+      body(handle.fd)
+    }
+  }
   def localAddress(handle: Listener | Connection): IpAddress | UnixAddress =
     KqueueHandles.addressOf(handle, peer = false)
   def peerAddress(handle: Connection): IpAddress | UnixAddress = KqueueHandles.addressOf(handle, peer = true)
@@ -244,9 +278,12 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K)
 }
 
 /** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
-final class Listen(address: SocketAddress, into: Slot[KqueueKinds.Listener])
-    extends OpensAtOnce(into, KqueueKinds.listener) {
-  protected def open(): Int = KqueueHandles.listenStream(address)
+final class Listen(
+    address: SocketAddress,
+    into: Slot[KqueueKinds.Listener],
+    options: SocketOptions = SocketOptions.default
+) extends OpensAtOnce(into, KqueueKinds.listener) {
+  protected def open(): Int = KqueueHandles.listenStream(address, options)
 }
 
 /** A datagram socket, bound and connected where given (see `IpDatagramOps.connectDatagram`). */
@@ -254,9 +291,10 @@ final class OpenDatagram[K <: Handle](
     local: SocketAddress | Null,
     remote: SocketAddress | Null,
     into: Slot[K],
-    kind: Handle => K
+    kind: Handle => K,
+    options: SocketOptions = SocketOptions.default
 ) extends OpensAtOnce(into, kind) {
-  protected def open(): Int = KqueueHandles.datagramSocket(local, remote)
+  protected def open(): Int = KqueueHandles.datagramSocket(local, remote, options)
 }
 
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`). */
@@ -293,7 +331,12 @@ final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.W
   * after writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is
   * closed and `into` left empty.
   */
-final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]) extends Command with Opens {
+final class ConnectTo(
+    address: SocketAddress,
+    into: Slot[KqueueKinds.Connection],
+    options: SocketOptions = SocketOptions.default
+) extends Command
+    with Opens {
   override private[io] def oneShot: Boolean = true // it opens its socket
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var socket = -1
@@ -305,7 +348,7 @@ final class ConnectTo(address: SocketAddress, into: Slot[KqueueKinds.Connection]
 
   /** Opens the socket and starts connecting it, for the reactor, as the op is submitted. */
   private[kqueue] def open(): Unit = {
-    socket = KqueueHandles.connectStream(address)
+    socket = KqueueHandles.connectStream(address, options)
     connected = false
   }
 

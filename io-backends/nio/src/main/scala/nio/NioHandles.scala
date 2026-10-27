@@ -43,6 +43,9 @@ private[nio] trait Entry {
   */
 private[nio] final class Selectable(val channel: SelectableChannel, bound: BoundFile | Null) extends Entry {
 
+  /** An IP listener's options, for each connection it accepts (see `NioHandles.accepted`). */
+  @volatile var accepting: SocketOptions | Null = null
+
   def read(buf: ByteBuffer): Int = channel match {
     case readable: ReadableByteChannel => readable.read(buf)
     case _                             => throw new IOException(s"$channel cannot be read")
@@ -282,23 +285,97 @@ object NioHandles {
     add(RegularFile(FileChannel.open(file, if write then StandardOpenOption.WRITE else StandardOpenOption.READ)))
   }
 
-  private[nio] def connectStream(address: SocketAddress): Handle = {
+  private[nio] def connectStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Handle = {
     val channel = SocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
+      if address.isInstanceOf[IpAddress] then applyOptions(channel, options, stream = true)
       // A Unix socket usually connects at once; `ConnectTo` checks.
       try channel.connect(socketAddress(address))
       catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
     }
   }
 
-  def listen(address: IpAddress): NioKinds.Listener = NioKinds.listener {
+  def listen(address: IpAddress, options: SocketOptions = SocketOptions.default): NioKinds.Listener = {
     val channel = ServerSocketChannel.open(familyOf(address))
-    selectable(channel, null) {
+    val handle = selectable(channel, null) {
       channel.configureBlocking(false)
       channel.setOption(StandardSocketOptions.SO_REUSEADDR, true) // whatever the JDK's default (see `Ops.listen`)
+      val receive = options.get(SocketOption.ReceiveBuffer) // before binding, so its connections' windows scale
+      if receive != null then channel.setOption(StandardSocketOptions.SO_RCVBUF, Integer.valueOf(receive.nn))
       channel.bind(socketAddress(address), Backlog)
     }
+    handle.entry.asInstanceOf[Selectable].accepting = options
+    NioKinds.listener(handle)
+  }
+
+  /** Gives `client`, accepted by the listener `listener`, the listener's options if it is an IP one: those a connection
+    * has, `NoDelay` on unless they set it off, and its send buffer; its receive buffer it has from the listener. A
+    * client reset at once may refuse them: it is delivered all the same, its first read failing.
+    */
+  private[nio] def accepted(listener: Handle, client: SocketChannel): Unit =
+    listener.entry match {
+      case s: Selectable if s.accepting != null =>
+        try applyOptions(client, s.accepting.nn, stream = true, connectionOnly = true)
+        catch case _: IOException => ()
+      case _ => ()
+    }
+
+  /** Whether the JDK has keepalive's timings here (`jdk.net.ExtendedSocketOptions`), which some platforms lack. */
+  lazy val keepAliveTimings: Boolean = {
+    val probe = SocketChannel.open()
+    try probe.supportedOptions().contains(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE)
+    finally probe.close()
+  }
+
+  /** Applies `options` to an IP socket's channel as it opens: for a stream socket `NoDelay` on unless they set it off;
+    * with `connectionOnly`, for an accepted connection, all but the receive buffer.
+    */
+  private def applyOptions(
+      channel: java.nio.channels.NetworkChannel,
+      options: SocketOptions,
+      stream: Boolean,
+      connectionOnly: Boolean = false
+  ): Unit = {
+    if stream then setOption(channel, SocketOption.NoDelay, gears.async.io.Ops.noDelay(options))
+    for option <- options.options if option != SocketOption.NoDelay do
+      if !(connectionOnly && option == SocketOption.ReceiveBuffer) then
+        setOption(channel, option, options.get(option).nn)
+  }
+
+  /** Sets `option` on `channel`. */
+  private[nio] def setOption(channel: java.nio.channels.NetworkChannel, option: SocketOption[?], value: Any): Unit =
+    option match {
+      case SocketOption.NoDelay =>
+        channel.setOption(StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.valueOf(value.asInstanceOf[Boolean]))
+      case SocketOption.KeepAlive =>
+        value.asInstanceOf[KeepAlive] match {
+          case KeepAlive.Off => channel.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.FALSE)
+          case KeepAlive.On(idle, interval, count) =>
+            channel.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.TRUE)
+            channel.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE, Integer.valueOf(idle))
+            channel.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL, Integer.valueOf(interval))
+            channel.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT, Integer.valueOf(count))
+        }
+      case SocketOption.ReceiveBuffer =>
+        channel.setOption(StandardSocketOptions.SO_RCVBUF, Integer.valueOf(value.asInstanceOf[Int]))
+      case SocketOption.SendBuffer =>
+        channel.setOption(StandardSocketOptions.SO_SNDBUF, Integer.valueOf(value.asInstanceOf[Int]))
+    }
+
+  /** `option`'s value on `channel`, as the system has it. */
+  private[nio] def optionOf(channel: java.nio.channels.NetworkChannel, option: SocketOption[?]): Any = option match {
+    case SocketOption.NoDelay   => channel.getOption(StandardSocketOptions.TCP_NODELAY).booleanValue
+    case SocketOption.KeepAlive =>
+      if !channel.getOption(StandardSocketOptions.SO_KEEPALIVE).booleanValue then KeepAlive.Off
+      else
+        KeepAlive.On(
+          channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE).intValue,
+          channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL).intValue,
+          channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT).intValue
+        )
+    case SocketOption.ReceiveBuffer => channel.getOption(StandardSocketOptions.SO_RCVBUF).intValue
+    case SocketOption.SendBuffer    => channel.getOption(StandardSocketOptions.SO_SNDBUF).intValue
   }
 
   def listen(address: UnixAddress): NioKinds.Listener = NioKinds.listener {
@@ -323,10 +400,15 @@ object NioHandles {
     NioKinds.connectedDatagram(datagram(local, remote))
   }
 
-  private[nio] def datagram(local: IpAddress | Null, remote: IpAddress | Null): Handle = {
+  private[nio] def datagram(
+      local: IpAddress | Null,
+      remote: IpAddress | Null,
+      options: SocketOptions = SocketOptions.default
+  ): Handle = {
     val channel = DatagramChannel.open(familyOf(if local != null then local else remote.nn))
     selectable(channel, null) {
       channel.configureBlocking(false)
+      applyOptions(channel, options, stream = false)
       if local != null then channel.bind(socketAddress(local))
       if remote != null then channel.connect(socketAddress(remote)) // binds an ephemeral local port
     }

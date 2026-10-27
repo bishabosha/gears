@@ -41,6 +41,9 @@ private[nwframework] final class NWFrameworkHandle(
   /** Its index in `NWFrameworkHandles`' table, set as it is added. */
   private[nwframework] var number = -1
 
+  /** The TCP options it opened with, or for an accepted connection its listener's, which `option` reports. */
+  private[nwframework] var tcp: SocketOptions = SocketOptions.default
+
   /** A listener's address as it was asked for, whose port, if 0, `address` replaces with the one it got. */
   private[nwframework] var listenedOn: IpAddress | Null = null
 
@@ -688,27 +691,50 @@ private[nwframework] object NWFrameworkHandles {
     if found != null && found.ptr == ptr then found else null
   }
 
-  /** Registers an accepted connection, as its own handle. */
-  def accepted(ptr: NWFrameworkIo.Handle): Handle = add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, null))
+  /** Registers a connection `listener` accepted, as its own handle, with the listener's options. */
+  def accepted(listener: NWFrameworkHandle, ptr: NWFrameworkIo.Handle): Handle = {
+    val connection = new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, null)
+    connection.tcp = listener.tcp
+    add(connection)
+  }
+
+  /** `options` as the C side takes them (see `NWFrameworkIo.TcpSettings`). */
+  private def tcpSettings(options: SocketOptions)(using Zone): Ptr[NWFrameworkIo.TcpSettings] = {
+    val settings = alloc[NWFrameworkIo.TcpSettings]()
+    settings._1 = if gears.async.io.Ops.noDelay(options) then 1 else 0
+    options.get(SocketOption.KeepAlive) match {
+      case null                                => settings._2 = 0
+      case KeepAlive.Off                       => settings._2 = 1
+      case KeepAlive.On(idle, interval, count) =>
+        settings._2 = 2
+        settings._3 = idle
+        settings._4 = interval
+        settings._5 = count
+    }
+    settings
+  }
 
   private def hostAndPort(address: IpAddress): (String, Int) = address match {
     case IpAddress.IPv4(host, port) => (host, port)
     case IpAddress.IPv6(host, port) => (host, port)
   }
 
-  def connect(address: IpAddress): Handle = {
+  def connect(address: IpAddress, options: SocketOptions): Handle = {
     val (host, port) = hostAndPort(address)
-    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_connect(toCString(host), port) }
-    add(new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, address))
+    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_connect(toCString(host), port, tcpSettings(options)) }
+    val connection = new NWFrameworkHandle(NWFrameworkHandle.Stream, ptr, address)
+    connection.tcp = options
+    add(connection)
   }
 
   /** A listener that will be listening once Network.framework has it ready, which `NWFrameworkListen` waits for. */
-  def listener(address: IpAddress): Handle = {
+  def listener(address: IpAddress, options: SocketOptions): Handle = {
     val (host, port) = hostAndPort(address)
-    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen(toCString(host), port) }
+    val ptr = Zone.acquire { implicit z => NWFrameworkIo.nwf_listen(toCString(host), port, tcpSettings(options)) }
     if ptr == null then throw new IOException(s"Failed to create a listener for $host:$port")
     val listener = new NWFrameworkHandle(NWFrameworkHandle.Listener, ptr, null)
     listener.listenedOn = address
+    listener.tcp = options
     add(listener)
   }
 

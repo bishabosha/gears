@@ -32,7 +32,12 @@ private[nwframework] object NWFrameworkIo {
   def nwf_cancel(handle: Handle): Unit = extern
   def nwf_cancel_async(handle: Handle): Unit = extern
 
-  def nwf_connect(host: CString, port: CInt): Handle = extern
+  /** TCP's options as a connection or listener opens (`nwf_tcp_settings`): no delay, keepalive (0 the system's, 1 off,
+    * 2 on), its idle time, interval and count.
+    */
+  type TcpSettings = CStruct5[CInt, CInt, CInt, CInt, CInt]
+
+  def nwf_connect(host: CString, port: CInt, settings: Ptr[TcpSettings]): Handle = extern
   def nwf_receive(handle: Handle, max: CUnsignedInt): Unit = extern
   def nwf_receive_message(handle: Handle): Unit = extern
   def nwf_receive_held(handle: Handle, max: CUnsignedInt): Unit = extern
@@ -40,7 +45,7 @@ private[nwframework] object NWFrameworkIo {
   def nwf_send(handle: Handle, bytes: Ptr[Byte], len: CInt): Unit = extern
   def nwf_send_final(handle: Handle): Unit = extern
 
-  def nwf_listen(host: CString, port: CInt): Handle = extern
+  def nwf_listen(host: CString, port: CInt, settings: Ptr[TcpSettings]): Handle = extern
 
   def nwf_datagram_connect(host: CString, port: CInt, localHost: CString, localPort: CInt): Handle = extern
   def nwf_udp_receive_buffer(): CInt = extern

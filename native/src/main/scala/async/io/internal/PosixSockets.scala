@@ -138,6 +138,33 @@ object PosixSockets {
       throw new IOException(s"Failed to set SO_REUSEADDR: ${cError()}")
   }
 
+  /** `IPPROTO_TCP`, and its options, which posixlib does not all have: the keepalive ones differ between macOS and
+    * Linux.
+    */
+  inline val IPPROTO_TCP = 6
+  inline val TCP_NODELAY = 1
+  def TCP_KEEPIDLE: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x10 else 4 // TCP_KEEPALIVE on macOS
+  def TCP_KEEPINTVL: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x101 else 5
+  def TCP_KEEPCNT: Int = if LinktimeInfo.isMac || LinktimeInfo.isFreeBSD then 0x102 else 6
+
+  /** Sets an `int` socket option, failing with an `IOException` that names it as `what`. */
+  def setIntOption(fd: Int, level: Int, name: Int, value: Int, what: String): Unit = {
+    val v = stackalloc[CInt]()
+    !v = value
+    if socket.setsockopt(fd, level, name, v.asInstanceOf[Ptr[Byte]], sizeOf[CInt].toUInt) < 0 then
+      throw new IOException(s"Failed to set $what: ${cError()}")
+  }
+
+  /** Reads an `int` socket option, failing with an `IOException` that names it as `what`. */
+  def intOption(fd: Int, level: Int, name: Int, what: String): Int = {
+    val v = stackalloc[CInt]()
+    val length = stackalloc[socket.socklen_t]()
+    !length = sizeOf[CInt].toUInt
+    if socket.getsockopt(fd, level, name, v.asInstanceOf[Ptr[Byte]], length) < 0 then
+      throw new IOException(s"Failed to read $what: ${cError()}")
+    !v
+  }
+
   /** Makes an IPv6 socket dual stack, taking IPv4 peers as IPv4-mapped addresses, as the JDK's are: the default on
     * macOS and Linux, set all the same, since FreeBSD's is the other way. Call it before `bind`.
     */

@@ -159,12 +159,15 @@ trait StreamSocketOps[Op, H <: AnyRef] extends Ops[Op, H] {
 /** The ops that open IP stream sockets, for a backend that has them (see `IpStreams`), used once open as any stream
   * socket is (`StreamSocketOps`, and `read` and `write`).
   */
-trait IpStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
+trait IpStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] with SocketOptionOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`. Completes once connected, after writing the socket into
     * `into`, which must be empty; fails if the connection is refused or cannot be made.
     */
-  def connect(address: IpAddress, into: Slot[Connection]): Op
+  final def connect(address: IpAddress, into: Slot[Connection]): Op = connect(address, SocketOptions.default, into)
+
+  /** As the other `connect`, the socket opening with `options` (see `SocketOptions`). */
+  def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`. Completes once it is listening, after writing it into `into`, which
     * must be empty; fails if the address is in use or cannot be bound. A port another listener holds is in use, but not
@@ -172,25 +175,43 @@ trait IpStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
     * backend binds as `SO_REUSEADDR` does, as Go, libuv and Rust's standard library always do, since Network.framework
     * cannot refuse such a port.
     */
-  def listen(address: IpAddress, into: Slot[Listener]): Op
+  final def listen(address: IpAddress, into: Slot[Listener]): Op = listen(address, SocketOptions.default, into)
+
+  /** As the other `listen`, the listener opening with `options`, and each connection it accepts with those of them that
+    * apply to a connection, `NoDelay` and `KeepAlive` (see `SocketOptions`).
+    */
+  def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): Op
 }
 
 /** The ops of IP datagram sockets, for a backend that has them (see `IpDatagrams`). A datagram socket is bound,
   * receiving from and sending to anyone (`bindDatagram`), or connected, to one peer (`connectDatagram`): two kinds, so
   * that sending a connected socket's packet elsewhere, or a bound socket's to nobody, does not compile.
   */
-trait IpDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
+trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
 
   /** Opens a datagram socket bound to `local`, port 0 for any. Completes once it is bound, after writing it into
     * `into`, which must be empty; fails if `local` is in use or cannot be bound.
     */
-  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): Op
+  final def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): Op =
+    bindDatagram(local, SocketOptions.default, into)
+
+  /** As the other `bindDatagram`, the socket opening with `options`, of those that apply to a datagram socket. */
+  def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): Op
 
   /** Opens a datagram socket connected to `remote`, bound to `local` if given, of the same family, else to an ephemeral
     * port. Completes once it is connected, after writing it into `into`, which must be empty; fails if `local` is in
     * use or cannot be bound. Connecting sends nothing: it only fixes the peer, which alone it then hears.
     */
-  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): Op
+  final def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): Op =
+    connectDatagram(local, remote, SocketOptions.default, into)
+
+  /** As the other `connectDatagram`, the socket opening with `options`, of those that apply to a datagram socket. */
+  def connectDatagram(
+      local: IpAddress | Null,
+      remote: IpAddress,
+      options: SocketOptions,
+      into: Slot[ConnectedDatagram]
+  ): Op
 
   /** Receives one packet on a bound datagram socket into `buf`, which is cleared first and left flipped for reading,
     * and writes its sender into `from`, which must be empty. Completes once a packet has arrived; its size is
@@ -384,6 +405,19 @@ trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
 private[io] object Ops {
 
   /** Checks a path an op names: a NUL would end it early as a C string, so the op would act on another path. */
+  /** Checks the options an opener is given as it is built: each one the backend `supports`, and for a datagram socket,
+    * not one for streams only; else an `IllegalArgumentException`.
+    */
+  def checkOptions(options: SocketOptions, supports: SocketOption[?] => Boolean, stream: Boolean): Unit =
+    for option <- options.options do {
+      if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option here")
+      if option.streamsOnly && !stream then
+        throw new IllegalArgumentException(s"$option applies to stream sockets, not datagram ones")
+    }
+
+  /** Whether a stream socket opening with `options` has `NoDelay` on: unless they set it off. */
+  def noDelay(options: SocketOptions): Boolean = options.get(SocketOption.NoDelay) != false
+
   def checkPath(path: String): Unit =
     if path.indexOf('\u0000') >= 0 then
       throw new IllegalArgumentException(s"The path has a NUL in it: ${path.replace("\u0000", "\\0")}")

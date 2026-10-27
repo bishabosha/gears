@@ -89,7 +89,7 @@ final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Com
   override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
     val client = NonBlocking.accept(fd)
-    if client >= 0 then into.set(KqueueKinds.connection(KqueueHandles.handle(client)))
+    if client >= 0 then into.set(KqueueKinds.connection(KqueueHandles.accepted(fd, client)))
     client >= 0
   }
   override def transferred: Int =
@@ -120,7 +120,8 @@ final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], ma
       case failure: Throwable =>
         if count == 0 then throw failure // with some accepted, they are delivered, and the next accept fails instead
     }
-    if count > 0 then into.set(Array.tabulate(count)(i => KqueueKinds.connection(KqueueHandles.handle(clients(i)))))
+    if count > 0 then
+      into.set(Array.tabulate(count)(i => KqueueKinds.connection(KqueueHandles.accepted(fd, clients(i)))))
     count > 0
   }
   override def transferred: Int =

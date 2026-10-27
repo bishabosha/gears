@@ -257,3 +257,15 @@ address family and transport, one each, none implying another: `IpStreams` (`IpS
 `SocketContract` for both with the checks that use both. Whether a host can listen as well as connect, which Workers
 cannot, is not split until a backend needs it.
 
+## Socket options are asked of the backend when the program runs, and `NoDelay` is on
+
+Socket options are not capabilities, as the socket families are: whether one is there depends on the host as much as on
+the backend (NIO's `SO_REUSEPORT` on the system, its keepalive timings on the JDK, kqueue's on macOS's version), so a
+type would promise what some hosts cannot keep. They are keys (`SocketOption`), given as a socket opens, the one shape
+every backend can honour, Network.framework's own sockets taking them only then; `supports` and `canChange` say what
+this backend has here, and an op built with an option it lacks fails as it is built, as the JDK's `setOption` throws and
+unlike Netty's, which logs and ignores. What needs machinery of its own (packet info, ECN, batching) will be a
+capability. `NoDelay` is on unless set off, on every backend, as Go has it: TLS records, HTTP/2 frames and WebSocket
+messages are small writes, which Nagle's algorithm with delayed acknowledgements can hold back by tens of milliseconds;
+each backend left it off before, as its system does.
+

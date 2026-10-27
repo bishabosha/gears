@@ -121,19 +121,29 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   def close(handle: Handle): KqueueOp =
     if owns(handle) then new NWFrameworkClose(handle) else KqueueOps.close(handle)
 
-  def connect(address: IpAddress, into: Slot[Connection]): KqueueOp = {
+  def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
     val ip = gears.async.io.Ops.ip(address)
-    if connectsOnKqueue(ip) then KqueueOps.connect(ip, forKqueue(into)) else new NWFrameworkConnectTo(ip, into)
+    if connectsOnKqueue(ip) then KqueueOps.connect(ip, options, forKqueue(into))
+    else new NWFrameworkConnectTo(ip, options, into)
   }
-  def listen(address: IpAddress, into: Slot[Listener]): KqueueOp = {
+  def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
     val ip = gears.async.io.Ops.ip(address)
-    if listensOnKqueue(ip) then KqueueOps.listen(ip, forKqueue(into)) else new NWFrameworkListen(ip, into)
+    if listensOnKqueue(ip) then KqueueOps.listen(ip, options, forKqueue(into))
+    else new NWFrameworkListen(ip, options, into)
   }
 
   /** A connected datagram socket is Network.framework's, unless its peer is on this host (see `connectsOnKqueue`). */
-  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): KqueueOp = {
+  def connectDatagram(
+      local: IpAddress | Null,
+      remote: IpAddress,
+      options: SocketOptions,
+      into: Slot[ConnectedDatagram]
+  ): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    if connectsOnKqueue(r.nn) then KqueueOps.connectDatagram(l, r.nn, forKqueue(into))
+    if connectsOnKqueue(r.nn) then KqueueOps.connectDatagram(l, r.nn, options, forKqueue(into))
     else new NWFrameworkOpenDatagram(l, r.nn, into)
   }
   def receive(handle: ConnectedDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
@@ -146,8 +156,36 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   /** A bound datagram socket, which sends to and hears from anyone, is kqueue's: Network.framework has no such socket
     * (see `NWFrameworkOps`).
     */
-  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): KqueueOp =
-    KqueueOps.bindDatagram(local, forKqueue(into))
+  def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    KqueueOps.bindDatagram(local, options, forKqueue(into))
+  }
+
+  // Socket options: those Network.framework's own sockets take, as they open only, since nothing changes them after;
+  // not the buffer sizes, which it has none of, though kqueue's sockets here could take them.
+  def supports(option: SocketOption[?]): Boolean =
+    option == SocketOption.NoDelay || option == SocketOption.KeepAlive
+  def canChange(option: SocketOption[?]): Boolean = false
+  def option[V](handle: Handle, option: SocketOption[V]): V = {
+    if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option")
+    if !owns(handle) then KqueueOps.option(handle, option)
+    else {
+      val h = NWFrameworkHandles.get(handle)
+      if h.kind == NWFrameworkHandle.Datagram then
+        throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+      option match {
+        case SocketOption.NoDelay   => gears.async.io.Ops.noDelay(h.tcp).asInstanceOf[V]
+        case SocketOption.KeepAlive =>
+          val set = h.tcp.get(SocketOption.KeepAlive)
+          (if set == null then KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
+        case _ => throw new IllegalArgumentException(s"This backend has no socket option $option")
+      }
+    }
+  }
+  def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit =
+    throw new IllegalArgumentException(
+      s"$option cannot be changed on this backend's open sockets, only given as they open"
+    )
   def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
     KqueueOps.receive(KqueueKinds.boundDatagram(handle), buf, from)
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
@@ -277,7 +315,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
     val accepted = h.acceptAll(max, reactor, token)
     if accepted == null then false
     else {
-      into.set(accepted.map(a => NWFrameworkKinds.connection(NWFrameworkHandles.accepted(a))))
+      into.set(accepted.map(a => NWFrameworkKinds.connection(NWFrameworkHandles.accepted(h, a))))
       true
     }
   }
@@ -292,7 +330,7 @@ final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Co
     val accepted = h.accept(reactor, token)
     if accepted == null then false
     else {
-      into.set(NWFrameworkKinds.connection(NWFrameworkHandles.accepted(accepted)))
+      into.set(NWFrameworkKinds.connection(NWFrameworkHandles.accepted(h, accepted)))
       true
     }
   }
@@ -347,15 +385,15 @@ sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Han
 /** A connection to `address` (see `IpStreamOps.connect`): ready once Network.framework has it ready, failing with its
   * error if it failed.
   */
-final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds.Connection])
+final class NWFrameworkConnectTo(address: IpAddress, options: SocketOptions, into: Slot[NWFrameworkKinds.Connection])
     extends NWFrameworkOpening(into, NWFrameworkKinds.connection) {
-  protected def make(): Handle = NWFrameworkHandles.connect(address)
+  protected def make(): Handle = NWFrameworkHandles.connect(address, options)
 }
 
 /** A listener on `address` (see `IpStreamOps.listen`): ready once it is listening, failing if it cannot. */
-final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Listener])
+final class NWFrameworkListen(address: IpAddress, options: SocketOptions, into: Slot[NWFrameworkKinds.Listener])
     extends NWFrameworkOpening(into, NWFrameworkKinds.listener) {
-  protected def make(): Handle = NWFrameworkHandles.listener(address)
+  protected def make(): Handle = NWFrameworkHandles.listener(address, options)
 }
 
 /** A datagram socket connected to `remote` (see `IpDatagramOps.connectDatagram`), bound to `local` if given: ready once

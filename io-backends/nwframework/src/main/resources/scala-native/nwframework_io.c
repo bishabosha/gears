@@ -357,8 +357,26 @@ static int nwf_errno(nw_error_t error) {
 
 /* ---- Connections ---- */
 
-static nw_parameters_t nwf_tcp_parameters(void) {
-  return nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION);
+/* TCP's options as a connection or listener opens (`SocketOption.NoDelay` and `KeepAlive`): Network.framework takes
+ * them on its parameters only, and a listener's connections have its parameters. `keepalive` 0 leaves the system's. */
+typedef struct nwf_tcp_settings {
+  int no_delay;
+  int keepalive; /* 0 the system's, 1 off, 2 on with the timings below */
+  int idle, interval, count;
+} nwf_tcp_settings_t;
+
+static nw_parameters_t nwf_tcp_parameters(const nwf_tcp_settings_t *settings) {
+  nwf_tcp_settings_t s = *settings;
+  return nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, ^(nw_protocol_options_t tcp) {
+    nw_tcp_options_set_no_delay(tcp, s.no_delay != 0);
+    if (s.keepalive == 1) nw_tcp_options_set_enable_keepalive(tcp, false);
+    else if (s.keepalive == 2) {
+      nw_tcp_options_set_enable_keepalive(tcp, true);
+      nw_tcp_options_set_keepalive_idle_time(tcp, s.idle);
+      nw_tcp_options_set_keepalive_interval(tcp, s.interval);
+      nw_tcp_options_set_keepalive_count(tcp, s.count);
+    }
+  });
 }
 
 static nw_parameters_t nwf_udp_parameters(void) {
@@ -403,10 +421,10 @@ static void nwf_connection_start(nwf_handle_t *h) {
 }
 
 /* A stream connection to `host`:`port`, started. */
-nwf_handle_t *nwf_connect(const char *host, int port) {
+nwf_handle_t *nwf_connect(const char *host, int port, const nwf_tcp_settings_t *settings) {
   nwf_handle_t *h = nwf_handle_new(NWF_STREAM);
   nw_endpoint_t endpoint = nwf_endpoint(host, port);
-  nw_parameters_t parameters = nwf_tcp_parameters();
+  nw_parameters_t parameters = nwf_tcp_parameters(settings);
   h->connection = nw_connection_create(endpoint, parameters);
   nw_release(endpoint);
   nw_release(parameters);
@@ -535,9 +553,9 @@ static void nwf_listener_start(nwf_handle_t *h) {
 
 /* A stream listener on `host`:`port`, started, its ready or failed state to come as an event; NULL if it cannot be
  * made. */
-nwf_handle_t *nwf_listen(const char *host, int port) {
+nwf_handle_t *nwf_listen(const char *host, int port, const nwf_tcp_settings_t *settings) {
   nwf_handle_t *h = nwf_handle_new(NWF_LISTENER);
-  nw_parameters_t parameters = nwf_tcp_parameters();
+  nw_parameters_t parameters = nwf_tcp_parameters(settings);
   nw_parameters_set_reuse_local_address(parameters, true); /* as SO_REUSEADDR, on every backend */
   nwf_restrict_family(parameters, host);
   nw_endpoint_t local = nwf_endpoint(host, port);

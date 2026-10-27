@@ -501,4 +501,98 @@ trait IpStreamContract extends ReactorContract {
       finally close(r, listener)
     }
   }
+
+  /** A connection to a listener opened with `listening`, the client opening with `connecting`: the client's and the
+    * server's ends, closed after `body`.
+    */
+  private def connected(r: R, listening: SocketOptions, connecting: SocketOptions)(
+      body: (Connection, Connection) => Unit
+  )(using munit.Location): Unit = {
+    val into = Slot[Listener]()
+    val listener = opened(r, into, backend.ops.listen(IpAddress.IPv4("127.0.0.1", 0), listening, into))
+    try {
+      val address = backend.ops.localAddress(listener).asInstanceOf[IpAddress]
+      val clientInto = Slot[Connection]()
+      val connecting_ = Outcome()
+      r.submit(backend.ops.connect(address, connecting, clientInto), connecting_)
+      val accepted = Slot[Connection]()
+      assertEquals(run(r, backend.ops.accept(listener, accepted)), null)
+      turnUntil(r)(connecting_.finished)
+      assertEquals(connecting_.failure, null)
+      val client = clientInto.clear()
+      val server = accepted.clear()
+      try body(client, server)
+      finally {
+        close(r, client)
+        close(r, server)
+      }
+    } finally close(r, listener)
+  }
+
+  test("a connection has NoDelay on at both ends unless it is set off, given to the client or to the listener") {
+    assert(backend.ops.supports(SocketOption.NoDelay), "every backend has NoDelay")
+    withReactor { r =>
+      connected(r, SocketOptions.default, SocketOptions.default) { (client, server) =>
+        assertEquals(backend.ops.option(client, SocketOption.NoDelay), true)
+        assertEquals(backend.ops.option(server, SocketOption.NoDelay), true)
+      }
+      val off = SocketOptions.default.set(SocketOption.NoDelay, false)
+      connected(r, off, off) { (client, server) =>
+        assertEquals(backend.ops.option(client, SocketOption.NoDelay), false)
+        assertEquals(backend.ops.option(server, SocketOption.NoDelay), false, "the listener's, on what it accepts")
+      }
+    }
+  }
+
+  test("keepalive given as a socket opens is the connection's, and the listener's is each accepted one's") {
+    assume(backend.ops.supports(SocketOption.KeepAlive), "this backend has no keepalive option")
+    val on = KeepAlive.On(30, 5, 3)
+    withReactor { r =>
+      connected(r, SocketOptions.default.set(SocketOption.KeepAlive, on), SocketOptions.default) { (client, server) =>
+        assertEquals(backend.ops.option(client, SocketOption.KeepAlive), KeepAlive.Off, "the system's, off")
+        assertEquals(backend.ops.option(server, SocketOption.KeepAlive), on)
+      }
+      connected(r, SocketOptions.default, SocketOptions.default.set(SocketOption.KeepAlive, on)) { (client, _) =>
+        assertEquals(backend.ops.option(client, SocketOption.KeepAlive), on)
+      }
+    }
+  }
+
+  test("a buffer size given as a socket opens is a request the system meets at least") {
+    for option <- List(SocketOption.ReceiveBuffer, SocketOption.SendBuffer) if backend.ops.supports(option) do
+      withReactor { r =>
+        connected(r, SocketOptions.default, SocketOptions.default.set(option, 65536)) { (client, _) =>
+          val size = backend.ops.option(client, option)
+          assert(size >= 65536, s"$option: $size")
+        }
+      }
+  }
+
+  test("an option that can change is changed on an open connection; one that cannot, or one missing, is refused") {
+    withReactor { r =>
+      connected(r, SocketOptions.default, SocketOptions.default) { (client, _) =>
+        def check[V](option: SocketOption[V], value: V, readsBack: Boolean)(using munit.Location): Unit =
+          if !backend.ops.supports(option) then {
+            intercept[IllegalArgumentException](backend.ops.option(client, option))
+            intercept[IllegalArgumentException](
+              backend.ops.connect(IpAddress.IPv4("127.0.0.1", 9), SocketOptions.default.set(option, value), Slot())
+            )
+          } else if !backend.ops.canChange(option) then
+            intercept[IllegalArgumentException](backend.ops.setOption(client, option, value))
+          else {
+            backend.ops.setOption(client, option, value)
+            if readsBack then assertEquals(backend.ops.option(client, option), value, s"$option")
+          }
+        check(SocketOption.NoDelay, false, readsBack = true)
+        check(SocketOption.KeepAlive, KeepAlive.On(30, 5, 3), readsBack = true)
+        check(SocketOption.ReceiveBuffer, 65536, readsBack = false) // a request, which the system may round or double
+        check(SocketOption.SendBuffer, 65536, readsBack = false)
+      }
+    }
+  }
+
+  test("an option's value out of range is refused as the options are made") {
+    intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.ReceiveBuffer, 0))
+    intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.KeepAlive, KeepAlive.On(0, 5, 3)))
+  }
 }

@@ -97,19 +97,58 @@ object NioOps
     require(max > 0, s"max must be positive, not $max")
     new AcceptAll(handle, into, max)
   }
-  def connect(address: IpAddress, into: Slot[Connection]): ConnectTo =
-    new ConnectTo(gears.async.io.Ops.ip(address), into)
+  def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    new ConnectTo(gears.async.io.Ops.ip(address), into, options)
+  }
   def connect(address: UnixAddress, into: Slot[Connection]): ConnectTo =
     new ConnectTo(gears.async.io.Ops.unix(address), into)
-  def listen(address: IpAddress, into: Slot[Listener]): NioOp =
-    new Listen(gears.async.io.Ops.ip(address), into)
+  def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): NioOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = true)
+    new Listen(gears.async.io.Ops.ip(address), into, options)
+  }
   def listen(address: UnixAddress, into: Slot[Listener]): NioOp =
     new Listen(gears.async.io.Ops.unix(address), into)
-  def bindDatagram(local: IpAddress, into: Slot[BoundDatagram]): NioOp =
-    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, NioKinds.boundDatagram)
-  def connectDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[ConnectedDatagram]): NioOp = {
+  def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): NioOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
+    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, NioKinds.boundDatagram, options)
+  }
+  def connectDatagram(
+      local: IpAddress | Null,
+      remote: IpAddress,
+      options: SocketOptions,
+      into: Slot[ConnectedDatagram]
+  ): NioOp = {
+    gears.async.io.Ops.checkOptions(options, supports, stream = false)
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    new OpenDatagram(l, r, into, NioKinds.connectedDatagram)
+    new OpenDatagram(l, r, into, NioKinds.connectedDatagram, options)
+  }
+
+  // Socket options: every one, keepalive's timings where the JDK has them here, changed at any time.
+  def supports(option: SocketOption[?]): Boolean = option != SocketOption.KeepAlive || NioHandles.keepAliveTimings
+  def canChange(option: SocketOption[?]): Boolean = supports(option)
+  def option[V](handle: Handle, option: SocketOption[V]): V =
+    NioHandles.optionOf(networkChannel(handle, option), option).asInstanceOf[V]
+  def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
+    option.check(value)
+    NioHandles.setOption(networkChannel(handle, option), option, value)
+  }
+
+  /** `handle`'s channel, an IP socket's `option` applies to; else an `IllegalArgumentException`. */
+  private def networkChannel(handle: Handle, option: SocketOption[?]): java.nio.channels.NetworkChannel = {
+    if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option here")
+    NioHandles.entry(handle) match {
+      case s: Selectable =>
+        s.channel match {
+          case c: java.nio.channels.NetworkChannel if c.getLocalAddress.isInstanceOf[java.net.InetSocketAddress] =>
+            val stream = c.isInstanceOf[SocketChannel] || c.isInstanceOf[ServerSocketChannel]
+            if option.streamsOnly && !stream then
+              throw new IllegalArgumentException(s"$option applies to stream sockets, not the datagram socket $handle")
+            c
+          case _ => throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
+        }
+      case _ => throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
+    }
   }
   def pipe(read: Slot[Readable], write: Slot[Writable]): NioOp = new OpenPipe(read, write)
   def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
@@ -182,9 +221,13 @@ sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce 
 }
 
 /** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
-final class Listen(address: SocketAddress, into: Slot[NioKinds.Listener]) extends OpensAtOnce(into) {
+final class Listen(
+    address: SocketAddress,
+    into: Slot[NioKinds.Listener],
+    options: SocketOptions = SocketOptions.default
+) extends OpensAtOnce(into) {
   protected def open(): NioKinds.Listener = address match {
-    case ip: IpAddress     => NioHandles.listen(ip)
+    case ip: IpAddress     => NioHandles.listen(ip, options)
     case unix: UnixAddress => NioHandles.listen(unix)
   }
 }
@@ -196,9 +239,10 @@ final class OpenDatagram[K <: Handle](
     local: IpAddress | Null,
     remote: IpAddress | Null,
     into: Slot[K],
-    kind: Handle => K
+    kind: Handle => K,
+    options: SocketOptions = SocketOptions.default
 ) extends OpensAtOnce(into) {
-  protected def open(): K = kind(NioHandles.datagram(local, remote))
+  protected def open(): K = kind(NioHandles.datagram(local, remote, options))
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
@@ -327,6 +371,7 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
           client.close()
           throw t
       }
+      NioHandles.accepted(handle, client)
       into.set(NioKinds.connection(NioHandles.add(Selectable(client, null))))
     }
     client != null
@@ -354,6 +399,7 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
               client.close()
               throw t
           }
+          NioHandles.accepted(handle, client)
           clients += NioKinds.connection(NioHandles.add(Selectable(client, null)))
         }
       }
@@ -373,7 +419,12 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   * Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times out
   * first, the socket is closed and `into` left empty.
   */
-final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) extends Command with Opens {
+final class ConnectTo(
+    address: SocketAddress,
+    into: Slot[NioKinds.Connection],
+    options: SocketOptions = SocketOptions.default
+) extends Command
+    with Opens {
   override private[nio] def oneShot: Boolean = true // it opens its socket
   override private[nio] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
     null // on a socket of its own
@@ -386,7 +437,7 @@ final class ConnectTo(address: SocketAddress, into: Slot[NioKinds.Connection]) e
 
   /** Opens the socket and starts connecting it, as the op is submitted or performed. */
   private[nio] def open(): Unit = {
-    socket = (NioHandles.connectStream(address))
+    socket = (NioHandles.connectStream(address, options))
     connected = false
   }
 
