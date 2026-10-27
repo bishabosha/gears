@@ -131,8 +131,9 @@ future to feed its channel, as a `Future` is the gears way to turn a loop of ops
   and how it compares with cats-effect.
 - [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend` on the pool: why each waits as it does, what
   was measured, and what was tried and dropped.
-- [`nwframework.md`](nwframework.md): Network.framework as a reactor backend, an experiment kept as the reference for
-  a completion-based one.
+- [`nwframework.md`](nwframework.md): kqueue's reactors with Network.framework for TCP and connected UDP off
+  loopback, as Apple advises, and kqueue's code for the rest: an experiment, and the reference for a completion-based
+  facility under a reactor.
 - [`scala-native.md`](scala-native.md): costs only Scala Native can remove, the changes proposed to it, and the
   workarounds meanwhile (the `setjmp` override, the `Unblocked` bindings).
 - [`missing-api.md`](missing-api.md): what the interface lacks for TLS, QUIC, HTTP and WebSockets (addresses, socket

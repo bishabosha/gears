@@ -168,7 +168,10 @@ can never be confused with a new one: it is the closed object, and an op on it f
 parameter (`Ops[Op, H]`, `SocketOps[Op, H]`, and the rest), so a handle's type is its backend's: `io.Handle` in a
 program, as `io.Op` is. Each backend implements it with a class of its own whose constructor is private to the
 backend's package: `KqueueBackend.Handle`, holding the descriptor; `NioCapabilities.Handle`, shared by NIO's two
-backends, holding the channel's entry; `NWFrameworkBackend.Handle`, holding its `NWFrameworkHandle`. Slots of handles
+backends, holding the channel's entry; and the Network.framework backend, since it runs on kqueue's reactors
+(2026-10-27, see [`nwframework.md`](nwframework.md)), kqueue's, a Network.framework object as its `foreign` one: its
+kinds are opaque types of its own, so the two backends' kinds do not type-check as each other's, and kqueue's ops
+refuse a foreign handle passed as a raw `Handle`, which only `close` takes. Slots of handles
 are `Slot[H]`; `Handle.Slot`, `Handle.Opt` and the opaque `Handle` are gone. Each handle has a closed flag, so a second
 close fails without touching a descriptor whose number may be another's by then.
 

@@ -34,8 +34,9 @@ trait GearsBenchCheck extends KQueueDemoSuite {
 class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   override def commandPrefix: Seq[String] = Seq("gears")
 
-  demoTest("bench: every scenario runs on the NWFramework backend over TCP, at a tiny scale") {
-    val output = run("bench", "--backend", "nwframework", "--tcp", "--scale", "0.01", "--connections", "8")
+  demoTest("bench: every scenario runs on Network.framework over TCP, at a tiny scale") {
+    val output =
+      run("bench", "--backend", "nwframework-everywhere", "--tcp", "--scale", "0.01", "--connections", "8")
     for (
       scenario <- Seq(
         "pingpong",
@@ -60,9 +61,9 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
     assert(!output.contains("Exception"), output)
   }
 
-  demoTest("bench: the NWFramework backend refuses a Unix socket address") {
-    val output = runFailing("bench", "--backend", "nwframework", "--scale", "0.01", "--scenarios", "pingpong")
-    assert(output.contains("no Unix domain sockets"), output)
+  demoTest("bench: the NWFramework backend runs a Unix socket's scenarios on kqueue's code") {
+    val output = run("bench", "--backend", "nwframework", "--scale", "0.01", "--scenarios", "pingpong")
+    assert(output.linesIterator.exists(_.startsWith("bench: pingpong ")), output)
   }
 }
 
@@ -74,7 +75,7 @@ class GearsSocketDemoSuite extends SocketDemoSuite {
   override def sendsEmptyConnectedDatagrams: Boolean = false
   override def otherStreamServers: Seq[StreamServer] = Seq(
     StreamServer("reactor-sock", Nil),
-    StreamServer("reactor-sock", Seq("--backend", "nwframework"), Seq(Family.IPv4, Family.IPv6))
+    StreamServer("reactor-sock", Seq("--backend", "nwframework-everywhere"), Seq(Family.IPv4, Family.IPv6))
   )
 }
 

@@ -60,7 +60,9 @@ object Main {
   def reactorSock4Serve(
       @arg host: String = "127.0.0.1",
       @arg port: Int = 9999,
-      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
+      @arg(doc =
+        "kqueue, nwframework (Network.framework, loopback on kqueue), or nwframework-everywhere (loopback too)"
+      ) backend: String = "kqueue"
   ): Unit = {
     withReactorBackend(backend)(ReactorServerSocket.run(IpAddress.IPv4(host, port))(using _))
   }
@@ -68,7 +70,9 @@ object Main {
   def reactorSock6Serve(
       @arg host: String = "::1",
       @arg port: Int = 9999,
-      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
+      @arg(doc =
+        "kqueue, nwframework (Network.framework, loopback on kqueue), or nwframework-everywhere (loopback too)"
+      ) backend: String = "kqueue"
   ): Unit = {
     withReactorBackend(backend)(ReactorServerSocket.run(IpAddress.IPv6(host, port))(using _))
   }
@@ -170,17 +174,18 @@ object Main {
       ) noServer: mainargs.Flag,
       @arg(doc = "worker threads for the clients, and as many again for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
-      @arg(doc = "kqueue, or nwframework: Network.framework, which needs --tcp") backend: String = "kqueue"
+      @arg(doc =
+        "kqueue, nwframework (Network.framework, loopback on kqueue), or nwframework-everywhere (loopback too); Network.framework's own sockets need --tcp, which on loopback needs nwframework-everywhere"
+      )
+      backend: String = "kqueue"
   ): Unit = {
     val names = scenarios.split(',').toSeq.map(_.trim).filter(_.nonEmpty)
     def run[B <: IpSockets](endpoint: Endpoint[B])(using B): Unit =
       GearsBench.run(names, scale, connections, endpoint, workers, takePolicy(policy), server = !noServer.value)
-    if tcp.value then withBackend(backend)(b => run(Endpoint.Ip(IpAddress.IPv4(host, port)))(using b))
-    else
-      backend match { // only kqueue has Unix stream sockets
-        case "kqueue" => run(Endpoint.Unix(UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")))
-        case other    => throw new IllegalArgumentException(s"`$other` has no Unix domain sockets; use --tcp")
-      }
+    withBackend(backend) { b =>
+      if tcp.value then run(Endpoint.Ip(IpAddress.IPv4(host, port)))(using b)
+      else run(Endpoint.Unix(UnixAddress(s"/tmp/gears-bench-${System.nanoTime() % 1_000_000}.sock")))(using b)
+    }
   }
   @main(name = "bench-serve", doc = "The bench's echo server alone, for a bench on another machine with --no-server")
   def benchServe(
@@ -188,7 +193,9 @@ object Main {
       @arg port: Int = 19876,
       @arg(doc = "worker threads for the server") workers: Int = 1,
       @arg(doc = "which tasks idle workers take from others: free, affine or hybrid") policy: String = "affine",
-      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
+      @arg(doc =
+        "kqueue, nwframework (Network.framework, loopback on kqueue), or nwframework-everywhere (loopback too)"
+      ) backend: String = "kqueue"
   ): Unit =
     withBackend(backend) { b =>
       GearsBench.serveForever(Endpoint.Ip(IpAddress.IPv4(host, port)), workers, takePolicy(policy))(using b)
@@ -198,20 +205,24 @@ object Main {
     .find(_.toString.equalsIgnoreCase(policy))
     .getOrElse(throw new IllegalArgumentException(s"Unknown policy `$policy`; try free, affine or hybrid"))
 
-  /** Runs `body` with the backend named: kqueue, or nwframework, Network.framework. */
-  private def withBackend(backend: String)(body: gears.async.io.SocketBackend => Unit): Unit = backend match {
-    case "kqueue"      => body(KqueueBackend)
-    case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
-    case other         => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
-  }
-
-  /** Runs `body` with the reactor backend named: kqueue, or nwframework, Network.framework. */
-  private def withReactorBackend(backend: String)(body: gears.async.io.ReactorBackend & IpSockets => Unit): Unit =
+  /** Runs `body` with the backend named: kqueue; nwframework, Network.framework for IP sockets not on loopback,
+    * kqueue's code for the rest; or nwframework-everywhere, Network.framework for loopback's too, to measure it.
+    */
+  private def withBackend(
+      backend: String
+  )(body: gears.async.io.ReactorBackend & gears.async.io.UnixStreams => Unit): Unit =
     backend match {
-      case "kqueue"      => body(KqueueBackend)
-      case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
-      case other         => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
+      case "kqueue"                 => body(KqueueBackend)
+      case "nwframework"            => body(gears.async.io.nwframework.NWFrameworkBackend)
+      case "nwframework-everywhere" => body(gears.async.io.nwframework.NWFrameworkBackend.Everywhere)
+      case other                    =>
+        throw new IllegalArgumentException(
+          s"Unknown backend `$other`; try kqueue, nwframework or nwframework-everywhere"
+        )
     }
+
+  private def withReactorBackend(backend: String)(body: gears.async.io.ReactorBackend & IpSockets => Unit): Unit =
+    withBackend(backend)(body)
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }

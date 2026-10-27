@@ -15,8 +15,8 @@
   *
   * A build runs the gears benchmark, `gears bench`; suffix its path with `@raw` to run the same scenarios written
   * against `KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`; or with `@nwframework` to run them on
-  * the Darwin backend (Network.framework) instead of kqueue: `nwframework=<path>@nwframework`, with `-- --tcp`, since
-  * it has no Unix sockets.
+  * Network.framework instead of kqueue (`--backend nwframework-everywhere`, loopback's sockets on it too):
+  * `nwframework=<path>@nwframework`, with `-- --tcp`, since the backend's Unix sockets are kqueue's.
   *
   * Each build runs `--runs` times, alternating between builds so drift in machine load affects them alike. The table
   * shows each scenario's median microseconds per operation, and each later build's change against the first. Arguments
@@ -87,7 +87,7 @@ def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable
   val command =
     if path.endsWith("@raw") then Seq(path.stripSuffix("@raw"), "bench")
     else if path.endsWith("@nwframework") then
-      Seq(path.stripSuffix("@nwframework"), "gears", "bench", "--backend", "nwframework")
+      Seq(path.stripSuffix("@nwframework"), "gears", "bench", "--backend", "nwframework-everywhere")
     else Seq(path, "gears", "bench")
   val out = Files.createTempFile("compare", ".out")
   val err = Files.createTempFile("compare", ".err")

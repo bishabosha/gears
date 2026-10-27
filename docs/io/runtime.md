@@ -1,7 +1,7 @@
 # The reactor pool: a design note
 
 The runtime in `gears.async.io.internal` (core, `jvm-native/`) runs a program over a `ReactorBackend` on a pool of
-workers, each a thread driving a reactor of its own. kqueue's and NIO's reactors run on it, and Network.framework's; this
+workers, each a thread driving a reactor of its own. kqueue's and NIO's reactors run on it, and the Network.framework backend's, which are kqueue's; this
 note is about the pool itself, with its measurements taken on kqueue, where it was built. It records the pool's shape
 and why, the take policies and how they compare, how tasks and descriptors move between threads, the budgets that keep
 the fast path fair, how failures are contained, and what macOS's per-process locks mean for scaling, with the three

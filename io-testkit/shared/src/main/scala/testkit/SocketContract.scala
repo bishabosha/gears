@@ -185,6 +185,41 @@ trait SocketContract extends ReactorContract {
     }
   }
 
+  test("a bound socket sends to peers that have not sent first from its own port, on its own port 0 or not") {
+    withReactor { r =>
+      val (first, firstPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      val (second, secondPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+      try {
+        def senderOf(to: Datagram)(using munit.Location): Int = {
+          val buf = allocate(16)
+          val from = Slot[IpAddress]()
+          assertEquals(run(r, backend.ops.receive(to, buf, from)), null)
+          from.clear() match {
+            case IpAddress.IPv4(_, port) => port
+            case other                   => fail(s"unexpected sender $other")
+          }
+        }
+        val (fixed, fixedPort) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))
+        try {
+          assertEquals(run(r, backend.ops.send(fixed, bytes("one"), IpAddress.IPv4("127.0.0.1", firstPort))), null)
+          assertEquals(senderOf(first), fixedPort)
+          assertEquals(run(r, backend.ops.send(fixed, bytes("two"), IpAddress.IPv4("127.0.0.1", secondPort))), null)
+          assertEquals(senderOf(second), fixedPort)
+        } finally close(r, fixed)
+        val any = datagram(r, IpAddress.IPv4("127.0.0.1", 0), null)
+        try {
+          assertEquals(run(r, backend.ops.send(any, bytes("one"), IpAddress.IPv4("127.0.0.1", firstPort))), null)
+          val port = senderOf(first)
+          assertEquals(run(r, backend.ops.send(any, bytes("two"), IpAddress.IPv4("127.0.0.1", secondPort))), null)
+          assertEquals(senderOf(second), port, "one port for every peer")
+        } finally close(r, any)
+      } finally {
+        close(r, first)
+        close(r, second)
+      }
+    }
+  }
+
   test("a packet lost on a socket that is not connected fails no send, to its peer or another") {
     withReactor { r =>
       val (server, port) = onFreePort(port => datagram(r, IpAddress.IPv4("127.0.0.1", port), null))

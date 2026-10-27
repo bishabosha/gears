@@ -216,3 +216,18 @@ it left the interface: the ops say what is done, not what is waited for. Kqueue 
 own suites. Readiness of a descriptor handed to another library, the one use the completion ops cannot cover, needs
 the descriptor too, which the interface never hands out. The blend of kqueue and Network.framework under way then has
 no capability it would have to refuse for some of its handles.
+
+## The Network.framework backend runs on kqueue's reactors
+
+The Network.framework backend had a reactor of its own, and, to keep one wait for everything, put pipes and FIFOs on
+Dispatch sources and emulated a bound datagram socket with a flow per peer. That emulation could not keep a kernel
+socket's promises: from a fixed port, a send to a peer that had not sent first was lost, since Network.framework
+refuses an outbound flow from a port its listener holds (probed), and per-peer flows needed an idle limit that lost
+packets in its turn. Apple's own advice (TN3151) is Network.framework for TCP and for UDP between two peers, and BSD
+sockets for what it does not support; and over loopback it uses the kernel's sockets at several times kqueue's cost.
+So the backend became kqueue's reactors, which run another facility's ops as `Notified` ops woken by a user event on
+the kqueue (`ReactorExtension`), with Network.framework for TCP and connected datagram sockets off loopback and
+kqueue's code for the rest: Unix domain sockets, which it gained, bound datagram sockets, loopback, pipes, FIFOs and
+files. The interface did not change: what goes where is the backend's choice, made by each opener's address and each
+op's handle, and `NWFrameworkBackend.Everywhere` keeps loopback on Network.framework for checking it.
+

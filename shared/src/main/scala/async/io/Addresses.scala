@@ -52,6 +52,14 @@ private[io] object IpText {
     case other => other
   }
 
+  /** Whether `address`, canonical, is a loopback address: IPv4's 127.0.0.0/8, IPv6's `::1`, or IPv4 loopback mapped
+    * into IPv6.
+    */
+  def isLoopback(address: IpAddress): Boolean = unmapped(address) match {
+    case IpAddress.IPv4(host, _) => host.startsWith("127.")
+    case IpAddress.IPv6(host, _) => host == "::1"
+  }
+
   private def invalid(host: String, family: String) =
     new IllegalArgumentException(s"Not a numeric $family address: $host")
 

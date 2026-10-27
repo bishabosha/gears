@@ -22,3 +22,11 @@ class NWFrameworkHigherLevelSuite extends HigherLevelChecks {
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     ReactorFutures.run(workers = 4)(using backend)(body)
 }
+
+/** The same with every IP socket on Network.framework, loopback's too, which the checks use. */
+class NWFrameworkEverywhereHigherLevelSuite extends HigherLevelChecks {
+  val backend: NWFrameworkBackend.Everywhere.type = NWFrameworkBackend.Everywhere
+
+  protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
+    ReactorFutures.run(workers = 4)(using backend)(body)
+}

@@ -5,27 +5,36 @@ import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
 import gears.async.io.Files
-import gears.async.io.IpSockets
 import gears.async.io.Pipes
 import gears.async.io.Reactor
 import gears.async.io.ReactorBackend
 import gears.async.io.Resolving
+import gears.async.io.UnixDatagrams
+import gears.async.io.UnixStreams
+import gears.async.io.kqueue.KqueueBackend
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueReactor
 
-/** Reactors over Apple's Network.framework, for IP sockets, and Dispatch, for pipes and FIFOs (see
-  * `NWFrameworkReactor`), with IP sockets, regular files and name resolution on the shared blocker pool, pipes,
-  * blocking ops, and FIFOs; no readiness, since Network.framework reports completions and nothing can be tried on a
-  * connection without waiting, and no Unix domain sockets, which Network.framework's public interface has no endpoint
-  * for. Its ops keep no state of one reactor between submissions, so an op may go to any of its reactors in turn.
+/** Kqueue's reactors with Network.framework where it serves best, as Apple advises (TN3151): its TCP connections and
+  * listeners, and UDP between two peers, a connected datagram socket; and kqueue's own code for the rest, which
+  * Network.framework does not do or does no better: Unix domain sockets, bound datagram sockets, pipes, FIFOs, regular
+  * files, name resolution and blocking ops, as `KqueueBackend` has them (see `NWFrameworkOps`). Each reactor is a
+  * `KqueueReactor`, woken for Network.framework's callbacks, which come on Dispatch's threads, by a user event on its
+  * kqueue (see `NWFrameworkExtension`). An op may go to any of its reactors in turn.
   */
-object NWFrameworkBackend
+sealed abstract class NWFrameworkBackends private[nwframework] (loopbackOnKqueue: Boolean)
     extends ReactorBackend
-    with IpSockets
     with Blocking
+    with UnixStreams
+    with UnixDatagrams
     with Fifos
     with Files
     with Resolving
     with Pipes {
-  type Op = NWFrameworkOp
+  type Op = KqueueOp
+
+  /** Kqueue's handle: a descriptor, or a Network.framework object as its foreign one (`KqueueBackend.Handle`). */
+  type Handle = KqueueBackend.Handle
   type Readable = NWFrameworkKinds.Readable
   type Writable = NWFrameworkKinds.Writable
   type Connection = NWFrameworkKinds.Connection
@@ -34,28 +43,18 @@ object NWFrameworkBackend
   type UnixDatagram = NWFrameworkKinds.UnixDatagram
   type File = NWFrameworkKinds.File
 
-  /** An open I/O object, as this backend's ops name it: made only by the ops that open one, so that a program cannot
-    * forge a handle, and closed once, a second close failing.
-    */
-  final class Handle private[nwframework] (private[nwframework] val target: NWFrameworkHandle) {
-    @volatile private var open = true
-
-    // The ops pending on it, at most one reading and one writing, on any submitter: each claims its direction as it is
-    // submitted, and lets it go as its completion is taken (see `Ops.alreadyPending`).
-    private[nwframework] val reader = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
-    private[nwframework] val writer = new java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
-
-    /** Whether it has not been closed. */
-    private[nwframework] def isOpen: Boolean = open
-
-    /** Marks it closed; false if it already was. */
-    private[nwframework] def markClosed(): Boolean = synchronized {
-      val was = open
-      open = false
-      was
-    }
-  }
-  def ops: NWFrameworkOps.type = NWFrameworkOps
+  val ops: NWFrameworkOps = new NWFrameworkOps(loopbackOnKqueue)
   def pool(bufferSize: Int, buffers: Int): BufferPool = new gears.async.io.internal.NativePool(bufferSize, buffers)
-  def open(): Reactor.Of[Op, Handle] = NWFrameworkReactor.open()
+  def open(): Reactor.Of[Op, Handle] = KqueueReactor.openFor(ops)
+}
+
+/** Sockets of loopback addresses on kqueue, as Unix domain sockets are, since Network.framework carries loopback over
+  * the kernel's own sockets at several times kqueue's cost.
+  */
+object NWFrameworkBackend extends NWFrameworkBackends(loopbackOnKqueue = true) {
+
+  /** Every IP socket on Network.framework, loopback's too: for checking and measuring Network.framework itself, whose
+    * checks run on loopback.
+    */
+  object Everywhere extends NWFrameworkBackends(loopbackOnKqueue = false)
 }

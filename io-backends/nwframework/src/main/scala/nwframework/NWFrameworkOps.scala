@@ -3,7 +3,6 @@ package nwframework
 
 import gears.async.io.BlockingOps
 import gears.async.io.BufferPool
-import gears.async.io.Completion
 import gears.async.io.FifoOps
 import gears.async.io.FileOps
 import gears.async.io.IpAddress
@@ -13,67 +12,42 @@ import gears.async.io.Repeatable
 import gears.async.io.ResolveOps
 import gears.async.io.ResolvedAddress
 import gears.async.io.Slot
-import gears.async.io.SocketOps
-import gears.async.io.internal.BlockingRun
+import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagramOps
+import gears.async.io.UnixStreamOps
 import gears.async.io.internal.NativeBuffer
 import gears.async.io.internal.NativePool
-import gears.async.io.internal.NonBlocking
-import gears.async.io.internal.PosixErr.cError
-import gears.async.io.internal.PosixResolver
-import gears.async.io.internal.TimerHeap
+import gears.async.io.kqueue.KqueueBackend.Handle
+import gears.async.io.kqueue.KqueueKinds
+import gears.async.io.kqueue.KqueueOp
+import gears.async.io.kqueue.KqueueOps
+import gears.async.io.kqueue.KqueueReactor
+import gears.async.io.kqueue.Notified
 
-import java.io.IOException
 import java.nio.ByteBuffer
-import scala.scalanative.posix.unistd
-import scala.scalanative.unsafe.*
-import scala.scalanative.unsigned.*
 
-import NWFrameworkBackend.Handle
+import NWFrameworkHandles.owns
 
-/** Everything `NWFrameworkReactor` can run: its `Op` member type. */
-sealed trait NWFrameworkOp extends TimerHeap.Entry {
-  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
-
-  // Whether this op has been submitted before, so a one-shot op is run once though submitted on two threads at once.
-  private val submissions = new java.util.concurrent.atomic.AtomicBoolean()
-
-  /** Records a submission, refusing a one-shot op submitted before with `IllegalStateException`. */
-  private[nwframework] final def markSubmitted(): Unit =
-    if submissions.getAndSet(true) && oneShot then
-      throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
-
-  /** While the op is pending in the reactor: its completion, so the op is its own record and submitting it allocates
-    * nothing. Taken off just before the completion runs, which may then submit the op again. Loop thread only.
-    */
-  private[nwframework] var completion: Completion[NWFrameworkOp] | Null = null
-
-  /** For an op that failed as soon as it was submitted: its failure, until its completion runs. */
-  private[nwframework] var atOnceFailure: Throwable | Null = null
-
-  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
-    * it does anything; null if its slots are empty.
-    */
-  private[nwframework] def slotRefusal: Throwable | Null = null
-
-  /** The claim this op takes on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
-    */
-  private[nwframework] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null = null
-
-  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
-  private[nwframework] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
-
-  /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
-  private[nwframework] var attachment: AnyRef | Null = null
-}
-
-/** Builds the ops `NWFrameworkReactor` understands. */
-object NWFrameworkOps
-    extends SocketOps[NWFrameworkOp, Handle]
-    with PipeOps[NWFrameworkOp, Handle]
-    with FifoOps[NWFrameworkOp, Handle]
-    with BlockingOps[NWFrameworkOp, Handle]
-    with FileOps[NWFrameworkOp, Handle]
-    with ResolveOps[NWFrameworkOp, Handle] {
+/** Builds the backend's ops, each Network.framework's or kqueue's, so that both run on the same kqueue reactor. An op
+  * on a handle is that handle's: a Network.framework connection's, listener's or connected datagram socket's
+  * (`NWFrameworkCommand`), or else kqueue's, on a descriptor. An opener chooses by what it opens, as Apple advises
+  * (TN3151, "Choosing the right networking API"): Network.framework for TCP connections and listeners, and for UDP
+  * between two peers, a connected datagram socket; kqueue's own code for what Network.framework does not do, or does no
+  * better than the kernel: Unix domain sockets, a bound datagram socket that sends to and hears from anyone, pipes,
+  * FIFOs and files; and, with `loopbackOnKqueue`, sockets of loopback addresses, which Network.framework carries over
+  * the kernel's own loopback at several times kqueue's cost (see docs/io/nwframework.md).
+  *
+  * Its kinds are opaque types of its own over kqueue's handle, so that a program cannot pass one to kqueue's ops, nor
+  * kqueue's to these; underneath, kqueue's openers write the same handles into its slots.
+  */
+final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
+    extends UnixStreamOps[KqueueOp, Handle]
+    with UnixDatagramOps[KqueueOp, Handle]
+    with PipeOps[KqueueOp, Handle]
+    with FifoOps[KqueueOp, Handle]
+    with BlockingOps[KqueueOp, Handle]
+    with FileOps[KqueueOp, Handle]
+    with ResolveOps[KqueueOp, Handle] {
   type Readable = NWFrameworkKinds.Readable
   type Writable = NWFrameworkKinds.Writable
   type Connection = NWFrameworkKinds.Connection
@@ -82,46 +56,88 @@ object NWFrameworkOps
   type UnixDatagram = NWFrameworkKinds.UnixDatagram
   type File = NWFrameworkKinds.File
 
-  def read(handle: Readable, buf: ByteBuffer): NWFrameworkRead = new NWFrameworkRead(handle, buf)
-  def write(handle: Writable, buf: ByteBuffer): NWFrameworkWrite = new NWFrameworkWrite(handle, buf)
-  def accept(handle: Listener, into: Slot[Connection]): NWFrameworkAccept = new NWFrameworkAccept(handle, into)
-  def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): NWFrameworkAcceptAll = {
+  /** Whether a socket of `address` goes to kqueue rather than Network.framework. */
+  private def onKqueue(address: IpAddress): Boolean = loopbackOnKqueue && gears.async.io.IpText.isLoopback(address)
+
+  /** `into`, for kqueue's opener: the same handles, under kqueue's kind of the same name. */
+  private def forKqueue[K <: AnyRef](into: Slot[?]): Slot[K] = into.asInstanceOf[Slot[K]]
+
+  def read(handle: Readable, buf: ByteBuffer): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkRead(handle, buf) else KqueueOps.read(KqueueKinds.readable(handle), buf)
+  def write(handle: Writable, buf: ByteBuffer): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkWrite(handle, buf) else KqueueOps.write(KqueueKinds.writable(handle), buf)
+  def read(handle: Readable, pool: BufferPool, into: Slot[Received]): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkPooledRead(handle, native(pool), into)
+    else KqueueOps.read(KqueueKinds.readable(handle), pool, into)
+  def accept(handle: Listener, into: Slot[Connection]): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkAccept(handle, into)
+    else KqueueOps.accept(KqueueKinds.listener(handle), forKqueue(into))
+  def acceptAll(handle: Listener, into: Slot[Array[Connection]], max: Int): KqueueOp & Repeatable = {
     require(max > 0, s"max must be positive, not $max")
-    new NWFrameworkAcceptAll(handle, into, max)
+    if owns(handle) then new NWFrameworkAcceptAll(handle, into, max)
+    else KqueueOps.acceptAll(KqueueKinds.listener(handle), forKqueue(into), max)
   }
-  def connect(address: IpAddress, into: Slot[Connection]): NWFrameworkOp =
-    new NWFrameworkConnectTo(gears.async.io.Ops.ip(address), into)
-  def listen(address: IpAddress, into: Slot[Listener]): NWFrameworkOp =
-    new NWFrameworkListen(gears.async.io.Ops.ip(address), into)
-  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): NWFrameworkOp = {
+  def shutdownOutput(handle: Connection): KqueueOp =
+    if owns(handle) then new NWFrameworkShutdownOutput(handle)
+    else KqueueOps.shutdownOutput(KqueueKinds.connection(handle))
+  def close(handle: Handle): KqueueOp =
+    if owns(handle) then new NWFrameworkClose(handle) else KqueueOps.close(handle)
+
+  def connect(address: IpAddress, into: Slot[Connection]): KqueueOp = {
+    val ip = gears.async.io.Ops.ip(address)
+    if onKqueue(ip) then KqueueOps.connect(ip, forKqueue(into)) else new NWFrameworkConnectTo(ip, into)
+  }
+  def listen(address: IpAddress, into: Slot[Listener]): KqueueOp = {
+    val ip = gears.async.io.Ops.ip(address)
+    if onKqueue(ip) then KqueueOps.listen(ip, forKqueue(into)) else new NWFrameworkListen(ip, into)
+  }
+
+  /** A connected socket is Network.framework's, unless its peer is on loopback; a bound one, which sends to and hears
+    * from anyone, is kqueue's, Network.framework having no such socket (see `NWFrameworkOps`).
+    */
+  def datagram(local: IpAddress | Null, remote: IpAddress | Null, into: Slot[Datagram]): KqueueOp = {
     val (l, r) = gears.async.io.Ops.ipPair(local, remote)
-    new NWFrameworkOpenDatagram(l, r, into)
+    if r == null || onKqueue(r.nn) then KqueueOps.datagram(l, r, forKqueue(into))
+    else new NWFrameworkOpenDatagram(l, r.nn, into)
   }
-  def pipe(read: Slot[Readable], write: Slot[Writable]): NWFrameworkOp = new NWFrameworkOpenPipe(read, write)
-  def openFifoForReading(path: String, into: Slot[Readable]): NWFrameworkOp =
-    new NWFrameworkOpenFifo(path, write = false, into, NWFrameworkKinds.readable)
-  def openFifoForWriting(path: String, into: Slot[Writable]): NWFrameworkOp =
-    new NWFrameworkOpenFifo(path, write = true, into, NWFrameworkKinds.writable)
-  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): NWFrameworkReceive =
-    new NWFrameworkReceive(handle, buf, from)
-  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): NWFrameworkSend =
-    new NWFrameworkSend(handle, buf, gears.async.io.Ops.ip(to))
-  def send(handle: Datagram, buf: ByteBuffer): NWFrameworkSend = new NWFrameworkSend(handle, buf, null)
-  def timer(milliseconds: Int): NWFrameworkTimer = new NWFrameworkTimer(milliseconds)
-  def blocking(body: () => Unit): NWFrameworkBlocking = new NWFrameworkBlockingTask(body)
-  def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NWFrameworkBlocking =
-    new NWFrameworkBlockingResultTask(body, into)
-  def resolve(host: String, into: Slot[List[ResolvedAddress]]): NWFrameworkOp = new NWFrameworkResolve(host, into)
-  def read(handle: Readable, pool: BufferPool, into: Slot[Received]): NWFrameworkPooledRead =
-    new NWFrameworkPooledRead(handle, NWFrameworkOps.native(pool), into)
-  def close(handle: Handle): NWFrameworkOp = new NWFrameworkClose(handle)
-  def shutdownOutput(handle: Connection): NWFrameworkOp = new NWFrameworkShutdownOutput(handle)
-  def open(path: String, write: Boolean, into: Slot[File]): NWFrameworkOp = new NWFrameworkOpenFile(path, write, into)
-  def read(handle: File, buf: ByteBuffer, offset: Long): NWFrameworkPositionalRead =
-    new NWFrameworkPositionalRead(handle, buf, offset)
-  def write(handle: File, buf: ByteBuffer, offset: Long): NWFrameworkPositionalWrite =
-    new NWFrameworkPositionalWrite(handle, buf, offset)
-  def sync(handle: File): NWFrameworkFileSync = new NWFrameworkFileSync(handle)
+  def receive(handle: Datagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkReceive(handle, buf, from)
+    else KqueueOps.receive(KqueueKinds.datagram(handle), buf, from)
+  def send(handle: Datagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkSend(handle, buf, gears.async.io.Ops.ip(to))
+    else KqueueOps.send(KqueueKinds.datagram(handle), buf, to)
+  def send(handle: Datagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    if owns(handle) then new NWFrameworkSend(handle, buf, null)
+    else KqueueOps.send(KqueueKinds.datagram(handle), buf)
+
+  // Kqueue's alone.
+  def connect(address: UnixAddress, into: Slot[Connection]): KqueueOp = KqueueOps.connect(address, forKqueue(into))
+  def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp = KqueueOps.listen(address, forKqueue(into))
+  def datagram(local: UnixAddress | Null, remote: UnixAddress | Null, into: Slot[UnixDatagram]): KqueueOp =
+    KqueueOps.datagram(local, remote, forKqueue(into))
+  @annotation.targetName("receiveUnix")
+  def receive(handle: UnixDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): KqueueOp & Repeatable =
+    KqueueOps.receive(KqueueKinds.unixDatagram(handle), buf, from)
+  def send(handle: UnixDatagram, buf: ByteBuffer, to: UnixAddress): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixDatagram(handle), buf, to)
+  @annotation.targetName("sendUnix")
+  def send(handle: UnixDatagram, buf: ByteBuffer): KqueueOp & Repeatable =
+    KqueueOps.send(KqueueKinds.unixDatagram(handle), buf)
+  def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = KqueueOps.pipe(forKqueue(read), forKqueue(write))
+  def openFifoForReading(path: String, into: Slot[Readable]): KqueueOp =
+    KqueueOps.openFifoForReading(path, forKqueue(into))
+  def openFifoForWriting(path: String, into: Slot[Writable]): KqueueOp =
+    KqueueOps.openFifoForWriting(path, forKqueue(into))
+  def timer(milliseconds: Int): KqueueOp & Repeatable = KqueueOps.timer(milliseconds)
+  def blocking(body: () => Unit): KqueueOp = KqueueOps.blocking(body)
+  def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueOp = KqueueOps.blocking(body, into)
+  def resolve(host: String, into: Slot[List[ResolvedAddress]]): KqueueOp = KqueueOps.resolve(host, into)
+  def open(path: String, write: Boolean, into: Slot[File]): KqueueOp = KqueueOps.open(path, write, forKqueue(into))
+  def read(handle: File, buf: ByteBuffer, offset: Long): KqueueOp & Repeatable =
+    KqueueOps.read(KqueueKinds.file(handle), buf, offset)
+  def write(handle: File, buf: ByteBuffer, offset: Long): KqueueOp & Repeatable =
+    KqueueOps.write(KqueueKinds.file(handle), buf, offset)
+  def sync(handle: File): KqueueOp & Repeatable = KqueueOps.sync(KqueueKinds.file(handle))
 
   private def native(pool: BufferPool): NativePool = pool match {
     case native: NativePool => native
@@ -129,35 +145,47 @@ object NWFrameworkOps
   }
 }
 
-/** An op on a handle. `attempt` tries to finish it on the reactor's thread, after the handle has taken in what the
-  * framework delivered: true once done, with its results in the caller's buffers and slots; false when it has to wait,
-  * registered on the handle with the reactor and the submission's token, so that the handle tells the reactor to
-  * attempt again; a failure is thrown. Commands are `Repeatable`: attempting again is always meaningful.
+/** An op on a Network.framework handle, run by a kqueue reactor (see `Notified`): `attemptOn` tries to finish it on the
+  * reactor's thread, after the handle has taken in what the framework delivered: true once done, with its results in
+  * the caller's buffers and slots; false when it has to wait, registered on the handle with the reactor and the
+  * submission's token, so that the handle notifies the reactor to attempt again; a failure is thrown.
   */
-sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
+sealed abstract class NWFrameworkCommand extends Notified {
   def handle: Handle
 
   /** What the command waits for (`NWFrameworkHandle.Read`, `Write`, `Connect` or `Close`). */
   def kind: Int
 
-  override private[nwframework] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
+  override private[io] def claim: java.util.concurrent.atomic.AtomicReference[AnyRef | Null] | Null =
     if kind == NWFrameworkHandle.Read then handle.reader
     else if kind == NWFrameworkHandle.Write then handle.writer
     else null
 
-  /** The current submission's token, and the handle it resolved to when submitted, kept for its attempts since the
-    * handle may be closed meanwhile. Loop thread only.
+  /** The handle the current submission resolved to, kept for its attempts since the handle may be closed meanwhile.
+    * Loop thread only.
     */
-  private[nwframework] var token = 0L
   private[nwframework] var target: NWFrameworkHandle | Null = null
 
-  private[nwframework] def attempt(reactor: NWFrameworkReactor, drainFirst: Boolean): Boolean = {
+  override private[io] def begin(): Unit = target = NWFrameworkHandles.get(handle)
+
+  /** On submission the handle takes in its events first, so that an op finishes at once when it can; attempted again
+    * after a notification, they were taken in by the drain that led to it.
+    */
+  private[io] def attempt(reactor: KqueueReactor, first: Boolean): Boolean = {
     val h = target.nn
-    if drainFirst && !h.isFile then h.drain(reactor.event)
+    if first then h.drain(NWFrameworkExtension.of(reactor).event)
     attemptOn(h, reactor)
   }
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean
+  private[io] def withdraw(): Unit = {
+    target.nn.unwait(kind, token)
+    reset()
+  }
+
+  /** Forgets what an attempt began, for a submission withdrawn. */
+  protected def reset(): Unit = ()
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean
 }
 
 /** Fills `buf` between position and limit. Done once at least one byte has been read, or at end of stream; fails if
@@ -166,64 +194,38 @@ sealed abstract class NWFrameworkCommand extends NWFrameworkOp with Repeatable {
 final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Read
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
-    else if h.isFile || h.isDescriptor then {
-      val read = h.using(NonBlocking.read(_, buf)) // -1 at EOF, which leaves the buffer as it was
-      if read != 0 || h.isFile then true
-      else h.armed(read = true, reactor, token)
-    } else {
+    else {
       val n = h.read(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
       if n > 0 then NativeBuffer.advance(buf, n)
       n >= 0
     }
 }
 
-/** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): a descriptor is read into one as into the
-  * caller's buffer; a connection receives straight into one.
-  */
+/** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`). */
 final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
     extends NWFrameworkCommand {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
-    if h.isFile || h.isDescriptor then {
-      val slot = pool.take()
-      if slot == null then throw new IOException("The pool has no buffer free")
-      val buffer = slot.nn.buffer
-      val read =
-        try h.using(NonBlocking.read(_, buffer)) // -1 at EOF, which leaves the buffer as it was
-        catch {
-          case failure: Throwable =>
-            slot.nn.release() // a failed read holds nothing
-            throw failure
-        }
-      if read != 0 || h.isFile then {
-        buffer.flip()
-        into.set(slot.nn)
-        true
-      } else {
-        slot.nn.release()
-        h.armed(read = true, reactor, token)
-      }
-    } else {
-      val received = h.readPooled(pool, reactor, token)
-      if received == null then false
-      else {
-        into.set(received.nn)
-        true
-      }
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
+    val received = h.readPooled(pool, reactor, token)
+    if received == null then false
+    else {
+      into.set(received.nn)
+      true
     }
+  }
 }
 
 /** Accepts the connections waiting on a listener, at most `max`, writing their handles into `into`. */
 final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFrameworkKinds.Connection]], max: Int)
     extends NWFrameworkCommand {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
     val accepted = h.acceptAll(max, reactor, token)
     if accepted == null then false
     else {
@@ -233,15 +235,30 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
   }
 }
 
-/** A command that opens the handle it waits on, and writes it into a slot (see `Ops`): `open` makes the handle when the
+/** Accepts one connection on a listener, writing its handle into `into`. */
+final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  def kind: Int = NWFrameworkHandle.Read
+
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
+    val accepted = h.accept(reactor, token)
+    if accepted == null then false
+    else {
+      into.set(NWFrameworkKinds.connection(NWFrameworkHandles.accepted(accepted)))
+      true
+    }
+  }
+}
+
+/** A command that opens the handle it waits on, and writes it into a slot (see `Ops`): `make` makes the handle as the
   * command is submitted, starting what Network.framework does asynchronously, a connection or a listener, and the
-  * command then waits for it to be ready (`ready`). Done once it is, after writing the handle into `into`; if it fails,
-  * or the submission is cancelled first, by `cancel`, a time limit or the reactor closing, `abandon` closes the handle
-  * and leaves `into` empty.
+  * command then waits for it to be ready. Done once it is, after writing the handle into `into`; if it fails, or the
+  * submission is cancelled first, by `cancel`, a time limit or the reactor closing, `abandon` closes the handle and
+  * leaves `into` empty.
   */
 sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Handle => K) extends NWFrameworkCommand {
-  override private[nwframework] def oneShot: Boolean = true // it opens its handle
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def oneShot: Boolean = true // it opens its handle
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
   private var opened: Handle | Null = null
   private var delivered = false
   def kind: Int = NWFrameworkHandle.Connect
@@ -250,38 +267,29 @@ sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Han
   /** Makes the handle. */
   protected def make(): Handle
 
-  /** Whether the handle is ready, once made. */
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean
-
-  /** Makes the handle, for the reactor, as the command is submitted. */
-  private[nwframework] def open(): Unit = {
-    opened = (make())
+  override private[io] def begin(): Unit = {
+    opened = make()
     delivered = false
+    super.begin()
   }
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
     val done =
-      try ready(h, reactor)
+      try h.connected(reactor, token)
       catch {
         case t: Throwable =>
           abandon()
           throw t
       }
     if done then {
-      deliver(opened.nn)
+      into.set(kindOf(opened.nn))
       delivered = true
     }
     done
   }
 
-  /** Writes what was opened into the caller's slots. */
-  protected def deliver(handle: Handle): Unit = into.set(kindOf(handle))
-
-  /** Empties the caller's slots, once delivered. */
-  protected def undeliver(): Unit = into.clear(): Unit
-
-  private[nwframework] def abandon(): Unit = if opened != null then {
-    if delivered then undeliver()
+  override private[io] def abandon(): Unit = if opened != null then {
+    if delivered then into.clear(): Unit
     NWFrameworkHandles.close(opened.nn)
     opened = null
     delivered = false
@@ -294,83 +302,40 @@ sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Han
 final class NWFrameworkConnectTo(address: IpAddress, into: Slot[NWFrameworkKinds.Connection])
     extends NWFrameworkOpening(into, NWFrameworkKinds.connection) {
   protected def make(): Handle = NWFrameworkHandles.connect(address)
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
 /** A listener on `address` (see `SocketOps.listen`): ready once it is listening, failing if it cannot. */
 final class NWFrameworkListen(address: IpAddress, into: Slot[NWFrameworkKinds.Listener])
     extends NWFrameworkOpening(into, NWFrameworkKinds.listener) {
   protected def make(): Handle = NWFrameworkHandles.listener(address)
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
-/** A datagram socket (see `SocketOps.datagram`): ready once Network.framework has it ready, a bound one's listener or a
-  * connected one's connection, failing if it cannot be.
+/** A datagram socket connected to `remote` (see `SocketOps.datagram`), bound to `local` if given: ready once
+  * Network.framework has its connection ready, failing if it cannot be.
   */
-final class NWFrameworkOpenDatagram(
-    local: IpAddress | Null,
-    remote: IpAddress | Null,
-    into: Slot[NWFrameworkKinds.Datagram]
-) extends NWFrameworkOpening(into, NWFrameworkKinds.datagram) {
+final class NWFrameworkOpenDatagram(local: IpAddress | Null, remote: IpAddress, into: Slot[NWFrameworkKinds.Datagram])
+    extends NWFrameworkOpening(into, NWFrameworkKinds.datagram) {
   protected def make(): Handle = NWFrameworkHandles.datagram(local, remote)
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = h.connected(reactor, token)
 }
 
-/** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`): a
-  * descriptor, ready when made.
-  */
-final class NWFrameworkOpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kindOf: Handle => K)
-    extends NWFrameworkOpening(into, kindOf) {
-  gears.async.io.Ops.checkPath(path)
-  protected def make(): Handle = NWFrameworkHandles.openFifo(path, write)
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = true
-}
-
-/** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`): descriptors, ready
-  * when made. The command's own handle is the read end.
-  */
-final class NWFrameworkOpenPipe(read: Slot[NWFrameworkKinds.Readable], write: Slot[NWFrameworkKinds.Writable])
-    extends NWFrameworkOpening(read, NWFrameworkKinds.readable) {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
-  private var writeEnd: Handle | Null = null
-  protected def make(): Handle = {
-    val (in, out) = NWFrameworkHandles.pipe()
-    writeEnd = (out)
-    in
-  }
-  protected def ready(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = true
-  override protected def deliver(handle: Handle): Unit = {
-    read.set(NWFrameworkKinds.readable(handle))
-    write.set(NWFrameworkKinds.writable(writeEnd.nn))
-  }
-  override protected def undeliver(): Unit = {
-    read.clear(): Unit
-    write.clear(): Unit
-  }
-  override private[nwframework] def abandon(): Unit = {
-    if writeEnd != null then NWFrameworkHandles.close(writeEnd.nn)
-    writeEnd = null
-    super.abandon()
-  }
-}
-
-/** Closes a handle, completing once it is closed (see `Ops.close`): a connection's cancellation is waited for, and the
-  * number is taken back once the op is done, so that the reactor still finds the handle for the cancelled state
-  * meanwhile; ops submitted on it meanwhile fail as closed.
+/** Closes a handle, completing once it is closed (see `Ops.close`): a listener's cancellation is waited for, and its
+  * number taken back once the op is done, so that the reactor still finds the handle for the cancelled state meanwhile;
+  * ops submitted on it meanwhile fail as closed.
   */
 final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
-  override private[nwframework] def oneShot: Boolean = true
+  override private[io] def oneShot: Boolean = true
+  override private[io] def closes: Boolean = true
   def kind: Int = NWFrameworkHandle.Close
   private var begun = false
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
     val done =
       if begun then h.closeDone
       else {
         begun = true
         h.closeAsync(reactor, token) // throws if already closed, so the op fails
       }
-    if done then NWFrameworkHandles.remove(handle)
+    if done then NWFrameworkHandles.remove(handle): Unit
     done
   }
 }
@@ -379,33 +344,28 @@ final class NWFrameworkClose(val handle: Handle) extends NWFrameworkCommand {
   * before it.
   */
 final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCommand {
-  override private[nwframework] def oneShot: Boolean = true
+  override private[io] def oneShot: Boolean = true
   def kind: Int = NWFrameworkHandle.Write
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
     h.shutdownOutput()
     true
   }
 }
 
-/** Drains `buf` between position and limit. Done once at least one byte has been written: for a connection, once as
-  * much as the handle's send window has room for has been copied and sent, at once if it has room, else once a send has
-  * been processed by the stack, having sent nothing until then (see `NWFrameworkHandle.write`). With nothing remaining,
-  * done at once, with no system call.
+/** Drains `buf` between position and limit. Done once at least one byte has been written: once as much as the handle's
+  * send window has room for has been copied and sent, at once if it has room, else once a send has been processed by
+  * the stack, having sent nothing until then (see `NWFrameworkHandle.write`). With nothing remaining, done at once.
   */
 final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false // with no window: the bytes were handed over, and the handle tells once one is processed
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
-    if !buf.hasRemaining() && !sent then true // nothing to write: done, with no system call
-    else if h.isFile || h.isDescriptor then {
-      if h.using(NonBlocking.write(_, buf)) >= 0 || !buf.hasRemaining() || h.isFile then true
-      else h.armed(read = false, reactor, token)
-    } else if sent then {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
+    if sent then {
       sent = false
       h.sent()
-    } else if !buf.hasRemaining() then true
+    } else if !buf.hasRemaining() then true // nothing to write: done
     else {
       val n = h.write(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
       if n > 0 then {
@@ -419,30 +379,16 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
       }
     }
 
-  private[nwframework] def reset(): Unit = sent = false
+  override protected def reset(): Unit = sent = false
 }
 
-/** Accepts one connection on a listener, writing its handle into `into`. */
-final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
-  def kind: Int = NWFrameworkHandle.Read
-
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
-    val accepted = h.accept(reactor, token)
-    if accepted == null then false
-    else {
-      into.set(NWFrameworkKinds.connection(NWFrameworkHandles.accepted(accepted)))
-      true
-    }
-  }
-}
-
-/** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender into `from`. */
+/** Receives one datagram into `buf`, which is left flipped for reading, and writes its sender, the peer, into `from`.
+  */
 final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress]) extends NWFrameworkCommand {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(from)
   def kind: Int = NWFrameworkHandle.Read
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean = {
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
     if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the packet would be dropped
     buf.clear()
     val packet = h.receivePacket(reactor, token)
@@ -457,150 +403,26 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer, from: Slot[I
   }
 }
 
-/** Sends `buf` as one datagram, consuming it: on a connected socket to its peer, which `to`, if given, must be, and
-  * never an empty one; on an unconnected socket to `to`, without which it fails.
+/** Sends `buf` as one datagram to the socket's peer, consuming it: `to`, if given, must be the peer, and the datagram
+  * must not be empty, as on every backend (see `SocketOps.send`).
   */
 final class NWFrameworkSend(val handle: Handle, buf: ByteBuffer, to: IpAddress | Null) extends NWFrameworkCommand {
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: NWFrameworkReactor): Boolean =
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
     if sent then {
       sent = false
       h.sent()
     } else {
       val size = buf.remaining()
-      // As the JDK does (see `SocketOps.send`): on a connected socket, only to its peer, and no empty packet.
-      val connected = h.kind == NWFrameworkHandle.Datagram
-      if connected then {
-        if to != null && to != h.remote then throw gears.async.io.Ops.notThePeer(to.nn, h.remote.nn)
-        if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
-      } else if to == null then throw gears.async.io.Ops.notConnected()
-      val bytes = NativeBuffer.atPosition(buf)
-      val done =
-        if connected then h.send(bytes, size, reactor, token) else h.sendTo(to.nn, bytes, size, reactor, token)
+      if to != null && to != h.remote then throw gears.async.io.Ops.notThePeer(to.nn, h.remote.nn)
+      if size == 0 then throw gears.async.io.Ops.emptyPacket(buf)
+      val done = h.send(NativeBuffer.atPosition(buf), size, reactor, token)
       buf.position(buf.limit()) // a datagram goes whole or not at all
       sent = !done
       done
     }
 
-  private[nwframework] def reset(): Unit = sent = false
-}
-
-/** A one-shot timer, kept in the reactor's heap while pending (`TimerHeap.Entry`). */
-final class NWFrameworkTimer(val milliseconds: Int) extends NWFrameworkOp with Repeatable {
-  require(milliseconds >= 0, "Timer duration must not be negative")
-
-  /** Whether the pending submission's time limit is shorter than the timer, so it fails when due. Loop thread only. */
-  private[nwframework] var expires = false
-}
-
-/** A blocking task run on the blocker pool (see `BlockingRun`); once it has returned, the reactor it was submitted to
-  * runs its completion on the loop thread. One marked `Repeatable`, such as a file op, is restarted on each submission.
-  */
-sealed abstract class NWFrameworkBlocking extends NWFrameworkOp with BlockingRun {
-  @volatile private[nwframework] var reactor: NWFrameworkReactor | Null = null
-  @volatile private[nwframework] var failure: Throwable | Null = null
-
-  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
-    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
-    */
-  private[nwframework] var cancelling: Completion[NWFrameworkOp] | Null = null
-  private[nwframework] var cancelledBy: Throwable | Null = null
-
-  protected def settled(failure: Throwable | Null): Unit = {
-    this.failure = failure
-    reactor.nn.resolved(this)
-  }
-}
-
-final class NWFrameworkBlockingTask(body: () => Unit) extends NWFrameworkBlocking {
-  def block(): Unit = body()
-}
-
-final class NWFrameworkBlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NWFrameworkBlocking {
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
-  def block(): Unit = publish(into, body())
-}
-
-/** Resolves a host name on the blocker pool, as kqueue's reactor does: Network.framework's public C interface has no
-  * resolver of its own, only connections by host name.
-  */
-final class NWFrameworkResolve(host: String, into: Slot[List[ResolvedAddress]]) extends NWFrameworkBlocking {
-  gears.async.io.Ops.checkHost(host)
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
-  override protected def detachable: Boolean = true // its cancel need not wait for the lookup
-  def block(): Unit = PosixResolver.lookup(host) match {
-    case Right(addresses) => publish(into, gears.async.io.Ops.resolved(host, addresses))
-    case Left(error)      => throw new IOException(s"Failed to resolve $host: $error")
-  }
-}
-
-/** Opens a regular file on the blocker pool and publishes its handle (see `FileOps.open`). A cancel that arrives once
-  * the file is open closes it again, since the handle never reaches the caller.
-  */
-final class NWFrameworkOpenFile(path: String, write: Boolean, into: Slot[NWFrameworkKinds.File])
-    extends NWFrameworkBlocking {
-  gears.async.io.Ops.checkPath(path)
-  override private[nwframework] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
-  def block(): Unit = {
-    val handle = NWFrameworkHandles.openFile(path, write)
-    if !unlessCancelled(into.set(NWFrameworkKinds.file(handle))) then NWFrameworkHandles.close(handle)
-  }
-}
-
-/** A file op on the blocker pool, on the descriptor of a regular file: the handle is resolved when the task runs, so
-  * that one closed meanwhile fails the op, and its descriptor held open while the op uses it, so that a close meanwhile
-  * waits for it rather than letting the number be reused under it.
-  */
-sealed abstract class NWFrameworkFileTask(val handle: Handle) extends NWFrameworkBlocking with Repeatable {
-  protected def usingFd[A](body: Int => A): A = {
-    val h = NWFrameworkHandles.get(handle)
-    if !h.isFile then throw new IOException(s"Handle $handle is not a regular file")
-    h.using(body)
-  }
-}
-
-/** A read at an offset (see `FileOps.read`): `pread` through posixlib's `@blocking` binding, at the op's offset, which
-  * each completion advances by the bytes read.
-  */
-final class NWFrameworkPositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
-    extends NWFrameworkFileTask(handle) {
-  gears.async.io.Ops.checkOffset(offset)
-  def block(): Unit = usingFd { descriptor => // a closed handle fails first
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
-    val read = unistd.pread(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
-    if read < 0 then throw new IOException(s"Failed to read descriptor $descriptor at $offset: ${cError()}")
-    val n = read.toInt
-    unlessCancelled {
-      NativeBuffer.advance(buf, n)
-      offset += n
-    }: Unit
-  }
-}
-
-/** A write at an offset (see `FileOps.write`): `pwrite` at the op's offset, which each completion advances. */
-final class NWFrameworkPositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
-    extends NWFrameworkFileTask(handle) {
-  gears.async.io.Ops.checkOffset(offset)
-  def block(): Unit = usingFd { descriptor => // a closed handle fails first, with nothing to write too
-    if buf.hasRemaining() then writeAt(descriptor)
-  }
-
-  private def writeAt(descriptor: Int): Unit = {
-    val written = unistd.pwrite(descriptor, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
-    if written < 0 then throw new IOException(s"Failed to write descriptor $descriptor at $offset: ${cError()}")
-    val n = written.toInt
-    unlessCancelled {
-      NativeBuffer.advance(buf, n)
-      offset += n
-    }
-  }
-}
-
-/** `fsync` (see `FileOps.sync`). */
-final class NWFrameworkFileSync(handle: Handle) extends NWFrameworkFileTask(handle) {
-  def block(): Unit = usingFd { descriptor =>
-    if unistd.fsync(descriptor) < 0 then throw new IOException(s"Failed to sync descriptor $descriptor: ${cError()}")
-  }
+  override protected def reset(): Unit = sent = false
 }

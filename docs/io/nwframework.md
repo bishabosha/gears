@@ -1,62 +1,80 @@
-# The Network.framework backend: a completion-based reactor on macOS
+# The Network.framework backend: kqueue's reactors with Network.framework on macOS
 
-`gears.async.io.nwframework.NWFrameworkBackend` (`ioNWFramework`, in `io-backends/nwframework`) runs the interface's
-ops over Apple's Network.framework, the user-space networking stack Apple offers in place of BSD sockets (see "SwiftNIO
-meets the same lock" in [`kqueue.md`](kqueue.md)), through its C interface, with Dispatch for what Network.framework
-does not cover. It is an experiment and is not published. It was built to answer two questions:
+`gears.async.io.nwframework.NWFrameworkBackend` (`ioNWFramework`, in `io-backends/nwframework`) is kqueue's reactors
+with Apple's Network.framework, the user-space networking stack Apple offers in place of BSD sockets (see "SwiftNIO
+meets the same lock" in [`kqueue.md`](kqueue.md)), where it serves best, and kqueue's own code for the rest. It is an
+experiment and is not published. It answers two questions:
 
 - **Can the `Reactor`, `Ops` and handle semantics be kept over a completion-based framework?** Yes, except where the
-  public framework has no counterpart: Unix domain sockets, and the sender of a datagram on a connected
-  socket (see "What public Network.framework cannot keep").
-- **What does it cost against kqueue on the same scenarios?** Over loopback TCP it loses every I/O scenario by two to
-  seven times, because each operation is a hand-off to a Dispatch thread and back; it wakes sooner for a starved
-  task, and timers and blocking ops cost the same. What it is for, Apple's user-space stack on a real interface, needs
-  a second machine to measure (see "Measured against kqueue over TCP").
+  public framework has no counterpart (see "What public Network.framework cannot keep"), which the backend now leaves
+  to kqueue.
+- **What does Network.framework cost against kqueue on the same scenarios?** Over loopback TCP it lost every I/O
+  scenario by two to seven times, each operation a hand-off to a Dispatch thread and back (see "Measured against
+  kqueue over TCP"), which is why loopback now goes to kqueue. What it is for, Apple's user-space stack on a real
+  interface, needs a second machine to measure.
 
-It stays as the reference for a completion-based reactor, which io_uring's would resemble, with one difference that
-matters for cost: io_uring's completions land in a ring the submitting thread reads, with no second thread between the
-kernel and the loop. The interface around it is described in [`README.md`](README.md), and the reactor pool that drives
-it in [`runtime.md`](runtime.md).
+It stays as the reference for a completion-based facility under a reactor, which io_uring's would resemble, with one
+difference that matters for cost: io_uring's completions land in a ring the submitting thread reads, with no second
+thread between the kernel and the loop. The interface around it is described in [`README.md`](README.md), and the
+reactor pool that drives it in [`runtime.md`](runtime.md).
 
 ## What it is
 
-- **IP sockets are Network.framework's**: `nw_connection_t` for stream and datagram connections, `nw_listener_t` for
-  listeners. A bound, unconnected datagram socket is a UDP listener whose flows, one `nw_connection_t` per peer, are
-  received from and replied to (`nwf_datagram_bind`, `nwf_flow_open`).
-- **Pipes and FIFOs are Dispatch sources** (`DISPATCH_SOURCE_TYPE_READ` and `WRITE`) over non-blocking descriptors,
-  since Network.framework has nothing for descriptors. A regular file's sequential reads and writes are done at
-  submission, as they never wait; its open, positional ops and sync run on the shared blocker pool, as
-  [`files.md`](files.md) describes.
+- **One reactor, kqueue's.** Each reactor is a `KqueueReactor`, so pipes, FIFOs, files, timers, blocking ops, Unix
+  sockets and bound datagram sockets run exactly as on `KqueueBackend`. Network.framework's ops are `Notified` ops of
+  kqueue's reactor: attempted when submitted, and again when Network.framework's side notifies the reactor for them.
+- **Which goes where, as Apple advises.** TN3151 ("Choosing the right networking API") recommends Network.framework
+  for TCP and for UDP between two peers, and BSD sockets for what it does not support, multicast, broadcast "and
+  other asymmetric designs". So `connect`, `listen` and a connected datagram socket are Network.framework's; a Unix
+  domain socket (which its public C interface has no endpoint for), a bound datagram socket (which it has no socket
+  for, see below), pipes, FIFOs and files are kqueue's. `NWFrameworkOps` routes each opener by what it opens, and each
+  op by its handle.
+- **Loopback is kqueue's.** A socket whose address is on loopback (127.0.0.0/8, `::1`) goes to kqueue, as a Unix domain
+  socket does: Network.framework carries loopback over the kernel's own sockets, at several times kqueue's cost and
+  with nothing gained. A listener on the wildcard address is Network.framework's, and so are the connections it
+  accepts, from loopback too. `NWFrameworkBackend.Everywhere` keeps every IP socket on Network.framework, loopback's
+  included, for checking and measuring Network.framework itself: its contract suites run on loopback.
 - **Nothing calls back into Scala, and C does only what Scala cannot.** Network.framework delivers everything as blocks,
   which Scala Native cannot build, on Dispatch's threads, which cannot run managed code. The C side
   (`src/main/resources/scala-native/nwframework_io.c`) is therefore trampolines: each block copies its arguments,
-  received bytes included, into an event, queues it on the handle, and wakes the reactor watching the handle. The
-  reactor's thread drains the handles with events each turn (`nwf_reactor_drain`, `nwf_handle_next`) and parks on a
-  condition variable between turns, bounded by its earliest timer (`nwf_reactor_wait`). Everything else is Scala, on
-  `NWFrameworkHandle`: the received bytes in a stash, datagrams, accepted connections, the connection's state and
-  errors, the send window, and the ops waiting with the reactor to tell for each. So every completion runs on the
-  loop thread, as `Reactor` promises, and an op is a waiter registered on the handle, attempted again when the handle
-  tells its reactor. The one piece of state C keeps is the count of sends outstanding, so that a closed connection is
-  cancelled once they have gone, whichever reactor, if any, is still watching it.
+  received bytes included, into an event, queues it on the handle, and offers the handle to the reactor watching it,
+  waking that reactor by triggering a user event on its kqueue, once until the reactor drains its list. The reactor
+  drains the handles with events each turn (`NWFrameworkExtension`, a `ReactorExtension` of kqueue's), and polls
+  `kevent` between turns, woken by that event as by any descriptor. Everything else is Scala, on `NWFrameworkHandle`:
+  the received bytes in a stash, datagrams, accepted connections, the connection's state and errors, the send window,
+  and the ops waiting with the reactor to tell for each. So every completion runs on the loop thread, as `Reactor`
+  promises. The one piece of state C keeps is the count of sends outstanding, so that a closed connection is cancelled
+  once they have gone, whichever reactor, if any, is still watching it.
 - **The reactor says what to wake it for.** `nwf_handle_watch` names the reactor watching a handle and a mask of the
   event kinds an op there waits for; the other events only queue. Without it every send's completion woke the reactor,
   a spurious wake-up per message per side.
-- **One wake-up, consumed only by the wait.** The reactor's wake-up flag is set by `nwf_reactor_wake` (`wakeup`, a
-  blocker thread finishing, another reactor queueing a notification) and consumed only by `nwf_reactor_wait`. When the
-  drain also consumed it, a wake-up landing between the Scala side emptying its queues and the drain was lost, and the
-  reactor parked, with no timer to bound the park, on a blocking op's result already queued: once in thirty runs of
-  the demo suite.
-- **The rest is shared with `KqueueReactor`**: timers in a user-space heap (`gears.async.io.internal.TimerHeap`),
-  blocking ops and `resolve` on the shared blocker pool (`gears.async.io.internal.Blockers`), completions of ops
-  finished at submission queued for the next turn, and `trySubmit` finishing them on the caller.
-- **Every executable that links it needs `-framework Network`** (`networkFramework` in build.sbt). It runs the base
-  contract suites (`NWFrameworkContractSuite`, `NWFrameworkFuturesSuite`) and `HigherLevelChecks`. It does not get the
-  kqueue backend's `setjmp` override (see [`kqueue.md`](kqueue.md)), which only programs linking `gears-io-kqueue` have.
+- **A handle is kqueue's, with a foreign object.** A Network.framework connection, listener or connected datagram
+  socket is a `KqueueBackend.Handle` whose `foreign` object is its `NWFrameworkHandle`, its `fd` -1; the backend's
+  kinds are opaque types of its own over that handle, so that a program cannot pass one to kqueue's ops, and kqueue's
+  ops refuse a foreign handle passed as a raw `Handle` (`close`).
+- **Every executable that links it needs `-framework Network`** (`networkFramework` in build.sbt), and gets kqueue's
+  `setjmp` override (see [`kqueue.md`](kqueue.md)) with `gears-io-kqueue`. It runs the contract suites with loopback on
+  kqueue (`NWFrameworkContractSuite`, Unix, FIFO and resolve contracts included) and with every socket on
+  Network.framework (`NWFrameworkEverywhereContractSuite`, `NWFrameworkFuturesSuite`), and `HigherLevelChecks` both
+  ways.
 
 The environment variables `GEARS_IO_NWFRAMEWORK_SEND_WINDOW` (bytes, default 256 KB, 0 to make every write wait for its
-send), `GEARS_IO_NWFRAMEWORK_PREFETCH` (0 turns the receive prefetch off), `GEARS_IO_NWFRAMEWORK_SPIN` (checks before
-parking, default 0) and `GEARS_IO_NWFRAMEWORK_TRACE` (1 prints at exit how long events waited to be taken) exist for
-measuring; the defaults are the measured best.
+send), `GEARS_IO_NWFRAMEWORK_PREFETCH` (0 turns the receive prefetch off) and `GEARS_IO_NWFRAMEWORK_TRACE` (1 prints at
+exit how long events waited to be taken) exist for measuring; the defaults are the measured best.
+
+## Why kqueue's reactor, not one of its own
+
+Until 2026-10-27 the backend had a reactor of its own, which parked on a condition variable that the callbacks
+signalled, and put pipes and FIFOs on Dispatch sources so that one wait covered everything; a bound datagram socket was
+a UDP listener whose flows, a connection per peer, were received from and replied to. Nothing measured chose that
+design; it followed from Network.framework calling back only on Dispatch's queues. It cost three things: descriptors
+waited through Dispatch, with `select`'s thread besides for a FIFO's end, which kqueue's code already does; a bound
+datagram socket emulated with flows, which could not keep a kernel socket's promises (an outbound flow from a fixed
+port fails with `EADDRINUSE`, so a first send to a new peer was lost; flows idle for a minute were let go, and a packet
+coming while one was cancelled was lost; see "What public Network.framework cannot keep"); and no Unix domain sockets
+at all. Waking a kqueue with a user event costs about what signalling a condition variable does (`EVFILT_USER` 3.00 µs
+against `os_sync` 2.78 µs, in [`runtime.md`](runtime.md)), so the reactor became kqueue's, and what Network.framework
+does not do well went back to kqueue's code.
 
 ## Semantics kept, and how
 
@@ -64,9 +82,6 @@ measuring; the defaults are the measured best.
   which go to the handle's stash, and a read takes from the stash. After a read that took bytes the next receive is
   issued at once, so the next read finds its bytes waiting and finishes at submission, which is how `trySubmit`
   finishes a read without suspending the caller.
-- **A FIFO's read is watched by `select` too.** Dispatch's read source is a kqueue filter, which macOS never fires for
-  a FIFO whose writer closes, so a read waiting on a FIFO is also watched by `FifoWatcher` (see [`kqueue.md`](kqueue.md)),
-  each wait costing a hop through its `select` thread besides Dispatch's.
 - **A pooled read skips the stash, and takes its buffer only when bytes come.** `ops.read(handle, pool, into)` that
   waits issues a receive whose event holds the framework's own content (`nwf_receive_held`), uncopied; as the reactor
   applies it, it takes a buffer of the pool's and copies the content in, once, and hands that buffer over as a
@@ -98,23 +113,22 @@ measuring; the defaults are the measured best.
   failure, as POSIX `connect` reports it.
 - **Opening and closing are ops that complete when the framework is done.** The `listen` op completes once the
   listener is ready, or fails with the address in use. The `close` op completes, for a connection, at once (above);
-  for a listener or a bound datagram socket, at its cancelled state, so that a port whose listener's close
-  op has completed can be listened on again at once (completing it after `nwf_cancel_async` alone failed the contract
-  now and then with "Address already in use"); for a descriptor or a file, at once. A bound
-  datagram socket is opened as a listener is, ready or failed as an event, so no opener waits on the reactor's thread.
-  The synchronous `NWFrameworkHandles.close`, which waits on a semaphore, is kept only for code with no reactor.
+  for a listener, at its cancelled state, so that a port whose listener's close op has completed can be listened on
+  again at once (completing it after `nwf_cancel_async` alone failed the contract now and then with "Address already
+  in use"). A listener is started and its ready or failed state comes as an event, so no opener waits on the reactor's
+  thread.
 - **Closing a handle fails the ops pending on it, on whichever reactor.** The handle takes its waiters and tells each
   one's reactor, where the op fails with "The handle was closed"; then it cancels the connection, whose outstanding
   receives and sends complete with errors and find no waiter. The C side is freed by the framework's last callback,
-  the cancelled state, or for a descriptor by the last Dispatch source's cancellation handler, which also closes it.
+  the cancelled state.
 - **A connection both sides have ended is read to its end.** `shutdownOutput` is a final send
   (`NW_CONNECTION_FINAL_MESSAGE_CONTEXT`, `nwf_send_final`), TCP's FIN. Once both sides have sent theirs and the peer
   closes, the framework moves the connection to `failed`, with POSIX `ENETDOWN`, while it still holds what the peer
   sent and its end for receives to come. A stream that was ready therefore keeps reading after `failed`, which fails
   only its writes, until a receive brings the end or fails itself. `HigherLevelChecks`' graceful close, a 256 KiB
   reply, read 128 KiB and then failed with "Network is down" before; it passed 60 runs in a row after.
-- **Handles are objects, numbered in a table.** Network.framework's objects are not descriptors, so a
-  `NWFrameworkBackend.Handle` holds its `NWFrameworkHandle`, whose number in a `gears.async.io.internal.HandleTable`
+- **Handles are objects, numbered in a table.** Network.framework's objects are not descriptors, so a handle holds its
+  `NWFrameworkHandle` as its foreign object, whose number in a `gears.async.io.internal.HandleTable`
   the C side carries as its first field, so a drained handle is found by number (`NWFrameworkHandles.at`) and checked
   against its C pointer. A closed handle fails every op later built or submitted on it (see [`handles.md`](handles.md)).
 - **Ops move between reactors.** A waiter is registered with the reactor submitting the op, and the handle keeps no
@@ -122,24 +136,19 @@ measuring; the defaults are the measured best.
 
 ## What public Network.framework cannot keep
 
+Each of these is now kqueue's in the backend (see "What it is").
+
 - **No Unix domain sockets.** The C headers define endpoints of type address, host, Bonjour and URL only; Swift's
-  `NWEndpoint.unix` is private API. So the backend has neither `UnixStreams` nor `UnixDatagrams`, the gears demos that
-  need Unix sockets do not compile against it, and the bench compares it with kqueue over TCP.
+  `NWEndpoint.unix` is private API.
 - **No readiness.** Nothing can be tried on a connection without waiting, and no event says a connection is readable.
-  The interface has no readiness either (see "Readiness is kqueue's own" in [interface-history.md](interface-history.md)):
-  it is kqueue's own, and the contracts use ops alone, so that every backend runs them.
+  The interface has no readiness either (see "Readiness is kqueue's own" in [interface-history.md](interface-history.md)).
+- **No bound datagram socket.** A UDP listener receives from anyone as flows, a connection per peer, but replying to a
+  peer that has not sent first needs an outbound flow from the bound address, which fails with `EADDRINUSE` from a
+  fixed port (probed on macOS 27.0, with `reuse_local_address` too), losing the packet; flows hold per-peer state that
+  a kernel socket does not, and a packet arriving while a flow is cancelled is dropped. Apple's answer (TN3151, and
+  Quinn on the developer forums: Network.framework "can't implement all possible UDP architectures") is BSD sockets.
 - **The sender of a datagram on a connected socket** is its peer as given at creation: Network.framework reports no
-  per-packet sender on a connection. A bound socket's flows report theirs.
-- **A bound datagram socket is a listener with flows.** Network.framework opens a flow per peer that sends to it, each
-  with a receive outstanding, so packets are taken in per peer as they arrive rather than from one socket buffer;
-  sending to a peer that has not sent first opens an outbound flow from the bound address. The packets taken and not
-  yet received are capped at a kernel UDP socket's receive buffer (`net.inet.udp.recvspace`), beyond which they are
-  dropped, as the kernel drops them. A flow is let go when it ends or fails, when its receive fails (as after an empty
-  packet, which Network.framework follows with an error), and when it has carried nothing for 60 s, so that a socket
-  with many peers keeps flows only for those it hears from; the peer's next packet, or a send to it, makes one anew.
-  Network.framework drops a packet that comes in the few milliseconds it takes to cancel a flow, which UDP allows and
-  a kernel socket would not do. A flow is known by a number (`nwf_flow`), not its address, which a flow made after one
-  let go may have.
+  per-packet sender on a connection.
 
 ## The slim C side, measured
 
@@ -205,12 +214,14 @@ that owns its buffers, this one and io_uring's multishot receive, and costs the 
 
 ## Measured against kqueue over TCP
 
-The gears bench on one release build (Scala Native nightly, release-fast), kqueue and NWFramework in turn, over loopback
+These measurements are of the backend with its own reactor (see "Why kqueue's reactor"), and over loopback, which the
+backend now leaves to kqueue; `--backend nwframework-everywhere` measures Network.framework there. The gears bench on
+one release build (Scala Native nightly, release-fast), kqueue and NWFramework in turn, over loopback
 TCP since NWFramework has no Unix sockets, median of 3 runs, µs an operation (`bench/results/native-darwin-tcp-window.json`,
 `-window-4-workers.json`, `-window-connections.json`; `connections` at a tenth of its scale and 2 runs, since 20,000
 connections exhaust the ephemeral ports). This is the state-in-C build with the send window; the slim build is about
 10 µs a round trip dearer (above). How to run the bench is in [`bench.md`](bench.md): `compare.sc` takes a build as
-`nwframework=<path>@nwframework` with `-- --tcp`.
+`nwframework=<path>@nwframework` with `-- --tcp`, which runs `--backend nwframework-everywhere`.
 
 | scenario | kqueue, 1 worker | NWFramework, 1 worker | kqueue, 4 workers | NWFramework, 4 workers |
 |---|---|---|---|---|
@@ -256,12 +267,7 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
 
 ## Known limits
 
-- **macOS only, not published**, and no Unix sockets (above).
-- **A packet from a peer whose flow was idle for 60 s can be lost** if it comes while that flow is being cancelled
-  (above).
-- **The back-pressure stream over a pipe hangs now and then.** `HigherLevelChecks`' "a stream of chunks consumed as a
-  gears channel, with back-pressure" waits for ever on four workers, all reactors idle, about once in 200 runs (30 to a
-  process). It hangs the same with and without the final-send change, so that is not its cause. Pipes here are
-  descriptors waited on through a Dispatch source with pooled reads; a wake-up lost between the writer's close and the
-  reader's next pooled read is the first thing to look at. Open.
+- **macOS only, not published.**
+- **Not measured since it moved onto kqueue's reactor.** The figures above are the backend with its own reactor;
+  Network.framework's cost per hop is unchanged, but the reactor's wake-up and turn are kqueue's now.
 - **The slim build's 10 µs over the state-in-C one** is open, at the handle's monitor (above).

@@ -111,9 +111,9 @@ lazy val ioKqueue =
     )
     .dependsOn(root.native, ioTestkit.native % Test)
 
-// The Network.framework backend: reactors over Apple's Network.framework for IP sockets and Dispatch for pipes and
-// FIFOs, with their C side in its resources (see docs/io/nwframework.md). macOS only; every executable that
-// links it needs Network.framework.
+// The Network.framework backend: kqueue's reactors with Apple's Network.framework for TCP and connected UDP, and
+// kqueue's own code for the rest, with the C side in its resources (see docs/io/nwframework.md). macOS only; every
+// executable that links it needs Network.framework.
 val networkFramework: Seq[String] =
   if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil
 lazy val ioNWFramework =
@@ -125,7 +125,7 @@ lazy val ioNWFramework =
       testFrameworks += MUnitFramework,
       nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
     )
-    .dependsOn(root.native, ioTestkit.native % Test)
+    .dependsOn(root.native, ioKqueue, ioTestkit.native % Test) // its reactors are kqueue's
 
 // The JVM's backends: NIO selectors over the JDK's selectable channels, and threads for what the JDK can only block
 // on (`NioBackend`), or each op on the calling thread (`NioOnCaller`).
