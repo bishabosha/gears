@@ -72,6 +72,10 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
 class GearsSocketDemoSuite extends SocketDemoSuite {
   override def commandPrefix: Seq[String] = Seq("gears")
   override def sendsEmptyConnectedDatagrams: Boolean = false
+  override def otherStreamServers: Seq[StreamServer] = Seq(
+    StreamServer("reactor-sock", Nil),
+    StreamServer("reactor-sock", Seq("--backend", "nwframework"), Seq(Family.IPv4, Family.IPv6))
+  )
 }
 
 /** The same gears demos on the JVM, over NIO: `NioOnCaller` (`backend` "caller"), or `NioBackend` on a reactor pool
@@ -115,4 +119,5 @@ class JvmReactorsGearsDemoSuite extends KQueueDemoSuite with GearsBenchCheck wit
 
 class JvmReactorsGearsSocketDemoSuite extends SocketDemoSuite with OnJvm {
   def backend = "reactors"
+  override def otherStreamServers: Seq[StreamServer] = Seq(StreamServer("reactor-sock", Nil))
 }

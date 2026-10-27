@@ -58,6 +58,19 @@ object Main {
   def sock6(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
     GearsSocket.run(IpAddress.IPv6(host, port))
   }
+  // On a reactor of NIO's whichever the backend chosen: `NioOnCaller` has none.
+  @main(name = "reactor-sock-serve", doc = "sock-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSockServe(@arg sock: String): Unit = {
+    ReactorServerSocket.run(sock)(using NioBackend)
+  }
+  @main(name = "reactor-sock4-serve", doc = "sock4-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSock4Serve(@arg host: String = "127.0.0.1", @arg port: Int = 9999): Unit = {
+    ReactorServerSocket.run(IpAddress.IPv4(host, port))(using NioBackend)
+  }
+  @main(name = "reactor-sock6-serve", doc = "sock6-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSock6Serve(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
+    ReactorServerSocket.run(IpAddress.IPv6(host, port))(using NioBackend)
+  }
   @main
   def kvServe(@arg sock: String): Unit = {
     GearsKeyValue.serve(UnixAddress(sock))

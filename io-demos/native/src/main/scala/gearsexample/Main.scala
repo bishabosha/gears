@@ -52,6 +52,26 @@ object Main {
   def sock6(@arg host: String = "::1", @arg port: Int = 9999): Unit = {
     GearsSocket.run(IpAddress.IPv6(host, port))
   }
+  @main(name = "reactor-sock-serve", doc = "sock-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSockServe(@arg sock: String): Unit = {
+    ReactorServerSocket.run(sock)
+  }
+  @main(name = "reactor-sock4-serve", doc = "sock4-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSock4Serve(
+      @arg host: String = "127.0.0.1",
+      @arg port: Int = 9999,
+      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
+  ): Unit = {
+    withReactorBackend(backend)(ReactorServerSocket.run(IpAddress.IPv4(host, port))(using _))
+  }
+  @main(name = "reactor-sock6-serve", doc = "sock6-serve as completions on one reactor (`ReactorServerSocket`)")
+  def reactorSock6Serve(
+      @arg host: String = "::1",
+      @arg port: Int = 9999,
+      @arg(doc = "kqueue, or nwframework: Network.framework") backend: String = "kqueue"
+  ): Unit = {
+    withReactorBackend(backend)(ReactorServerSocket.run(IpAddress.IPv6(host, port))(using _))
+  }
   @main
   def kvServe(@arg sock: String): Unit = {
     GearsKeyValue.serve(UnixAddress(sock))
@@ -184,6 +204,14 @@ object Main {
     case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
     case other         => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
   }
+
+  /** Runs `body` with the reactor backend named: kqueue, or nwframework, Network.framework. */
+  private def withReactorBackend(backend: String)(body: gears.async.io.ReactorBackend & IpSockets => Unit): Unit =
+    backend match {
+      case "kqueue"      => body(KqueueBackend)
+      case "nwframework" => body(gears.async.io.nwframework.NWFrameworkBackend)
+      case other         => throw new IllegalArgumentException(s"Unknown backend `$other`; try kqueue or nwframework")
+    }
   def main(args: Array[String]): Unit = {
     ParserForMethods(this).runOrExit(args.toIndexedSeq)
   }

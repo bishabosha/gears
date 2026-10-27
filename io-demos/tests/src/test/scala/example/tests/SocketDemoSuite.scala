@@ -37,10 +37,22 @@ class SocketDemoSuite extends DemoSuite {
   /** A server address plus the demo arguments that select it. */
   final case class Endpoint(address: SocketAddress, args: Seq[String])
 
+  /** A stream server the stream checks run against, beside `sock-serve`: run as `<command><suffix>-serve`, with `args`
+    * after the address's, for the families listed.
+    */
+  final case class StreamServer(command: String, args: Seq[String], families: Seq[Family] = Family.values.toSeq)
+
+  /** The stream servers checked beside `sock-serve`. */
+  def otherStreamServers: Seq[StreamServer] = Nil
+
   for (family <- Family.values) {
     demoTest(s"stream ${family.name}: native clients, framing, fragmentation, invalid length, concurrent clients") {
       withTempDirectory("gears-sockets-")(stream(family, _))
     }
+    for (server <- otherStreamServers if server.families.contains(family))
+      demoTest(s"stream ${family.name}, ${(server.command +: server.args).mkString(" ")}: the same") {
+        withTempDirectory("gears-sockets-")(stream(family, _, server))
+      }
     if family != Family.Unix || hasUnixDatagrams then
       demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
         withTempDirectory("gears-sockets-")(datagram(family, _))
@@ -105,54 +117,55 @@ class SocketDemoSuite extends DemoSuite {
       }
   }
 
-  private def stream(family: Family, directory: Path): Unit = {
+  private def stream(family: Family, directory: Path, serving: StreamServer = StreamServer("sock", Nil)): Unit = {
     val Endpoint(address, args) = endpoint(family, datagram = false, directory)
-    withServer(s"sock${family.suffix}-serve" +: args, "listening for connections") { server =>
-      for (_ <- 1 to 2) assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
-      val payloads = Seq(
-        (utf8("coalesced"), false),
-        (utf8("fragmented"), true),
-        (Array.empty[Byte], false),
-        (Array.fill[Byte](131072)('x'), false)
-      )
-      for ((payload, fragmented) <- payloads) {
-        Using.resource(SocketChannel.open(address)) { client =>
-          val bytes = frame(payload)
-          if (fragmented) {
-            for ((from, until) <- Seq((0, 1), (1, 3), (3, 5), (5, bytes.length))) {
-              client.write(ByteBuffer.wrap(bytes, from, until - from))
-              Thread.sleep(30)
-            }
-          } else client.write(ByteBuffer.wrap(bytes))
-          assertEquals(readReply(client), Reply)
+    withServer(s"${serving.command}${family.suffix}-serve" +: (args ++ serving.args), "listening for connections") {
+      server =>
+        for (_ <- 1 to 2) assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
+        val payloads = Seq(
+          (utf8("coalesced"), false),
+          (utf8("fragmented"), true),
+          (Array.empty[Byte], false),
+          (Array.fill[Byte](131072)('x'), false)
+        )
+        for ((payload, fragmented) <- payloads) {
+          Using.resource(SocketChannel.open(address)) { client =>
+            val bytes = frame(payload)
+            if (fragmented) {
+              for ((from, until) <- Seq((0, 1), (1, 3), (3, 5), (5, bytes.length))) {
+                client.write(ByteBuffer.wrap(bytes, from, until - from))
+                Thread.sleep(30)
+              }
+            } else client.write(ByteBuffer.wrap(bytes))
+            assertEquals(readReply(client), Reply)
+          }
         }
-      }
-      // Reject an invalid frame without losing the listening server.
-      Using.resource(SocketChannel.open(address)) { client =>
-        client.write(ByteBuffer.allocate(4).putInt(0xffffffff).flip())
-        assertEquals(client.read(ByteBuffer.allocate(1)), -1)
-      }
-      assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
-      // Clients that go away before the reply: writing to them must fail only that connection, not raise SIGPIPE and
-      // end the server. A TCP client resets the connection (SO_LINGER 0), so that the server's one write fails.
-      for (_ <- 1 to 3) {
-        val client = SocketChannel.open(address)
-        if (family != Family.Unix) client.setOption(java.net.StandardSocketOptions.SO_LINGER, Integer.valueOf(0))
-        client.write(ByteBuffer.wrap(frame(utf8("going away"))))
-        client.close()
-      }
-      Thread.sleep(200)
-      assert(server.isAlive, server.output.takeRight(4096))
-      assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
-      // Keep several connections ready together to exercise native event-array
-      // indexing, including events beyond the first entry in a poll result.
-      val clients = Vector.fill(8)(SocketChannel.open(address))
-      try {
-        for ((client, i) <- clients.zipWithIndex)
-          client.write(ByteBuffer.wrap(frame(utf8(s"concurrent client $i"))))
-        for (client <- clients) assertEquals(readReply(client), Reply)
-      } finally clients.foreach(_.close())
-      assert(server.isAlive, server.output.takeRight(4096))
+        // Reject an invalid frame without losing the listening server.
+        Using.resource(SocketChannel.open(address)) { client =>
+          client.write(ByteBuffer.allocate(4).putInt(0xffffffff).flip())
+          assertEquals(client.read(ByteBuffer.allocate(1)), -1)
+        }
+        assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
+        // Clients that go away before the reply: writing to them must fail only that connection, not raise SIGPIPE and
+        // end the server. A TCP client resets the connection (SO_LINGER 0), so that the server's one write fails.
+        for (_ <- 1 to 3) {
+          val client = SocketChannel.open(address)
+          if (family != Family.Unix) client.setOption(java.net.StandardSocketOptions.SO_LINGER, Integer.valueOf(0))
+          client.write(ByteBuffer.wrap(frame(utf8("going away"))))
+          client.close()
+        }
+        Thread.sleep(200)
+        assert(server.isAlive, server.output.takeRight(4096))
+        assert(run(s"sock${family.suffix}" +: args*).contains("Just pinging back!"))
+        // Keep several connections ready together to exercise native event-array
+        // indexing, including events beyond the first entry in a poll result.
+        val clients = Vector.fill(8)(SocketChannel.open(address))
+        try {
+          for ((client, i) <- clients.zipWithIndex)
+            client.write(ByteBuffer.wrap(frame(utf8(s"concurrent client $i"))))
+          for (client <- clients) assertEquals(readReply(client), Reply)
+        } finally clients.foreach(_.close())
+        assert(server.isAlive, server.output.takeRight(4096))
     }
   }
 
