@@ -7,7 +7,6 @@ import gears.async.Future.awaitAllOrCancel
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpStreams
-import gears.async.io.ReactorFutures
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
@@ -142,7 +141,7 @@ object GearsKeyValue {
 
   def serve(address: StreamAddress)(using UnixStreams & IpStreams): Unit = {
     val store = new Store
-    ReactorFutures.run { io ?=>
+    Io.run { io ?=>
       val server = Sockets.listen(address)
       try {
         println("Key-value server is now listening for connections.")
@@ -160,7 +159,7 @@ object GearsKeyValue {
     BufferArena.scoped { arena =>
       val outbox = arena.allocate(BufferSize)
       val inbox = arena.allocate(BufferSize)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         println(s"connection in progress to: $address")
         val socket = Sockets.connect(address)
         try {

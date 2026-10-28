@@ -29,7 +29,7 @@ backends do: `NioOnCaller` on a selector of each handle's own, `NioBackend` on i
 ## `NioOnCaller`, the default
 
 `NioOnCaller` is a `CallerBackend`: each op is done on the calling thread, which is a virtual thread for any future of
-the program. It needs nothing of the JDK beyond its public interface: `ReactorFutures.run(using NioOnCaller)` runs the
+the program. It needs nothing of the JDK beyond its public interface: `Io.run(using NioOnCaller)` runs the
 program on gears' own virtual threads, on the JDK's scheduler, and hands it an `Io` that performs on the calling thread
 (internally an `OnCaller`, which works from any `Async` context). Per kind of op (`NioOnCaller.performHere`):
 
@@ -84,7 +84,7 @@ The program's futures are virtual threads whose scheduler is the `ReactorPool` (
 goes to the reactor of the worker carrying its future, may finish there at once, and its completion resumes the future
 on that worker under the pool's `TakePolicy`. The JDK keeps a virtual thread's scheduler and its carrier to itself, so
 this reaches `ThreadBuilders.VirtualThreadBuilder(Executor)` and `Thread.currentCarrierThread` by reflection, which
-needs `--add-opens java.base/java.lang=ALL-UNNAMED`. `ReactorFutures.run` checks before any thread starts
+needs `--add-opens java.base/java.lang=ALL-UNNAMED`. `Io.run` checks before any thread starts
 (`VirtualCarriers.check`) and says what is missing. `-Dgears.io.nio.backend=reactors` selects it in the demos and the
 bench.
 

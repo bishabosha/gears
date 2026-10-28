@@ -3,7 +3,6 @@ package higherlevel
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.io.Io
-import gears.async.io.ReactorFutures
 import gears.async.io.internal.ReactorRuns
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
@@ -13,7 +12,7 @@ class NioOnCallerHigherLevelSuite extends HigherLevelChecks {
   val backend: NioOnCaller.type = NioOnCaller
 
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    ReactorFutures.run(using backend)(body)
+    Io.run(using backend)(body)
 }
 
 /** The higher level over `NioBackend`, on a pool of several workers driving its reactors. */

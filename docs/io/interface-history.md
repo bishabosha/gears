@@ -136,7 +136,7 @@ gears waiter, went too: the attachment belongs to the op and is read through any
 ## The runner is out of the interface
 
 The interface once had `Backend.start(runner, workers, policy)` on every backend, and a `Runner`, so that every
-backend started the runtime itself. Now `ReactorFutures.run(using backend)` dispatches once, by the backend's kind,
+backend started the runtime itself. Now `Io.run(using backend)` dispatches once, by the backend's kind,
 with intersection patterns and no cast, and `run(workers, policy)` exists only for a `ReactorBackend`, the one kind
 with workers and a policy. `run` returns the program's value on both platforms, as `Async.blocking` does: before, every
 contract test smuggled its result out in a `var`.
@@ -321,7 +321,7 @@ the refusal.
 with the `Io` the runner gives it, and nothing more is supported, so they are in `gears.async.io.internal` now: what
 the runtime, the backends and their contract suites use. Submitting to a reactor directly is still possible, as
 `ReactorServerSocket` shows, but unsupported. So are a backend's kinds, `ReactorBackend` and `CallerBackend`: the
-runner tells them apart, and `ReactorFutures.run` takes any `Backend`, its pool form refusing a caller backend, which
+runner tells them apart, and `Io.run` takes any `Backend`, its pool form refusing a caller backend, which
 has nothing for a pool to run, with an `IllegalArgumentException`; it gives a pool's program an `Io`, no longer an
 `OnPool`. One reason for queueing a datagram socket's ops in the backends (see above) was that a program submitting to
 reactors itself should have the same rule; that reason is gone with this, the others stand: a backend may do better
@@ -329,7 +329,7 @@ than queue, and an op's time limit and cancel cover its wait.
 
 ## The runner chooses its pool
 
-`ReactorFutures.run` took a pool's size and its `TakePolicy` as a program's choice, with one worker unless told
+`Io.run` took a pool's size and its `TakePolicy` as a program's choice, with one worker unless told
 otherwise. A program should not need to know how its futures are carried, so `run` now has no knobs: over a backend
 with reactors it starts a pool of one worker per available processor, under the affine policy, and over any other it
 runs on the caller. The knobs are internal (`ReactorRuns.run(workers, policy)`, and `TakePolicy` with it), for the
@@ -345,3 +345,10 @@ counterpart, and TCP's and IP's (`NoDelay`, keepalive, don't-fragment, reuse-por
 built. `supports` and `canChange` take the kind of socket: on the Network.framework backend the answer differs by
 family, its Unix sockets being kqueue's, which take the buffer sizes and change them, where its own IP sockets take
 neither.
+
+## `Io.run`
+
+The runner was `ReactorFutures.run`, one object per platform, named for reactors, which a program no longer sees. It is
+`Io.run` now, on `Io`'s companion in the shared interface, so a program names only `Io` and its backend; each
+platform's implementation is internal (`internal.Runner`, with Scala Native's suspension support beside it), and Scala.js,
+which has no backend yet, refuses.

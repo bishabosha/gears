@@ -10,10 +10,10 @@ import _root_.gears.async.Cancellable
   * and capabilities are what the program uses, and adds only where they run: `perform`, and on a pool `yield`. It is
   * not a backend and has no ops of its own; its type names the backend it is over, so a program's helper asks for an
   * `Io` over a backend with the capabilities it needs, `Io[IpSockets]`, and one over a backend with more,
-  * `Io[IpSockets & Files]`, is one of those. A program gets its `Io` from the platform's runner (`ReactorFutures.run`),
-  * which over a reactor backend performs each op where there is a worker, and its reactor, to run it, since a backend
-  * alone performs nothing, and over a caller backend performs it on the calling thread; how it does is internal. A
-  * program's `Io` is lexical: a future it spawns captures it, and runs where the program runs.
+  * `Io[IpSockets & Files]`, is one of those. A program gets its `Io` from the platform's runner (`Io.run`), which over
+  * a reactor backend performs each op where there is a worker, and its reactor, to run it, since a backend alone
+  * performs nothing, and over a caller backend performs it on the calling thread; how it does is internal. A program's
+  * `Io` is lexical: a future it spawns captures it, and runs where the program runs.
   *
   * It is also the program's gears `AsyncOperations`, given to it by the runner beside its `Async`: `sleep` is a timer
   * op performed, so gears' `sleep`, `withTimeout` and `Timer` run on the backend's timers, and `yield` gives up the
@@ -60,4 +60,16 @@ trait Io[+B <: Backend] extends AsyncOperations {
     require(millis >= 0 && millis <= Int.MaxValue, s"A sleep of $millis ms is out of a timer's range")
     perform(backend.ops.timer(millis.toInt))
   }
+}
+
+object Io {
+
+  /** Runs `program` over `backend` and returns what it returns, rethrowing its failure: the program is given an `Io`
+    * over the backend, as a context parameter, with which it performs its ops and which is its `AsyncOperations`,
+    * beside its `Async`. Over a backend with reactors it runs on a pool of workers, one per available processor,
+    * driving them; over one without, on gears' own threads, each op performed on the calling thread. A program's `Io`
+    * is not a `Backend`, so starting a run over one is refused when compiling.
+    */
+  def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
+    internal.Runner.run(program)
 }

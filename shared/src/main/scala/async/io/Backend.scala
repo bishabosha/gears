@@ -7,10 +7,10 @@ import _root_.gears.async.Async
 /** A way of doing I/O: the ops it can perform, the handles they name, and the pools its reads fill. How an op is
   * performed is its kind's, which is internal: a reactor backend submits its ops on reactors it opens, and a program
   * over it runs on a pool of workers driving them; a caller backend does each op itself on the calling thread, as NIO's
-  * `NioOnCaller` does with non-blocking channels from a thread that may block. The runner knows which
-  * (`ReactorFutures.run`). Ops of another backend are a different type. Building an op or using a handle performs
-  * nothing, so either may be done from any thread, and a backend performs nothing itself: a program performs its ops
-  * with an `Io` over the backend (`Io.backend`), which says where they run.
+  * `NioOnCaller` does with non-blocking channels from a thread that may block. The runner knows which (`Io.run`). Ops
+  * of another backend are a different type. Building an op or using a handle performs nothing, so either may be done
+  * from any thread, and a backend performs nothing itself: a program performs its ops with an `Io` over the backend
+  * (`Io.backend`), which says where they run.
   *
   * What every backend has is here: streams, read and written, into the caller's buffers or into buffers of the
   * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes

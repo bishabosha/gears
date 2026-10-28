@@ -1,7 +1,7 @@
 package gearsexample
 
 import gears.async.io.Fifos
-import gears.async.io.ReactorFutures
+import gears.async.io.Io
 import gears.async.io.testkit.BufferArena
 
 import java.nio.charset.StandardCharsets
@@ -14,7 +14,7 @@ object GearsFileWrite {
     BufferArena.scoped { arena =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
       val buf = arena.allocate(math.max(bytes.length, 1))
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         println(s"attempt to open file $fifo")
         val file = HigherLevel.openFifoForWriting(fifo)
         try {

@@ -5,7 +5,6 @@ import gears.async.Future
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpStreams
-import gears.async.io.ReactorFutures
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
@@ -59,7 +58,7 @@ object GearsServerSocket {
   def run(sock: String)(using UnixStreams & IpStreams): Unit = run(UnixAddress(sock))
 
   def run(address: StreamAddress)(using UnixStreams & IpStreams): Unit =
-    ReactorFutures.run { io ?=>
+    Io.run { io ?=>
       val server = Sockets.listen(address)
       try {
         println("Socket is now listening for connections.")

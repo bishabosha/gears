@@ -20,8 +20,8 @@ import java.util.concurrent.TimeoutException
   * thread if its time limit is up; an op done at once, such as a close, is done. Cancelling the caller ends the wait,
   * and the handle stays open. Nothing spins: busy waiting gave the best latency and starved the other futures, so it
   * was dropped (see "Tried and dropped" in docs/io/jvm.md). A time limit runs from the call: an op whose time runs out
-  * has done nothing and throws. Its `Io`, which `ReactorFutures.run` hands the program, performs on the calling thread,
-  * from any `Async` context. Nothing of the JDK beyond its public interface.
+  * has done nothing and throws. Its `Io`, which `Io.run` hands the program, performs on the calling thread, from any
+  * `Async` context. Nothing of the JDK beyond its public interface.
   */
 object NioOnCaller extends CallerBackend with NioCapabilities {
 

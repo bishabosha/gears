@@ -1,9 +1,9 @@
 package gearsexample
 
 import gears.async.io.AddressFamily
+import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.IpStreams
-import gears.async.io.ReactorFutures
 import gears.async.io.Resolving
 import gears.async.io.testkit.BufferArena
 
@@ -20,7 +20,7 @@ object GearsWhois {
   def run(host: String, port: Int, query: String)(using IpStreams & Resolving): Unit = {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         val resolvedAll = HigherLevel.resolve(host) // a failed lookup throws
         val resolved = resolvedAll.head
         val address = resolved.family match {
@@ -55,7 +55,7 @@ object GearsWhois {
 
   /** Resolves a host through the reactor's blocker pool and prints every address. */
   def resolve(host: String)(using Resolving): Unit = {
-    ReactorFutures.run { io ?=>
+    Io.run { io ?=>
       val resolvedAll = HigherLevel.resolve(host) // a failed lookup throws
       resolvedAll.foreach { a =>
         val family = if a.family == AddressFamily.IPv4 then "IPv4" else "IPv6"

@@ -1,7 +1,7 @@
 package gearsexample
 
 import gears.async.io.Fifos
-import gears.async.io.ReactorFutures
+import gears.async.io.Io
 import gears.async.io.testkit.BufferArena
 
 import java.io.ByteArrayOutputStream
@@ -19,7 +19,7 @@ object GearsFileRead {
     BufferArena.scoped { arena =>
       val chunk = arena.allocate(1024)
       val contents = new ByteArrayOutputStream()
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         println(s"attempt to open file $fifo")
         val file = HigherLevel.openFifoForReading(fifo)
         try {

@@ -1,8 +1,8 @@
 package gearsexample
 
 import gears.async.io.Backend
+import gears.async.io.Io
 import gears.async.io.IpStreams
-import gears.async.io.ReactorFutures
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
@@ -23,7 +23,7 @@ object GearsSocket {
   def run(address: StreamAddress)(using UnixStreams & IpStreams): Unit = {
     BufferArena.scoped { arena =>
       val buf = arena.allocate(8192)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         println(s"connection in progress to: $address")
         val socket = Sockets.connect(address)
         try {

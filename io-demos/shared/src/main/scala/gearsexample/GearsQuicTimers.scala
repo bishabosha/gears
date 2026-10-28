@@ -6,7 +6,6 @@ import gears.async.UnboundedChannel
 import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.IpDatagrams
-import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.testkit.BufferArena
 
@@ -68,7 +67,7 @@ object GearsQuicTimers {
   private def run(connections: Int, packets: Int, interval: FiniteDuration, buffer: Int => ByteBuffer)(using
       IpDatagrams
   ): Unit =
-    ReactorFutures.run { io ?=>
+    Io.run { io ?=>
       val socket = HigherLevel.bindDatagram(IpAddress.IPv4("127.0.0.1", 0))
       val address = io.backend.ops.localAddress(socket)
       val counts = new Counts

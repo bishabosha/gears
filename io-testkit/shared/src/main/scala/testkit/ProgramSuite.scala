@@ -30,8 +30,8 @@ import scala.concurrent.duration.*
 import munit.FunSuite
 
 /** A suite of programs over one backend: the backend under test, `running`, which starts a program over it the
-  * platform's way (`ReactorFutures.run`), and what the checks share, buffers from an arena and a listener to connect
-  * to. `FuturesContract` and the higher level's checks extend it.
+  * platform's way (`Io.run`), and what the checks share, buffers from an arena and a listener to connect to.
+  * `FuturesContract` and the higher level's checks extend it.
   */
 trait ProgramSuite extends FunSuite {
 

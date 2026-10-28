@@ -91,7 +91,7 @@ See [LICENSE](./LICENSE) for more details.
 gears has an interface for asynchronous I/O in `gears.async.io`, on every platform: a backend
 (`Backend`) builds ops (`Ops`) on the handles they name, with capabilities such as IP sockets,
 files, pipes and name resolution mixed in, and a program performs those ops with an `Io` over
-the backend, which is also its gears `AsyncOperations`. `ReactorFutures.run` starts a program
+the backend, which is also its gears `AsyncOperations`. `Io.run` starts a program
 over a backend on the JVM and on Scala Native, on a pool of workers driving the backend's
 reactors. The runtime and what the backends share is in `gears.async.io.internal`. See
 [docs/io/README.md](docs/io/README.md) for the design.
@@ -197,7 +197,7 @@ the JVM over NIO, with the commands NIO has the capabilities for: `ioDemosJVM/ru
 the reactor pool instead of the JDK's virtual thread scheduler. Each step is an op performed
 with `Io.perform`, which suspends the caller until the op finishes, so the code reads
 sequentially; wrapping a call in a `Future` runs the op alongside other work. Reactors are
-thread-owned: `ReactorFutures.run` makes the calling thread a reactor thread, running the
+thread-owned: `Io.run` makes the calling thread a reactor thread, running the
 program as a future on a pool of workers, each a thread alternating between its queued tasks
 and turns of its own reactor's loop, blocking only when it has no task to run and none to take
 from another worker. With one worker, the default, everything a program spawns stays on the

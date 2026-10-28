@@ -2,12 +2,12 @@ package gearsexample
 
 import gears.async.Future
 import gears.async.io.Backend
-import gears.async.io.ReactorFutures
+import gears.async.io.Io
 
 /** Mirror of `example.KQueueExampleTimer`: a five-second one-shot timer, with a one-second ticker running alongside. */
 object GearsTimer {
   def run()(using Backend): Unit = {
-    ReactorFutures.run { io ?=>
+    Io.run { io ?=>
       println("Creating and registering timer event...")
       val fired = Future(io.perform(io.backend.ops.timer(5000)))
       println("Event registered successfully. Waiting for it to trigger...")

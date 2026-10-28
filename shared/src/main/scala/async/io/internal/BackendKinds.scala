@@ -5,7 +5,7 @@ import _root_.gears.async.Async
 
 /** A backend that performs each op on the calling thread, which may block, as a virtual thread may: NIO's
   * `NioOnCaller`. Its ops may be performed from anywhere, so a program over it needs no runner: its `Io` is an `Io`
-  * from the runner (`ReactorFutures.run`) performs them on the calling thread.
+  * from the runner (`Io.run`) performs them on the calling thread.
   */
 trait CallerBackend extends Backend {
 

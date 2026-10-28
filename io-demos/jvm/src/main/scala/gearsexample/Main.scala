@@ -22,7 +22,7 @@ import mainargs.{ParserForMethods, arg, main}
   *
   * This is the edge, the one place that chooses NIO: `NioOnCaller`, with no reactor, each op performed on the future's
   * own virtual thread; or, with `-Dgears.io.nio.backend=reactors`, `NioBackend`, its futures carried by the reactor
-  * pool (see `gears.async.io.ReactorFutures`).
+  * pool (see `gears.async.io.Io.run`).
   */
 object Main {
   given (IpSockets & UnixStreams & Blocking & Files & Resolving & Pipes) =

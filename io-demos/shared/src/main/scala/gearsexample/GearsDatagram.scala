@@ -6,7 +6,6 @@ import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpAddress
 import gears.async.io.IpDatagrams
-import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagrams
@@ -32,7 +31,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         val socket = HigherLevel.connectDatagram(UnixAddress(localSock), UnixAddress(sock))
         val ops = io.backend.ops
         val receive = ops.receive(socket, response)
@@ -47,7 +46,7 @@ object GearsDatagram {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         val socket = HigherLevel.connectDatagram(null, address)
         val ops = io.backend.ops
         val receive = ops.receive(socket, response)
@@ -91,7 +90,7 @@ object GearsDatagram {
   def serve(address: UnixAddress)(using UnixDatagrams): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         val socket = HigherLevel.bindDatagram(address)
         val sender = Slot[UnixAddress]() // each packet's sender, written alongside the packet itself
         val ops = io.backend.ops
@@ -104,7 +103,7 @@ object GearsDatagram {
   def serve(address: IpAddress)(using IpDatagrams): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
-      ReactorFutures.run { io ?=>
+      Io.run { io ?=>
         val socket = HigherLevel.bindDatagram(address)
         val sender = Slot[IpAddress]()
         val ops = io.backend.ops

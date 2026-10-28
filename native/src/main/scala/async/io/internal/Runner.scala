@@ -1,4 +1,5 @@
 package gears.async.io
+package internal
 
 import gears.async.Async
 import gears.async.AsyncOperations
@@ -7,8 +8,6 @@ import gears.async.Future
 import gears.async.Listener
 import gears.async.io.Backend
 import gears.async.io.Io
-import gears.async.io.internal.*
-import gears.async.io.internal.ReactorBackend
 import gears.async.native.NativeSuspend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
@@ -16,10 +15,8 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
   type Scheduler = ReactorPool
 }
 
-/** Gears futures over thread-owned reactors on Scala Native: `run` starts a pool, and the rest is its `Io`'s
-  * (`internal.OnPool`).
-  */
-object ReactorFutures {
+/** What `Io.run` does on Scala Native: a pool of workers over thread-owned reactors, the rest its `Io`'s (`OnPool`). */
+object Runner {
 
   /** A pool's workers: one per processor available to the program. */
   private def Workers: Int = Runtime.getRuntime().availableProcessors()

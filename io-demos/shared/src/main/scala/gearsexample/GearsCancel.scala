@@ -3,8 +3,8 @@ package gearsexample
 import gears.async.Future
 import gears.async.Future.Promise
 import gears.async.io.Blocking
+import gears.async.io.Io
 import gears.async.io.Pipes
-import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.internal.ReactorBackend
 import gears.async.io.internal.ReactorRuns

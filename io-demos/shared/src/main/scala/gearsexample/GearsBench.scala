@@ -7,7 +7,6 @@ import gears.async.Future.awaitAll
 import gears.async.io.Backend
 import gears.async.io.Blocking
 import gears.async.io.Io
-import gears.async.io.ReactorFutures
 import gears.async.io.Received
 import gears.async.io.Slot
 import gears.async.io.StreamSockets
@@ -323,7 +322,7 @@ object GearsBench {
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend match {
     case reactors: (ReactorBackend & backend.type) => ReactorRuns.run(workers, policy)(using reactors)(program)
-    case _                                         => ReactorFutures.run(using backend)(program)
+    case _                                         => Io.run(using backend)(program)
   }
 
   /** `io`'s backend as one with blocking ops, which a scenario that runs only on one needs: still `io`'s, so `io`

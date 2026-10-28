@@ -22,7 +22,7 @@ class NioOnCallerSuite extends FuturesContract {
   val backend: NioOnCaller.type = NioOnCaller
 
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    ReactorFutures.run(using backend)(body)
+    Io.run(using backend)(body)
 
   test("NIO's kinds of handle are distinct types, though one class underneath") {
     assert(compileErrors("def k(c: NioBackend.Connection): NioBackend.Listener = c").nonEmpty)
@@ -117,7 +117,7 @@ class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {
   }
 
   test("a program's Io cannot start a run: it is not a Backend") {
-    val errors = compileErrors("running(io ?=> ReactorFutures.run(using io)(()))")
+    val errors = compileErrors("running(io ?=> Io.run(using io)(()))")
     assert(errors.nonEmpty, errors)
   }
 
