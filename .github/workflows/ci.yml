@@ -39,6 +39,22 @@ jobs:
     - uses: sbt/setup-sbt@v1
     - name: Test
       run: sbt rootJVM/test
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
   test-native:
     strategy:
       fail-fast: false
@@ -63,6 +79,22 @@ jobs:
       run: env GC_MAXIMUM_HEAP_SIZE=140M sbt 'rootNative/testOnly StressTest'
   # The I/O projects that run anywhere: the NIO backend and the demos on the JVM. A newer JDK than the core's, for the
   # virtual-thread carriers' internals and the plain JDK bench's StructuredTaskScope, as tested.
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
   test-io-jvm:
     strategy:
       fail-fast: false
@@ -82,6 +114,22 @@ jobs:
       run: sbt 'ioNio/test; ioDemosJVM/test'
   # The backends for macOS alone, kqueue and Network.framework, which neither build nor run on Linux, and what uses
   # them: the demos on Scala Native, and the tests driving the demo executables.
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
   test-io-macos:
     strategy:
       fail-fast: false
@@ -110,6 +158,22 @@ jobs:
     - name: Test the demos
       if: ${{ !cancelled() }}
       run: sbt 'ioDemosNative/test; ioDemosTests/test'
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
   test-js:
     strategy:
       fail-fast: false
@@ -130,3 +194,19 @@ jobs:
     - uses: sbt/setup-sbt@v1
     - name: Test
       run: sbt rootJS/test
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
