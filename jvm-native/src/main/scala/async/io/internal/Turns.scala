@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 /** The turn to read a handle, or to write it, which one op pending at a time holds, on any submitter (see
   * `Ops.alreadyPending`). An op on a stream that finds it held is refused, since two reads would take the stream's
   * bytes in no order and two writes would interleave theirs. An op on a datagram socket or a listener, each of whose
-  * receives, sends and accepts is whole, waits its turn instead (`await`), behind those waiting already, as Go's fd
+  * receives, sends and accepts is whole, waits its turn instead (`enqueue`), behind those waiting already, as Go's fd
   * lock queues the reads and writes of a socket's concurrent callers: the turn passes to it once the op holding it lets
   * go (`release`), and it is told so (`onTurn`), on the thread letting go, to go on on its own submitter.
   *
@@ -28,7 +28,7 @@ final class Turns {
   /** Queues `op` for the turn, behind those waiting already: `onTurn` runs once it holds it, on the thread passing it,
     * perhaps this one, before this returns, if the turn was let go meanwhile.
     */
-  def await(op: AnyRef, onTurn: Runnable): Unit = {
+  def enqueue(op: AnyRef, onTurn: Runnable): Unit = {
     synchronized {
       queue.add(Turns.Waiter(op, onTurn))
       waiters += 1

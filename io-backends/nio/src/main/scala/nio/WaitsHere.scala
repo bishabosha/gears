@@ -39,9 +39,9 @@ private[nio] sealed trait WaitHere extends Cancellable {
     * timer's does once its time has passed, so there is nothing to try; false if the caller should try the op again, or
     * its time ran out, which the caller keeps track of. Throws if the op's handle has been closed.
     */
-  def await(timeoutNanos: Long): Boolean
+  def park(timeoutNanos: Long): Boolean
 
-  /** Ends the wait, from any thread: a caller parked in `await` returns, and the next `await` returns at once. */
+  /** Ends the wait, from any thread: a caller parked in `park` returns, and the next `park` returns at once. */
   def cancel(): Unit
 }
 
@@ -55,7 +55,7 @@ private[nio] final class SelectorWait(entry: Selectable, write: Boolean, ops: In
 
   /** Never finishes the op itself: the caller tries it once the selector reports the handle ready, or its time is up.
     */
-  def await(timeoutNanos: Long): Boolean = {
+  def park(timeoutNanos: Long): Boolean = {
     val selector = entry.enterWait(write)
     try {
       val key = entry.channel.keyFor(selector)
@@ -94,7 +94,7 @@ private[nio] final class TimerWait(timer: NioTimer) extends WaitHere with gears.
   /** Parks until the timer's key, its deadline or time limit, a cancel, or its deadline moving earlier (`moved`); true
     * if its deadline has come. The timer carries its own time limit, so `timeoutNanos` is not used.
     */
-  def await(timeoutNanos: Long): Boolean = {
+  def park(timeoutNanos: Long): Boolean = {
     parked = Thread.currentThread()
     timer.waiter = this
     try {
@@ -141,7 +141,7 @@ private[nio] final class TurnWait(turns: gears.async.io.internal.Turns, op: AnyR
   private val caller = Thread.currentThread()
 
   /** Parks until `op` holds the turn, a cancel, or `timeoutNanos` have passed; true if it holds it. */
-  def await(timeoutNanos: Long): Boolean = {
+  def park(timeoutNanos: Long): Boolean = {
     val deadline = if timeoutNanos < 0 then -1L else System.nanoTime() + timeoutNanos
     var left = timeoutNanos
     while !turns.holds(op) && !cancelled && left != 0 do {

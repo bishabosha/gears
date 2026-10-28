@@ -67,7 +67,7 @@ class HandleCloseSuite extends munit.FunSuite {
         val fd = KqueueHandles.descriptor(out)
         val inUse = new CountDownLatch(1)
         val end = new CountDownLatch(1)
-        val user = new Thread(() => KqueueHandles.using(out) { inUse.countDown(); end.await() })
+        val user = new Thread(() => KqueueHandles.inUse(out) { inUse.countDown(); end.await() })
         user.start()
         inUse.await()
         @volatile var closed = false

@@ -40,7 +40,7 @@ class BlockingRunSuite extends FunSuite {
     assert(task.cancelUnlessCommitted())
     assert(task.interrupt(), "still running, so the cancel waits for it")
     task.release.countDown()
-    task.awaitEnd()
+    task.waitForEnd()
     intercept[IllegalStateException](into.clear()) // nothing published after the cancel
   }
 
@@ -50,7 +50,7 @@ class BlockingRunSuite extends FunSuite {
     assert(task.cancelUnlessCommitted())
     assert(!task.interrupt(), "detachable, so the cancel need not wait")
     task.release.countDown()
-    task.awaitEnd()
+    task.waitForEnd()
     intercept[IllegalStateException](into.clear()) // its result was not written
   }
 }

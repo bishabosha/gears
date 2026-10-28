@@ -58,12 +58,12 @@ final class KqueueReactor private (
   }
 
   // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
-  // to go on submitting (`deliverGiven`).
-  private val awaiting = scala.collection.mutable.HashSet.empty[KqueueOp]
-  private val givenQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueueOp]()
+  // to go on submitting (`deliverTurns`).
+  private val queued = scala.collection.mutable.HashSet.empty[KqueueOp]
+  private val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[KqueueOp]()
 
   /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
-  private def awaitTurn(
+  private def queueForTurn(
       op: KqueueOp,
       turns: gears.async.io.internal.Turns,
       pending: Completion[KqueueOp],
@@ -71,30 +71,30 @@ final class KqueueReactor private (
   ): Unit = {
     op.completion = pending
     if timeoutMillis >= 0 then schedule(op, timeoutMillis)
-    awaiting += op
-    turns.await(
+    queued += op
+    turns.enqueue(
       op,
       () => {
-        givenQueue.add(op)
+        turnsCome.add(op)
         if !(Thread.currentThread() eq loopThread) then wakeup()
       }
     )
   }
 
   /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
-  private def deliverGiven(): Boolean = {
+  private def deliverTurns(): Boolean = {
     var any = false
-    var op = givenQueue.poll()
+    var op = turnsCome.poll()
     while op != null do {
       val claim = op.claim
       // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
-      if claim != null && claim.holds(op) && awaiting.remove(op) then {
+      if claim != null && claim.holds(op) && queued.remove(op) then {
         any = true
         val pending = op.completion.nn
         op.completion = null
         submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
       }
-      op = givenQueue.poll()
+      op = turnsCome.poll()
     }
     any
   }
@@ -371,7 +371,7 @@ final class KqueueReactor private (
     val slotRefusal = op.slotRefusal
     val claim = op.claim
     if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
-      awaitTurn(op, claim, pending, timeoutMillis)
+      queueForTurn(op, claim, pending, timeoutMillis)
       false
     } else {
       val refusal =
@@ -758,7 +758,7 @@ final class KqueueReactor private (
         case blocking: KqueueBlocking if blocking.cancelling != null =>
           // A cancelled blocker's `block` has returned, so its op's buffers and slots are the caller's again. Its
           // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
-          assert(completion == null, "a blocker awaiting its cancel was resubmitted")
+          assert(completion == null, "a blocker queued its cancel was resubmitted")
           val cancelled = blocking.cancelling.nn
           val failure = blocking.cancelledBy
           blocking.cancelling = null
@@ -793,13 +793,13 @@ final class KqueueReactor private (
         if slot.nn.write != null then drop(slot.nn.write.nn)
       }
       java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
-      for op <- awaiting do {
+      for op <- queued do {
         val claim = op.claim
         if claim != null then claim.withdraw(op): Unit
         drop(op)
       }
-      awaiting.clear()
-      givenQueue.clear()
+      queued.clear()
+      turnsCome.clear()
       for (_, op) <- waiting.toList do {
         op.withdraw()
         drop(op)
@@ -867,7 +867,7 @@ final class KqueueReactor private (
         KqueueLoop.freeQueue(events)
         KqueueReactor.all.remove(this)
       }
-      running.foreach(_.awaitEnd()) // Until then they may still write to their ops' buffers and slots.
+      running.foreach(_.waitForEnd()) // Until then they may still write to their ops' buffers and slots.
       for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
       finished.foreach { (op, completion, failure) =>
@@ -916,7 +916,7 @@ final class KqueueReactor private (
     * pending here.
     */
   private def withdraw(op: KqueueOp): Completion[KqueueOp] | Null =
-    if awaiting.remove(op) then {
+    if queued.remove(op) then {
       // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
       val claim = op.claim
       if claim != null then claim.withdraw(op): Unit
@@ -1167,7 +1167,7 @@ final class KqueueReactor private (
     val closingDue = closing.size
     deliverMoved()
     val delivered = // no short-circuiting
-      deliverGiven() | deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() |
+      deliverTurns() | deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() |
         closingDue > 0
     val polled =
       if !delivered then {

@@ -37,7 +37,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
     extends KqueueBlocking
     with Repeatable {
   gears.async.io.Ops.checkOffset(offset)
-  def block(): Unit = KqueueHandles.using(handle) {
+  def block(): Unit = KqueueHandles.inUse(handle) {
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
     val fd = handle.fd
     val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
@@ -57,7 +57,7 @@ final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset:
     extends KqueueBlocking
     with Repeatable {
   gears.async.io.Ops.checkOffset(offset)
-  def block(): Unit = KqueueHandles.using(handle) { // a closed handle fails first, with nothing to write too
+  def block(): Unit = KqueueHandles.inUse(handle) { // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(handle.fd)
   }
 
@@ -74,7 +74,7 @@ final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset:
 
 /** `fsync` (see `FileOps.sync`). */
 final class FileSync(handle: Handle) extends KqueueBlocking with Repeatable {
-  def block(): Unit = KqueueHandles.using(handle) {
+  def block(): Unit = KqueueHandles.inUse(handle) {
     val fd = handle.fd
     if unistd.fsync(fd) < 0 then throw new IOException(s"Failed to sync descriptor $fd: ${cError()}")
   }

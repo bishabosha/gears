@@ -55,12 +55,12 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   }
 
   // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
-  // to go on submitting (`deliverGiven`).
-  private val awaiting = scala.collection.mutable.HashSet.empty[NioOp]
-  private val givenQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioOp]()
+  // to go on submitting (`deliverTurns`).
+  private val queued = scala.collection.mutable.HashSet.empty[NioOp]
+  private val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[NioOp]()
 
   /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
-  private def awaitTurn(
+  private def queueForTurn(
       op: NioOp,
       turns: gears.async.io.internal.Turns,
       pending: Completion[NioOp],
@@ -68,30 +68,30 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   ): Unit = {
     op.completion = pending
     if timeoutMillis >= 0 then schedule(op, timeoutMillis)
-    awaiting += op
-    turns.await(
+    queued += op
+    turns.enqueue(
       op,
       () => {
-        givenQueue.add(op)
+        turnsCome.add(op)
         if !(Thread.currentThread() eq loopThread) then wakeup()
       }
     )
   }
 
   /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
-  private def deliverGiven(): Boolean = {
+  private def deliverTurns(): Boolean = {
     var any = false
-    var op = givenQueue.poll()
+    var op = turnsCome.poll()
     while op != null do {
       val claim = op.claim
       // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
-      if claim != null && claim.holds(op) && awaiting.remove(op) then {
+      if claim != null && claim.holds(op) && queued.remove(op) then {
         any = true
         val pending = op.completion.nn
         op.completion = null
         submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
       }
-      op = givenQueue.poll()
+      op = turnsCome.poll()
     }
     any
   }
@@ -266,7 +266,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
     val slotRefusal = op.slotRefusal
     val claim = op.claim
     if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
-      awaitTurn(op, claim, pending, timeoutMillis)
+      queueForTurn(op, claim, pending, timeoutMillis)
       false
     } else {
       val refusal =
@@ -580,7 +580,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
       pendingPromises -= promise
       promise match {
         case blocking: NioBlocking if blocking.cancelling != null =>
-          assert(completion == null, "a blocker awaiting its cancel was resubmitted")
+          assert(completion == null, "a blocker queued its cancel was resubmitted")
           val cancelled = blocking.cancelling.nn
           val failure = blocking.cancelledBy
           blocking.cancelling = null
@@ -617,13 +617,13 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
         waiting.write = null
       }
       while !again.isEmpty do drop(again.poll())
-      for op <- awaiting do {
+      for op <- queued do {
         val claim = op.claim
         if claim != null then claim.withdraw(op): Unit
         drop(op)
       }
-      awaiting.clear()
-      givenQueue.clear()
+      queued.clear()
+      turnsCome.clear()
       while !ready.isEmpty do { // finished, but their completions have not run
         val op = ready.poll().nn
         val failure = op.atOnceFailure
@@ -680,7 +680,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
         selector.close() // deregisters every channel; the channels stay open
       }
       closedQueue.clear()
-      running.foreach(_.awaitEnd())
+      running.foreach(_.waitForEnd())
       for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       finished.foreach { (op, completion, failure) =>
         if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
@@ -719,7 +719,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
     * pending here.
     */
   private def withdraw(op: NioOp): Completion[NioOp] | Null =
-    if awaiting.remove(op) then {
+    if queued.remove(op) then {
       // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
       val claim = op.claim
       if claim != null then claim.withdraw(op): Unit
@@ -807,7 +807,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
     deliverMoved()
     val closingDue = closing.size
     val delivered =
-      deliverGiven() | deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
+      deliverTurns() | deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
     updateInterest()
     val select =
       if !delivered then {

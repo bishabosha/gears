@@ -119,7 +119,7 @@ final class SelectorIo extends Io {
   }
 
   /** Parks the caller until `channel` is ready for `ops`. */
-  private def await(channel: SelectableChannel, ops: Int): Unit = {
+  private def waitUntilReady(channel: SelectableChannel, ops: Int): Unit = {
     val wait = new Wait(channel, ops, Thread.currentThread())
     requests.add(wait)
     if parked then selector.wakeup()
@@ -130,7 +130,7 @@ final class SelectorIo extends Io {
     val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
     channel.configureBlocking(false)
     if !channel.connect(address) then {
-      while !channel.finishConnect() do await(channel, SelectionKey.OP_CONNECT)
+      while !channel.finishConnect() do waitUntilReady(channel, SelectionKey.OP_CONNECT)
     }
     channel
   }
@@ -139,7 +139,7 @@ final class SelectorIo extends Io {
     server.configureBlocking(false)
     var client = server.accept()
     while client == null do {
-      await(server, SelectionKey.OP_ACCEPT)
+      waitUntilReady(server, SelectionKey.OP_ACCEPT)
       client = server.accept()
     }
     client.configureBlocking(false)
@@ -149,14 +149,14 @@ final class SelectorIo extends Io {
   def read(channel: SocketChannel, buf: ByteBuffer): Int = {
     var n = channel.read(buf)
     while n == 0 do {
-      await(channel, SelectionKey.OP_READ)
+      waitUntilReady(channel, SelectionKey.OP_READ)
       n = channel.read(buf)
     }
     n
   }
 
   def write(channel: SocketChannel, buf: ByteBuffer): Unit =
-    while channel.write(buf) == 0 && buf.hasRemaining do await(channel, SelectionKey.OP_WRITE)
+    while channel.write(buf) == 0 && buf.hasRemaining do waitUntilReady(channel, SelectionKey.OP_WRITE)
 }
 
 /** A `Selector` design with no selector thread: non-blocking channels, each operation tried on the calling virtual
@@ -197,7 +197,7 @@ object SelectorHereIo extends Io {
   private val selectors = new ConcurrentHashMap[SelectableChannel, Selectors]()
 
   /** Waits on the caller until `channel` is ready for `ops`. One thread waits in each direction at a time. */
-  private def await(channel: SelectableChannel, ops: Int): Unit = {
+  private def waitUntilReady(channel: SelectableChannel, ops: Int): Unit = {
     val waiting = selectors.computeIfAbsent(channel, new Selectors(_))
     // The `Selectors` of a channel are used by one reader and one writer, each on its own selector.
     val selector = waiting.synchronized(waiting.forOps(ops))
@@ -208,7 +208,7 @@ object SelectorHereIo extends Io {
     val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
     channel.configureBlocking(false)
     if !channel.connect(address) then {
-      while !channel.finishConnect() do await(channel, SelectionKey.OP_CONNECT)
+      while !channel.finishConnect() do waitUntilReady(channel, SelectionKey.OP_CONNECT)
     }
     channel
   }
@@ -217,7 +217,7 @@ object SelectorHereIo extends Io {
     server.configureBlocking(false)
     var client = server.accept()
     while client == null do {
-      await(server, SelectionKey.OP_ACCEPT)
+      waitUntilReady(server, SelectionKey.OP_ACCEPT)
       client = server.accept()
     }
     client.configureBlocking(false)
@@ -238,14 +238,14 @@ object SelectorHereIo extends Io {
       if yields > 0 then {
         yields -= 1
         Thread.`yield`()
-      } else await(channel, SelectionKey.OP_READ)
+      } else waitUntilReady(channel, SelectionKey.OP_READ)
       n = channel.read(buf)
     }
     n
   }
 
   def write(channel: SocketChannel, buf: ByteBuffer): Unit =
-    while channel.write(buf) == 0 && buf.hasRemaining do await(channel, SelectionKey.OP_WRITE)
+    while channel.write(buf) == 0 && buf.hasRemaining do waitUntilReady(channel, SelectionKey.OP_WRITE)
 
   override def close(channel: SocketChannel): Unit = {
     val kept = selectors.remove(channel)

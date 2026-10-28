@@ -299,12 +299,12 @@ object KqueueHandles {
 
   private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()
 
-  def readNow(handle: Handle, buf: ByteBuffer): Int = using(handle) {
+  def readNow(handle: Handle, buf: ByteBuffer): Int = inUse(handle) {
     if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf) // reading nothing would say end of stream
     NonBlocking.read(handle.fd, buf)
   }
   def writeNow(handle: Handle, buf: ByteBuffer): Int =
-    using(handle)(if buf.hasRemaining() then NonBlocking.write(handle.fd, buf) else 0)
+    inUse(handle)(if buf.hasRemaining() then NonBlocking.write(handle.fd, buf) else 0)
 
   /** Closes `handle`, from any thread, as `closeHandle` does, waiting, if a use of its descriptor is in progress, for
     * the last use to close it, and throwing what that close threw. Closing the descriptor ends its generation in
@@ -349,7 +349,7 @@ object KqueueHandles {
   }
 
   /** Runs `body` as a use of `handle`'s descriptor (see `KqueueBackend.Handle`); throws if the handle is closed. */
-  private[kqueue] inline def using[A](handle: Handle)(inline body: A): A = {
+  private[kqueue] inline def inUse[A](handle: Handle)(inline body: A): A = {
     if !handle.acquire() then throw notOpen(handle)
     try body
     finally handle.release()
@@ -362,7 +362,7 @@ object KqueueHandles {
     */
   private[kqueue] def addressOf(handle: Handle, peer: Boolean): SocketAddress = {
     checkOwn(handle)
-    using(handle) {
+    inUse(handle) {
       val storage = stackalloc[socket.sockaddr_storage]()
       val length = stackalloc[socket.socklen_t]()
       !length = sizeOf[socket.sockaddr_storage].toUInt

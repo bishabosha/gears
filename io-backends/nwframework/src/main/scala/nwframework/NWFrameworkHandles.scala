@@ -255,7 +255,7 @@ private[nwframework] final class NWFrameworkHandle(
   }
 
   /** Registers the op of `token` on `reactor` as waiting for `kind`; refused if one already is. Under the lock. */
-  private def await(kind: Int, reactor: KqueueReactor, token: Long): Unit = {
+  private def registerWaiting(kind: Int, reactor: KqueueReactor, token: Long): Unit = {
     val slotTaken = kind match {
       case Read    => readReactor != null
       case Write   => writeReactor != null
@@ -353,7 +353,7 @@ private[nwframework] final class NWFrameworkHandle(
     } else if eof then 0
     else if readError != 0 then throw failure("read", readError)
     else {
-      await(Read, reactor, token)
+      registerWaiting(Read, reactor, token)
       pooledFor = null // a plain read takes what comes from the stash
       if !receiving then receive(cap)
       -1
@@ -393,7 +393,7 @@ private[nwframework] final class NWFrameworkHandle(
       slot
     } else if readError != 0 then throw failure("read", readError)
     else {
-      await(Read, reactor, token)
+      registerWaiting(Read, reactor, token)
       if !receiving then {
         pooledFor = pool
         receiving = true
@@ -447,7 +447,7 @@ private[nwframework] final class NWFrameworkHandle(
     } else {
       val room = NWFrameworkHandle.SendWindow - sentBytes
       if room <= 0 then {
-        await(Write, reactor, token)
+        registerWaiting(Write, reactor, token)
         0
       } else {
         val n = math.min(len.toLong, room).toInt
@@ -497,13 +497,13 @@ private[nwframework] final class NWFrameworkHandle(
     val total = gears.async.io.Ops.remaining(bufs)
     val room = if NWFrameworkHandle.SendWindow == 0 then total else NWFrameworkHandle.SendWindow - sentBytes
     if room <= 0 then {
-      await(Write, reactor, token)
+      registerWaiting(Write, reactor, token)
       0
     } else {
       val n = math.min(total, room).toInt
       val region = gathered(bufs, n)
       if NWFrameworkHandle.SendWindow == 0 then {
-        await(Write, reactor, token)
+        registerWaiting(Write, reactor, token)
         sentBytes += n
         NWFrameworkIo.nwf_send_owned(ptr, region, n)
         -n
@@ -521,7 +521,7 @@ private[nwframework] final class NWFrameworkHandle(
     if writeError != 0 then throw failure("write", writeError)
     val n = gears.async.io.Ops.remaining(bufs).toInt
     val fits = sentBytes < NWFrameworkHandle.SendWindow
-    if !fits then await(Write, reactor, token)
+    if !fits then registerWaiting(Write, reactor, token)
     sentBytes += n
     NWFrameworkIo.nwf_send_owned(ptr, gathered(bufs, n), n)
     fits
@@ -560,7 +560,7 @@ private[nwframework] final class NWFrameworkHandle(
 
   private def sendOn(bytes: Ptr[Byte], len: Int, reactor: KqueueReactor, token: Long): Boolean = {
     val fits = sentBytes < NWFrameworkHandle.SendWindow
-    if !fits then await(Write, reactor, token)
+    if !fits then registerWaiting(Write, reactor, token)
     sentBytes += len
     NWFrameworkIo.nwf_send(ptr, bytes, len)
     fits
@@ -579,7 +579,7 @@ private[nwframework] final class NWFrameworkHandle(
     if state == 1 then true
     else if state == 2 then throw failure("connect", error)
     else {
-      await(Connect, reactor, token)
+      registerWaiting(Connect, reactor, token)
       false
     }
   }
@@ -590,7 +590,7 @@ private[nwframework] final class NWFrameworkHandle(
     if !accepted.isEmpty then accepted.poll()
     else if state == 2 then throw failure("accept", error)
     else {
-      await(Read, reactor, token)
+      registerWaiting(Read, reactor, token)
       null
     }
   }
@@ -608,7 +608,7 @@ private[nwframework] final class NWFrameworkHandle(
       taken
     } else if state == 2 then throw failure("accept", error)
     else {
-      await(Read, reactor, token)
+      registerWaiting(Read, reactor, token)
       null
     }
   }
@@ -625,7 +625,7 @@ private[nwframework] final class NWFrameworkHandle(
       packet
     } else if readError != 0 then throw failure("receive", readError)
     else {
-      await(Read, reactor, token)
+      registerWaiting(Read, reactor, token)
       if kind == NWFrameworkHandle.Datagram && !receiving then receiveMessage()
       null
     }

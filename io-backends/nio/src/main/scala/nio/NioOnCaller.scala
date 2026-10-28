@@ -55,7 +55,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
         // by an op that may wait for it, else refused.
         val claim = command.claim
         if claim != null && !claim.take(command) then
-          if command.waitsItsTurn then awaitTurn(claim, command, deadline)
+          if command.waitsItsTurn then waitForTurn(claim, command, deadline)
           else throw gears.async.io.Ops.alreadyPending(command)
         try performCommand(command, deadline)
         finally if claim != null then claim.release(command)
@@ -72,14 +72,14 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     * `TimeoutException` after it, or a `CancellationException` once the caller is cancelled, leaving the queue either
     * way.
     */
-  private def awaitTurn(turns: gears.async.io.internal.Turns, command: Command, deadline: Long)(using Async): Unit = {
+  private def waitForTurn(turns: gears.async.io.internal.Turns, command: Command, deadline: Long)(using Async): Unit = {
     val wait = new TurnWait(turns, command)
-    turns.await(command, () => wait.wake())
+    turns.enqueue(command, () => wait.wake())
     var holds = false
     try
       cancellationScope(wait) {
         while !holds do {
-          holds = wait.await(remaining(deadline))
+          holds = wait.park(remaining(deadline))
           if !holds then {
             checkCancelled()
             if expired(deadline) then throw new TimeoutException(s"$command timed out")
@@ -124,7 +124,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
           val wait = new SelectorWait(s, command.interest == Interest.Write, command.selectOps(s.channel))
           cancellationScope(wait) {
             while !done do {
-              wait.await(remaining(deadline)): Unit
+              wait.park(remaining(deadline)): Unit
               checkCancelled()
               done = command.perform()
               if !done && expired(deadline) then throw new TimeoutException(s"$command timed out")
@@ -151,7 +151,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
       var outcome = gears.async.io.internal.TimerState.Again
       cancellationScope(wait) {
         while outcome == gears.async.io.internal.TimerState.Again do {
-          wait.await(-1L): Unit
+          wait.park(-1L): Unit
           checkCancelled()
           outcome = timer.due(System.nanoTime())
         }

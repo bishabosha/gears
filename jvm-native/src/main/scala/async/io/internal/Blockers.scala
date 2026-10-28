@@ -129,7 +129,7 @@ trait BlockingRun {
 
   /** Marks the task cancelled and interrupts its thread if it is running. Returns true if the pool still holds it,
     * running `block`, which may touch the op's buffers and slots until it returns, or queued to run it, which it will
-    * skip: either way the blocker thread reports through `settled` when it has let go, and `awaitEnd` waits for that.
+    * skip: either way the blocker thread reports through `settled` when it has let go, and `waitForEnd` waits for that.
     * False once it has ended, or for a `detachable` task, whose cancel need not wait. For a task given to the pool, or
     * run with `runHere`: one never submitted has not ended either, and a reactor only cancels what it holds pending.
     */
@@ -169,13 +169,13 @@ trait BlockingRun {
     }
   }
 
-  /** What `block` threw, once it has returned (`awaitEnd`): for a reactor that closes while a task whose result is
+  /** What `block` threw, once it has returned (`waitForEnd`): for a reactor that closes while a task whose result is
     * written still runs, which then gets its outcome.
     */
   private[io] def thrownBy: Throwable | Null = synchronized(thrown)
 
   /** Waits until a running `block` has returned. An interrupt of the waiting thread is kept for later. */
-  def awaitEnd(): Unit = {
+  def waitForEnd(): Unit = {
     var interrupted = false
     synchronized {
       while !ended do

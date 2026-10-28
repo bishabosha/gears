@@ -64,7 +64,7 @@ object KQueueExampleBench {
   private def unregister(kq: Int, fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read)
 
   /** Polls `kq` until it reports `fd` writable, ignoring anything else it reports meanwhile. */
-  private def awaitWritable(kq: Int, events: EventQueue, fd: Int): Unit = {
+  private def waitUntilWritable(kq: Int, events: EventQueue, fd: Int): Unit = {
     register(kq, fd, read = false, oneShot = true)
     var writable = false
     while !writable do {
@@ -80,12 +80,12 @@ object KQueueExampleBench {
 
   /** Writes all of `buf`, waiting for writability whenever a write would block. */
   private def writeAll(kq: Int, events: EventQueue, fd: Int, buf: ByteBuffer): Unit =
-    while buf.hasRemaining() do if NonBlocking.write(fd, buf) < 0 then awaitWritable(kq, events, fd)
+    while buf.hasRemaining() do if NonBlocking.write(fd, buf) < 0 then waitUntilWritable(kq, events, fd)
 
   /** Connects to `address`, waiting for the connection to complete, and registers it for reads. */
   private def connect(kq: Int, events: EventQueue, address: IpAddress | UnixAddress): Int = {
     val fd = connectTo(address)
-    awaitWritable(kq, events, fd)
+    waitUntilWritable(kq, events, fd)
     PosixSockets.checkConnect(fd)
     register(kq, fd, read = true, oneShot = false)
     fd

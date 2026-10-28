@@ -212,7 +212,7 @@ object KqueueOps
   /** Runs `body` on `handle`'s descriptor, an IP socket `option` applies to; else an `IllegalArgumentException`. */
   private def onSocket[A](handle: Handle, option: SocketOption[?])(body: Int => A): A = {
     KqueueHandles.checkOwn(handle)
-    KqueueHandles.using(handle) {
+    KqueueHandles.inUse(handle) {
       val kind = KqueueHandles.socketKind(handle.fd)
       if kind == null then throw new IllegalArgumentException(s"$option applies to IP sockets, not $handle")
       if !SocketOption.onSocket(option, kind.nn) then throw gears.async.io.Ops.notFor(option, kind.nn)
@@ -428,7 +428,7 @@ final class Close(val handle: Handle) extends KqueuePromise {
   * queued, then the end of the stream, after the call returns.
   */
 final class ShutdownOutput(val handle: Handle) extends KqueueAtOnce {
-  def perform(): Unit = KqueueHandles.using(handle)(gears.async.io.internal.PosixSockets.shutdownOutput(handle.fd))
+  def perform(): Unit = KqueueHandles.inUse(handle)(gears.async.io.internal.PosixSockets.shutdownOutput(handle.fd))
 }
 
 /** What to do with a descriptor once kqueue reports it ready. `perform` runs a non-blocking operation on the reactor
