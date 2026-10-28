@@ -464,109 +464,36 @@ final class KqueueReactor private (
           KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
       }
 
-  /** Cancels every pending op, interrupting blockers, then closes the kqueue. The kqueue's own filters and wake event
-    * go with it. A blocker still running is waited for before its `onCancel`. An op that had already finished, whose
-    * completion had not run yet, gets its outcome, not a cancel: what it read or opened is the caller's.
+  /** Drops the commands in the slots and the other facility's ops waiting to be notified (see `ReactorCore.dropOwn`).
     */
-  def close(): Unit = {
-    if !closed then {
-      // Detach every pending op first, so nothing can be delivered while the reactor shuts down.
-      val dropped = scala.collection.mutable.ArrayBuffer.empty[(KqueueOp, Completion[KqueueOp])]
-      val finished = scala.collection.mutable.ArrayBuffer.empty[(KqueueOp, Completion[KqueueOp], Throwable | Null)]
-      def drop(op: KqueueOp): Unit = dropped += ((op, take(op)))
-      for slot <- slots if slot != null do {
-        if slot.nn.read != null then drop(slot.nn.read.nn)
-        if slot.nn.write != null then drop(slot.nn.write.nn)
-      }
-      java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
-      for op <- queued do {
-        val claim = op.claim
-        if claim != null then claim.withdraw(op): Unit
-        drop(op)
-      }
-      queued.clear()
-      turnsCome.clear()
-      for (_, op) <- waiting.toList do {
-        op.withdraw()
-        drop(op)
-      }
-      waiting.clear()
-      notifiedHere.clear()
-      notifiedElsewhere.clear()
-      while !ready.isEmpty do { // finished, but their completions have not run
-        val op = ready.poll().nn
-        val failure = op.atOnceFailure
-        op.atOnceFailure = null
-        finished += ((op, take(op), failure))
-      }
-      while !closing.isEmpty do { // closed their handles, but their completions have not run
-        val op = closing.poll().nn
-        val failure = op.atOnceFailure
-        op.atOnceFailure = null
-        finished += ((op, take(op), failure))
-      }
-      var resolved = resolvedQueue.poll()
-      while resolved != null do { // finished on another thread; a cancelled blocker among them is settled below
-        resolved match {
-          case blocking: KqueueBlocking if blocking.cancelling != null => ()
-          case promise                                                 =>
-            val completion = detach(promise)
-            if completion != null then finished += ((promise, completion, promise.failure))
-        }
-        resolved = resolvedQueue.poll()
-      }
-      val running = scala.collection.mutable.ArrayBuffer.empty[gears.async.io.internal.BlockingRun]
-      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
-      val written = scala.collection.mutable.ArrayBuffer.empty[(KqueueBlocking, Completion[KqueueOp])]
-      for promise <- pendingPromises.toList do {
-        val completion = detach(promise)
-        if completion != null then
-          promise match {
-            case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() =>
-              written += ((blocking, completion))
-              running += blocking
-            case _ =>
-              dropped += ((promise, completion))
-              promise match {
-                case blocking: KqueueBlocking if blocking.interrupt() => running += blocking
-                case _                                                => ()
-              }
-          }
-      }
-      for blocking <- cancellingBlockers do {
-        dropped += ((blocking, blocking.cancelling.nn))
-        blocking.cancelling = null
-        blocking.cancelledBy = null
-        running += blocking
-      }
-      cancellingBlockers.clear()
-      // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
-      while !timers.isEmpty do drop(timers.poll())
-      resolvedQueue.clear()
-      closedQueue.clear()
-      selectedQueue.clear()
-      val ext = extension
-      if ext != null then ext.close() // nothing triggers its event from here on
-      wakeLock.synchronized {
-        closed = true
-        KqueueLoop.close(kq) // Its filters and wake event go with it.
-        KqueueLoop.freeQueue(events)
-        KqueueReactor.all.remove(this)
-      }
-      running.foreach(_.waitForEnd()) // Until then they may still write to their ops' buffers and slots.
-      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
-      // Only now tell the completions, so one that throws cannot leak the reactor's resources.
-      finished.foreach { (op, completion, failure) =>
-        if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
-      }
-      dropped.foreach { (op, completion) =>
-        op match {
-          case opens: Opens       => opens.abandon() // what it opened never reaches the caller
-          case notified: Notified => notified.abandon()
-          case _                  => ()
-        }
-        deliverCancel(completion, op)
-      }
+  protected def dropOwn(drop: KqueueOp => Unit): Unit = {
+    for slot <- slots if slot != null do {
+      if slot.nn.read != null then drop(slot.nn.read.nn)
+      if slot.nn.write != null then drop(slot.nn.write.nn)
+    }
+    java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
+    for (_, op) <- waiting.toList do {
+      op.withdraw()
+      drop(op)
+    }
+    waiting.clear()
+    notifiedHere.clear()
+    notifiedElsewhere.clear()
+  }
+
+  /** Closes the extension, if any, and the kqueue: the kqueue's own filters and wake event go with it (see
+    * `ReactorCore.closeOwn`).
+    */
+  protected def closeOwn(): Unit = {
+    closedQueue.clear()
+    selectedQueue.clear()
+    val ext = extension
+    if ext != null then ext.close() // nothing triggers its event from here on
+    wakeLock.synchronized {
+      closed = true
+      KqueueLoop.close(kq) // Its filters and wake event go with it.
+      KqueueLoop.freeQueue(events)
+      KqueueReactor.all.remove(this)
     }
   }
 

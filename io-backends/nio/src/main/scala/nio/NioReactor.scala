@@ -311,99 +311,27 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
       }
   }
 
-  /** Cancels every pending op, interrupting blockers, then closes the selector. A blocker still running is waited for
-    * before its `onCancel`. An op that had already finished, whose completion had not run yet, gets its outcome, not a
-    * cancel: what it read or opened is the caller's.
-    */
-  def close(): Unit =
-    if !closed then {
-      val dropped = scala.collection.mutable.ArrayBuffer.empty[(NioOp, Completion[NioOp])]
-      val finished = scala.collection.mutable.ArrayBuffer.empty[(NioOp, Completion[NioOp], Throwable | Null)]
-      def drop(op: NioOp): Unit = dropped += ((op, take(op)))
-      selector.keys().forEach { key =>
-        val waiting = key.attachment().asInstanceOf[Waiting]
-        if waiting.read != null then drop(waiting.read.nn)
-        if waiting.write != null then drop(waiting.write.nn)
-        waiting.read = null
-        waiting.write = null
-      }
-      while !again.isEmpty do drop(again.poll())
-      for op <- queued do {
-        val claim = op.claim
-        if claim != null then claim.withdraw(op): Unit
-        drop(op)
-      }
-      queued.clear()
-      turnsCome.clear()
-      while !ready.isEmpty do { // finished, but their completions have not run
-        val op = ready.poll().nn
-        val failure = op.atOnceFailure
-        op.atOnceFailure = null
-        finished += ((op, take(op), failure))
-      }
-      while !closing.isEmpty do { // closed their handles, but their completions have not run
-        val op = closing.poll().nn
-        val failure = op.atOnceFailure
-        op.atOnceFailure = null
-        finished += ((op, take(op), failure))
-      }
-      var resolved = resolvedQueue.poll()
-      while resolved != null do { // finished on another thread; a cancelled blocker among them is settled below
-        resolved match {
-          case blocking: NioBlocking if blocking.cancelling != null => ()
-          case promise                                              =>
-            val completion = detach(promise)
-            if completion != null then finished += ((promise, completion, promise.failure))
-        }
-        resolved = resolvedQueue.poll()
-      }
-      val running = scala.collection.mutable.ArrayBuffer.empty[gears.async.io.internal.BlockingRun]
-      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
-      val written = scala.collection.mutable.ArrayBuffer.empty[(NioBlocking, Completion[NioOp])]
-      for promise <- pendingPromises.toList do {
-        val completion = detach(promise)
-        if completion != null then
-          promise match {
-            case blocking: NioBlocking if !blocking.cancelUnlessCommitted() =>
-              written += ((blocking, completion))
-              running += blocking
-            case _ =>
-              dropped += ((promise, completion))
-              promise match {
-                case blocking: NioBlocking if blocking.interrupt() => running += blocking
-                case _                                             => ()
-              }
-          }
-      }
-      for blocking <- cancellingBlockers do {
-        dropped += ((blocking, blocking.cancelling.nn))
-        blocking.cancelling = null
-        blocking.cancelledBy = null
-        running += blocking
-      }
-      cancellingBlockers.clear()
-      // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
-      while !timers.isEmpty do drop(timers.poll())
-      resolvedQueue.clear()
-      waitingByEntry.clear()
-      wakeLock.synchronized {
-        closed = true
-        selector.close() // deregisters every channel; the channels stay open
-      }
-      closedQueue.clear()
-      running.foreach(_.waitForEnd())
-      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
-      finished.foreach { (op, completion, failure) =>
-        if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
-      }
-      dropped.foreach { (op, completion) =>
-        op match {
-          case opens: Opens => opens.abandon() // what it opened never reaches the caller
-          case _            => ()
-        }
-        deliverCancel(completion, op)
-      }
+  /** Drops the commands waiting on the selector's keys, and on regular files (see `ReactorCore.dropOwn`). */
+  protected def dropOwn(drop: NioOp => Unit): Unit = {
+    selector.keys().forEach { key =>
+      val waiting = key.attachment().asInstanceOf[Waiting]
+      if waiting.read != null then drop(waiting.read.nn)
+      if waiting.write != null then drop(waiting.write.nn)
+      waiting.read = null
+      waiting.write = null
     }
+    while !again.isEmpty do drop(again.poll())
+  }
+
+  /** Closes the selector, which deregisters every channel; the channels stay open (see `ReactorCore.closeOwn`). */
+  protected def closeOwn(): Unit = {
+    waitingByEntry.clear()
+    wakeLock.synchronized {
+      closed = true
+      selector.close()
+    }
+    closedQueue.clear()
+  }
 
   /** Takes a pending command off its key, or out of `again` (see `ReactorCore.withdrawOwn`). */
   protected def withdrawOwn(op: NioOp): Completion[NioOp] | Null =

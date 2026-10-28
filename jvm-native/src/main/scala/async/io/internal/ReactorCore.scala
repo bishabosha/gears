@@ -32,7 +32,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   @volatile protected final var closed = false
 
   /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
-  protected final def release(op: O): Unit = {
+  private def release(op: O): Unit = {
     val claim = op.claim
     if claim != null then claim.release(op)
   }
@@ -132,7 +132,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   }
 
   /** Puts `timer` in the heap under its key (see `TimerState`). */
-  protected final def file(timer: O & LoopTimer[O]): Unit = {
+  private def file(timer: O & LoopTimer[O]): Unit = {
     val key = timer.key
     timer.when = key
     timer.filed = key
@@ -144,7 +144,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
     * out then (see `fireDueTimers`).
     */
-  protected final def schedule(op: O, milliseconds: Int): Unit = {
+  private def schedule(op: O, milliseconds: Int): Unit = {
     op.when = System.nanoTime() + milliseconds * 1_000_000L
     op.order = nextTimerOrder
     nextTimerOrder += 1
@@ -153,8 +153,8 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
 
   // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
   // to go on submitting (`deliverTurns`).
-  protected final val queued = scala.collection.mutable.HashSet.empty[O]
-  protected final val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[O]()
+  private val queued = scala.collection.mutable.HashSet.empty[O]
+  private val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[O]()
 
   /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
   private def queueForTurn(op: O, turns: Turns, pending: Completion[O], timeoutMillis: Int): Unit = {
@@ -307,7 +307,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   protected final val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
 
   // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
-  protected final val cancellingBlockers = scala.collection.mutable.HashSet.empty[O & LoopBlocking[O]]
+  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[O & LoopBlocking[O]]
 
   /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
     * loop is not polling, so queueing is enough.
@@ -357,7 +357,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   }
 
   /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
-  protected final def detach(promise: Promise): Completion[O] | Null = {
+  private def detach(promise: Promise): Completion[O] | Null = {
     val completion = promise.completion
     promise.completion = null
     if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
@@ -453,6 +453,98 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
             }
           case op => timedOut(op)
         }
+    }
+
+  /** Takes every op pending on what the backend waits on, its commands, and hands each to `drop`, with `take`'s
+    * completion, as `close` begins; and forgets them.
+    */
+  protected def dropOwn(drop: O => Unit): Unit
+
+  /** Releases the backend's own resources as `close` ends, once no pending op is left: sets `closed`, under what guards
+    * waking the loop, after which no wake-up may touch them.
+    */
+  protected def closeOwn(): Unit
+
+  /** Cancels every pending op, interrupting blockers, then releases the backend's resources (`closeOwn`). A blocker
+    * still running is waited for before its `onCancel`. An op that had already finished, whose completion had not run
+    * yet, gets its outcome, not a cancel: what it read or opened is the caller's.
+    */
+  final def close(): Unit =
+    if !closed then {
+      // Detach every pending op first, so nothing can be delivered while the reactor shuts down.
+      val dropped = scala.collection.mutable.ArrayBuffer.empty[(O, Completion[O])]
+      val finished = scala.collection.mutable.ArrayBuffer.empty[(O, Completion[O], Throwable | Null)]
+      def drop(op: O): Unit = dropped += ((op, take(op)))
+      dropOwn(drop)
+      for op <- queued do {
+        val claim = op.claim
+        if claim != null then claim.withdraw(op): Unit
+        drop(op)
+      }
+      queued.clear()
+      turnsCome.clear()
+      while !ready.isEmpty do { // finished, but their completions have not run
+        val op = ready.poll().nn
+        val failure = op.atOnceFailure
+        op.atOnceFailure = null
+        finished += ((op, take(op), failure))
+      }
+      while !closing.isEmpty do { // closed their handles, but their completions have not run
+        val op = closing.poll().nn
+        val failure = op.atOnceFailure
+        op.atOnceFailure = null
+        finished += ((op, take(op), failure))
+      }
+      var resolved = resolvedQueue.poll()
+      while resolved != null do { // finished on another thread; a cancelled blocker among them is settled below
+        val promise = resolved.nn
+        promise match {
+          case blocking: LoopBlocking[?] if blocking.cancelling != null => ()
+          case _                                                        =>
+            val completion = detach(promise)
+            if completion != null then finished += ((promise, completion, promise.failure))
+        }
+        resolved = resolvedQueue.poll()
+      }
+      val running = scala.collection.mutable.ArrayBuffer.empty[BlockingRun]
+      // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
+      val written = scala.collection.mutable.ArrayBuffer.empty[(O & LoopBlocking[O], Completion[O])]
+      for promise <- pendingPromises.toList do {
+        val completion = detach(promise)
+        if completion != null then
+          promise match {
+            case blocking: LoopBlocking[O] @unchecked if !blocking.cancelUnlessCommitted() =>
+              written += ((blocking, completion))
+              running += blocking
+            case _ =>
+              dropped += ((promise, completion))
+              promise match {
+                case blocking: LoopBlocking[?] if blocking.interrupt() => running += blocking
+                case _                                                 => ()
+              }
+          }
+      }
+      for blocking <- cancellingBlockers do {
+        dropped += ((blocking, blocking.cancelling.nn))
+        blocking.cancelling = null
+        blocking.cancelledBy = null
+        running += blocking
+      }
+      cancellingBlockers.clear()
+      // What is left in the heap are timers: the other ops in it left it as they were taken or detached above.
+      while !timers.isEmpty do drop(timers.poll())
+      resolvedQueue.clear()
+      closeOwn()
+      running.foreach(_.waitForEnd()) // Until then they may still write to their ops' buffers and slots.
+      for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
+      // Only now tell the completions, so one that throws cannot leak the reactor's resources.
+      finished.foreach { (op, completion, failure) =>
+        if failure == null then deliverComplete(completion, op) else deliverFailure(completion, op, failure)
+      }
+      dropped.foreach { (op, completion) =>
+        abandon(op) // what it opened never reaches the caller
+        deliverCancel(completion, op)
+      }
     }
 
   def stop(): Unit = running = false
