@@ -42,6 +42,9 @@ private[nio] trait Entry {
   /** Drains `bufs` in order, as `write` drains one: the bytes written, or -1 if none fit now. */
   def write(bufs: Array[ByteBuffer]): Long
   def close(): Unit
+
+  /** What it is, for a handle's `toString`. */
+  def description: String
 }
 
 /** A channel a `Selector` watches: a socket, a listener, a datagram socket, or an end of a pipe, in non-blocking mode.
@@ -51,6 +54,8 @@ private[nio] final class Selectable(val channel: SelectableChannel, bound: Bound
 
   /** An IP listener's options, for each connection it accepts (see `NioHandles.accepted`). */
   @volatile var accepting: SocketOptions | Null = null
+
+  def description: String = channel.toString
 
   def read(buf: ByteBuffer): Int = channel match {
     case readable: ReadableByteChannel => readable.read(buf)
@@ -210,6 +215,8 @@ private[nio] object SelectorPool {
   * to the file.
   */
 private[nio] final class RegularFile(val channel: FileChannel) extends Entry {
+
+  def description: String = s"file ${channel.toString}"
   def read(buf: ByteBuffer): Int = RegularFile.failing(channel.read(buf))
   def write(buf: ByteBuffer): Int = RegularFile.failing(channel.write(buf))
   def read(bufs: Array[ByteBuffer]): Long = RegularFile.failing(channel.read(bufs))

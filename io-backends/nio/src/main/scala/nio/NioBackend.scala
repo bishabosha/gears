@@ -61,6 +61,9 @@ object NioCapabilities {
       open = false
       was
     }
+
+    /** Named by its channel, as the JDK describes it, for the failures that name it (`HandleClosedException`). */
+    override def toString: String = s"Handle(${entry.description})"
   }
 }
 
