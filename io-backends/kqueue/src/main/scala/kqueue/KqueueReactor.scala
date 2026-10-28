@@ -114,10 +114,6 @@ final class KqueueReactor private (
     KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
   }
 
-  // Set by the first `wakeup` since the loop last saw the wake event, so later ones skip the syscall. The loop clears it
-  // when it sees the event, before it runs anything, so whatever a merged wake-up was for is seen in that same turn.
-  private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
-
   private final class Slot {
     var read: KqueueOp | Null = null
     var write: KqueueOp | Null = null
@@ -179,9 +175,6 @@ final class KqueueReactor private (
   private val selectedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
-
-  // Guards triggering the wake event against `close`, after which the kqueue's descriptor number may be reused.
-  private object wakeLock {}
 
   /** Submits a command, a connect, a close, or another facility's op (see `ReactorCore.submitOwn`). */
   protected def submitOwn(op: KqueueOp, pending: Completion[KqueueOp], finishNow: Boolean): Int =
@@ -434,12 +427,9 @@ final class KqueueReactor private (
     read != null || write != null
   }
 
-  def wakeup(): Unit =
-    if wakePending.compareAndSet(false, true) then
-      wakeLock.synchronized {
-        if !closed then
-          KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
-      }
+  /** Triggers the wake event (see `ReactorCore.wakeup`). */
+  protected def wakeNow(): Unit =
+    KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
 
   /** Drops the commands in the slots and the other facility's ops waiting to be notified (see `ReactorCore.dropOwn`).
     */
@@ -589,8 +579,8 @@ final class KqueueReactor private (
     */
   private def dispatch(event: Event): Unit =
     if KqueueLoop.isUserEvent(event) then {
-      // Resolved promises are delivered by `runOnce` itself, as are the extension's events (`deliverNotified`).
-      if KqueueLoop.ident(event) == WakeEvent then wakePending.set(false)
+      // Resolved promises are delivered by `runOnce` itself, as are the extension's events (`deliverNotified`); a
+      // wake-up was taken as answered once the poll returned (`tookWakeUps`).
     } else dispatchFile(fileIdent(event), isWriteEvent(event), KqueueLoop.isEOF(event), KqueueLoop.data(event).toLong)
 
   /** What `dispatch` does for a descriptor's filter firing, a write's if `write`, at the end of the stream if `eof`,
@@ -668,7 +658,7 @@ final class KqueueReactor private (
     * event, which the reactor registers itself, there is nothing to fail; a wake-up is still taken as one.
     */
   private def dispatchError(event: Event): Unit =
-    if KqueueLoop.isUserEvent(event) then { if KqueueLoop.ident(event) == WakeEvent then wakePending.set(false) }
+    if KqueueLoop.isUserEvent(event) then ()
     else if KqueueLoop.isReadEvent(event) || isWriteEvent(event) then {
       val ident = fileIdent(event)
       val slot = if ident >= 0 && ident < slots.length then slots(ident) else null
@@ -702,6 +692,7 @@ final class KqueueReactor private (
     */
   protected def poll(block: Boolean): Unit = {
     val polled = if block then pollBeforeBlocking(events) else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+    tookWakeUps()
     var i = 0
     while i < polled do {
       val event = events(i)
@@ -726,20 +717,24 @@ final class KqueueReactor private (
       spins += 1
     }
     if polled != 0 then polled
-    else if timers.isEmpty then KqueueLoop.pollEventsForever(kq, events, maxEvents)
-    else {
-      // Block no longer than until the earliest timer is due, or not at all if it already is.
-      val wait = timers.peek.when - System.nanoTime()
-      if wait <= 0 then KqueueLoop.pollEventsNow(kq, events, maxEvents)
-      else
-        KqueueLoop.pollEventsTimeout(
-          kq,
-          events,
-          maxEvents,
-          (wait / 1_000_000_000L).toInt,
-          (wait % 1_000_000_000L).toInt
-        )
-    }
+    else if !mayBlock() then KqueueLoop.pollEventsNow(kq, events, maxEvents) // a wake-up came meanwhile
+    else
+      try
+        if timers.isEmpty then KqueueLoop.pollEventsForever(kq, events, maxEvents)
+        else {
+          // Block no longer than until the earliest timer is due, or not at all if it already is.
+          val wait = timers.peek.when - System.nanoTime()
+          if wait <= 0 then KqueueLoop.pollEventsNow(kq, events, maxEvents)
+          else
+            KqueueLoop.pollEventsTimeout(
+              kq,
+              events,
+              maxEvents,
+              (wait / 1_000_000_000L).toInt,
+              (wait % 1_000_000_000L).toInt
+            )
+        }
+      finally unpark()
   }
 
 }

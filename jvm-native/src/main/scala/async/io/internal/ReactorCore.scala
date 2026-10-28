@@ -625,6 +625,55 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     */
   protected def poll(block: Boolean): Unit
 
+  // Set by the first `wakeup` since the loop last polled, so later ones skip the backend's wake-up; cleared after each
+  // poll, before anything it found is looked at.
+  private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
+
+  // Whether the loop is blocked in its poll, or about to be, and whether a wake-up was asked for since its last poll.
+  // `wakeup` sets the second, then wakes the poll only if the first is set; the loop sets the first, then blocks only
+  // if the second is not (`mayBlock`), so one of them always sees the other: a wake-up while the loop is awake, running
+  // completions or a caller's tasks, costs no system call, neither the backend's wake-up nor the event it makes.
+  @volatile private var parked = false
+  @volatile private var wakeRequested = false
+
+  /** Guards the backend's wake-up against its close, after which what it wakes may be gone, or its number reused. */
+  protected final val wakeLock = new Object
+
+  /** Wakes the loop from another thread, if it is blocked in its poll or about to be; else the turn it is in, or the
+    * next, delivers what the wake-up was for.
+    */
+  final def wakeup(): Unit = {
+    wakeRequested = true
+    if parked && wakePending.compareAndSet(false, true) then
+      wakeLock.synchronized {
+        if !closed then wakeNow()
+      }
+  }
+
+  /** Makes the poll the loop is blocked in, or its next one, return: kqueue's user event, or `Selector.wakeup`. */
+  protected def wakeNow(): Unit
+
+  /** Marks the loop parked, about to block in its poll, and returns whether it may: false, and unmarked, if a wake-up
+    * was asked for since its last poll, so the poll must not block. A blocking poll calls `unpark` once it returns.
+    */
+  protected final def mayBlock(): Boolean = {
+    parked = true
+    if wakeRequested then {
+      parked = false
+      false
+    } else true
+  }
+
+  protected final def unpark(): Unit = parked = false
+
+  /** Takes the wake-ups asked for until now as answered: called after each poll, before anything it found is looked at,
+    * since the turn then delivers what they were for.
+    */
+  protected final def tookWakeUps(): Unit = {
+    wakeRequested = false
+    wakePending.set(false)
+  }
+
   /** Whether this turn of `runOnce` polls, having `delivered` completions before it or not (see `turnsWithoutPoll`).
     */
   private def pollsThisTurn(delivered: Boolean): Boolean =

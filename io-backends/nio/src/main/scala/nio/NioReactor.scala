@@ -59,21 +59,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Selectable]()
   private val waitingByEntry = new java.util.IdentityHashMap[Selectable, Waiting]()
 
-  // Set by the first `wakeup` since the loop last selected, so later ones skip waking the selector, which a select
-  // returning clears; cleared after each select, before anything it was for is looked at.
-  private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
-
-  // Whether the loop is blocked in a select, or about to be, and whether a wake-up was asked for since the last select.
-  // `wakeup` sets the second, then wakes the selector only if the first is set; the loop sets the first, then blocks
-  // only if the second is not, so one of them always sees the other: a wake-up while the loop is awake, running
-  // completions or a caller's tasks, costs no `Selector.wakeup`, which writes to the selector's pipe, and the read that
-  // drains it.
-  @volatile private var parked = false
-  @volatile private var wakeRequested = false
-
-  // Guards waking the selector against `close`.
-  private object wakeLock {}
-
   /** Submits a command or a connect (see `ReactorCore.submitOwn`). */
   protected def submitOwn(op: NioOp, pending: Completion[NioOp], finishNow: Boolean): Int = {
     var finished = false
@@ -278,13 +263,8 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     any
   }
 
-  def wakeup(): Unit = {
-    wakeRequested = true
-    if parked && wakePending.compareAndSet(false, true) then
-      wakeLock.synchronized {
-        if !closed then selector.wakeup(): Unit
-      }
-  }
+  /** Wakes the selector (see `ReactorCore.wakeup`), which writes to its pipe, and the select that returns drains it. */
+  protected def wakeNow(): Unit = selector.wakeup(): Unit
 
   /** Drops the commands waiting on the selector's keys, and on regular files (see `ReactorCore.dropOwn`). */
   protected def dropOwn(drop: NioOp => Unit): Unit = {
@@ -368,12 +348,10 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   protected def poll(block: Boolean): Unit = {
     selectedCount = 0
     val waitFor = block && again.isEmpty && ready.isEmpty
-    if !waitFor then selector.selectNow(collect)
-    else {
-      parked = true
+    if !waitFor || !mayBlock() then selector.selectNow(collect)
+    else
       try
-        if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty || dropsWanted.get() > 0 then
-          selector.selectNow(collect)
+        if !resolvedQueue.isEmpty || !closedQueue.isEmpty || dropsWanted.get() > 0 then selector.selectNow(collect)
         else if timers.isEmpty then selector.select(collect)
         else {
           // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
@@ -381,11 +359,9 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
           if wait <= 0 then selector.selectNow(collect)
           else selector.select(collect, (wait + 999_999L) / 1_000_000L)
         }
-      finally parked = false
-    }
+      finally unpark()
     // Before anything a wake-up was for is looked at: the caller's tasks after this turn, and promises below.
-    wakeRequested = false
-    wakePending.set(false)
+    tookWakeUps()
     var i = 0
     while i < selectedCount do {
       dispatch(selected(i))
