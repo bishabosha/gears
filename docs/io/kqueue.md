@@ -335,11 +335,17 @@ refuse.
 
 What kqueue's reactor and NIO's do alike is `ReactorCore`, with what their ops keep in `LoopOp` (both in
 `jvm-native/.../internal`): the timer heap and moved deadlines, handles' turns, the ready and closing queues, promises
-and blockers, submission past the backend's own kinds, cancel and time-outs, and `close`. Each reactor keeps how it
-waits: its commands' submission (`submitOwn`, tried before any other type test), withdrawal and dropping on close, and
-`runOnce`. `runOnce` stays in each, sharing only when a turn skips the poll (`pollsThisTurn`): the two deliver what
-came between polls in different orders, kqueue failing the commands of closed descriptors before the ready queue and
-again after the timers, NIO after the resolved promises, and a shared rhythm would change one of them.
+and blockers, submission past the backend's own kinds, cancel and time-outs, `close`, and the turn itself
+(`runOnce`). Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
+test), withdrawal and dropping on close, failing what was pending on handles closed meanwhile (`deliverClosed`), what
+else it delivers each turn (`deliverOwn`: FIFOs and notified ops here, regular files and interest changes on NIO), and
+the poll (`poll`).
+
+The two had delivered a close's failures at different points in a turn, for no reason either recorded: kqueue queued
+them to run before the ready queue, and drained the closed descriptors again after the timers, a pass the next turn's
+first one made redundant; NIO failed them after the ready queue and resolved promises. Now a turn fails them first, on
+both, directly, before anything else it delivers. Only the order of completions within a turn changed; a close still
+fails its handle's ops at the start of the turn after it is noticed, and wakes a blocked poll.
 
 ## What is open
 

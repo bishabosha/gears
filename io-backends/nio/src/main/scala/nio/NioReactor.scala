@@ -276,7 +276,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   /** Fails the commands pending on the handles closed since the last turn. Their keys, cancelled by the close, are
     * dropped by the next select.
     */
-  private def deliverClosed(): Boolean = {
+  protected def deliverClosed(): Boolean = {
     var any = false
     var entry = closedQueue.poll()
     while entry != null do {
@@ -382,48 +382,43 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     markChanged(key, waiting)
   }
 
-  /** Delivers commands that finished when submitted, resolved promises and regular files, fails the commands pending on
-    * handles closed meanwhile, selects once, performs what it found ready, fires due timers, then delivers promises
-    * resolved meanwhile. It blocks in the select only if asked to and nothing was delivered first, and skips the select
-    * after delivering something, except every `ReactorCore.PollEvery` turns.
-    */
-  def runOnce(block: Boolean): Unit = {
-    deliverMoved()
-    val closingDue = closing.size
-    val delivered =
-      deliverTurns() | deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
+  /** The regular files tried again each turn, then the interest changes of the turn, made before the select. */
+  protected def deliverOwn(): Boolean = {
+    val any = deliverAgain()
     updateInterest()
-    if pollsThisTurn(delivered) then {
-      selectedCount = 0
-      val waitFor = !delivered && block && again.isEmpty && ready.isEmpty
-      if !waitFor then selector.selectNow(collect)
-      else {
-        parked = true
-        try
-          if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty || dropsWanted.get() > 0 then
-            selector.selectNow(collect)
-          else if timers.isEmpty then selector.select(collect)
-          else {
-            // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
-            val wait = timers.peek.when - System.nanoTime()
-            if wait <= 0 then selector.selectNow(collect)
-            else selector.select(collect, (wait + 999_999L) / 1_000_000L)
-          }
-        finally parked = false
-      }
-      // Before anything a wake-up was for is looked at: the caller's tasks after this turn, and promises below.
-      wakeRequested = false
-      wakePending.set(false)
-      var i = 0
-      while i < selectedCount do {
-        dispatch(selected(i))
-        selected(i) = null
-        i += 1
-      }
+    any
+  }
+
+  /** Selects once and performs what it found ready, waiting for something to happen if `block` and nothing is left to
+    * try again or deliver.
+    */
+  protected def poll(block: Boolean): Unit = {
+    selectedCount = 0
+    val waitFor = block && again.isEmpty && ready.isEmpty
+    if !waitFor then selector.selectNow(collect)
+    else {
+      parked = true
+      try
+        if wakeRequested || !resolvedQueue.isEmpty || !closedQueue.isEmpty || dropsWanted.get() > 0 then
+          selector.selectNow(collect)
+        else if timers.isEmpty then selector.select(collect)
+        else {
+          // Block no longer than until the earliest timer is due, rounding up, so it is due when the select returns.
+          val wait = timers.peek.when - System.nanoTime()
+          if wait <= 0 then selector.selectNow(collect)
+          else selector.select(collect, (wait + 999_999L) / 1_000_000L)
+        }
+      finally parked = false
     }
-    fireDueTimers()
-    deliverResolved()
-    deliverClosing(closingDue)
+    // Before anything a wake-up was for is looked at: the caller's tasks after this turn, and promises below.
+    wakeRequested = false
+    wakePending.set(false)
+    var i = 0
+    while i < selectedCount do {
+      dispatch(selected(i))
+      selected(i) = null
+      i += 1
+    }
   }
 
 }

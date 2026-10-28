@@ -552,9 +552,42 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   // handles that only a poll can report are not starved. Loop thread only.
   private var turnsWithoutPoll = 0
 
+  /** One turn of the loop, the same on every loop backend: timers whose deadlines moved are refiled; the ops pending on
+    * handles closed since the last turn fail, before anything else, so that a close's failures come first whatever else
+    * the turn delivers; then the ops whose turn on a handle came, those that finished when submitted, resolved promises
+    * and what the backend delivers of its own; then it polls once, blocking only if asked to and nothing was delivered
+    * first, and skipping the poll after delivering something, except every `ReactorCore.PollEvery` turns
+    * (`turnsWithoutPoll`); then due timers fire, promises resolved meanwhile are delivered, and the closes queued
+    * before the turn complete, after the failures they caused.
+    */
+  final def runOnce(block: Boolean): Unit = {
+    deliverMoved()
+    val closingDue = closing.size
+    val delivered = // no short-circuiting
+      deliverClosed() | deliverTurns() | deliverReady() | deliverResolved() | deliverOwn() | closingDue > 0
+    if pollsThisTurn(delivered) then poll(block && !delivered)
+    fireDueTimers()
+    deliverResolved()
+    deliverClosing(closingDue)
+  }
+
+  /** Fails, with the backend's failure for a closed handle, the ops pending on the handles closed since the last turn,
+    * from any thread (`Ops.close`), and returns whether any were.
+    */
+  protected def deliverClosed(): Boolean
+
+  /** Delivers what the backend has of its own to deliver each turn, before it polls, and returns whether it delivered
+    * anything.
+    */
+  protected def deliverOwn(): Boolean
+
+  /** Polls once and performs or completes what the poll found, waiting for something to happen if `block`, else not.
+    */
+  protected def poll(block: Boolean): Unit
+
   /** Whether this turn of `runOnce` polls, having `delivered` completions before it or not (see `turnsWithoutPoll`).
     */
-  protected final def pollsThisTurn(delivered: Boolean): Boolean =
+  private def pollsThisTurn(delivered: Boolean): Boolean =
     if !delivered then {
       turnsWithoutPoll = 0
       true

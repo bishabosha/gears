@@ -413,10 +413,19 @@ final class KqueueReactor private (
       if !(Thread.currentThread() eq loopThread) then wakeup()
     }
 
+  private def failClosedCommand(command: KqueueOp, fd: Int, now: Boolean): Unit = {
+    val failure = new IOException(s"Descriptor $fd was closed")
+    if now then fail(command, failure)
+    else {
+      command.atOnceFailure = failure
+      ready.add(command)
+    }
+  }
+
   /** Fails the commands pending on the descriptors closed since the last turn, where the slot still knows that
     * descriptor and not a reused number. Returns whether any were.
     */
-  private def deliverClosed(): Boolean = {
+  protected def deliverClosed(): Boolean = {
     var any = false
     var packed = closedQueue.poll()
     while packed != null do {
@@ -424,31 +433,25 @@ final class KqueueReactor private (
       val generation = (packed.longValue >>> 32).toInt
       if fd >= 0 && fd < slots.length then {
         val slot = slots(fd)
-        if slot != null && slot.nn.generation == generation then any |= failClosed(slot.nn, fd)
+        if slot != null && slot.nn.generation == generation then any |= failClosed(slot.nn, fd, now = true)
       }
       packed = closedQueue.poll()
     }
     any
   }
 
-  /** Queues the failure of the commands pending in `slot`, whose descriptor was closed, as commands that failed when
-    * submitted, so their completions run from the next turn and never inside a submit; and forgets the descriptor.
-    * Returns whether there were any.
+  /** Fails the commands pending in `slot`, whose descriptor was closed, and forgets the descriptor: `now`, from the
+    * loop's turn (`deliverClosed`); else queued as commands that failed when submitted, so that their completions run
+    * from the next turn and never inside a submit. Returns whether there were any.
     */
-  private def failClosed(slot: Slot, fd: Int): Boolean = {
+  private def failClosed(slot: Slot, fd: Int, now: Boolean): Boolean = {
     val read = slot.read
     val write = slot.write
     slot.read = null
     slot.write = null
     slot.forget()
-    if read != null then {
-      read.atOnceFailure = new IOException(s"Descriptor $fd was closed")
-      ready.add(read)
-    }
-    if write != null then {
-      write.atOnceFailure = new IOException(s"Descriptor $fd was closed")
-      ready.add(write)
-    }
+    if read != null then failClosedCommand(read, fd, now)
+    if write != null then failClosedCommand(write, fd, now)
     read != null || write != null
   }
 
@@ -556,7 +559,7 @@ final class KqueueReactor private (
     val generation = DescriptorTable.generation(entry)
     if generation != slot.generation then {
       // Its number was closed, and reused, since: whatever is still pending belonged to the closed descriptor.
-      failClosed(slot, fd)
+      failClosed(slot, fd, now = false)
       slot.generation = generation
     }
     slot.alwaysTry = DescriptorTable.alwaysTry(entry)
@@ -712,21 +715,14 @@ final class KqueueReactor private (
   private val eventsZone = Zone.open()
   private val events = KqueueLoop.allocateQueue(maxEvents)(using eventsZone)
 
-  /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
-    * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
-    * skips the poll after delivering something, except every `ReactorCore.PollEvery` turns. An error event fails the
-    * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
+  /** The FIFOs `FifoWatcher` found readable, and the ops a facility notified (`Notified`). */
+  protected def deliverOwn(): Boolean = deliverSelected() | deliverNotified()
+
+  /** Polls kqueue once and dispatches what it polled: an error event fails the command it is for (`dispatchError`); a
+    * failing poll, of the kqueue itself, throws.
     */
-  def runOnce(block: Boolean): Unit = {
-    val closingDue = closing.size
-    deliverMoved()
-    val delivered = // no short-circuiting
-      deliverTurns() | deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() |
-        closingDue > 0
-    val polled =
-      if !pollsThisTurn(delivered) then 0
-      else if !delivered && block then pollBeforeBlocking(events)
-      else KqueueLoop.pollEventsNow(kq, events, maxEvents)
+  protected def poll(block: Boolean): Unit = {
+    val polled = if block then pollBeforeBlocking(events) else KqueueLoop.pollEventsNow(kq, events, maxEvents)
     var i = 0
     while i < polled do {
       val event = events(i)
@@ -734,10 +730,6 @@ final class KqueueReactor private (
       i += 1
     }
     if polled > 0 then deliverNotified(): Unit // what the extension's event, if among them, woke the poll for
-    fireDueTimers()
-    deliverClosed() // their failures are delivered next turn, which a wake-up makes immediate
-    deliverResolved() // including any whose wake-up was merged into an event just dispatched
-    deliverClosing(closingDue)
   }
 
   /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
