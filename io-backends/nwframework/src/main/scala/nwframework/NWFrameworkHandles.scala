@@ -221,7 +221,9 @@ private[nwframework] final class NWFrameworkHandle(
     stashLength += len
   }
 
-  /** Room for `len` more bytes in the stash. */
+  /** Room for `len` more bytes in the stash: grown by `realloc`, which a zone cannot do, the stash outliving any one op
+    * and growing as bytes arrive.
+    */
   private def stashReserve(len: Int): Unit =
     if stashLength + len > stashCapacity then {
       var capacity = if stashCapacity == 0 then 4096 else stashCapacity
@@ -528,7 +530,8 @@ private[nwframework] final class NWFrameworkHandle(
   }
 
   /** The first `n` bytes remaining in `bufs`, in order, copied into a buffer from `malloc`, the buffers advanced past
-    * them.
+    * them. `malloc`, not a zone: the C side hands it to `dispatch_data_create` with `DISPATCH_DATA_DESTRUCTOR_FREE`,
+    * which owns it from then on and frees it with `free` once Network.framework has sent it.
     */
   private def gathered(bufs: Array[java.nio.ByteBuffer], n: Int): Ptr[Byte] = {
     val region = stdlib.malloc(math.max(n, 1).toCSize)

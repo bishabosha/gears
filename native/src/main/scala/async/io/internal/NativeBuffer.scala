@@ -2,7 +2,6 @@ package gears.async.io
 package internal
 
 import java.nio.ByteBuffer
-import scala.scalanative.libc.stdlib
 import scala.scalanative.memory.PointerBuffer
 import scala.scalanative.memory.PointerBufferOps.given
 import scala.scalanative.unsafe.*
@@ -39,13 +38,13 @@ object NativeBuffer {
   ): A =
     if buf.hasPointer() then body(buf)
     else {
-      val memory = stagingMemory(buf.remaining())
+      val zone = Zone.open()
       try {
-        val stand = standIn(buf, memory, copyIn)
+        val stand = standIn(buf, stagingMemory(buf.remaining())(using zone), copyIn)
         val result = body(stand)
         settle(buf, stand, copyOut)
         result
-      } finally stdlib.free(memory)
+      } finally zone.close()
     }
 
   /** As the other `staged`, for buffers taken in order: each with native memory stands for itself, the others each by a
@@ -57,25 +56,18 @@ object NativeBuffer {
     if bufs.forall(_.hasPointer()) then body(bufs)
     else {
       val stands = bufs.clone()
-      val memories = scala.collection.mutable.ArrayBuffer.empty[(Int, Ptr[Byte])]
+      val zone = Zone.open() // the stand-ins' memory, all of it freed as the op is done
       try {
-        for i <- bufs.indices if !bufs(i).hasPointer() do {
-          val memory = stagingMemory(bufs(i).remaining())
-          memories += ((i, memory))
-          stands(i) = standIn(bufs(i), memory, copyIn)
-        }
+        for i <- bufs.indices if !bufs(i).hasPointer() do
+          stands(i) = standIn(bufs(i), stagingMemory(bufs(i).remaining())(using zone), copyIn)
         val result = body(stands)
-        for (i, _) <- memories do settle(bufs(i), stands(i), copyOut)
+        for i <- bufs.indices if stands(i) ne bufs(i) do settle(bufs(i), stands(i), copyOut)
         result
-      } finally for (_, memory) <- memories do stdlib.free(memory)
+      } finally zone.close()
     }
 
-  /** Memory for a stand-in of `size` bytes, from `malloc`. */
-  def stagingMemory(size: Int): Ptr[Byte] = {
-    val memory = stdlib.malloc(math.max(size, 1).toCSize)
-    if memory == null then throw new OutOfMemoryError(s"No native memory for a $size-byte staging buffer")
-    memory
-  }
+  /** Memory for a stand-in of `size` bytes, in `zone`. */
+  def stagingMemory(size: Int)(using zone: Zone): Ptr[Byte] = alloc[Byte](math.max(size, 1))
 
   /** A stand-in for `buf` over `memory`: its remaining bytes long, holding them if `copyIn`, positioned at 0. */
   def standIn(buf: ByteBuffer, memory: Ptr[Byte], copyIn: Boolean): ByteBuffer = {

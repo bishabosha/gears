@@ -263,8 +263,9 @@ object KqueueLoop {
 
   def freeQueue(events: EventQueue): Unit = stdlib.free(events)
 
-  // A zero timeout for polls that must not wait, allocated once: setting a stack-allocated one boxes its pointer.
-  private val zeroTimeout: Ptr[timespec] = stdlib.calloc(1.toCSize, sizeof[timespec]).asInstanceOf[Ptr[timespec]]
+  // A zero timeout for polls that must not wait, allocated once, in a zone kept for the process: setting a
+  // stack-allocated one boxes its pointer.
+  private val zeroTimeout: Ptr[timespec] = alloc[timespec]()(using Zone.open())
 
   /** Polls without waiting, so without telling the GC (see `Unblocked`). */
   def pollEventsNow(

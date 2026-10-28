@@ -4,7 +4,6 @@ package nwframework
 import gears.async.io.kqueue.KqueueReactor
 import gears.async.io.kqueue.ReactorExtension
 
-import scala.scalanative.libc.stdlib
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
@@ -20,11 +19,10 @@ private[nwframework] final class NWFrameworkExtension private (reactor: KqueueRe
   /** The C side's list of handles with events for this reactor. */
   val ptr: NWFrameworkIo.Reactor = NWFrameworkIo.nwf_reactor_create(reactor.kq)
 
-  // The handles a turn drains, and the event a handle copies out, allocated once and freed by `close`.
-  private val drained: Ptr[NWFrameworkIo.Handle] =
-    stdlib.malloc((sizeOf[Ptr[Byte]] * maxDrained).toCSize).asInstanceOf[Ptr[NWFrameworkIo.Handle]]
-  val event: Ptr[NWFrameworkIo.Event] =
-    stdlib.malloc(sizeOf[NWFrameworkIo.Event].toCSize).asInstanceOf[Ptr[NWFrameworkIo.Event]]
+  // The handles a turn drains, and the event a handle copies out, allocated once in a zone that `close` frees.
+  private val zone = Zone.open()
+  private val drained: Ptr[NWFrameworkIo.Handle] = alloc[NWFrameworkIo.Handle](maxDrained)(using zone)
+  val event: Ptr[NWFrameworkIo.Event] = alloc[NWFrameworkIo.Event]()(using zone)
 
   def deliver(): Boolean =
     NWFrameworkIo.nwf_reactor_ready(ptr) != 0 && {
@@ -40,8 +38,7 @@ private[nwframework] final class NWFrameworkExtension private (reactor: KqueueRe
 
   def close(): Unit = {
     NWFrameworkIo.nwf_reactor_destroy(ptr)
-    stdlib.free(drained.asInstanceOf[Ptr[Byte]])
-    stdlib.free(event.asInstanceOf[Ptr[Byte]])
+    zone.close()
   }
 }
 
