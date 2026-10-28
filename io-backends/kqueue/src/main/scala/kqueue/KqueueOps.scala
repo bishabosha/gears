@@ -18,7 +18,6 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixDatagramOps
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.BlockingRun
-import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
 import gears.async.io.internal.NativePool
 import gears.async.io.internal.NonBlocking
@@ -28,49 +27,10 @@ import java.nio.ByteBuffer
 import KqueueBackend.Handle
 
 /** Everything `KqueueReactor` can run: its `Op` member type. Kqueue-specific code may construct the classes below
-  * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`.
+  * directly; code that only knows the `Reactor` interface builds them through `reactor.ops`. What each keeps while
+  * pending is `LoopOp`'s.
   */
-sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
-  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
-
-  // Whether this op has been submitted before, so a one-shot op is run once though submitted on two threads at once.
-  private val submissions = new java.util.concurrent.atomic.AtomicBoolean()
-
-  /** Records a submission, refusing a one-shot op submitted before with `IllegalStateException`. */
-  private[kqueue] final def markSubmitted(): Unit =
-    if submissions.getAndSet(true) && oneShot then
-      throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
-
-  /** While the op is pending in the reactor: its completion, so the op is its own record and submitting it allocates
-    * nothing. Taken off just before the completion runs, which may then submit the op again. Loop thread only.
-    */
-  private[kqueue] var completion: Completion[KqueueOp] | Null = null
-
-  /** For an op that failed as soon as it was submitted, or a command whose descriptor was closed while it waited: its
-    * failure, until its completion runs.
-    */
-  private[kqueue] var atOnceFailure: Throwable | Null = null
-
-  /** The failure of an op submitted with a slot still holding a value (`Checks.notEmpty`), which fails it at once,
-    * before it does anything; null if its slots are empty.
-    */
-  private[io] def slotRefusal: Throwable | Null = null
-
-  /** The turn this op holds on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
-    */
-  private[io] def claim: gears.async.io.internal.Turns | Null = null
-
-  /** Whether, finding its handle's turn held, it waits for it rather than failing (see `Turns`): a datagram socket's
-    * receive or send, or a listener's accept.
-    */
-  private[io] def waitsItsTurn: Boolean = false
-
-  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
-  private[io] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
-
-  /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
-  private[kqueue] var attachment: AnyRef | Null = null
-}
+sealed trait KqueueOp extends gears.async.io.internal.LoopOp[KqueueOp]
 
 /** Builds the ops `KqueueReactor` understands. */
 object KqueueOps
@@ -308,9 +268,7 @@ object KqueueOps
 /** An op the reactor performs as soon as it is submitted, with no descriptor to wait for: its completion runs on the
   * next turn, with the failure `perform` threw, if any. One-shot.
   */
-sealed abstract class KqueueAtOnce extends KqueueOp {
-  def perform(): Unit
-}
+sealed abstract class KqueueAtOnce extends gears.async.io.internal.LoopAtOnce[KqueueOp] with KqueueOp
 
 /** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
   * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
@@ -567,9 +525,8 @@ trait ReactorExtension {
 
 /** A one-shot timer, `nanos` from each submission, kept in the reactor's heap while pending (`TimerState`). */
 sealed class KqueueTimer private[kqueue] (protected val nanos: Long)
-    extends KqueueOp
-    with Repeatable
-    with gears.async.io.internal.TimerState {
+    extends gears.async.io.internal.LoopTimer[KqueueOp]
+    with KqueueOp {
 
   /** A timer of `milliseconds`, for kqueue-specific code. */
   def this(milliseconds: Int) = {
@@ -588,62 +545,16 @@ final class KqueueDeadlineTimer private[kqueue] (initially: Long) extends Kqueue
   def moveTo(nanoTime: Long): Unit = move(nanoTime)
 }
 
-/** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
-  * thread. `KqueueBlocking` completes itself from the blocker pool, and `Close`, when it cannot close at once, from the
-  * thread of the descriptor's last use.
+/** The reactor's side of a promise (`LoopPromise`): `KqueueBlocking` completes itself from the blocker pool, and
+  * `Close`, when it cannot close at once, from the thread of the descriptor's last use.
   */
-sealed abstract class KqueuePromise extends KqueueOp {
-  // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.
-  private val outcome = new java.util.concurrent.atomic.AtomicReference[Any](KqueuePromise.Unsettled)
-  @volatile private[kqueue] var reactor: KqueueReactor | Null = null
-
-  private[kqueue] def failure: Throwable | Null = outcome.get() match {
-    case KqueuePromise.Failed(failure) => failure
-    case _                             => null
-  }
-
-  /** Completes the promise with a failure instead. */
-  def fail(failure: Throwable): Unit = settle(KqueuePromise.Failed(failure))
-
-  /** Forgets the previous submission's outcome, for a `Repeatable` promise submitted again. Loop thread only, before
-    * the submission can complete.
-    */
-  private[kqueue] def reset(): Unit = outcome.set(KqueuePromise.Unsettled)
-
-  /** Tells the reactor this promise has finished, without a value. */
-  private[kqueue] def signal(): Unit = settle(())
-
-  /** Records the outcome, if this is the first, and tells the reactor this promise has finished. */
-  protected final def settle(value: Any): Unit = {
-    val owner = reactor
-    if owner == null then throw new IllegalStateException("A promise must be submitted before it is completed")
-    if !outcome.compareAndSet(KqueuePromise.Unsettled, value) then
-      throw new IllegalStateException("A promise can only be completed once")
-    owner.resolved(this)
-  }
-
-}
-
-object KqueuePromise {
-  private[kqueue] object Unsettled
-  private[kqueue] final case class Failed(failure: Throwable)
-}
+sealed abstract class KqueuePromise extends gears.async.io.internal.LoopPromise[KqueueOp] with KqueueOp
 
 /** A promise the reactor completes by running `block` on the blocker pool, with `BlockingRun`'s cancellation: skipped
   * if not started, interrupted if running, and `onCancel` waits for `block` to return. One marked `Repeatable`, such as
   * a file op, is restarted on each submission.
   */
-abstract class KqueueBlocking extends KqueuePromise with BlockingRun {
-
-  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
-    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
-    */
-  private[kqueue] var cancelling: Completion[KqueueOp] | Null = null
-  private[kqueue] var cancelledBy: Throwable | Null = null
-
-  protected def settled(failure: Throwable | Null): Unit =
-    if failure != null then fail(failure) else signal()
-}
+abstract class KqueueBlocking extends KqueuePromise with gears.async.io.internal.LoopBlocking[KqueueOp]
 
 /** A blocking task built from a function, for `BlockingOps.blocking`. */
 final class BlockingTask(body: () => Unit) extends KqueueBlocking {

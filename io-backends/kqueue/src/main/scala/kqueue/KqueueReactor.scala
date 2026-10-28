@@ -37,13 +37,17 @@ final class KqueueReactor private (
     spinPolls: Int,
     builtBy: Ops[KqueueOp, KqueueBackend.Handle]
 ) extends Reactor
-    with gears.async.io.internal.TimerWaiter {
+    with gears.async.io.internal.TimerWaiter
+    with gears.async.io.internal.LoopPromise.Owner[KqueueOp] {
 
   /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go
     * to any kqueue reactor in turn (see `KqueueBackend`).
     */
   type Op = KqueueOp
   type Handle = KqueueBackend.Handle
+
+  /** A promise of this reactor's: a `KqueuePromise` or one of its subclasses. */
+  private type Promise = KqueueOp & gears.async.io.internal.LoopPromise[KqueueOp]
 
   /** The ops of the backend that opened it: `KqueueOps`, or those of a backend built on kqueue's reactors. */
   def ops: Ops[KqueueOp, Handle] = builtBy
@@ -257,7 +261,7 @@ final class KqueueReactor private (
   private var turnsWithoutPoll = 0
 
   // Promises resolve on other threads; they queue here and a user event interrupts a blocked poll.
-  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueuePromise]()
+  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
   private val WakeEvent = 0.toUSize
   KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
     KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
@@ -334,7 +338,7 @@ final class KqueueReactor private (
   private var running = false
 
   // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
-  private val pendingPromises = scala.collection.mutable.HashSet.empty[KqueuePromise]
+  private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
 
   // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
   private val cancellingBlockers = scala.collection.mutable.HashSet.empty[KqueueBlocking]
@@ -728,7 +732,7 @@ final class KqueueReactor private (
   /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
     * loop is not polling, so queueing is enough.
     */
-  private[kqueue] def resolved(promise: KqueuePromise): Unit =
+  private[io] def resolved(promise: Promise): Unit =
     if !closed then { // otherwise its completion was dropped by `close`
       resolvedQueue.add(promise)
       if !(Thread.currentThread() eq loopThread) then wakeup()
@@ -979,7 +983,7 @@ final class KqueueReactor private (
   private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
 
   /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
-  private def detach(promise: KqueuePromise): Completion[KqueueOp] | Null = {
+  private def detach(promise: Promise): Completion[KqueueOp] | Null = {
     val completion = promise.completion
     promise.completion = null
     if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it

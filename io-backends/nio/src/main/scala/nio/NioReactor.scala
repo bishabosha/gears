@@ -25,10 +25,16 @@ import java.util.concurrent.TimeoutException
   * The selector's keys belong to the channels: closing a handle cancels its keys, and the commands pending on it here
   * fail with a `ClosedChannelException` from the loop (`closed`), as `Ops.close` says and as on the kqueue backend.
   */
-final class NioReactor private (selector: Selector) extends Reactor with gears.async.io.internal.TimerWaiter {
+final class NioReactor private (selector: Selector)
+    extends Reactor
+    with gears.async.io.internal.TimerWaiter
+    with gears.async.io.internal.LoopPromise.Owner[NioOp] {
 
   type Op = NioOp
   type Handle = NioCapabilities.Handle
+
+  /** A promise of this reactor's: a `NioPromise` or one of its subclasses. */
+  private type Promise = NioOp & gears.async.io.internal.LoopPromise[NioOp]
 
   def ops: Ops[Op, Handle] = NioOps
 
@@ -198,7 +204,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   private val waitingByEntry = new java.util.IdentityHashMap[Selectable, Waiting]()
 
   // Promises resolve on other threads; they queue here and wake the selector.
-  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioPromise]()
+  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
 
   // Set by the first `wakeup` since the loop last selected, so later ones skip waking the selector, which a select
   // returning clears; cleared after each select, before anything it was for is looked at.
@@ -218,7 +224,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   private var running = false
 
   // Promises submitted here whose completion has not run, and cancelled blockers whose `block` was still running.
-  private val pendingPromises = scala.collection.mutable.HashSet.empty[NioPromise]
+  private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
   private val cancellingBlockers = scala.collection.mutable.HashSet.empty[NioBlocking]
 
   // Guards waking the selector against `close`.
@@ -499,7 +505,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
   }
 
   /** Called from any thread when a promise has its result: queue it and wake the loop. */
-  private[nio] def resolved(promise: NioPromise): Unit =
+  private[io] def resolved(promise: Promise): Unit =
     if !closed then {
       resolvedQueue.add(promise)
       if !(Thread.currentThread() eq loopThread) then wakeup()
@@ -767,7 +773,7 @@ final class NioReactor private (selector: Selector) extends Reactor with gears.a
       case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
     }
 
-  private def detach(promise: NioPromise): Completion[NioOp] | Null = {
+  private def detach(promise: Promise): Completion[NioOp] | Null = {
     val completion = promise.completion
     promise.completion = null
     if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it

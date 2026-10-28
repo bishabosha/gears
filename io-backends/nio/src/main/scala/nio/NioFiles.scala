@@ -17,7 +17,7 @@ import NioCapabilities.Handle
   */
 final class OpenFile(path: String, write: Boolean, into: Slot[NioKinds.File]) extends NioBlocking {
   gears.async.io.internal.Checks.checkPath(path)
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = {
     val handle = NioHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then NioHandles.close(handle)

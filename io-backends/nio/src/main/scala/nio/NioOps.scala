@@ -18,7 +18,6 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamOps
 import gears.async.io.internal.Blockers
 import gears.async.io.internal.BlockingRun
-import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
 
 import java.io.IOException
@@ -34,47 +33,10 @@ import java.nio.channels.SocketChannel
 import NioCapabilities.Handle
 
 /** Everything `NioReactor` can run: its `Op` member type. NIO-specific code may construct the classes below directly;
-  * code that only knows the `Reactor` interface builds them through `reactor.ops`.
+  * code that only knows the `Reactor` interface builds them through `reactor.ops`. What each keeps while pending is
+  * `LoopOp`'s.
   */
-sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
-  // An op is in its reactor's timer heap while it is a pending timer, or a pending op with a time limit (`Entry`).
-
-  // Whether this op has been submitted before, so a one-shot op is run once though submitted on two threads at once.
-  private val submissions = new java.util.concurrent.atomic.AtomicBoolean()
-
-  /** Records a submission, refusing a one-shot op submitted before with `IllegalStateException`. */
-  private[nio] final def markSubmitted(): Unit =
-    if submissions.getAndSet(true) && oneShot then
-      throw new IllegalStateException(s"$this is not Repeatable and was already submitted")
-
-  /** While the op is pending in the reactor: its completion, so the op is its own record. Taken off just before the
-    * completion runs, which may then submit the op again. Loop thread only.
-    */
-  private[nio] var completion: Completion[NioOp] | Null = null
-
-  /** For a command that failed as soon as it was submitted: its failure, until its completion runs. */
-  private[nio] var atOnceFailure: Throwable | Null = null
-
-  /** The failure of an op submitted with a slot still holding a value (`Checks.notEmpty`), which fails it at once,
-    * before it does anything; null if its slots are empty.
-    */
-  private[nio] def slotRefusal: Throwable | Null = null
-
-  /** The turn this op holds on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
-    */
-  private[nio] def claim: gears.async.io.internal.Turns | Null = null
-
-  /** Whether, finding its handle's turn held, it waits for it rather than failing (see `Turns`): a datagram socket's
-    * receive or send, or a listener's accept.
-    */
-  private[nio] def waitsItsTurn: Boolean = false
-
-  /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
-  private[nio] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
-
-  /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
-  private[nio] var attachment: AnyRef | Null = null
-}
+sealed trait NioOp extends gears.async.io.internal.LoopOp[NioOp]
 
 /** Builds the ops `NioReactor` understands. */
 object NioOps
@@ -246,9 +208,7 @@ object NioOps
 /** An op the reactor performs as soon as it is submitted, with no handle to wait for: its completion runs on the next
   * turn, with the failure `perform` threw, if any. One-shot.
   */
-sealed abstract class NioAtOnce extends NioOp {
-  def perform(): Unit
-}
+sealed abstract class NioAtOnce extends gears.async.io.internal.LoopAtOnce[NioOp] with NioOp
 
 /** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
   * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
@@ -262,7 +222,7 @@ sealed trait Opens extends NioOp {
   * pipes are.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce with Opens {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var opened: K | Null = null
   protected def open(): K
   def perform(): Unit = {
@@ -304,7 +264,7 @@ final class OpenDatagram[K <: Handle](
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
 final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writable]) extends NioAtOnce with Opens {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
   private var ends: (NioKinds.Readable, NioKinds.Writable) | Null = null
   def perform(): Unit = {
     val (in, out) = NioHandles.pipe()
@@ -344,7 +304,7 @@ abstract class Command extends NioOp with Repeatable {
   def interest: Interest
   def perform(): Boolean
 
-  override private[nio] def claim: gears.async.io.internal.Turns | Null =
+  override private[io] def claim: gears.async.io.internal.Turns | Null =
     if interest == Interest.Read then handle.reader else handle.writer
 
   /** The interest ops to wait for on `channel`: reading a listener is accepting. */
@@ -384,7 +344,7 @@ final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
 final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val slot = pool.take()
@@ -434,8 +394,8 @@ final class WriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Comma
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
 final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends Command {
-  override private[nio] def waitsItsTurn: Boolean = true
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def waitsItsTurn: Boolean = true
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = selectable(classOf[ServerSocketChannel], "Accepting").accept()
@@ -457,8 +417,8 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
   * `StreamSocketOps.acceptAll`). Done once at least one has been accepted.
   */
 final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]], max: Int) extends Command {
-  override private[nio] def waitsItsTurn: Boolean = true
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def waitsItsTurn: Boolean = true
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val listener = selectable(classOf[ServerSocketChannel], "Accepting")
@@ -501,10 +461,10 @@ final class ConnectTo(
     options: SocketOptions = SocketOptions.default
 ) extends Command
     with Opens {
-  override private[nio] def oneShot: Boolean = true // it opens its socket
-  override private[nio] def claim: gears.async.io.internal.Turns | Null =
+  override private[io] def oneShot: Boolean = true // it opens its socket
+  override private[io] def claim: gears.async.io.internal.Turns | Null =
     null // on a socket of its own
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var socket: Handle | Null = null
   private var connected = false
   def handle: Handle = socket.nn
@@ -548,8 +508,8 @@ final class ConnectTo(
   */
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] | Null) extends Command {
   gears.async.io.internal.Checks.checkFillable(buf)
-  override private[nio] def waitsItsTurn: Boolean = true
-  override private[nio] def slotRefusal: Throwable | Null =
+  override private[io] def waitsItsTurn: Boolean = true
+  override private[io] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
@@ -569,7 +529,7 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] |
   * null, to its peer, never an empty one.
   */
 final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Null) extends Command {
-  override private[nio] def waitsItsTurn: Boolean = true
+  override private[io] def waitsItsTurn: Boolean = true
   def this(handle: Handle, buf: ByteBuffer, to: IpAddress | Null) = this(handle, Array(buf), to)
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)
@@ -594,9 +554,8 @@ final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Nu
 
 /** A one-shot timer, kept in its reactor's heap while pending (`TimerHeap.Entry`). */
 sealed class NioTimer private[nio] (protected val nanos: Long)
-    extends NioOp
-    with Repeatable
-    with gears.async.io.internal.TimerState
+    extends gears.async.io.internal.LoopTimer[NioOp]
+    with NioOp
 
 /** A timer at a deadline that may move while it is pending (see `Ops.deadlineTimer`). */
 final class NioDeadlineTimer private[nio] (initially: Long) extends NioTimer(-1L) with Deadline {
@@ -605,44 +564,10 @@ final class NioDeadlineTimer private[nio] (initially: Long) extends NioTimer(-1L
   def moveTo(nanoTime: Long): Unit = move(nanoTime)
 }
 
-/** The reactor's side of a promise: completed from any thread, after which the reactor runs its completion on the loop
-  * thread. `NioBlocking`, the only kind, completes itself from the blocker pool.
+/** The reactor's side of a promise (`LoopPromise`): `NioBlocking`, the only kind, completes itself from the blocker
+  * pool.
   */
-sealed abstract class NioPromise extends NioOp {
-  // `Unsettled` until the first completion or failure wins the compare-and-set; later ones are refused.
-  private val outcome = new java.util.concurrent.atomic.AtomicReference[Any](NioPromise.Unsettled)
-  @volatile private[nio] var reactor: NioReactor | Null = null
-
-  private[nio] def failure: Throwable | Null = outcome.get() match {
-    case NioPromise.Failed(failure) => failure
-    case _                          => null
-  }
-
-  /** Completes the promise with a failure instead. */
-  def fail(failure: Throwable): Unit = settle(NioPromise.Failed(failure))
-
-  /** Forgets the previous submission's outcome, for a `Repeatable` promise submitted again. Loop thread only, before
-    * the submission can complete.
-    */
-  private[nio] def reset(): Unit = outcome.set(NioPromise.Unsettled)
-
-  /** Tells the reactor this promise has finished, without a value. */
-  private[nio] def signal(): Unit = settle(())
-
-  /** Records the outcome, if this is the first, and tells the reactor this promise has finished. */
-  protected final def settle(value: Any): Unit = {
-    val owner = reactor
-    if owner == null then throw new IllegalStateException("A promise must be submitted before it is completed")
-    if !outcome.compareAndSet(NioPromise.Unsettled, value) then
-      throw new IllegalStateException("A promise can only be completed once")
-    owner.resolved(this)
-  }
-}
-
-object NioPromise {
-  private[nio] object Unsettled
-  private[nio] final case class Failed(failure: Throwable)
-}
+sealed abstract class NioPromise extends gears.async.io.internal.LoopPromise[NioOp] with NioOp
 
 /** A promise the reactor completes by running `block` on the blocker pool (`Blockers`), with `BlockingRun`'s
   * cancellation: skipped if not started, interrupted if running, and `onCancel` waits for `block` to return. An
@@ -650,19 +575,10 @@ object NioPromise {
   * result into its slot through `publish`, which skips the write once cancelled. One marked `Repeatable`, such as a
   * file op, is restarted on each submission.
   */
-abstract class NioBlocking extends NioPromise with BlockingRun {
-
-  /** The cancelled submission whose `onCancel` waits for `block` to return, or whose `onFailure` does, with
-    * `cancelledBy`, for one whose time limit ran out. Loop thread only.
-    */
-  private[nio] var cancelling: Completion[NioOp] | Null = null
-  private[nio] var cancelledBy: Throwable | Null = null
+abstract class NioBlocking extends NioPromise with gears.async.io.internal.LoopBlocking[NioOp] {
 
   /** Runs `block` on the blocker pool and completes the promise with the outcome, unless it is cancelled first. */
   private[nio] def start(): Unit = Blockers.run(this)
-
-  protected def settled(failure: Throwable | Null): Unit =
-    if failure != null then fail(failure) else signal()
 
   /** Readies this op to run on the calling thread instead of the blocker pool (see `NioOnCaller`, which has recorded
     * the submission).
@@ -681,14 +597,14 @@ final class BlockingTask(body: () => Unit) extends NioBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NioBlocking {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = publish(into, body())
 }
 
 /** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
   gears.async.io.internal.Checks.checkHost(host)
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   override protected def detachable: Boolean = true // its cancel need not wait for the lookup
   def block(): Unit = publish(into, Resolve.addresses(host))
 }
