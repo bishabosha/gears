@@ -93,7 +93,9 @@ bench.
 
 - `--timeout SECONDS` (600 by default): a run past it has its threads dumped to `bench/results/hangs`, with `jcmd` for
   a JVM, virtual threads included, or macOS's `sample` otherwise, before it is killed; it counts as a failed run, which
-  `--retries` reruns. This is how intermittent hangs are caught with evidence.
+  `--retries` reruns. This is how intermittent hangs are caught with evidence. A run that still fails keeps the
+  scenarios it finished and the comparison goes on; the table marks medians taken over fewer runs, the saved file
+  lists the failures (`incomplete`), and the script exits with 1.
 - `--save` writes `bench/results/<date>-<labels>.json`, `--save-to FILE` to a file of one's choosing: every run's
   numbers and the medians, each build's provenance record, the arguments, the date and the load average before and
   after. Results files are ignored by git and added with `git add -f` when a finding cites them.

@@ -23,7 +23,10 @@
   * shows each scenario's median microseconds per operation, and each later build's change against the first. Arguments
   * after `--` go to `bench`, for example `-- --scenarios pingpong,pipelined --scale 0.5`. A run past `--timeout`
   * seconds has its threads dumped to bench/results/hangs (a JVM's with jcmd, virtual threads included, any other's with
-  * macOS's `sample`) before it is killed, and counts as a failed run, which `--retries` reruns.
+  * macOS's `sample`) before it is killed, and counts as a failed run, which `--retries` reruns. A run that still fails
+  * keeps the scenarios it finished before failing, and the comparison goes on: the table and the saved file are
+  * written whatever fails, with the failures listed (`failed_runs`, and `incomplete` for those not recovered by a
+  * retry), and the script then exits with 1.
   *
   * `--save` writes the results as JSON to bench/results/<date>-<labels>.json (ignored by git), and `--save-to FILE`
   * to FILE: every run's numbers and the medians, each build's provenance from build.sc (the <executable>.json beside
@@ -82,9 +85,19 @@ def dumpHung(pid: Long, label: String): Path =
   else quietly("sample", pid.toString, "3", "-file", target.toString)
   target
 
-/** One run of a build: its microseconds per operation by scenario. */
-def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable.Buffer[String], timeout: Long,
-    label: String): Map[String, Double] =
+/** The scenarios a run printed, with their microseconds per operation: all of them, or those finished before it failed.
+  */
+def parse(out: Path): Map[String, Double] =
+  // bench: <scenario> <ops> <seconds> <ops/s> <us/op>
+  Files.readAllLines(out).asScala.map(_.trim.split("\\s+")).collect {
+    case Array("bench:", scenario, _, _, _, us) if scenario != "scenario" => scenario -> us.toDouble
+  }.toMap
+
+/** One run of a build: its microseconds per operation by scenario. A run that fails after its retries is recorded in
+  * `incomplete`, and gives the scenarios it finished.
+  */
+def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable.Buffer[String],
+    incomplete: mutable.Buffer[String], timeout: Long, label: String): Map[String, Double] =
   val command =
     if path.endsWith("@raw") then Seq(path.stripSuffix("@raw"), "bench")
     else if path.endsWith("@nwframework") then
@@ -98,6 +111,7 @@ def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable
   try
     var attempt = 0
     var done = false
+    var found = Map.empty[String, Double]
     while !done do
       val (process, exit) = run(command ++ benchArgs, out, err, timeout)
       val failure = exit match
@@ -109,23 +123,25 @@ def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable
           process.destroyForcibly().waitFor()
           Some(s"hung past $timeout s; threads in $dump")
       failure match
-        case None          => done = true
+        case None =>
+          done = true
+          found = parse(out)
+          if found.isEmpty then
+            System.err.println(s"$path printed no bench results:\n${Files.readString(out)}")
+            incomplete += s"$label: ${command.mkString(" ")} printed no bench results"
         case Some(failure) =>
           val stderr = Files.readString(err).trim
           crashes += s"${command.mkString(" ")} $failure: ${stderr.takeRight(300)}"
           if attempt == retries then
+            done = true
+            found = parse(out)
             System.err.println(
-              s"${command.mkString(" ")} $failure, ${retries + 1} times; last output:\n${Files.readString(out)}$stderr")
-            sys.exit(1)
-          System.err.println(s"  $failure; retrying")
-          attempt += 1
-    // bench: <scenario> <ops> <seconds> <ops/s> <us/op>
-    val found = Files.readAllLines(out).asScala.map(_.trim.split("\\s+")).collect {
-      case Array("bench:", scenario, _, _, _, us) if scenario != "scenario" => scenario -> us.toDouble
-    }.toMap
-    if found.isEmpty then
-      System.err.println(s"$path printed no bench results:\n${Files.readString(out)}")
-      sys.exit(1)
+              s"${command.mkString(" ")} $failure, ${retries + 1} times; keeping the ${found.size} scenario(s) it " +
+                s"finished; last output:\n${Files.readString(out)}$stderr")
+            incomplete += s"$label: ${command.mkString(" ")} $failure; kept ${found.keys.toSeq.sorted.mkString(", ")}"
+          else
+            System.err.println(s"  $failure; retrying")
+            attempt += 1
     found
   finally
     Files.deleteIfExists(out)
@@ -175,11 +191,12 @@ if builds.isEmpty then
 
 val samples = builds.map((label, _) => label -> mutable.LinkedHashMap[String, mutable.ArrayBuffer[Double]]()).toMap
 val crashes = mutable.ArrayBuffer[String]()
+val incomplete = mutable.ArrayBuffer[String]()
 val started = OffsetDateTime.now()
 val loadBefore = loadAverage()
 for run <- 1 to runs; (label, path) <- builds do
   System.err.println(s"run $run/$runs: $label")
-  for (scenario, us) <- runOnce(path, benchArgs, retries, crashes, timeout, label) do
+  for (scenario, us) <- runOnce(path, benchArgs, retries, crashes, incomplete, timeout, label) do
     samples(label).getOrElseUpdate(scenario, mutable.ArrayBuffer()) += us
 
 val scenarios = builds.flatMap((label, _) => samples(label).keys).distinct
@@ -200,9 +217,17 @@ for scenario <- scenarios do
   }
   println(f"$scenario%-18s" + row.mkString)
 
+val short = for (label, _) <- builds; (scenario, values) <- samples(label) if values.size < runs
+  yield s"$label $scenario: ${values.size} of $runs"
+if short.nonEmpty then
+  println(s"\nmedians of fewer runs than asked, where a run failed before finishing them:")
+  short.foreach(s => println(s"  $s"))
 if crashes.nonEmpty then
-  println(s"\n${crashes.size} run(s) failed and were retried:")
+  println(s"\n${crashes.size} run(s) failed:")
   crashes.foreach(c => println(s"  $c"))
+if incomplete.nonEmpty then
+  println(s"\n${incomplete.size} run(s) failed after their retries, with what they finished kept:")
+  incomplete.foreach(c => println(s"  $c"))
 
 if saveDefault || saveTo.nonEmpty then
   val file = saveTo.map(Path.of(_)).getOrElse(
@@ -225,7 +250,10 @@ if saveDefault || saveTo.nonEmpty then
         "samples" -> ujson.Obj.from(samples(label).map((s, v) => s -> ujson.Arr.from(v.map(ujson.Num(_)))))
       )
     },
-    "failed_runs" -> crashes
+    "failed_runs" -> crashes,
+    "incomplete" -> incomplete
   )
   Files.writeString(file, ujson.write(json, indent = 2) + "\n")
   println(s"\nsaved $file")
+
+if incomplete.nonEmpty then sys.exit(1)
