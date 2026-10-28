@@ -151,6 +151,155 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     timers.add(op)
   }
 
+  // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
+  // to go on submitting (`deliverTurns`).
+  protected final val queued = scala.collection.mutable.HashSet.empty[O]
+  protected final val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[O]()
+
+  /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
+  private def queueForTurn(op: O, turns: Turns, pending: Completion[O], timeoutMillis: Int): Unit = {
+    op.completion = pending
+    if timeoutMillis >= 0 then schedule(op, timeoutMillis)
+    queued += op
+    turns.enqueue(
+      op,
+      () => {
+        turnsCome.add(op)
+        if !(Thread.currentThread() eq loopThread) then wakeup()
+      }
+    )
+  }
+
+  /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
+  protected final def deliverTurns(): Boolean = {
+    var any = false
+    var next = turnsCome.poll()
+    while next != null do {
+      val op = next.nn // `O` is abstract, so `next` is not narrowed
+      val claim = op.claim
+      // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
+      if claim != null && claim.holds(op) && queued.remove(op) then {
+        any = true
+        val pending = op.completion.nn
+        op.completion = null
+        submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
+      }
+      next = turnsCome.poll()
+    }
+    any
+  }
+
+  final def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
+    submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
+
+  final def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
+    submitOrFinish(op, completion, finishNow = true, timeoutMillis)
+
+  /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
+    * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
+    * limit, goes into the timer heap to time out when it is due.
+    */
+  private def submitOrFinish[C <: Op](
+      op: C,
+      completion: Completion[C],
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
+    if closed then throw new IllegalStateException(s"The reactor is closed: $op")
+    op.markSubmitted()
+    require(op.completion == null, s"$op is already pending")
+    val pending = completion.asInstanceOf[Completion[O]] // only ever called with `op`, which is a C
+    val slotRefusal = op.slotRefusal
+    val claim = op.claim
+    if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
+      queueForTurn(op, claim, pending, timeoutMillis)
+      false
+    } else {
+      val refusal =
+        if slotRefusal != null then slotRefusal
+        else if claim != null && !claim.holds(op) then Checks.alreadyPending(op)
+        else null
+      submitHolding(op, pending, refusal, finishNow, timeoutMillis)
+    }
+  }
+
+  /** Submits `op`, holding its handle's turn if it takes one, if it is one of the backend's own kinds, which wait on
+    * what the backend polls, or that the backend handles otherwise than here, such as a close: returns
+    * `ReactorCore.Finished` if it finished, its failure, if any, in `atOnceFailure`, which only `finishNow` allows;
+    * `ReactorCore.Waits` if it is left pending, its time limit to be filed; `ReactorCore.Queued` if its completion was
+    * queued to run on a later turn (`ready`, `closing`); or `ReactorCore.NotOwn` for a timer, a promise or an at-once
+    * op the backend leaves to this class. Checked first, so that the backend's commands, its hot path, meet no other
+    * type test before theirs.
+    */
+  protected def submitOwn(op: O, pending: Completion[O], finishNow: Boolean): Int
+
+  /** Goes on submitting `op`, which holds its handle's turn if it takes one, failing it with `refusal` if not null. */
+  private def submitHolding(
+      op: O,
+      pending: Completion[O],
+      refusal: Throwable | Null,
+      finishNow: Boolean,
+      timeoutMillis: Int
+  ): Boolean = {
+    var finished = false
+    var waits = false
+    if refusal != null then {
+      op.completion = pending
+      op.atOnceFailure = refusal
+      if finishNow then finished = true else ready.add(op)
+    } else {
+      val own = submitOwn(op, pending, finishNow)
+      if own == ReactorCore.Finished then finished = true
+      else if own == ReactorCore.Waits then waits = true
+      else if own == ReactorCore.NotOwn then
+        op match {
+          case t: LoopTimer[?] =>
+            val timer = t.asInstanceOf[O & LoopTimer[O]]
+            require(timer.heapIndex < 0, "This timer is already pending")
+            // Due at its time, or failed at its time limit if that comes first (see `TimerState`).
+            timer.start(System.nanoTime(), timeoutMillis)
+            timer.completion = pending
+            timer.waiter = this
+            file(timer)
+          case p: LoopPromise[?] =>
+            val promise = p.asInstanceOf[Promise]
+            promise match {
+              case blocking: LoopBlocking[?] if blocking.cancelling != null =>
+                throw new IllegalStateException(s"$op is still running after being cancelled")
+              case _ => ()
+            }
+            promise.reset() // a `Repeatable` promise's previous outcome
+            promise.reactor = this
+            promise.completion = pending
+            pendingPromises += promise
+            promise match {
+              case blocking: LoopBlocking[?] =>
+                blocking.restart()
+                Blockers.run(blocking)
+              case _ => ()
+            }
+            waits = true
+          case atOnce: LoopAtOnce[?] =>
+            op.completion = pending
+            try atOnce.perform()
+            catch case t: Throwable => op.atOnceFailure = t
+            if finishNow then finished = true else ready.add(op)
+          case _ => throw new IllegalStateException(s"Unexpected op $op")
+        }
+    }
+    if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
+    if finished then {
+      op.completion = null // finished here, so the completion is never called
+      release(op)
+      val failure = op.atOnceFailure
+      if failure != null then {
+        op.atOnceFailure = null
+        throw failure
+      }
+    }
+    finished
+  }
+
   // Promises resolve on other threads; they queue here and wake the loop.
   protected final val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
 
@@ -248,4 +397,13 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     running = true
     while running do runOnce(block = true)
   }
+}
+
+object ReactorCore {
+
+  // What `submitOwn` did with an op (see there).
+  inline val Queued = 0
+  inline val Finished = 1
+  inline val Waits = 2
+  inline val NotOwn = -1
 }

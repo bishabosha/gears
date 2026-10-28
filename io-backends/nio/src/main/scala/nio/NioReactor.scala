@@ -41,48 +41,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     var dirty = false // queued in `changed`
   }
 
-  // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
-  // to go on submitting (`deliverTurns`).
-  private val queued = scala.collection.mutable.HashSet.empty[NioOp]
-  private val turnsCome = new java.util.concurrent.ConcurrentLinkedQueue[NioOp]()
-
-  /** Leaves `op`, pending, to wait for the turn `turns` holds for another op, its time limit running meanwhile. */
-  private def queueForTurn(
-      op: NioOp,
-      turns: gears.async.io.internal.Turns,
-      pending: Completion[NioOp],
-      timeoutMillis: Int
-  ): Unit = {
-    op.completion = pending
-    if timeoutMillis >= 0 then schedule(op, timeoutMillis)
-    queued += op
-    turns.enqueue(
-      op,
-      () => {
-        turnsCome.add(op)
-        if !(Thread.currentThread() eq loopThread) then wakeup()
-      }
-    )
-  }
-
-  /** Goes on submitting the ops given their turn since the last turn of the loop, still waiting for it here. */
-  private def deliverTurns(): Boolean = {
-    var any = false
-    var op = turnsCome.poll()
-    while op != null do {
-      val claim = op.claim
-      // One withdrawn meanwhile, and perhaps submitted again since, holds no turn it was given before.
-      if claim != null && claim.holds(op) && queued.remove(op) then {
-        any = true
-        val pending = op.completion.nn
-        op.completion = null
-        submitHolding(op, pending, null, finishNow = false, timeoutMillis = -1): Unit // its time limit is filed
-      }
-      op = turnsCome.poll()
-    }
-    any
-  }
-
   // Commands on regular files that were not done: a file is always ready, so they are performed again each turn.
   private val again = new java.util.ArrayDeque[Command]()
 
@@ -122,12 +80,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   // Guards waking the selector against `close`.
   private object wakeLock {}
 
-  def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
-    submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
-
-  def trySubmit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Boolean =
-    submitOrFinish(op, completion, finishNow = true, timeoutMillis)
-
   /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure as
     * an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns false.
     */
@@ -143,147 +95,80 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         false
     }
 
-  /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
-    * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
-    * limit, goes into the timer heap to time out when it is due.
-    */
-  private def submitOrFinish[C <: Op](
-      op: C,
-      completion: Completion[C],
-      finishNow: Boolean,
-      timeoutMillis: Int
-  ): Boolean = {
-    if closed then throw new IllegalStateException(s"The reactor is closed: $op")
-    op.markSubmitted()
-    require(op.completion == null, s"$op is already pending")
-    val pending = completion.asInstanceOf[Completion[NioOp]] // only ever called with `op`, which is a C
-    val slotRefusal = op.slotRefusal
-    val claim = op.claim
-    if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
-      queueForTurn(op, claim, pending, timeoutMillis)
-      false
-    } else {
-      val refusal =
-        if slotRefusal != null then slotRefusal
-        else if claim != null && !claim.holds(op) then gears.async.io.internal.Checks.alreadyPending(op)
-        else null
-      submitHolding(op, pending, refusal, finishNow, timeoutMillis)
-    }
-  }
-
-  /** Goes on submitting `op`, which holds its handle's turn if it takes one, failing it with `refusal` if not null. */
-  private def submitHolding(
-      op: NioOp,
-      pending: Completion[NioOp],
-      refusal: Throwable | Null,
-      finishNow: Boolean,
-      timeoutMillis: Int
-  ): Boolean = {
+  /** Submits a command, a connect or a close (see `ReactorCore.submitOwn`). */
+  protected def submitOwn(op: NioOp, pending: Completion[NioOp], finishNow: Boolean): Int = {
     var finished = false
     var waits = false
-    if refusal != null then {
-      op.completion = pending
-      op.atOnceFailure = refusal
-      if finishNow then finished = true else ready.add(op)
-    } else
-      op match {
-        case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-        case command: Command                                           =>
-          // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
-          var failure: java.io.IOException | Null = null
-          val entry =
-            try NioHandles.entry(command.handle)
+    var own = true
+    op match {
+      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
+      case command: Command                                           =>
+        // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
+        var failure: java.io.IOException | Null = null
+        val entry =
+          try NioHandles.entry(command.handle)
+          catch {
+            case e: java.io.IOException =>
+              failure = e
+              null
+          }
+        command.entry = entry
+        val read = command.interest == Interest.Read
+        val key = entry match {
+          case s: Selectable =>
+            try keyFor(command, s)
             catch {
               case e: java.io.IOException =>
                 failure = e
                 null
             }
-          command.entry = entry
-          val read = command.interest == Interest.Read
-          val key = entry match {
-            case s: Selectable =>
-              try keyFor(command, s)
-              catch {
-                case e: java.io.IOException =>
-                  failure = e
-                  null
+          case _ => null
+        }
+        (entry, key) match {
+          case _ if failure != null =>
+            command.completion = pending
+            command.atOnceFailure = failure
+            if !finishNow then ready.add(command)
+            finished = finishNow
+          case (s: Selectable, key: SelectionKey) =>
+            val waiting = key.attachment().asInstanceOf[Waiting]
+            // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+            if read then require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
+            else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
+            command.completion = pending
+            if performedAtOnce(command, queue = !finishNow) then finished = finishNow
+            else {
+              val ops = command.selectOps(s.channel)
+              if read then {
+                waiting.read = command
+                waiting.readOps = ops
+              } else {
+                waiting.write = command
+                waiting.writeOps = ops
               }
-            case _ => null
-          }
-          (entry, key) match {
-            case _ if failure != null =>
-              command.completion = pending
-              command.atOnceFailure = failure
-              if !finishNow then ready.add(command)
-              finished = finishNow
-            case (s: Selectable, key: SelectionKey) =>
-              val waiting = key.attachment().asInstanceOf[Waiting]
-              // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
-              if read then
-                require(waiting.read == null, s"A read command is already pending on handle ${command.handle}")
-              else require(waiting.write == null, s"A write command is already pending on handle ${command.handle}")
-              command.completion = pending
-              if performedAtOnce(command, queue = !finishNow) then finished = finishNow
-              else {
-                val ops = command.selectOps(s.channel)
-                if read then {
-                  waiting.read = command
-                  waiting.readOps = ops
-                } else {
-                  waiting.write = command
-                  waiting.writeOps = ops
-                }
-                markChanged(key, waiting)
-                waits = true
-              }
-            case (_: RegularFile, _) =>
-              command.completion = pending
-              if performedAtOnce(command, queue = !finishNow) then finished = finishNow // always ready
-              else {
-                again.add(command)
-                waits = true
-              }
-            case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
-          }
-        case timer: NioTimer =>
-          require(timer.heapIndex < 0, "This timer is already pending")
-          // Due at its time, or failed at its time limit if that comes first (see `TimerState`).
-          timer.start(System.nanoTime(), timeoutMillis)
-          timer.completion = pending
-          timer.waiter = this
-          file(timer)
-        case blocking: NioBlocking =>
-          if blocking.cancelling != null then
-            throw new IllegalStateException(s"$op is still running after being cancelled")
-          blocking.reset() // a `Repeatable` promise's previous outcome
-          blocking.reactor = this
-          blocking.completion = pending
-          pendingPromises += blocking
-          blocking.restart()
-          blocking.start()
-          waits = true
-        case close: Close =>
-          close.completion = pending
-          try close.perform()
-          catch case t: Throwable => close.atOnceFailure = t
-          closing.add(close) // completed after the failures it causes, never in trySubmit
-        case atOnce: NioAtOnce =>
-          atOnce.completion = pending
-          try atOnce.perform()
-          catch case t: Throwable => atOnce.atOnceFailure = t
-          if finishNow then finished = true else ready.add(atOnce)
-      }
-    if waits && timeoutMillis >= 0 then schedule(op, timeoutMillis)
-    if finished then {
-      op.completion = null // finished here, so the completion is never called
-      release(op)
-      val failure = op.atOnceFailure
-      if failure != null then {
-        op.atOnceFailure = null
-        throw failure
-      }
+              markChanged(key, waiting)
+              waits = true
+            }
+          case (_: RegularFile, _) =>
+            command.completion = pending
+            if performedAtOnce(command, queue = !finishNow) then finished = finishNow // always ready
+            else {
+              again.add(command)
+              waits = true
+            }
+          case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
+        }
+      case close: Close =>
+        close.completion = pending
+        try close.perform()
+        catch case t: Throwable => close.atOnceFailure = t
+        closing.add(close) // completed after the failures it causes, never in trySubmit
+      case _ => own = false // a timer, a blocker or an at-once op
     }
-    finished
+    if !own then gears.async.io.internal.ReactorCore.NotOwn
+    else if finished then gears.async.io.internal.ReactorCore.Finished
+    else if waits then gears.async.io.internal.ReactorCore.Waits
+    else gears.async.io.internal.ReactorCore.Queued
   }
 
   /** `command`'s key in this selector for `s`'s channel, registering the channel with no interest ops the first time.

@@ -577,9 +577,6 @@ sealed abstract class NioPromise extends gears.async.io.internal.LoopPromise[Nio
   */
 abstract class NioBlocking extends NioPromise with gears.async.io.internal.LoopBlocking[NioOp] {
 
-  /** Runs `block` on the blocker pool and completes the promise with the outcome, unless it is cancelled first. */
-  private[nio] def start(): Unit = Blockers.run(this)
-
   /** Readies this op to run on the calling thread instead of the blocker pool (see `NioOnCaller`, which has recorded
     * the submission).
     */
