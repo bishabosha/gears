@@ -335,8 +335,10 @@ refuse.
 
 What kqueue's reactor and NIO's do alike is `ReactorCore`, with what their ops keep in `LoopOp` (both in
 `jvm-native/.../internal`): the timer heap and moved deadlines, handles' turns, the ready and closing queues, promises
-and blockers, submission past the backend's own kinds, cancel and time-outs, `close`, and the turn itself
-(`runOnce`). Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
+and blockers, submission past the backend's own kinds, cancel and time-outs, `close`, the turn itself (`runOnce`),
+and the openers' bookkeeping (`LoopOpensAtOnce`, `LoopOpensPipe`, `LoopConnects`): what an opener keeps of what it
+opened, and `abandon`, which closes it and empties its slots if the submission is withdrawn; each backend says only
+how a handle is opened and closed again. Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
 test), withdrawal and dropping on close, failing what was pending on handles closed meanwhile (`deliverClosed`), what
 else it delivers each turn (`deliverOwn`: FIFOs and notified ops here, regular files and interest changes on NIO), and
 the poll (`poll`).

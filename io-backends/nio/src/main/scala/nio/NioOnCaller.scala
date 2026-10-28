@@ -43,7 +43,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
       case connect: ConnectTo =>
-        connect.open()
+        connect.start()
         try performCommand(connect, deadline)
         catch {
           case t: Throwable =>

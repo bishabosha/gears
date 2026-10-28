@@ -405,10 +405,29 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     */
   protected def withdrawOwn(op: O): Completion[O] | Null
 
-  /** Closes what `op`, withdrawn before its completion ran, opened, which never reaches the caller: nothing for an op
-    * that opens nothing.
+  /** Closes what `op`, withdrawn before its completion ran, opened, which never reaches the caller (`LoopOpens`):
+    * nothing for an op that opens nothing. A backend whose ops open otherwise adds them.
     */
-  protected def abandon(op: O): Unit
+  protected def abandon(op: O): Unit = op match {
+    case opens: LoopOpens[?] => opens.abandon()
+    case _                   => ()
+  }
+
+  /** Starts `connect` as it is submitted (`LoopConnects.start`), opening its socket, and returns true; or, if that
+    * fails, delivers the failure as an at-once op's is, queued for the next turn or, with `finishNow`, thrown by
+    * `submitOrFinish`, and returns false.
+    */
+  protected final def started(connect: O & LoopConnects[O, ?], pending: Completion[O], finishNow: Boolean): Boolean =
+    try {
+      connect.start()
+      true
+    } catch {
+      case t: Throwable =>
+        connect.completion = pending
+        connect.atOnceFailure = t
+        if !finishNow then ready.add(connect)
+        false
+    }
 
   /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
     * pending here.

@@ -64,6 +64,113 @@ abstract class LoopAtOnce[O <: LoopOp[O]] extends LoopOp[O] { this: O =>
   def perform(): Unit
 }
 
+/** An op that opens handles and writes them into slots (see `Ops`): if its submission is withdrawn, by `cancel`, a time
+  * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slots,
+  * so that nothing is left open that the caller never got (`ReactorCore.abandon`). Each backend says how a handle it
+  * opened is opened and closed again (`open`, `discard`); what is kept, and when it is let go, is the same.
+  */
+trait LoopOpens[O <: LoopOp[O]] extends LoopOp[O] { this: O =>
+  def abandon(): Unit
+}
+
+/** An op that opens one handle at once, when submitted (`LoopAtOnce`), as a listener, a datagram socket or a FIFO is,
+  * and writes it into `into`, which must be empty.
+  */
+trait LoopOpensAtOnce[O <: LoopOp[O], K <: AnyRef](into: Slot[K]) extends LoopOpens[O] { this: O & LoopAtOnce[O] =>
+  override private[io] def slotRefusal: Throwable | Null = Checks.notEmpty(into)
+  private var opened: K | Null = null
+
+  /** Opens the handle; a failure fails the op. */
+  protected def open(): K
+
+  /** Closes `handle`, opened here, which never reached the caller. */
+  protected def discard(handle: K): Unit
+
+  def perform(): Unit = {
+    val handle = open()
+    opened = handle
+    into.set(handle)
+  }
+
+  def abandon(): Unit = if opened != null then {
+    into.clear(): Unit
+    discard(opened.nn)
+    opened = null
+  }
+}
+
+/** An op that opens a pipe at once, when submitted (`LoopAtOnce`), its read end written into `read` and its write end
+  * into `write`, both of which must be empty (see `PipeOps.pipe`).
+  */
+trait LoopOpensPipe[O <: LoopOp[O], R <: AnyRef, W <: AnyRef](read: Slot[R], write: Slot[W]) extends LoopOpens[O] {
+  this: O & LoopAtOnce[O] =>
+  override private[io] def slotRefusal: Throwable | Null = Checks.notEmpty(read, write)
+  private var readEnd: R | Null = null
+  private var writeEnd: W | Null = null
+
+  /** Opens the pipe: its read end and its write end; a failure fails the op. */
+  protected def open(): (R, W)
+
+  /** Closes `end`, one end of a pipe opened here, which never reached the caller. */
+  protected def discard(end: R | W): Unit
+
+  def perform(): Unit = {
+    val (in, out) = open()
+    readEnd = in
+    writeEnd = out
+    read.set(in)
+    write.set(out)
+  }
+
+  def abandon(): Unit = if readEnd != null then {
+    read.clear(): Unit
+    write.clear(): Unit
+    discard(readEnd.nn)
+    discard(writeEnd.nn)
+    readEnd = null
+    writeEnd = null
+  }
+}
+
+/** A connect (see `IpStreamOps.connect`): its socket is opened, and its non-blocking connect started, as it is
+  * submitted (`start`, from `ReactorCore.started` or a caller backend), after which it waits as a command does; once
+  * connected (`finished`), the socket is written into `into`, which must be empty. If the connect fails, or the
+  * submission is withdrawn first, `abandon` closes the socket and leaves `into` empty. One-shot, as it opens.
+  */
+trait LoopConnects[O <: LoopOp[O], K <: AnyRef](into: Slot[K]) extends LoopOpens[O] { this: O =>
+  override private[io] def oneShot: Boolean = true
+  override private[io] def slotRefusal: Throwable | Null = Checks.notEmpty(into)
+
+  /** The socket the submission opened, until abandoned. */
+  protected var socket: K | Null = null
+  private var connected = false
+
+  /** Opens the socket and starts connecting it; a failure fails the op. */
+  protected def open(): K
+
+  /** Closes `socket`, opened here, which never reached the caller. */
+  protected def discard(socket: K): Unit
+
+  /** Opens the socket and starts connecting it, as the op is submitted. */
+  private[io] final def start(): Unit = {
+    socket = open()
+    connected = false
+  }
+
+  /** The connect is done: the socket goes into `into`. */
+  protected final def finished(): Unit = {
+    connected = true
+    into.set(socket.nn)
+  }
+
+  def abandon(): Unit = if socket != null then {
+    if connected then into.clear(): Unit
+    discard(socket.nn)
+    socket = null
+    connected = false
+  }
+}
+
 /** A one-shot timer, kept in its reactor's heap while pending (`TimerState`). */
 abstract class LoopTimer[O <: LoopOp[O]] extends LoopOp[O] with Repeatable with TimerState { this: O => }
 

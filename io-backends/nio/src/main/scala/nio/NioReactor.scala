@@ -74,29 +74,14 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   // Guards waking the selector against `close`.
   private object wakeLock {}
 
-  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure as
-    * an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns false.
-    */
-  private def opened(connect: ConnectTo, pending: Completion[NioOp], finishNow: Boolean): Boolean =
-    try {
-      connect.open()
-      true
-    } catch {
-      case t: Throwable =>
-        connect.completion = pending
-        connect.atOnceFailure = t
-        if !finishNow then ready.add(connect)
-        false
-    }
-
   /** Submits a command or a connect (see `ReactorCore.submitOwn`). */
   protected def submitOwn(op: NioOp, pending: Completion[NioOp], finishNow: Boolean): Int = {
     var finished = false
     var waits = false
     var own = true
     op match {
-      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command                                           =>
+      case connect: ConnectTo if !started(connect, pending, finishNow) => finished = finishNow
+      case command: Command                                            =>
         // A handle closed, or a channel this selector can no longer take, fails the op as a perform would.
         var failure: java.io.IOException | Null = null
         val entry =
@@ -350,11 +335,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
           }
       case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
     }
-
-  protected def abandon(op: NioOp): Unit = op match {
-    case opens: Opens => opens.abandon()
-    case _            => ()
-  }
 
   /** Performs the commands a ready key is waiting for. Each is taken off the key first, so its completion may submit
     * the next; one not ready after all waits again, without its completion ever seeing it.

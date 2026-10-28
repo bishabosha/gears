@@ -188,8 +188,8 @@ final class KqueueReactor private (
     var waits = false
     var own = true
     op match {
-      case connect: ConnectTo if !opened(connect, pending, finishNow) => finished = finishNow
-      case command: Command                                           =>
+      case connect: ConnectTo if !started(connect, pending, finishNow) => finished = finishNow
+      case command: Command                                            =>
         // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
         val handle = command.handle
         if handle != null && !handle.acquire() then {
@@ -273,21 +273,6 @@ final class KqueueReactor private (
     else if waits then gears.async.io.internal.ReactorCore.Waits
     else gears.async.io.internal.ReactorCore.Queued
   }
-
-  /** Opens the socket of a `ConnectTo` as it is submitted, and returns true; or, if that fails, delivers the failure as
-    * an at-once op's is, queued for the next turn or, with `finishNow`, thrown by `submitOrFinish`, and returns false.
-    */
-  private def opened(connect: ConnectTo, pending: Completion[KqueueOp], finishNow: Boolean): Boolean =
-    try {
-      connect.open()
-      true
-    } catch {
-      case t: Throwable =>
-        connect.completion = pending
-        connect.atOnceFailure = t
-        if !finishNow then ready.add(connect)
-        false
-    }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
     * turn if `queue`, rather than run here, and this returns true; if it would block, this returns false. For a read,
@@ -532,10 +517,10 @@ final class KqueueReactor private (
       case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
     }
 
-  protected def abandon(op: KqueueOp): Unit = op match {
-    case opens: Opens       => opens.abandon()
+  /** What an op opened (see `ReactorCore.abandon`), or another facility's op (`Notified.abandon`). */
+  override protected def abandon(op: KqueueOp): Unit = op match {
     case notified: Notified => notified.abandon()
-    case _                  => ()
+    case _                  => super.abandon(op)
   }
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed

@@ -210,31 +210,16 @@ object NioOps
   */
 sealed abstract class NioAtOnce extends gears.async.io.internal.LoopAtOnce[NioOp] with NioOp
 
-/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
-  * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
-  * so that nothing is left open that the caller never got.
-  */
-sealed trait Opens extends NioOp {
-  def abandon(): Unit
-}
+/** An op that opens a handle and writes it into a slot (see `LoopOpens`): what it opened, abandoned, is closed. */
+sealed trait Opens extends NioOp with gears.async.io.internal.LoopOpens[NioOp]
 
-/** An op that opens its handle at once, when submitted (see `NioAtOnce`), as NIO's listeners, datagram sockets and
-  * pipes are.
+/** An op that opens its handle at once, when submitted (see `NioAtOnce`), as NIO's listeners and datagram sockets are.
   */
-sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
-  private var opened: K | Null = null
-  protected def open(): K
-  def perform(): Unit = {
-    val handle = open()
-    opened = (handle)
-    into.set(handle)
-  }
-  def abandon(): Unit = if opened != null then {
-    into.clear(): Unit
-    NioHandles.close(opened.nn)
-    opened = null
-  }
+sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K])
+    extends NioAtOnce
+    with gears.async.io.internal.LoopOpensAtOnce[NioOp, K](into)
+    with Opens {
+  protected final def discard(handle: K): Unit = NioHandles.close(handle)
 }
 
 /** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
@@ -263,23 +248,12 @@ final class OpenDatagram[K <: Handle](
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
-final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writable]) extends NioAtOnce with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
-  private var ends: (NioKinds.Readable, NioKinds.Writable) | Null = null
-  def perform(): Unit = {
-    val (in, out) = NioHandles.pipe()
-    ends = (in, out)
-    read.set(in)
-    write.set(out)
-  }
-  def abandon(): Unit = if ends != null then {
-    val (in, out) = ends.nn
-    read.clear(): Unit
-    write.clear(): Unit
-    NioHandles.close(in)
-    NioHandles.close(out)
-    ends = null
-  }
+final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writable])
+    extends NioAtOnce
+    with gears.async.io.internal.LoopOpensPipe[NioOp, NioKinds.Readable, NioKinds.Writable](read, write)
+    with Opens {
+  protected def open(): (NioKinds.Readable, NioKinds.Writable) = NioHandles.pipe()
+  protected def discard(end: NioKinds.Readable | NioKinds.Writable): Unit = NioHandles.close(end)
 }
 
 /** Closes a handle (see `Ops.close`): at once, as `NioHandles.close` does. */
@@ -450,33 +424,27 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   }
 }
 
-/** A stream socket connected to `address` (see `IpStreamOps.connect`): the socket is opened, and its non-blocking
-  * connect started, when the op is submitted or performed on the caller (`open`), and the op then waits for the connect
-  * to finish. Done once connected, after writing the socket into `into`, which a connection that finished at once, as a
-  * Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled or times out
-  * first, the socket is closed and `into` left empty.
+/** A stream socket connected to `address` (see `IpStreamOps.connect` and `LoopConnects`): the socket is opened, and its
+  * non-blocking connect started, when the op is submitted or performed on the caller, and the op then waits for the
+  * connect to finish. Done once connected, after writing the socket into `into`, which a connection that finished at
+  * once, as a Unix socket's usually does, is as soon as it is submitted; if the connect fails, or the op is cancelled
+  * or times out first, the socket is closed and `into` left empty.
   */
 final class ConnectTo(
     address: SocketAddress,
     into: Slot[NioKinds.Connection],
     options: SocketOptions = SocketOptions.default
 ) extends Command
+    with gears.async.io.internal.LoopConnects[NioOp, NioKinds.Connection](into)
     with Opens {
-  override private[io] def oneShot: Boolean = true // it opens its socket
   override private[io] def claim: gears.async.io.internal.Turns | Null =
     null // on a socket of its own
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
-  private var socket: Handle | Null = null
-  private var connected = false
   def handle: Handle = socket.nn
   def interest: Interest = Interest.Write
   override def selectOps(channel: SelectableChannel): Int = SelectionKey.OP_CONNECT
 
-  /** Opens the socket and starts connecting it, as the op is submitted or performed. */
-  private[nio] def open(): Unit = {
-    socket = (NioHandles.connectStream(address, options))
-    connected = false
-  }
+  protected def open(): NioKinds.Connection = NioKinds.connection(NioHandles.connectStream(address, options))
+  protected def discard(socket: NioKinds.Connection): Unit = NioHandles.close(socket)
 
   def perform(): Boolean = {
     val done =
@@ -489,18 +457,8 @@ final class ConnectTo(
           abandon()
           throw t
       }
-    if done then {
-      connected = true
-      into.set(NioKinds.connection(socket.nn))
-    }
+    if done then finished()
     done
-  }
-
-  def abandon(): Unit = if socket != null then {
-    if connected then into.clear(): Unit
-    NioHandles.close(socket.nn)
-    socket = null
-    connected = false
   }
 }
 

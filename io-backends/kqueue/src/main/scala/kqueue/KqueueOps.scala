@@ -270,30 +270,22 @@ object KqueueOps
   */
 sealed abstract class KqueueAtOnce extends gears.async.io.internal.LoopAtOnce[KqueueOp] with KqueueOp
 
-/** An op that opens a handle and writes it into a slot (see `Ops`): if its submission is cancelled, by `cancel`, a time
-  * limit or the reactor closing, before its completion has run, `abandon` closes what it opened and empties its slot,
-  * so that nothing is left open that the caller never got.
+/** An op that opens a handle and writes it into a slot (see `LoopOpens`): what it opened, abandoned, is closed by its
+  * descriptor, the handle never having reached the caller.
   */
-sealed trait Opens extends KqueueOp {
-  def abandon(): Unit
-}
+sealed trait Opens extends KqueueOp with gears.async.io.internal.LoopOpens[KqueueOp]
 
 /** An op that opens its handle at once, when submitted (see `KqueueAtOnce`), as kqueue's listeners, datagram sockets,
-  * pipes and FIFOs are: `opened` is what it opened, written into `into` by the time the op completes.
+  * pipes and FIFOs are: `openDescriptor` opens its descriptor, whose handle, of the kind `kind` makes, is written into
+  * `into` by the time the op completes.
   */
-sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K) extends KqueueAtOnce with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
-  private var opened = -1
-  protected def open(): Int
-  def perform(): Unit = {
-    opened = open()
-    into.set(kind(KqueueHandles.handle(opened)))
-  }
-  def abandon(): Unit = if opened >= 0 then {
-    into.clear(): Unit
-    KqueueHandles.closeDescriptor(opened)
-    opened = -1
-  }
+sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K)
+    extends KqueueAtOnce
+    with gears.async.io.internal.LoopOpensAtOnce[KqueueOp, K](into)
+    with Opens {
+  protected def openDescriptor(): Int
+  protected final def open(): K = kind(KqueueHandles.handle(openDescriptor()))
+  protected final def discard(handle: K): Unit = KqueueHandles.closeDescriptor(handle.fd)
 }
 
 /** A stream socket bound and listening on `address` (see `IpStreamOps.listen`). */
@@ -302,7 +294,7 @@ final class Listen(
     into: Slot[KqueueKinds.Listener],
     options: SocketOptions = SocketOptions.default
 ) extends OpensAtOnce(into, KqueueKinds.listener) {
-  protected def open(): Int = KqueueHandles.listenStream(address, options)
+  protected def openDescriptor(): Int = KqueueHandles.listenStream(address, options)
 }
 
 /** A datagram socket, bound and connected where given (see `IpDatagramOps.connectDatagram`). */
@@ -313,81 +305,58 @@ final class OpenDatagram[K <: Handle](
     kind: Handle => K,
     options: SocketOptions = SocketOptions.default
 ) extends OpensAtOnce(into, kind) {
-  protected def open(): Int = KqueueHandles.datagramSocket(local, remote, options)
+  protected def openDescriptor(): Int = KqueueHandles.datagramSocket(local, remote, options)
 }
 
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`). */
 final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kind: Handle => K)
     extends OpensAtOnce(into, kind) {
   gears.async.io.internal.Checks.checkPath(path)
-  protected def open(): Int = KqueueHandles.fifoDescriptor(path, write)
+  protected def openDescriptor(): Int = KqueueHandles.fifoDescriptor(path, write)
 }
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
 final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.Writable])
     extends KqueueAtOnce
+    with gears.async.io.internal.LoopOpensPipe[KqueueOp, KqueueKinds.Readable, KqueueKinds.Writable](read, write)
     with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
-  private var ends: (Int, Int) | Null = null
-  def perform(): Unit = {
+  protected def open(): (KqueueKinds.Readable, KqueueKinds.Writable) = {
     val (in, out) = KqueueHandles.pipeDescriptors()
-    ends = (in, out)
-    read.set(KqueueKinds.readable(KqueueHandles.handle(in)))
-    write.set(KqueueKinds.writable(KqueueHandles.handle(out)))
+    (KqueueKinds.readable(KqueueHandles.handle(in)), KqueueKinds.writable(KqueueHandles.handle(out)))
   }
-  def abandon(): Unit = if ends != null then {
-    val (in, out) = ends.nn
-    read.clear(): Unit
-    write.clear(): Unit
-    KqueueHandles.closeDescriptor(in)
-    KqueueHandles.closeDescriptor(out)
-    ends = null
-  }
+  protected def discard(end: KqueueKinds.Readable | KqueueKinds.Writable): Unit = KqueueHandles.closeDescriptor(end.fd)
 }
 
-/** A stream socket connected to `address` (see `IpStreamOps.connect`): the socket is opened, and its non-blocking
-  * connect started, when the op is submitted (`open`), and the op then waits as `Connect` does. Done once connected,
-  * after writing the socket into `into`; if the connect fails, or the submission is cancelled first, the socket is
-  * closed and `into` left empty.
+/** A stream socket connected to `address` (see `IpStreamOps.connect` and `LoopConnects`): the socket is opened, and its
+  * non-blocking connect started, when the op is submitted, and the op then waits for the socket to be writable, as a
+  * connect does. Done once connected, after writing the socket into `into`; if the connect fails, or the submission is
+  * cancelled first, the socket is closed and `into` left empty.
   */
 final class ConnectTo(
     address: SocketAddress,
     into: Slot[KqueueKinds.Connection],
     options: SocketOptions = SocketOptions.default
 ) extends Command
+    with gears.async.io.internal.LoopConnects[KqueueOp, KqueueKinds.Connection](into)
     with Opens {
-  override private[io] def oneShot: Boolean = true // it opens its socket
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
-  private var socket = -1
-  private var connected = false
-  def fd: Int = socket
+  def fd: Int = if socket == null then -1 else socket.nn.fd
   def interest: Interest = Interest.Write
   override def tryFirst: Boolean = false // the check passes while the connection is still in progress
   override def registersReads: Boolean = true
 
-  /** Opens the socket and starts connecting it, for the reactor, as the op is submitted. */
-  private[kqueue] def open(): Unit = {
-    socket = KqueueHandles.connectStream(address, options)
-    connected = false
-  }
+  protected def open(): KqueueKinds.Connection =
+    KqueueKinds.connection(KqueueHandles.handle(KqueueHandles.connectStream(address, options)))
+  protected def discard(socket: KqueueKinds.Connection): Unit = KqueueHandles.closeDescriptor(socket.fd)
 
   def perform(): Boolean = {
-    try gears.async.io.internal.PosixSockets.checkConnect(socket)
+    try gears.async.io.internal.PosixSockets.checkConnect(fd)
     catch {
       case t: Throwable =>
         abandon()
         throw t
     }
-    connected = true
-    into.set(KqueueKinds.connection(KqueueHandles.handle(socket)))
+    finished()
     true
-  }
-
-  def abandon(): Unit = if socket >= 0 then {
-    if connected then into.clear(): Unit
-    KqueueHandles.closeDescriptor(socket)
-    socket = -1
-    connected = false
   }
 }
 
