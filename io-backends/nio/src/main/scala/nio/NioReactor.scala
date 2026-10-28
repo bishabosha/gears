@@ -2,16 +2,13 @@ package gears.async.io
 package nio
 
 import gears.async.io.Ops
-import gears.async.io.Repeatable
 import gears.async.io.internal.Completion
 import gears.async.io.internal.Interest
 import gears.async.io.internal.Reactor
-import gears.async.io.internal.TimerHeap
 
 import java.nio.channels.CancelledKeyException
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
-import java.util.concurrent.TimeoutException
 
 /** The NIO implementation of `Reactor`, for ops built by `NioOps`, over a `Selector`. A command is performed as soon as
   * it is submitted when it allows that; otherwise, or when it would block, it waits for readiness and is performed on
@@ -408,78 +405,36 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
       }
     }
 
-  /** As `KqueueReactor.cancel`: a command that finished when submitted counts as finished; anything else pending is
-    * removed, and its `onCancel` runs before this returns, except for a blocking task that was running, whose
-    * `onCancel` runs from the loop once `block` has returned.
-    */
-  def cancel(op: Op): Boolean = {
-    val completion = withdraw(op)
-    if completion == null then false
-    else {
-      settleWithdrawn(op, completion, null)
-      true
-    }
-  }
-
-  /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
-    * where that would be `onCancel`. Nothing if it is no longer pending.
-    */
-  protected def timedOut(op: NioOp): Unit = {
-    val completion = withdraw(op)
-    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
-  }
-
-  /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
-    * pending here.
-    */
-  private def withdraw(op: NioOp): Completion[NioOp] | Null =
-    if queued.remove(op) then {
-      // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
-      val claim = op.claim
-      if claim != null then claim.withdraw(op): Unit
-      take(op)
-    } else
-      op match {
-        case command: Command =>
-          if command.completion == null then null
-          else
-            command.entry match {
-              case _: Selectable =>
-                val key = command.key
-                if key == null || !(key.selector() eq selector) then null
-                else {
-                  val waiting = key.attachment().asInstanceOf[Waiting]
-                  val pending = (waiting.read eq command) || (waiting.write eq command)
-                  if !pending then null // finished when submitted, or not submitted here
-                  else {
-                    if waiting.read eq command then waiting.read = null else waiting.write = null
-                    markChanged(key, waiting)
-                    take(command)
-                  }
-                }
-              case _: RegularFile => if again.remove(command) then take(command) else null
-              case _              => null // never submitted
-            }
-        case timer: NioTimer => if timer.heapIndex < 0 then null else take(timer)
-        case blocking: NioBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
-        case promise: NioPromise                                        => detach(promise)
-        case _: NioAtOnce                                               => null // performed when submitted, so finished
-      }
-
-  /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
-    * out; for a blocking task that was running, from the loop once `block` has returned.
-    */
-  private def settleWithdrawn(op: NioOp, completion: Completion[NioOp], failure: Throwable | Null): Unit =
+  /** Takes a pending command off its key, or out of `again` (see `ReactorCore.withdrawOwn`). */
+  protected def withdrawOwn(op: NioOp): Completion[NioOp] | Null =
     op match {
-      case opens: Opens =>
-        opens.abandon() // what it opened never reaches the caller
-        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
-      case blocking: NioBlocking if blocking.interrupt() =>
-        blocking.cancelling = completion
-        blocking.cancelledBy = failure
-        cancellingBlockers += blocking
-      case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
+      case command: Command =>
+        if command.completion == null then null
+        else
+          command.entry match {
+            case _: Selectable =>
+              val key = command.key
+              if key == null || !(key.selector() eq selector) then null
+              else {
+                val waiting = key.attachment().asInstanceOf[Waiting]
+                val pending = (waiting.read eq command) || (waiting.write eq command)
+                if !pending then null // finished when submitted, or not submitted here
+                else {
+                  if waiting.read eq command then waiting.read = null else waiting.write = null
+                  markChanged(key, waiting)
+                  take(command)
+                }
+              }
+            case _: RegularFile => if again.remove(command) then take(command) else null
+            case _              => null // never submitted
+          }
+      case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
     }
+
+  protected def abandon(op: NioOp): Unit = op match {
+    case opens: Opens => opens.abandon()
+    case _            => ()
+  }
 
   /** Performs the commands a ready key is waiting for. Each is taken off the key first, so its completion may submit
     * the next; one not ready after all waits again, without its completion ever seeing it.

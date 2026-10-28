@@ -1,7 +1,6 @@
 package gears.async.io
 package kqueue
 
-import gears.async.io.Repeatable
 import gears.async.io.internal.Completion
 import gears.async.io.internal.DescriptorTable
 import gears.async.io.internal.Interest
@@ -10,7 +9,6 @@ import gears.async.io.kqueue.KqueueLoop
 import gears.async.io.kqueue.KqueueLoop.Event
 
 import java.io.IOException
-import java.util.concurrent.TimeoutException
 import scala.scalanative.posix.string
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
@@ -577,87 +575,43 @@ final class KqueueReactor private (
   private def isWriteEvent(event: Event): Boolean = KqueueLoop.isWriteEvent(event)
   private def fileIdent(event: Event): Int = KqueueLoop.fileIdent(event)
 
-  /** A command that finished when submitted counts as finished: its completion still runs, and this returns false. A
-    * pending command is removed from its slot and its filter deleted; a pending timer is deleted; a promise is
-    * detached, so completing it later does nothing, and a blocking task is skipped or interrupted. The completion's
-    * `onCancel` then runs before this returns, except for a blocking task that was running: its `onCancel` runs from
-    * the loop once `block` has returned.
+  /** Takes a pending command out of its slot, deleting its one-shot filter, or another facility's op out of `waiting`
+    * (see `ReactorCore.withdrawOwn`).
     */
-  def cancel(op: Op): Boolean = {
-    val completion = withdraw(op)
-    if completion == null then false
-    else {
-      settleWithdrawn(op, completion, null)
-      true
-    }
-  }
-
-  /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
-    * where that would be `onCancel`. Nothing if it is no longer pending.
-    */
-  protected def timedOut(op: KqueueOp): Unit = {
-    val completion = withdraw(op)
-    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
-  }
-
-  /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
-    * pending here.
-    */
-  private def withdraw(op: KqueueOp): Completion[KqueueOp] | Null =
-    if queued.remove(op) then {
-      // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
-      val claim = op.claim
-      if claim != null then claim.withdraw(op): Unit
-      take(op)
-    } else
-      op match {
-        case command: Command =>
-          val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
-          if slot == null then null
-          else {
-            val read = command.interest == Interest.Read
-            val p = if read then slot.read else slot.write
-            if p == null || !(p eq command) then null
-            else {
-              // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
-              if read then slot.read = null else slot.write = null
-              if !(read && command.edgeTriggered) then {
-                if read then slot.readRegistered = false
-                deleteFilter(command.fd, read)
-              }
-              take(command)
-            }
-          }
-        case notified: Notified =>
-          if notified.completion == null || waiting.getOrNull(notified.token) == null then null // finished, or not here
-          else {
-            waiting -= notified.token
-            notified.withdraw() // a notification already queued for it is dropped when delivered
-            take(notified)
-          }
-        case timer: KqueueTimer => if timer.heapIndex < 0 then null else take(timer)
-        case blocking: KqueueBlocking if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
-        case promise: KqueuePromise                                        => detach(promise)
-        case _: KqueueAtOnce => null // performed when submitted, so finished
-      }
-
-  /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
-    * out; for a blocking task that was running, from the loop once `block` has returned.
-    */
-  private def settleWithdrawn(op: KqueueOp, completion: Completion[KqueueOp], failure: Throwable | Null): Unit =
+  protected def withdrawOwn(op: KqueueOp): Completion[KqueueOp] | Null =
     op match {
-      case opens: Opens =>
-        opens.abandon() // what it opened never reaches the caller
-        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
+      case command: Command =>
+        val slot = if command.fd >= 0 && command.fd < slots.length then slots(command.fd) else null
+        if slot == null then null
+        else {
+          val read = command.interest == Interest.Read
+          val p = if read then slot.read else slot.write
+          if p == null || !(p eq command) then null
+          else {
+            // A persistent read filter stays; a one-shot filter is deleted so that it cannot fire for nothing.
+            if read then slot.read = null else slot.write = null
+            if !(read && command.edgeTriggered) then {
+              if read then slot.readRegistered = false
+              deleteFilter(command.fd, read)
+            }
+            take(command)
+          }
+        }
       case notified: Notified =>
-        notified.abandon()
-        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
-      case blocking: KqueueBlocking if blocking.interrupt() =>
-        blocking.cancelling = completion
-        blocking.cancelledBy = failure
-        cancellingBlockers += blocking
-      case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
+        if notified.completion == null || waiting.getOrNull(notified.token) == null then null // finished, or not here
+        else {
+          waiting -= notified.token
+          notified.withdraw() // a notification already queued for it is dropped when delivered
+          take(notified)
+        }
+      case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
     }
+
+  protected def abandon(op: KqueueOp): Unit = op match {
+    case opens: Opens       => opens.abandon()
+    case notified: Notified => notified.abandon()
+    case _                  => ()
+  }
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed
     * the descriptor, kqueue removed the filter with it and reports `ENOENT` or `EBADF`; the op is cancelled all the

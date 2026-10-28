@@ -365,10 +365,75 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     completion
   }
 
+  /** A command that finished when submitted counts as finished: its completion still runs, and this returns false. A
+    * pending command stops waiting (`withdrawOwn`); a pending timer is deleted; a promise is detached, so completing it
+    * later does nothing, and a blocking task is skipped or interrupted. The completion's `onCancel` then runs before
+    * this returns, except for a blocking task that was running: its `onCancel` runs from the loop once `block` has
+    * returned.
+    */
+  final def cancel(op: Op): Boolean = {
+    val completion = withdraw(op)
+    if completion == null then false
+    else {
+      settleWithdrawn(op, completion, null)
+      true
+    }
+  }
+
   /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
     * where that would be `onCancel`. Nothing if it is no longer pending.
     */
-  protected def timedOut(op: O): Unit
+  private def timedOut(op: O): Unit = {
+    val completion = withdraw(op)
+    if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
+  }
+
+  /** Takes `op` out of what the backend waits on, if it is one of its own kinds (see `submitOwn`), and returns its
+    * completion (`take`): null if it is not pending here, or `ReactorCore.NotOwnCompletion` if it is a timer, a promise
+    * or an at-once op, which this class withdraws.
+    */
+  protected def withdrawOwn(op: O): Completion[O] | Null
+
+  /** Closes what `op`, withdrawn before its completion ran, opened, which never reaches the caller: nothing for an op
+    * that opens nothing.
+    */
+  protected def abandon(op: O): Unit
+
+  /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
+    * pending here.
+    */
+  private def withdraw(op: O): Completion[O] | Null =
+    if queued.remove(op) then {
+      // Waiting for its turn, or given it and not yet submitted again: out of the queue, or the turn passed on.
+      val claim = op.claim
+      if claim != null then claim.withdraw(op): Unit
+      take(op)
+    } else {
+      val own = withdrawOwn(op)
+      if !(own eq ReactorCore.NotOwnCompletion) then own
+      else
+        op match {
+          case timer: LoopTimer[?] => if timer.heapIndex < 0 then null else take(op)
+          case blocking: LoopBlocking[?] if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
+          case _: LoopPromise[?]                                              => detach(op.asInstanceOf[Promise])
+          case _ => null // an at-once op, performed when submitted, so finished
+        }
+    }
+
+  /** Runs the completion of an op `withdraw` took out: `onCancel`, or `onFailure` with `failure` for one that timed
+    * out; for a blocking task that was running, from the loop once `block` has returned.
+    */
+  private def settleWithdrawn(op: O, completion: Completion[O], failure: Throwable | Null): Unit =
+    op match {
+      case b: LoopBlocking[?] if b.interrupt() =>
+        val blocking = b.asInstanceOf[O & LoopBlocking[O]]
+        blocking.cancelling = completion
+        blocking.cancelledBy = failure
+        cancellingBlockers += blocking
+      case _ =>
+        abandon(op)
+        if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
+    }
 
   /** Completes the timers that are due, earliest first, and times out the ops whose time limit is. Only entries
     * scheduled before it started fire, so a completion that submits a zero-length timer leaves it for the next turn.
@@ -406,4 +471,9 @@ object ReactorCore {
   inline val Finished = 1
   inline val Waits = 2
   inline val NotOwn = -1
+
+  /** What `withdrawOwn` returns for an op it leaves to `ReactorCore`. */
+  object NotOwnCompletion extends Completion[Any] {
+    def onComplete(op: Any): Unit = ()
+  }
 }
