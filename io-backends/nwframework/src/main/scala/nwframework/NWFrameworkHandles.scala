@@ -794,9 +794,9 @@ private[nwframework] object NWFrameworkHandles {
     val settings = alloc[NWFrameworkIo.TcpSettings]()
     settings._1 = if gears.async.io.internal.Checks.noDelay(options) then 1 else 0
     options.get(SocketOption.KeepAlive) match {
-      case null                                => settings._2 = 0
-      case KeepAlive.Off                       => settings._2 = 1
-      case KeepAlive.On(idle, interval, count) =>
+      case null                                             => settings._2 = 0
+      case SocketOption.KeepAlive.Off                       => settings._2 = 1
+      case SocketOption.KeepAlive.On(idle, interval, count) =>
         settings._2 = 2
         settings._3 = idle
         settings._4 = interval

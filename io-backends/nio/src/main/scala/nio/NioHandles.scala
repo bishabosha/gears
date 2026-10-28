@@ -394,9 +394,10 @@ object NioHandles {
       case SocketOption.NoDelay =>
         channel.setOption(StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.valueOf(value.asInstanceOf[Boolean]))
       case SocketOption.KeepAlive =>
-        value.asInstanceOf[KeepAlive] match {
-          case KeepAlive.Off => channel.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.FALSE)
-          case KeepAlive.On(idle, interval, count) =>
+        value.asInstanceOf[SocketOption.KeepAlive.Value] match {
+          case SocketOption.KeepAlive.Off =>
+            channel.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.FALSE)
+          case SocketOption.KeepAlive.On(idle, interval, count) =>
             channel.setOption(StandardSocketOptions.SO_KEEPALIVE, java.lang.Boolean.TRUE)
             channel.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE, Integer.valueOf(idle))
             channel.setOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL, Integer.valueOf(interval))
@@ -419,9 +420,9 @@ object NioHandles {
   private[nio] def optionOf(channel: java.nio.channels.NetworkChannel, option: SocketOption[?]): Any = option match {
     case SocketOption.NoDelay   => channel.getOption(StandardSocketOptions.TCP_NODELAY).booleanValue
     case SocketOption.KeepAlive =>
-      if !channel.getOption(StandardSocketOptions.SO_KEEPALIVE).booleanValue then KeepAlive.Off
+      if !channel.getOption(StandardSocketOptions.SO_KEEPALIVE).booleanValue then SocketOption.KeepAlive.Off
       else
-        KeepAlive.On(
+        SocketOption.KeepAlive.On(
           channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE).intValue,
           channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL).intValue,
           channel.getOption(jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT).intValue

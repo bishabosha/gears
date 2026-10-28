@@ -551,10 +551,14 @@ trait IpStreamContract extends ReactorContract {
       backend.ops.supports(SocketOption.KeepAlive, SocketOption.Kind.Connection),
       "this backend has no keepalive option"
     )
-    val on = KeepAlive.On(30, 5, 3)
+    val on = SocketOption.KeepAlive.On(30, 5, 3)
     withReactor { r =>
       connected(r, SocketOptions.default.set(SocketOption.KeepAlive, on), SocketOptions.default) { (client, server) =>
-        assertEquals(backend.ops.option(client, SocketOption.KeepAlive), KeepAlive.Off, "the system's, off")
+        assertEquals(
+          backend.ops.option(client, SocketOption.KeepAlive),
+          SocketOption.KeepAlive.Off,
+          "the system's, off"
+        )
         assertEquals(backend.ops.option(server, SocketOption.KeepAlive), on)
       }
       connected(r, SocketOptions.default, SocketOptions.default.set(SocketOption.KeepAlive, on)) { (client, _) =>
@@ -592,7 +596,7 @@ trait IpStreamContract extends ReactorContract {
             if readsBack then assertEquals(backend.ops.option(client, option), value, s"$option")
           }
         check(SocketOption.NoDelay, false, readsBack = true)
-        check(SocketOption.KeepAlive, KeepAlive.On(30, 5, 3), readsBack = true)
+        check(SocketOption.KeepAlive, SocketOption.KeepAlive.On(30, 5, 3), readsBack = true)
         check(SocketOption.ReceiveBuffer, 65536, readsBack = false) // a request, which the system may round or double
         check(SocketOption.SendBuffer, 65536, readsBack = false)
       }
@@ -601,7 +605,9 @@ trait IpStreamContract extends ReactorContract {
 
   test("an option's value out of range is refused as the options are made") {
     intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.ReceiveBuffer, 0))
-    intercept[IllegalArgumentException](SocketOptions.default.set(SocketOption.KeepAlive, KeepAlive.On(0, 5, 3)))
+    intercept[IllegalArgumentException](
+      SocketOptions.default.set(SocketOption.KeepAlive, SocketOption.KeepAlive.On(0, 5, 3))
+    )
   }
 
   test("ReusePort lets listeners that set it share a port, refusing one that does not; a connection takes none") {

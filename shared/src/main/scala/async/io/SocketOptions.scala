@@ -49,13 +49,25 @@ object SocketOption {
     * default, the system's. IP stream sockets only, being TCP's; given to `listen`, it applies to every connection
     * accepted.
     */
-  object KeepAlive extends SocketOption[gears.async.io.KeepAlive]("KeepAlive") {
+  object KeepAlive extends SocketOption[KeepAlive.Value]("KeepAlive") {
+
+    /** Keepalive's setting. */
+    sealed trait Value
+
+    /** No probes. */
+    case object Off extends Value
+
+    /** Probes once a connection has been idle `idleSeconds`, every `intervalSeconds` after, giving it up after `count`
+      * have gone unanswered.
+      */
+    final case class On(idleSeconds: Int, intervalSeconds: Int, count: Int) extends Value
+
     def appliesTo(kind: Kind): Boolean = kind == Connection || kind == Listener
-    override private[io] def check(value: gears.async.io.KeepAlive): Unit = value match {
-      case gears.async.io.KeepAlive.On(idle, interval, count) =>
+    override private[io] def check(value: Value): Unit = value match {
+      case On(idle, interval, count) =>
         if idle <= 0 || interval <= 0 || count <= 0 then
           throw new IllegalArgumentException(s"Keepalive's timings are positive: $value")
-      case gears.async.io.KeepAlive.Off => ()
+      case Off => ()
     }
   }
 
@@ -133,18 +145,6 @@ object SocketOption {
     */
   private[io] def onSocket(option: SocketOption[?], kind: Kind): Boolean =
     option.appliesTo(kind) && !(kind == Listener && forConnections(option))
-}
-
-/** Keepalive's setting (see `SocketOption.KeepAlive`). */
-enum KeepAlive {
-
-  /** No probes. */
-  case Off
-
-  /** Probes once a connection has been idle `idleSeconds`, every `intervalSeconds` after, giving it up after `count`
-    * have gone unanswered.
-    */
-  case On(idleSeconds: Int, intervalSeconds: Int, count: Int)
 }
 
 /** The options a socket opens with, the system's for those not set, except that a stream socket has `NoDelay` on unless

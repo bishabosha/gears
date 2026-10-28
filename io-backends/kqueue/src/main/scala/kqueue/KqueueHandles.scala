@@ -101,9 +101,10 @@ object KqueueHandles {
       val on = if value.asInstanceOf[Boolean] then 1 else 0
       PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_NODELAY, on, "TCP_NODELAY")
     case SocketOption.KeepAlive =>
-      value.asInstanceOf[KeepAlive] match {
-        case KeepAlive.Off => PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0, "SO_KEEPALIVE")
-        case KeepAlive.On(idle, interval, count) =>
+      value.asInstanceOf[SocketOption.KeepAlive.Value] match {
+        case SocketOption.KeepAlive.Off =>
+          PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0, "SO_KEEPALIVE")
+        case SocketOption.KeepAlive.On(idle, interval, count) =>
           PosixSockets.setIntOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1, "SO_KEEPALIVE")
           PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPIDLE, idle, "TCP_KEEPIDLE")
           PosixSockets.setIntOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPINTVL, interval, "TCP_KEEPINTVL")
@@ -144,9 +145,10 @@ object KqueueHandles {
     case SocketOption.NoDelay =>
       PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_NODELAY, "TCP_NODELAY") != 0
     case SocketOption.KeepAlive =>
-      if PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, "SO_KEEPALIVE") == 0 then KeepAlive.Off
+      if PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_KEEPALIVE, "SO_KEEPALIVE") == 0 then
+        SocketOption.KeepAlive.Off
       else
-        KeepAlive.On(
+        SocketOption.KeepAlive.On(
           PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPIDLE, "TCP_KEEPIDLE"),
           PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPINTVL, "TCP_KEEPINTVL"),
           PosixSockets.intOption(fd, PosixSockets.IPPROTO_TCP, PosixSockets.TCP_KEEPCNT, "TCP_KEEPCNT")

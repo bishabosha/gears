@@ -204,7 +204,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
         case SocketOption.NoDelay   => gears.async.io.internal.Checks.noDelay(h.opened).asInstanceOf[V]
         case SocketOption.KeepAlive =>
           val set = h.opened.get(SocketOption.KeepAlive)
-          (if set == null then KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
+          (if set == null then SocketOption.KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
         case SocketOption.DontFragment => (h.opened.get(SocketOption.DontFragment) == true).asInstanceOf[V]
         case _                         => throw gears.async.io.internal.Checks.noOption(option, kind)
       }
