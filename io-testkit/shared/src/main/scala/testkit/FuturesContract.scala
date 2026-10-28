@@ -607,7 +607,7 @@ trait FuturesContract extends ProgramSuite {
         waiting.awaitResult.failed.toOption.orNull
       } finally io.perform(io.backend.ops.close(out))
     }
-    assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+    assert(failure.isInstanceOf[java.nio.channels.ClosedChannelException], String.valueOf(failure))
   }
 
   test("a connection refused after waiting for it fails perform") {

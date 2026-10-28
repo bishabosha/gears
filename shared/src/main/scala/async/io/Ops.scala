@@ -147,14 +147,16 @@ trait Ops[Op, H <: AnyRef] {
   def read(handle: Readable, pool: BufferPool, into: Slot[Received]): Op & Repeatable
 
   /** Closes `handle`, completing once it is closed. The ops under way on it, from whichever future, have failed with an
-    * `IOException` (a closed channel's) before this completes, a `perform` waiting on one throwing it, as the JDK fails
-    * a thread blocked on a channel that is closed: on a reactor, an op pending on the handle on the reactor the close
-    * runs on has had its completion told the failure first; one pending on another reactor can no longer succeed by
-    * then, and is told on that reactor's next turn, since reactors turn independently. Its number is then free for
-    * reuse, and a listener's port for listening on again. A Unix socket path that a listener or datagram socket bound
-    * is removed with it, if the file there is still its own, not one a later listener bound in its place: checked, then
-    * removed, as no system call removes a file only if it is a given one, so a listener binding the path between the
-    * two, a few microseconds, loses its file. Fails if `handle` is not open.
+    * `IOException`, a closed channel's (`java.nio.channels.ClosedChannelException` on the JVM and Scala Native, naming
+    * the handle), before this completes, a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a
+    * channel that is closed: on a reactor, an op pending on the handle on the reactor the close runs on has had its
+    * completion told the failure first; one pending on another reactor can no longer succeed by then, and is told on
+    * that reactor's next turn, since reactors turn independently. Its number is then free for reuse, and a listener's
+    * port for listening on again. A Unix socket path that a listener or datagram socket bound is removed with it, if
+    * the file there is still its own, not one a later listener bound in its place: checked, then removed, as no system
+    * call removes a file only if it is a given one, so a listener binding the path between the two, a few microseconds,
+    * loses its file. Fails if `handle` is not open, with the failure an op submitted on a closed handle has: a closed
+    * channel's, as above.
     */
   def close(handle: H): Op
 }

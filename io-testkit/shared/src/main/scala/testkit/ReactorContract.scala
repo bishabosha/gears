@@ -8,6 +8,7 @@ import gears.async.io.internal.ReactorBackend
 
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.nio.channels.ClosedChannelException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -301,13 +302,13 @@ trait ReactorContract extends FunSuite {
       close(r, in)
       close(r, out)
       val again = run(r, backend.ops.close(out))
-      assert(again.isInstanceOf[IOException], s"closing it again: $again")
+      assert(again.isInstanceOf[ClosedChannelException], s"closing it again: $again")
       val (in2, out2) = pipe(r) // on kqueue, most likely the same two descriptor numbers
       try {
         val early = run(r, built)
-        assert(early.isInstanceOf[IOException], s"an op built before the close: $early")
+        assert(early.isInstanceOf[ClosedChannelException], s"an op built before the close: $early")
         val late = run(r, backend.ops.write(out, bytes("stale")))
-        assert(late.isInstanceOf[IOException], s"an op built after the close: $late")
+        assert(late.isInstanceOf[ClosedChannelException], s"an op built after the close: $late")
         assertEquals(run(r, backend.ops.write(out2, bytes("new"))), null)
         val buf = allocate(16)
         assertEquals(run(r, backend.ops.read(in2, buf)), null)
@@ -738,7 +739,7 @@ trait ReactorContract extends FunSuite {
         r.runOnce(block = false) // the read is registered, and waiting
         closeAlone(in)
         turnUntil(r)(outcome.finished)
-        assert(outcome.failure.isInstanceOf[IOException], String.valueOf(outcome.failure))
+        assert(outcome.failure.isInstanceOf[ClosedChannelException], String.valueOf(outcome.failure))
         assertEquals(outcome.completed, 0)
       }
     finally closeAlone(out)
@@ -773,7 +774,7 @@ trait ReactorContract extends FunSuite {
       Thread.sleep(20) // so that the other reactor is blocked again
       closeAlone(in)
       assert(failed.await(5, java.util.concurrent.TimeUnit.SECONDS), "the pending read was not ended by the close")
-      assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+      assert(failure.isInstanceOf[ClosedChannelException], String.valueOf(failure))
     } finally {
       val b = other
       if b != null then {
@@ -865,7 +866,7 @@ trait ReactorContract extends FunSuite {
       val outcome = Outcome()
       r.submit(backend.ops.read(in, allocate(16)), outcome)
       turnUntil(r)(outcome.finished)
-      assert(outcome.failure.isInstanceOf[IOException], String.valueOf(outcome.failure))
+      assert(outcome.failure.isInstanceOf[ClosedChannelException], String.valueOf(outcome.failure))
     }
   }
 
@@ -1031,7 +1032,8 @@ trait ReactorContract extends FunSuite {
         val order = scala.collection.mutable.ArrayBuffer.empty[String]
         val read = new Completion[backend.Op] {
           def onComplete(op: backend.Op): Unit = order += "read completed"
-          override def onFailure(op: backend.Op, t: Throwable): Unit = order += "read failed"
+          override def onFailure(op: backend.Op, t: Throwable): Unit =
+            order += (if t.isInstanceOf[ClosedChannelException] then "read failed" else s"read failed with $t")
         }
         a.submit(backend.ops.read(in, allocate(16)), read)
         a.runOnce(block = false)
@@ -1140,11 +1142,11 @@ trait ReactorContract extends FunSuite {
       r.submit(backend.ops.close(in), closed)
       turnUntil(r)(closed.finished && read.finished)
       assertEquals(closed.completed, 1, String.valueOf(closed.failure))
-      assert(read.failure.isInstanceOf[IOException], String.valueOf(read.failure))
+      assert(read.failure.isInstanceOf[ClosedChannelException], String.valueOf(read.failure))
       val again = Outcome()
       r.submit(backend.ops.close(in), again)
       turnUntil(r)(again.finished)
-      assert(again.failure.isInstanceOf[IOException], "closing a closed handle fails")
+      assert(again.failure.isInstanceOf[ClosedChannelException], s"closing a closed handle fails: ${again.failure}")
       val outClosed = Outcome()
       r.submit(backend.ops.close(out), outClosed)
       turnUntil(r)(outClosed.finished)

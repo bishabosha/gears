@@ -414,7 +414,7 @@ final class KqueueReactor private (
     }
 
   private def failClosedCommand(command: KqueueOp, fd: Int, now: Boolean): Unit = {
-    val failure = new IOException(s"Descriptor $fd was closed")
+    val failure = gears.async.io.internal.HandleClosedException.pending(s"Descriptor $fd")
     if now then fail(command, failure)
     else {
       command.atOnceFailure = failure

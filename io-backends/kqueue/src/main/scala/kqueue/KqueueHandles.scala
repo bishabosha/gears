@@ -371,7 +371,8 @@ object KqueueHandles {
     finally handle.release()
   }
 
-  private[kqueue] def notOpen(handle: Handle): IOException = new IOException(s"Not an open handle: $handle")
+  private[kqueue] def notOpen(handle: Handle): IOException =
+    gears.async.io.internal.HandleClosedException.notOpen(handle)
 
   /** The address `handle`'s socket is bound to, or with `peer` its peer's, as the system has it (`getsockname`,
     * `getpeername`): an IPv4 peer of a dual-stack socket as IPv4, as `decode` gives it.

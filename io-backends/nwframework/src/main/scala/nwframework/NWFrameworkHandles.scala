@@ -123,7 +123,7 @@ private[nwframework] final class NWFrameworkHandle(
   private var connectToken = 0L
   private var watcher: KqueueReactor | Null = null
 
-  private def closedFailure = new IOException("The handle was closed")
+  private def closedFailure = gears.async.io.internal.HandleClosedException.pending(this)
   private def failure(what: String, errno: Int) =
     new IOException(s"$what failed: ${NWFrameworkHandles.errorText(if errno != 0 then errno else 5)}")
 
@@ -776,7 +776,7 @@ private[nwframework] object NWFrameworkHandles {
 
   /** The handle's object, or an `IOException` if it is not open. */
   def get(handle: Handle): NWFrameworkHandle = {
-    if !handle.isOpen then throw new IOException(s"Not an open handle: $handle")
+    if !handle.isOpen then throw gears.async.io.internal.HandleClosedException.notOpen(handle)
     handle.foreign.asInstanceOf[NWFrameworkHandle]
   }
 
@@ -860,7 +860,7 @@ private[nwframework] object NWFrameworkHandles {
     */
   def remove(handle: Handle): NWFrameworkHandle = {
     if handle.close(() => ()) == gears.async.io.kqueue.KqueueBackend.Handle.AlreadyClosed then
-      throw new IOException(s"Not an open handle: $handle")
+      throw gears.async.io.internal.HandleClosedException.notOpen(handle)
     val target = handle.foreign.asInstanceOf[NWFrameworkHandle]
     table.remove(target.number)
   }

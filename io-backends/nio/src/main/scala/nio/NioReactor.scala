@@ -283,11 +283,11 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         waiting.write = null
         if read != null then {
           any = true
-          fail(read, new java.nio.channels.ClosedChannelException())
+          fail(read, gears.async.io.internal.HandleClosedException.pending(read.handle))
         }
         if write != null then {
           any = true
-          fail(write, new java.nio.channels.ClosedChannelException())
+          fail(write, gears.async.io.internal.HandleClosedException.pending(write.handle))
         }
       }
       entry = closedQueue.poll()

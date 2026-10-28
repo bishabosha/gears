@@ -98,7 +98,9 @@ Each is stated on the interface where it applies, and checked by the contract su
   (`Ops`).
 - **Options** are given as a socket opens, `NoDelay` on unless set off; what a backend supports, for each kind of
   socket, is asked of it when the program runs (`SocketOptionOps`).
-- **Closing** fails the ops waiting on the handle, completes at once, and frees the port or path (`Ops.close`).
+- **Closing** fails the ops waiting on the handle, completes at once, and frees the port or path (`Ops.close`). The
+  ops it ends, and any op submitted on the handle after, a second close too, fail with a closed channel's failure,
+  `ClosedChannelException` naming the handle, on every backend.
 
 Left to a higher level, on purpose: ops, `perform` and slots are mutable records the caller owns and reuses, the
 lowest level there is. A result-returning or streaming API wraps that; the interface makes sure it can be written once

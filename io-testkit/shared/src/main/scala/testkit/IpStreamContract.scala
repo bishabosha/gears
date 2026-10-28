@@ -415,9 +415,9 @@ trait IpStreamContract extends ReactorContract {
       r.runOnce(block = false)
       close(r, listener)
       turnUntil(r)(waiting.finished)
-      assert(waiting.failure.isInstanceOf[IOException], String.valueOf(waiting.failure))
+      assert(waiting.failure.isInstanceOf[java.nio.channels.ClosedChannelException], String.valueOf(waiting.failure))
       val after = run(r, backend.ops.accept(listener, Slot[Connection]()))
-      assert(after.isInstanceOf[IOException], String.valueOf(after))
+      assert(after.isInstanceOf[java.nio.channels.ClosedChannelException], String.valueOf(after))
     }
   }
 

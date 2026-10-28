@@ -289,7 +289,7 @@ object NioHandles {
 
   /** What `handle` names; throws if it is not open. */
   private[nio] def entry(handle: Handle): Entry = {
-    if !handle.isOpen then throw new IOException(s"Not an open handle: $handle")
+    if !handle.isOpen then throw gears.async.io.internal.HandleClosedException.notOpen(handle)
     handle.entry
   }
 
@@ -490,7 +490,7 @@ object NioHandles {
   }
 
   def close(handle: Handle): Unit = {
-    if !handle.markClosed() then throw new IOException(s"Not an open handle: $handle")
+    if !handle.markClosed() then throw gears.async.io.internal.HandleClosedException.notOpen(handle)
     handle.entry.close()
   }
 
