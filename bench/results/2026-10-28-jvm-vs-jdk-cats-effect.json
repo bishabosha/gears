@@ -1,0 +1,606 @@
+{
+  "started": "2026-10-28T09:37:05+01:00",
+  "finished": "2026-10-28T10:17:12+01:00",
+  "load_average": {
+    "before": [
+      3.37,
+      13.18,
+      12.99
+    ],
+    "after": [
+      2.63,
+      3.19,
+      3.82
+    ]
+  },
+  "runs": 5,
+  "bench_args": [
+    "--scenarios",
+    "pingpong,pingpong-deadline,concurrent,connections,pipelined,blocking,blocking-io,timers,fairness,starvation,mixed"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "nio-caller",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-fix/nio-caller",
+      "benchmark": "gears",
+      "build": {
+        "commit": "2cc5934484fba392a698d52c09853c9d93c8f682",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dgears.io.nio.backend=caller",
+        "built": "2026-10-28T09:36:00+01:00"
+      },
+      "median": {
+        "concurrent": 8.25,
+        "pipelined": 2.26,
+        "fairness": 2.44,
+        "starvation-p99": 1094.46,
+        "starvation-max": 2287.96,
+        "pingpong": 6.82,
+        "blocking-io": 7.12,
+        "mixed-compute": 39.04,
+        "blocking": 0.14,
+        "mixed": 7.76,
+        "pingpong-deadline": 6.89,
+        "timers": 1.19,
+        "fairness-tick": 1.21,
+        "starvation": 8.28,
+        "connections": 127.16,
+        "starvation-p50": 200.33
+      },
+      "samples": {
+        "concurrent": [
+          8.3,
+          8.25,
+          8.4,
+          8.08,
+          8.07
+        ],
+        "pipelined": [
+          2.74,
+          2.23,
+          2.26,
+          2.24,
+          2.74
+        ],
+        "fairness": [
+          2.81,
+          2.43,
+          2.37,
+          2.87,
+          2.44
+        ],
+        "starvation-p99": [
+          974.96,
+          2035.88,
+          1040.17,
+          1094.46,
+          2018.5
+        ],
+        "starvation-max": [
+          1316.17,
+          11594.58,
+          2287.96,
+          2132.46,
+          3215.38
+        ],
+        "pingpong": [
+          7.01,
+          6.83,
+          6.78,
+          6.76,
+          6.82
+        ],
+        "blocking-io": [
+          7.06,
+          7.12,
+          7.06,
+          7.19,
+          7.32
+        ],
+        "mixed-compute": [
+          38.36,
+          39.04,
+          39.11,
+          36.38,
+          39.64
+        ],
+        "blocking": [
+          0.14,
+          0.14,
+          0.14,
+          0.15,
+          0.15
+        ],
+        "mixed": [
+          7.65,
+          7.9,
+          7.82,
+          7.25,
+          7.76
+        ],
+        "pingpong-deadline": [
+          6.9,
+          6.89,
+          6.79,
+          6.71,
+          6.94
+        ],
+        "timers": [
+          1.18,
+          1.23,
+          1.15,
+          1.19,
+          1.2
+        ],
+        "fairness-tick": [
+          1.22,
+          1.2,
+          1.23,
+          1.14,
+          1.21
+        ],
+        "starvation": [
+          8.28,
+          8.41,
+          8.51,
+          8.18,
+          8.13
+        ],
+        "connections": [
+          128.14,
+          126.71,
+          127.16,
+          127.29,
+          125.83
+        ],
+        "starvation-p50": [
+          193.08,
+          200.33,
+          202.92,
+          166,
+          207
+        ]
+      }
+    },
+    {
+      "label": "nio-reactors",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-fix/nio-reactors",
+      "benchmark": "gears",
+      "build": {
+        "commit": "2cc5934484fba392a698d52c09853c9d93c8f682",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/jdk.internal.vm=ALL-UNNAMED -Dgears.io.nio.backend=reactors",
+        "built": "2026-10-28T09:36:00+01:00"
+      },
+      "median": {
+        "concurrent": 2.04,
+        "pipelined": 0.52,
+        "fairness": 1.36,
+        "starvation-p99": 317.58,
+        "starvation-max": 935.13,
+        "pingpong": 7.18,
+        "blocking-io": 14.96,
+        "mixed-compute": 34.63,
+        "blocking": 5.98,
+        "mixed": 17.34,
+        "pingpong-deadline": 7.29,
+        "timers": 1.69,
+        "fairness-tick": 2.71,
+        "starvation": 4.9,
+        "connections": 84.02,
+        "starvation-p50": 79.21
+      },
+      "samples": {
+        "concurrent": [
+          2.1,
+          2.04,
+          2.02,
+          2.05,
+          1.99
+        ],
+        "pipelined": [
+          0.52,
+          0.53,
+          0.52,
+          0.52,
+          0.5
+        ],
+        "fairness": [
+          1.36,
+          1.33,
+          1.35,
+          1.37,
+          1.36
+        ],
+        "starvation-p99": [
+          354.04,
+          458.88,
+          317.58,
+          286.75,
+          250.25
+        ],
+        "starvation-max": [
+          806.25,
+          1050.67,
+          796,
+          1006.83,
+          935.13
+        ],
+        "pingpong": [
+          7.18,
+          7.14,
+          6.96,
+          7.21,
+          7.79
+        ],
+        "blocking-io": [
+          15.01,
+          14.87,
+          14.78,
+          14.96,
+          15.28
+        ],
+        "mixed-compute": [
+          34.22,
+          34.23,
+          34.82,
+          34.63,
+          35.06
+        ],
+        "blocking": [
+          5.98,
+          5.97,
+          6.1,
+          6.33,
+          5.9
+        ],
+        "mixed": [
+          17.13,
+          17.13,
+          17.43,
+          17.34,
+          17.55
+        ],
+        "pingpong-deadline": [
+          7.24,
+          7.29,
+          7.11,
+          7.32,
+          7.52
+        ],
+        "timers": [
+          1.69,
+          1.67,
+          1.71,
+          1.72,
+          1.67
+        ],
+        "fairness-tick": [
+          2.71,
+          2.66,
+          2.7,
+          2.74,
+          2.71
+        ],
+        "starvation": [
+          4.5,
+          4.9,
+          4.78,
+          4.97,
+          5.02
+        ],
+        "connections": [
+          83.94,
+          84.02,
+          84.35,
+          84.13,
+          83.03
+        ],
+        "starvation-p50": [
+          79.33,
+          74.96,
+          79.21,
+          80.83,
+          73.21
+        ]
+      }
+    },
+    {
+      "label": "jdk-vthreads",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-fix/jdk-vthreads",
+      "benchmark": "gears",
+      "build": {
+        "commit": "2cc5934484fba392a698d52c09853c9d93c8f682",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "jdk-bench",
+        "java_options": "--enable-preview",
+        "built": "2026-10-28T09:36:00+01:00"
+      },
+      "median": {
+        "concurrent": 11.56,
+        "pipelined": 0.97,
+        "fairness": 1.85,
+        "starvation-p99": 409.29,
+        "starvation-max": 761.29,
+        "pingpong": 8.85,
+        "blocking-io": 14.71,
+        "mixed-compute": 29.91,
+        "blocking": 5.11,
+        "mixed": 10.63,
+        "pingpong-deadline": 11.74,
+        "timers": 0.29,
+        "fairness-tick": 9.84,
+        "starvation": 12.37,
+        "connections": 39.44,
+        "starvation-p50": 197.21
+      },
+      "samples": {
+        "concurrent": [
+          11.75,
+          11.56,
+          11.58,
+          11.5,
+          11.53
+        ],
+        "pipelined": [
+          0.97,
+          1.33,
+          0.97,
+          1.14,
+          0.94
+        ],
+        "fairness": [
+          1.69,
+          1.94,
+          1.65,
+          1.85,
+          1.87
+        ],
+        "starvation-p99": [
+          409.29,
+          409.58,
+          402.67,
+          410.17,
+          407.79
+        ],
+        "starvation-max": [
+          17638.79,
+          2641.13,
+          671.71,
+          473.42,
+          761.29
+        ],
+        "pingpong": [
+          8.88,
+          8.76,
+          8.85,
+          8.77,
+          8.89
+        ],
+        "blocking-io": [
+          14.71,
+          15.24,
+          14.65,
+          14.68,
+          14.83
+        ],
+        "mixed-compute": [
+          31.32,
+          29.8,
+          30.03,
+          29.89,
+          29.91
+        ],
+        "blocking": [
+          5.12,
+          5.1,
+          5.04,
+          5.11,
+          5.16
+        ],
+        "mixed": [
+          9.68,
+          10.7,
+          10.63,
+          10.55,
+          10.63
+        ],
+        "pingpong-deadline": [
+          12.15,
+          11.74,
+          11.63,
+          11.7,
+          11.94
+        ],
+        "timers": [
+          0.28,
+          0.29,
+          0.29,
+          0.28,
+          0.3
+        ],
+        "fairness-tick": [
+          9.84,
+          10.18,
+          9.53,
+          9.75,
+          10.33
+        ],
+        "starvation": [
+          12.14,
+          12.39,
+          12.37,
+          12.64,
+          11.98
+        ],
+        "connections": [
+          39.65,
+          39,
+          39.21,
+          39.44,
+          39.55
+        ],
+        "starvation-p50": [
+          175.58,
+          214.25,
+          197.21,
+          226.88,
+          164.5
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/jvm-fix/cats-effect@raw",
+      "benchmark": "raw",
+      "build": {
+        "commit": "2cc5934484fba392a698d52c09853c9d93c8f682",
+        "dirty": "false",
+        "jdk": "openjdk version \"27\" 2026-09-15",
+        "command": "bench",
+        "java_options": "",
+        "built": "2026-10-28T09:36:00+01:00"
+      },
+      "median": {
+        "concurrent": 15.42,
+        "pipelined": 26.27,
+        "fairness": 22.8,
+        "starvation-p99": 1385.21,
+        "starvation-max": 4082.38,
+        "pingpong": 72.18,
+        "blocking-io": 76.11,
+        "mixed-compute": 19.04,
+        "blocking": 0.06,
+        "mixed": 2322.6,
+        "pingpong-deadline": 75.15,
+        "timers": 0.63,
+        "fairness-tick": 0.2,
+        "starvation": 2304.44,
+        "connections": 492.25,
+        "starvation-p50": 1296.63
+      },
+      "samples": {
+        "concurrent": [
+          16.14,
+          15.82,
+          15.42,
+          14.89,
+          12.78
+        ],
+        "pipelined": [
+          26.27,
+          26.41,
+          26.2,
+          26.3,
+          25.93
+        ],
+        "fairness": [
+          24.53,
+          22.46,
+          22.39,
+          23.82,
+          22.8
+        ],
+        "starvation-p99": [
+          1384.33,
+          1385.21,
+          1387.63,
+          1372.58,
+          1389.58
+        ],
+        "starvation-max": [
+          4082.38,
+          5202.88,
+          3707.63,
+          3984.5,
+          4152.96
+        ],
+        "pingpong": [
+          71.52,
+          72.23,
+          72.18,
+          73.14,
+          66.1
+        ],
+        "blocking-io": [
+          75.72,
+          76.13,
+          76.11,
+          76.31,
+          70.79
+        ],
+        "mixed-compute": [
+          19.03,
+          19.04,
+          19.04,
+          19.03,
+          19.05
+        ],
+        "blocking": [
+          0.06,
+          0.06,
+          0.06,
+          0.06,
+          0.06
+        ],
+        "mixed": [
+          2321.61,
+          2322.6,
+          2322.64,
+          2321.72,
+          2324.14
+        ],
+        "pingpong-deadline": [
+          74.56,
+          75.15,
+          75.54,
+          75.97,
+          69.63
+        ],
+        "timers": [
+          0.63,
+          0.65,
+          0.73,
+          0.57,
+          0.57
+        ],
+        "fairness-tick": [
+          0.22,
+          0.19,
+          0.19,
+          0.21,
+          0.2
+        ],
+        "starvation": [
+          2303.17,
+          2304.44,
+          2304.55,
+          2303.18,
+          2306.01
+        ],
+        "connections": [
+          487.87,
+          492.25,
+          493.56,
+          493.42,
+          220.85
+        ],
+        "starvation-p50": [
+          1295.38,
+          1296.63,
+          1296.46,
+          1296.63,
+          1298.29
+        ]
+      }
+    }
+  ],
+  "failed_runs": [],
+  "incomplete": []
+}

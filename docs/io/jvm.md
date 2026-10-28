@@ -127,8 +127,25 @@ computation), since the reply is usually caught by a retry on the caller's own t
 `NioOnCaller` every waiting future makes its own system calls. On macOS those contend for the per-process descriptor
 lock (see [kqueue.md](kqueue.md)); Linux has no such lock, and is where the gap is still to be measured.
 
-Against the JDK's blocking channels and cats-effect (Unix sockets, then TCP; measured before the hand-off ladder below
-was cut, which left latency and `mixed` unchanged and cost `concurrent` a fifth; `jvm-nio-jdk-tuned*.json`):
+Against the JDK's blocking channels and cats-effect, rerun on the branch as proposed, over Unix sockets (median of 5;
+starvation's lateness in µs; `bench/results/2026-10-28-jvm-vs-jdk-cats-effect.json`):
+
+| scenario | `NioOnCaller` | `NioBackend` | JDK blocking channels | cats-effect |
+| --- | --- | --- | --- | --- |
+| pingpong | 6.82 | 7.18 | 8.85 | 72.2 |
+| pingpong-deadline | 6.89 | 7.29 | 11.74 | 75.2 |
+| concurrent | 8.25 | 2.04 | 11.56 | 15.4 |
+| connections | 127 | 84.0 | 39.4 | 492 |
+| pipelined | 2.26 | 0.52 | 0.97 | 26.3 |
+| blocking-io | 7.12 | 15.0 | 14.7 | 76.1 |
+| timers | 1.19 | 1.69 | 0.29 | 0.63 |
+| fairness (tick) | 2.44 (1.21) | 1.36 (2.71) | 1.85 (9.84) | 22.8 (0.20) |
+| mixed (compute) | 7.76 (39.0) | 17.3 (34.6) | 10.6 (29.9) | 2323 (19.0) |
+| starvation p50 / p99 / max | 200 / 1094 / 2288 | 79 / 318 / 935 | 197 / 409 / 761 | 1297 / 1385 / 4082 |
+
+`NioOnCaller`'s `mixed` compute is its yield's trip through the timer ("How `NioOnCaller` yields", below). The
+earlier comparison, with TCP too (measured before the hand-off ladder below was cut, which left latency and `mixed`
+unchanged and cost `concurrent` a fifth; `jvm-nio-jdk-tuned*.json`):
 
 | scenario | `NioOnCaller` | `NioBackend` | JDK blocking channels | cats-effect, TCP | `NioOnCaller`, TCP | `NioBackend`, TCP |
 | --- | --- | --- | --- | --- | --- | --- |

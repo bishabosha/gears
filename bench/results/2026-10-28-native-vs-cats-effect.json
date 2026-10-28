@@ -1,0 +1,474 @@
+{
+  "started": "2026-10-28T03:49:58+01:00",
+  "finished": "2026-10-28T03:56:57+01:00",
+  "load_average": {
+    "before": [
+      5.33,
+      10.1,
+      10.68
+    ],
+    "after": [
+      3.52,
+      5.5,
+      8.15
+    ]
+  },
+  "runs": 5,
+  "bench_args": [],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "gears",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/gears",
+      "benchmark": "gears",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "bdf8bc71c6cbc17db3b6365d00d0e6e9e2553ed9",
+        "subject": "Network.framework backend left for a pull request of its own: io-backends/nwframework, its probes in bench/ and docs/io/nwframework.md removed, with its project, CI step, demo backends and suites; the docs link to its account at the fork's tag async-io-full-2026-10-28. kqueue keeps what a backend built on its reactors uses (Notified ops, ReactorExtension, foreign handles)",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-28T03:44:56+01:00"
+      },
+      "median": {
+        "concurrent": 2.16,
+        "pipelined": 0.74,
+        "fairness": 1.66,
+        "rearm-cancel": 61.94,
+        "starvation-p99": 459.04,
+        "pingpong": 7.4,
+        "blocking-io": 14.22,
+        "mixed-compute": 31,
+        "rearm-earlier": 0,
+        "concurrent-compute": 6.68,
+        "large-pooled": 93.57,
+        "pingpong-fresh-ops": 7.46,
+        "rearm-later": 0,
+        "pingpong-pooled": 7.47,
+        "starvation-max": 683.13,
+        "mixed": 15.51,
+        "pingpong-deadline": 7.46,
+        "timers": 19.5,
+        "large": 94.43,
+        "blocking": 5.68,
+        "fairness-tick": 3.32,
+        "concurrent-offload": 7.59,
+        "starvation": 4.38,
+        "connections": 30.24,
+        "starvation-p50": 78.63
+      },
+      "samples": {
+        "concurrent": [
+          2.16,
+          2.16,
+          2.17,
+          2.12,
+          2.18
+        ],
+        "pipelined": [
+          0.8,
+          0.74,
+          0.74,
+          0.73,
+          0.75
+        ],
+        "fairness": [
+          1.88,
+          1.7,
+          1.66,
+          1.65,
+          1.63
+        ],
+        "rearm-cancel": [
+          63.1,
+          61.94,
+          61.87,
+          61.07,
+          62.04
+        ],
+        "starvation-p99": [
+          468.04,
+          459.04,
+          457,
+          343.25,
+          473.88
+        ],
+        "pingpong": [
+          7.98,
+          7.45,
+          7.35,
+          7.34,
+          7.4
+        ],
+        "blocking-io": [
+          14.34,
+          14.22,
+          14.1,
+          13.62,
+          14.42
+        ],
+        "mixed-compute": [
+          31,
+          31.09,
+          30.92,
+          30.9,
+          31.01
+        ],
+        "rearm-earlier": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "concurrent-compute": [
+          6.86,
+          6.62,
+          6.81,
+          6.56,
+          6.68
+        ],
+        "large-pooled": [
+          93.57,
+          97.7,
+          93.92,
+          92.59,
+          92.73
+        ],
+        "pingpong-fresh-ops": [
+          8.13,
+          7.46,
+          7.39,
+          7.33,
+          7.7
+        ],
+        "rearm-later": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pingpong-pooled": [
+          7.65,
+          7.47,
+          7.5,
+          7.29,
+          7.41
+        ],
+        "starvation-max": [
+          607.92,
+          683.13,
+          871.54,
+          470.83,
+          767.42
+        ],
+        "mixed": [
+          15.51,
+          15.56,
+          15.48,
+          15.47,
+          15.53
+        ],
+        "pingpong-deadline": [
+          7.53,
+          7.52,
+          7.46,
+          7.31,
+          7.44
+        ],
+        "timers": [
+          19.52,
+          19.5,
+          19.57,
+          19.28,
+          19.47
+        ],
+        "large": [
+          94.39,
+          94.43,
+          92.58,
+          99.49,
+          95.28
+        ],
+        "blocking": [
+          5.91,
+          5.68,
+          5.83,
+          5.59,
+          5.67
+        ],
+        "fairness-tick": [
+          3.75,
+          3.39,
+          3.32,
+          3.3,
+          3.26
+        ],
+        "concurrent-offload": [
+          7.99,
+          7.66,
+          7.58,
+          7.42,
+          7.59
+        ],
+        "starvation": [
+          4.38,
+          4.47,
+          4.4,
+          4.26,
+          4.34
+        ],
+        "connections": [
+          28.79,
+          30.37,
+          30.18,
+          30.41,
+          30.24
+        ],
+        "starvation-p50": [
+          97.04,
+          89.29,
+          78.63,
+          69.71,
+          74.04
+        ]
+      }
+    },
+    {
+      "label": "raw",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/gears@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "bdf8bc71c6cbc17db3b6365d00d0e6e9e2553ed9",
+        "subject": "Network.framework backend left for a pull request of its own: io-backends/nwframework, its probes in bench/ and docs/io/nwframework.md removed, with its project, CI step, demo backends and suites; the docs link to its account at the fork's tag async-io-full-2026-10-28. kqueue keeps what a backend built on its reactors uses (Notified ops, ReactorExtension, foreign handles)",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-28T03:44:56+01:00"
+      },
+      "median": {
+        "concurrent": 1.19,
+        "pipelined": 0.52,
+        "pingpong": 4.39,
+        "blocking-io": 10.62,
+        "blocking": 3.39,
+        "connections": 20.28,
+        "pingpong-deadline": 5.39,
+        "timers": 0.6
+      },
+      "samples": {
+        "concurrent": [
+          1.19,
+          1.12,
+          1.43,
+          1.15,
+          1.3
+        ],
+        "pipelined": [
+          0.49,
+          0.52,
+          0.52,
+          0.52,
+          0.51
+        ],
+        "pingpong": [
+          4.39,
+          4.35,
+          4.39,
+          4.29,
+          4.39
+        ],
+        "blocking-io": [
+          10.62,
+          11.05,
+          10.81,
+          10.45,
+          10.61
+        ],
+        "blocking": [
+          3.38,
+          3.5,
+          3.39,
+          3.24,
+          3.42
+        ],
+        "connections": [
+          19.99,
+          20.49,
+          20.28,
+          20.61,
+          19.81
+        ],
+        "pingpong-deadline": [
+          5.44,
+          5.39,
+          5.65,
+          5.26,
+          5.39
+        ],
+        "timers": [
+          0.6,
+          0.61,
+          0.62,
+          0.6,
+          0.6
+        ]
+      }
+    },
+    {
+      "label": "cats-effect",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/ce@raw",
+      "benchmark": "raw",
+      "build": {
+        "project": "ceBench",
+        "commit": "bdf8bc71c6cbc17db3b6365d00d0e6e9e2553ed9",
+        "subject": "Network.framework backend left for a pull request of its own: io-backends/nwframework, its probes in bench/ and docs/io/nwframework.md removed, with its project, CI step, demo backends and suites; the docs link to its account at the fork's tag async-io-full-2026-10-28. kqueue keeps what a backend built on its reactors uses (Notified ops, ReactorExtension, foreign handles)",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-28T03:45:28+01:00"
+      },
+      "median": {
+        "concurrent": 10.19,
+        "pipelined": 2.16,
+        "fairness": 2.3,
+        "starvation-p99": 3256.67,
+        "starvation-max": 3687.58,
+        "pingpong": 23.42,
+        "blocking-io": 22.17,
+        "mixed-compute": 19.31,
+        "blocking": 0.07,
+        "mixed": 1176.91,
+        "pingpong-deadline": 27.03,
+        "timers": 1.01,
+        "fairness-tick": 3.47,
+        "starvation": 13.57,
+        "connections": 156.13,
+        "starvation-p50": 885.42
+      },
+      "samples": {
+        "concurrent": [
+          10.57,
+          10.22,
+          10.19,
+          9.9,
+          10.07
+        ],
+        "pipelined": [
+          2.16,
+          2.16,
+          2.16,
+          2.16,
+          2.14
+        ],
+        "fairness": [
+          2.36,
+          2.3,
+          2.3,
+          2.26,
+          2.31
+        ],
+        "starvation-p99": [
+          3359.42,
+          3254.54,
+          3383.29,
+          3057.5,
+          3256.67
+        ],
+        "starvation-max": [
+          3951.83,
+          3687.58,
+          3555.54,
+          3534.75,
+          3828.75
+        ],
+        "pingpong": [
+          24.07,
+          23.42,
+          23.44,
+          22.55,
+          23.29
+        ],
+        "blocking-io": [
+          22.93,
+          23.61,
+          21.81,
+          22.17,
+          21.69
+        ],
+        "mixed-compute": [
+          19.41,
+          19.31,
+          19.33,
+          19.28,
+          19.25
+        ],
+        "blocking": [
+          0.07,
+          0.07,
+          0.07,
+          0.07,
+          0.07
+        ],
+        "mixed": [
+          1184.43,
+          1176.91,
+          1178.12,
+          1175.28,
+          1173.42
+        ],
+        "pingpong-deadline": [
+          26.89,
+          27.03,
+          27.09,
+          26.64,
+          27.24
+        ],
+        "timers": [
+          1.03,
+          1.02,
+          1.01,
+          1,
+          1.01
+        ],
+        "fairness-tick": [
+          3.48,
+          3.44,
+          3.54,
+          3.35,
+          3.47
+        ],
+        "starvation": [
+          14.01,
+          13.72,
+          13.57,
+          13.29,
+          13.49
+        ],
+        "connections": [
+          156.13,
+          156.3,
+          156.21,
+          150.73,
+          156.03
+        ],
+        "starvation-p50": [
+          948.13,
+          904.83,
+          885.42,
+          877.21,
+          883.67
+        ]
+      }
+    }
+  ],
+  "failed_runs": []
+}

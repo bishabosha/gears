@@ -209,20 +209,22 @@ small; the rest is the runtime's cost per allocation and per thread-local access
 `bench/ce-bench` writes the same scenarios with cats-effect 3.7.1 and fs2-io 3.14.0, whose Scala Native runtime has the
 design of gears' pool: workers that take tasks from one another, each polling its own kqueue. Same message size, counts
 and result lines; the echo server and the clients each run on a runtime of their own. One worker, conditional
-yieldpoints (`bench/results/vs-cats-effect.json`):
+yieldpoints, rerun on the branch as proposed (`bench/results/2026-10-28-native-vs-cats-effect.json`; the first run,
+before the affine default and the timers' futures, is `bench/results/vs-cats-effect.json`):
 
 | scenario | gears | hand-written loop | cats-effect |
 | --- | --- | --- | --- |
-| pingpong | 7.51 | 4.97 | 23.0 |
-| pingpong-deadline | 7.50 | 5.87 | 26.8 |
-| concurrent | 2.11 | 1.11 | 9.85 |
-| connections | 41.5 | 18.7 | 150 |
-| pipelined | 0.65 | 0.48 | 2.15 |
-| timers | 0.18 | 0.60 | 1.01 |
-| fairness (tick) | 1.63 (3.25) | | 2.25 (3.30) |
-| mixed (compute) | 27.1 (27.0) | | 1173 (19.2) |
+| pingpong | 7.40 | 4.39 | 23.4 |
+| pingpong-deadline | 7.46 | 5.39 | 27.0 |
+| concurrent | 2.16 | 1.19 | 10.2 |
+| connections | 30.2 | 20.3 | 156 |
+| pipelined | 0.74 | 0.52 | 2.16 |
+| timers | 19.5 | 0.60 | 1.01 |
+| fairness (tick) | 1.66 (3.32) | | 2.30 (3.47) |
+| mixed (compute) | 15.5 (31.0) | | 1177 (19.3) |
 
-(`connections` here predates the affine default, which brought gears' to about 21; see [`runtime.md`](runtime.md).)
+`timers` arms each timer by a future and cancels half of them, which is costly on Scala Native ("What is open"
+below); with timers submitted as completions it was 0.18.
 
 - **I/O costs cats-effect 3–5 times what it costs gears.** In ping-pong both its sides sleep in `kevent64` for every
   message, two thread wake-ups per round trip, where gears' polls before blocking leave 0.6, and it makes about 24
@@ -232,19 +234,19 @@ yieldpoints (`bench/results/vs-cats-effect.json`):
   compute slices; gears polls after every round of tasks.
 - **Not like for like**: `blocking` (`IO.blocking` runs on the calling thread and hands the worker's role to another
   thread, where gears hands the task to a blocker thread and back) and `timers` (a fiber per timer). `blocking-io`
-  shows the hand-over's cost when each blocking task is followed by I/O: gears 15.08 µs (6.96 of it the blocking task),
-  the hand-written loop 12.57 (7.37), cats-effect 25.89 (1.97) (`bench/results/blocking-io.json`). cats-effect's
+  shows the hand-over's cost when each blocking task is followed by I/O: gears 14.22 µs (`blocking` alone 5.68), the
+  hand-written loop 10.62 (3.39), cats-effect 22.17 (0.07) (`bench/results/2026-10-28-native-vs-cats-effect.json`). cats-effect's
   hand-over is off the task's path; gears' task waits for two hops.
 - **Responsiveness.** `starvation` is cats-effect's CPU starvation check as a scenario: `concurrent`'s round trips
   while a compute fiber per core works in slices, and a checker sleeping 1 ms over and over, recording how late it wakes
-  (lateness in µs; `bench/results/native-starvation.json`, `native-starvation-4-workers.json`):
+  (lateness in µs; one worker from the rerun above, four from `bench/results/native-starvation-4-workers.json`):
 
   | | gears, 1 worker | cats-effect, 1 thread | gears, 4 workers | cats-effect, 4 threads |
   | --- | --- | --- | --- | --- |
-  | p50 | 109 | 827 | 17 | 1092 |
-  | p99 | 456 | 2917 | 199 | 2916 |
-  | max | 749 | 3741 | 262 | 3424 |
-  | round trip, µs/op | 5.8 | 14.2 | 3.8 | 13.6 |
+  | p50 | 79 | 885 | 17 | 1092 |
+  | p99 | 459 | 3257 | 199 | 2916 |
+  | max | 683 | 3688 | 262 | 3424 |
+  | round trip, µs/op | 4.4 | 13.6 | 3.8 | 13.6 |
 
 On more workers the comparison is in [`runtime.md`](runtime.md): gears stays 3–6 times faster on `pingpong`,
 `connections`, `pipelined` and `timers`.
