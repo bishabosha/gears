@@ -363,8 +363,21 @@ and Network.framework's notified close completed as soon as it was notified. Can
 queued now returns false, as for any op that has finished: before, kqueue's close, a promise, was detached from the
 queue it was in, and the loop failed taking its completion again.
 
+Waking the loop from another thread is `ReactorCore`'s too (`wakeup`): every waker first asks (`wakeRequested`), and
+the loop, about to block, marks itself parked and then checks the ask (`mayBlock`), so that one always sees the other
+and no wake-up is lost; a spin before blocking ends as soon as one is asked (`wakeAsked`). Whether a wake-up also
+signals a loop that is awake is each backend's choice, by measurement (`signalsWhileAwake`). NIO signals only while
+parked, sparing `Selector.wakeup`'s write to its pipe. kqueue signals while awake too, as it always had: not signalling
+took `blocking` from 5.5 to 60 µs a task, and to 25 with the spin ending early. The signal's `kevent` call keeps the
+blocker thread that resolved the task awake for its length; without it the thread went back to sleep at once, and
+each next hand-off paid a thread wake-up, the loop finding the task done only after its spins.
+
 ## What is open
 
+- **`fairness` on four workers is bimodal**: about half the runs give the ticking future a turn every 14 µs, the rest
+  every 3.4, the I/O beside it twice as fast in the slow mode (0.8 against 1.7 µs an op); 16 and 17 slow runs in 30,
+  before and after the wake-up was shared, so it predates it. Which mode a run settles in is likely where the pool's
+  stealing leaves the ticker relative to the I/O, and is to be looked into in [`runtime.md`](runtime.md)'s terms.
 - **Cancelling a gears `Future` is expensive on Scala Native**, which `timers` shows now that it arms each timer by a
   future and cancels half of them: 20.7 µs a timer (release, 7 runs) against 0.41 when timers were submitted with
   completions, 0.61 for the hand-written loop and 1.13 for cats-effect (`bench/results/2026-10-25-timers-native.json`).
