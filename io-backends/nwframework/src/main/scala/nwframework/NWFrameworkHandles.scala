@@ -101,7 +101,7 @@ private[nwframework] final class NWFrameworkHandle(
   // going to the stash. And a buffer so filled, waiting to be taken by the read, or copied by a plain one (its
   // position is what a plain read took).
   private var pooledFor: NativePool | Null = null
-  private var pooledReady: NativePool#Slot | Null = null
+  private var pooledReady: NativePool#NativeSlot | Null = null
 
   // The close op waiting for the listener's cancelled state, if any.
   private var closeReactor: KqueueReactor | Null = null
@@ -403,7 +403,7 @@ private[nwframework] final class NWFrameworkHandle(
     }
   }
 
-  private def takeFrom(pool: NativePool): NativePool#Slot = {
+  private def takeFrom(pool: NativePool): NativePool#NativeSlot = {
     val slot = pool.take()
     if slot == null then throw new IOException("The pool has no buffer free")
     slot.nn
