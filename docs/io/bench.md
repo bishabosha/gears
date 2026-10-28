@@ -138,7 +138,7 @@ question about the kernel:
 | `bench/descriptor-contention.c` | Do descriptor calls from threads of one process slow each other down where separate processes do not? Does setting the signal mask? And on Linux, with epoll and io_uring? | Yes on macOS, for both: the per-process descriptor lock and the proc lock. Not on Linux. See [`runtime.md`](runtime.md). |
 | `bench/wakeup-contention.c` | Is waking a worker by Mach port, `mach_msg` or `os_sync_wait_on_address` cheaper than by `EVFILT_USER`? | No: blocking wake-ups cost the same whatever carries them, between threads or processes. |
 | `bench/write-events.c` | How often does a persistent edge-triggered write filter fire when nothing waits to write? | Once per turn of a ping-pong, so write filters stay one-shot. See [`kqueue.md`](kqueue.md). |
-| [`bench/network-framework.c`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/bench/network-framework.c) | Does Network.framework get round the descriptor lock? | Not over loopback, where it uses the kernel's sockets. See [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md). |
+| `bench/network-framework.c` | Does Network.framework get round the descriptor lock? | Not over loopback, where it uses the kernel's sockets. See [`nwframework.md`](nwframework.md). |
 
 ## Measuring well
 

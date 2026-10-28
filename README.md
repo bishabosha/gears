@@ -102,13 +102,14 @@ The backends incubate in projects of their own, each with the contract suites fr
 | Project | Backend | Platform |
 | --- | --- | --- |
 | `ioKqueue` (`io-backends/kqueue`) | kqueue | Scala Native, macOS |
+| `ioNWFramework` (`io-backends/nwframework`) | Network.framework and Dispatch | Scala Native, macOS |
 | `ioNio` (`io-backends/nio`) | NIO selectors, or each op on the calling thread | JVM |
 
 `ioTestkit` holds the gears demos, written against the interface alone, each taking the `Io`
 and `Async` it runs with, their command line, and `higherlevel` (`gears.io.higherlevel`), a result-returning and
 streaming API over the interface. Each backend has a demo application that runs them,
 choosing the backend and starting the run: `ioKqueueDemos`, which also holds the plain kqueue
-demos, over the kqueue backend's own types with no gears, and `ioNioDemos`. The bench is
+demos, over the kqueue backend's own types with no gears, `ioNWFrameworkDemos` and `ioNioDemos`. The bench is
 `ioBench` (`bench/io-bench`). The kqueue backend and its demos were ported
 from [bishabosha/scala-native-async-io@6e8320d](https://github.com/bishabosha/scala-native-async-io/commit/6e8320d36c71f75c9daf85065f5c89729f0825c0),
 and extended with Unix datagrams and IPv4/IPv6 sockets.

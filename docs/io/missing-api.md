@@ -74,7 +74,7 @@ where the mover is often another worker's thread and wakes the timer's reactor.
 
 Network.framework has QUIC built in (since macOS 12), with its own TLS 1.3, multiplexed streams and QUIC's unreliable
 datagrams (RFC 9221), and TLS over TCP; the Network.framework backend, which now uses the framework where it adds what
-kqueue cannot (see [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)), could offer both as optional capabilities that only it has, so
+kqueue cannot (see [`nwframework.md`](nwframework.md)), could offer both as optional capabilities that only it has, so
 that a program asking for them does not compile against kqueue or NIO. They map onto the interface's kinds:
 
 - **A QUIC connection** is like a listener of streams: an op opens it (address, ALPN, TLS settings), an accept-like op
@@ -90,7 +90,7 @@ work and macOS's alone; and QUIC in user space over datagrams, on every backend,
 the lists above (don't-fragment, fine timers re-armed in place, packet info, ECN, batching). What every server needs
 either way, addresses and socket options, stays first.
 
-Probed on macOS 27.0, over loopback ([`bench/network-framework-quic.c`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/bench/network-framework-quic.c), a self-signed identity imported into memory):
+Probed on macOS 27.0, over loopback (`bench/network-framework-quic.c`, a self-signed identity imported into memory):
 
 - **The pieces exist in the C interface since macOS 12**: `nw_parameters_create_quic` with ALPN, TLS identity and
   verification, stream and datagram limits set on its options; a listener whose QUIC connections each arrive as a

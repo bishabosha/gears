@@ -62,6 +62,46 @@ class GearsKQueueBenchSuite extends BenchChecks {
   override def commandPrefix: Seq[String] = Seq("gears")
 }
 
+/** The gears bench on Network.framework: `iobench gears bench --backend nwframework-everywhere`, whose own sockets are
+  * TCP's, and `--backend nwframework`, which runs a Unix socket's scenarios on kqueue's code.
+  */
+class GearsNWFrameworkBenchSuite extends DemoSuite {
+  override def launcher: Seq[String] = Seq(benchBinary)
+  override def commandPrefix: Seq[String] = Seq("gears")
+
+  demoTest("bench: every scenario runs on Network.framework over TCP, at a tiny scale") {
+    val output =
+      run("bench", "--backend", "nwframework-everywhere", "--tcp", "--scale", "0.01", "--connections", "8")
+    for (
+      scenario <- Seq(
+        "pingpong",
+        "pingpong-fresh-ops",
+        "pingpong-deadline",
+        "concurrent",
+        "concurrent-compute",
+        "concurrent-offload",
+        "connections",
+        "pipelined",
+        "blocking",
+        "blocking-io",
+        "timers",
+        "fairness",
+        "fairness-tick",
+        "starvation-p99",
+        "mixed",
+        "mixed-compute"
+      )
+    )
+      assert(output.linesIterator.exists(_.startsWith(s"bench: $scenario ")), output)
+    assert(!output.contains("Exception"), output)
+  }
+
+  demoTest("bench: the NWFramework backend runs a Unix socket's scenarios on kqueue's code") {
+    val output = run("bench", "--backend", "nwframework", "--scale", "0.01", "--scenarios", "pingpong")
+    assert(output.linesIterator.exists(_.startsWith("bench: pingpong ")), output)
+  }
+}
+
 /** The gears bench on the JVM, `java -cp <ioBenchJVM> gearsbench.Main bench`, over `NioOnCaller`. */
 class JvmGearsBenchSuite extends BenchChecks with OnJvm {
   def backend = "caller"

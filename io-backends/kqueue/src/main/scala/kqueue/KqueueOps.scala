@@ -189,7 +189,7 @@ object KqueueOps
   }
 
   /** The kind of socket `handle` is, for `option`, which applies to it; else an `IllegalArgumentException`. For a
-    * backend built on kqueue's reactors, whose options differ.
+    * backend built on kqueue's reactors, whose options differ (`NWFrameworkOps`).
     */
   private[io] def kindFor(handle: Handle, option: SocketOption[?]): SocketOption.Kind =
     onSocket(handle, option)((_, kind) => kind)

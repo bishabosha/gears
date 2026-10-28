@@ -21,7 +21,7 @@ import DemoIO.{FrameReader, InvalidFrame, StreamProtocol}
   * reactor the program drives itself, with no futures, but each step an op of the backend's (`read`, `write`,
   * `shutdownOutput`, `close`) where kqueue's steps are commands run on readiness, reading and writing a descriptor
   * themselves. A completion learns that its op finished, not that its handle is ready, so the same code runs on any
-  * reactor backend: kqueue, NIO, or one such as Network.framework, whose connections have no readiness to wait for.
+  * reactor backend: kqueue, NIO, or Network.framework, whose connections have no readiness to wait for.
   */
 object ReactorServerSocket {
   private val Response = "Just pinging back!\n"

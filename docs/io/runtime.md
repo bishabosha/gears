@@ -6,7 +6,7 @@ note is about the pool itself, with its measurements taken on kqueue, where it w
 and why, the take policies and how they compare, how tasks and descriptors move between threads, the budgets that keep
 the fast path fair, how failures are contained, and what macOS's per-process locks mean for scaling, with the three
 designs tried around them and reverted. NIO's use of the pool is in [`jvm.md`](jvm.md), Network.framework's in
-[`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md), and kqueue's reactor in [`kqueue.md`](kqueue.md). Unless a table says otherwise,
+[`nwframework.md`](nwframework.md), and kqueue's reactor in [`kqueue.md`](kqueue.md). Unless a table says otherwise,
 numbers are microseconds per operation, the median of 5 runs of release-fast Scala Native builds on an M1 Pro running
 macOS 27, with client and server each a pool of the size given (see [`bench.md`](bench.md)).
 
@@ -312,8 +312,8 @@ wake-ups stay `EVFILT_USER`.
 
 **Network.framework** is Apple's way round the lock, a user-space stack over Skywalk; SwiftNIO's POSIX transport, an
 event loop and kqueue per thread as here, meets the same lock. Over loopback Network.framework uses the kernel's
-sockets, and is slower than blocking BSD sockets and scales worse within one process ([`bench/network-framework.c`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/bench/network-framework.c)); see
-[`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md).
+sockets, and is slower than blocking BSD sockets and scales worse within one process (`bench/network-framework.c`); see
+[`nwframework.md`](nwframework.md).
 
 **What this means.** On macOS a pool in one process cannot scale I/O beyond about one busy thread, and every extra
 thread making descriptor calls slows the others; cats-effect is under the same limit. The pool helps computation, as in

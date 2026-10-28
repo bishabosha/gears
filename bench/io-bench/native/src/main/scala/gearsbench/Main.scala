@@ -3,14 +3,17 @@ package gearsbench
 import mainargs.{ParserForMethods, arg, main}
 
 /** The bench on Scala Native, the executable `iobench` that bench/build.sc builds for bench/compare.sc: `iobench gears
-  * <command>` runs the gears scenarios (`BenchCommands`) over the kqueue demos' backends (`example.GearsDemos`), and
-  * `iobench <command>` the same scenarios written against `KqueueLoop` directly (`KQueueExampleBench`), the reference
-  * compare.sc runs for a build marked `@raw`.
+  * <command>` runs the gears scenarios (`BenchCommands`) over the Network.framework demos' backends
+  * (`nwframeworkdemos.NWFrameworkDemos`), kqueue by default, or Network.framework with `--backend nwframework` or
+  * `nwframework-everywhere`, which compare.sc runs for a build marked `@nwframework`; and `iobench <command>` the same
+  * scenarios written against `KqueueLoop` directly (`KQueueExampleBench`), the reference compare.sc runs for a build
+  * marked `@raw`.
   */
 object Main {
 
-  /** The gears bench over kqueue, with kqueue's own `move-bench`. */
-  final class KqueueBenchCommands extends BenchCommands(example.GearsDemos.backends) {
+  /** The gears bench over kqueue and Network.framework, with kqueue's own `move-bench`. */
+  final class NativeBenchCommands
+      extends BenchCommands(nwframeworkdemos.NWFrameworkDemos.backends(default = "kqueue")) {
     @main(name = "move-bench", doc = "Measures what moving a descriptor between kqueue reactors costs")
     def moveBench(
         @arg(name = "round-trips") roundTrips: Int = 100_000,
@@ -53,7 +56,7 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    if args.headOption.contains("gears") then ParserForMethods(KqueueBenchCommands()).runOrExit(args.tail.toIndexedSeq)
+    if args.headOption.contains("gears") then ParserForMethods(NativeBenchCommands()).runOrExit(args.tail.toIndexedSeq)
     else ParserForMethods(Raw).runOrExit(args.toIndexedSeq)
   }
 }

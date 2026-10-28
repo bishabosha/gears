@@ -128,8 +128,8 @@ jobs:
       with:
         name: test-reports-${{ github.job }}
         path: '**/test-reports/*.xml'
-  # The backend for macOS alone, kqueue, which neither builds nor runs on Linux, and what uses
-  # it: the testkit on Scala Native, and the tests driving the demo and bench executables.
+  # The backends for macOS alone, kqueue and Network.framework, which neither build nor run on Linux, and what uses
+  # them: the testkit on Scala Native, and the tests driving the demo and bench executables.
   test-io-macos:
     strategy:
       fail-fast: false
@@ -152,6 +152,9 @@ jobs:
     - name: Test kqueue
       if: ${{ !cancelled() }}
       run: sbt ioKqueue/test
+    - name: Test Network.framework
+      if: ${{ !cancelled() }}
+      run: sbt 'ioNWFramework/test; ioNWFrameworkDemos/compile'
     - name: Test the demos
       if: ${{ !cancelled() }}
       run: sbt 'ioTestkitNative/test; ioDemosTests/test'

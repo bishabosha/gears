@@ -25,6 +25,37 @@ class GearsSocketDemoSuite extends SocketDemoSuite {
   override def otherStreamServers: Seq[StreamServer] = Seq(StreamServer("reactor-sock", Nil))
 }
 
+/** The gears demos over the Network.framework backend's demo application (`nwframeworkdemos.NWFrameworkDemos`), whose
+  * backends are `nwframework` (the default: Network.framework off this host, kqueue's code for loopback),
+  * `nwframework-everywhere` (loopback's IP sockets on Network.framework too) and `kqueue`.
+  */
+trait OnNWFramework extends DemoSuite {
+  override def launcher: Seq[String] = Seq(nwframeworkBinary)
+  override def gearsMirrors: Boolean = true
+  override def sendsEmptyConnectedDatagrams: Boolean = false
+}
+
+class NWFrameworkDemoSuite extends DemoSuite with OnNWFramework {
+  demoTest("quic-timers: each connection's deadline timer, moved per packet, acknowledges and closes it idle") {
+    for backend <- Seq("nwframework", "nwframework-everywhere", "kqueue") do {
+      val output = run("quic-timers", "--backend", backend, "--connections", "16", "--packets", "201")
+      assert(output.contains("every packet acknowledged, every connection closed idle"), s"$backend:\n$output")
+      assert(output.contains("16 connections closed idle"), s"$backend:\n$output")
+      assert(!output.contains("Exception"), s"$backend:\n$output")
+    }
+  }
+}
+
+/** `ReactorServerSocket` with its connections on Network.framework, checked as the stream servers are; the rest of the
+  * demos are those `GearsSocketDemoSuite` checks.
+  */
+class NWFrameworkSocketDemoSuite extends SocketDemoSuite with OnNWFramework {
+  override def checksDemoServers: Boolean = false
+  override def otherStreamServers: Seq[StreamServer] = Seq(
+    StreamServer("reactor-sock", Seq("--backend", "nwframework-everywhere"), Seq(Family.IPv4, Family.IPv6))
+  )
+}
+
 /** The same gears demos on the JVM, over NIO's demo application (`niodemos.NioDemos`): `NioOnCaller` (`backend`
   * "caller"), or `NioBackend` on a reactor pool ("reactors"), chosen as the bench's launchers choose it, by
   * `-Dgears.io.nio.backend`. NIO has neither FIFOs nor Unix datagram sockets, so its demos that need them fail; the

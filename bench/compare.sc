@@ -15,8 +15,10 @@
   * }}}
   *
   * A build runs the gears benchmark, `gears bench`; suffix its path with `@raw` to run the same scenarios written
-  * against `KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`; or with `@backend=<name>` to run
-  * `gears bench --backend <name>`, for a build with another backend, or whose backends had other names.
+  * against `KqueueLoop` directly (`bench`), as a reference: `raw=<path>@raw`; or with `@nwframework` to run them on
+  * Network.framework instead of kqueue (`--backend nwframework-everywhere`, loopback's sockets on it too):
+  * `nwframework=<path>@nwframework`, with `-- --tcp`, since the backend's Unix sockets are kqueue's; or with
+  * `@backend=<name>` to run `gears bench --backend <name>`, for a build whose backends had other names.
   *
   * Each build runs `--runs` times, alternating between builds so drift in machine load affects them alike. The table
   * shows each scenario's median microseconds per operation, and each later build's change against the first. Arguments
@@ -42,7 +44,7 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 val Usage =
-  """usage: compare.sc label=path[@raw|@backend=NAME]... [--runs N] [--retries N] [--timeout SECONDS]
+  """usage: compare.sc label=path[@raw|@nwframework|@backend=NAME]... [--runs N] [--retries N] [--timeout SECONDS]
     |                     [--save | --save-to FILE] [-- bench arguments]""".stripMargin
 
 /** Where this script lives, which is where results and hang dumps go. */
@@ -99,6 +101,8 @@ def runOnce(path: String, benchArgs: Seq[String], retries: Int, crashes: mutable
     incomplete: mutable.Buffer[String], timeout: Long, label: String): Map[String, Double] =
   val command =
     if path.endsWith("@raw") then Seq(path.stripSuffix("@raw"), "bench")
+    else if path.endsWith("@nwframework") then
+      Seq(path.stripSuffix("@nwframework"), "gears", "bench", "--backend", "nwframework-everywhere")
     else if path.contains("@backend=") then
       val at = path.indexOf("@backend=")
       Seq(path.substring(0, at), "gears", "bench", "--backend", path.substring(at + "@backend=".length))
@@ -151,6 +155,7 @@ def provenance(path: String): ujson.Value =
 
 def benchmark(path: String): String =
   if path.endsWith("@raw") then "raw"
+  else if path.endsWith("@nwframework") then "nwframework"
   else if path.contains("@backend=") then path.substring(path.indexOf("@backend=") + "@backend=".length)
   else "gears"
 

@@ -53,8 +53,8 @@ object KqueueBackend
     * for one (`close`).
     *
     * A handle with a `foreign` object is not a descriptor but another facility's I/O object, which a backend built on
-    * kqueue's reactors adds (see `Notified`), such as a Network.framework connection. Its `fd` is -1, kqueue's ops
-    * refuse it, and only its own backend's ops use it.
+    * kqueue's reactors adds (see `Notified`): Network.framework's connections, in `NWFrameworkBackend`. Its `fd` is -1,
+    * kqueue's ops refuse it, and only its own backend's ops use it.
     */
   final class Handle private[kqueue] (private[kqueue] val fd: Int, private[io] val foreign: AnyRef | Null = null) {
     // The sign bit: closed. The rest: how many uses of the descriptor are in progress.

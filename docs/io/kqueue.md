@@ -258,7 +258,7 @@ and `sigprocmask` that sets a mask takes the process lock, so a pool of kqueue r
 beyond about one busy thread: `concurrent` gets slower on 4 workers than on 1. Plain C shows the same. Linux has no
 such lock (measured), nor has FreeBSD's descriptor lookup (from its source), and the only way measured to scale on macOS
 is several processes. SwiftNIO's POSIX transport, an event loop and kqueue per thread as here, meets the same lock;
-Apple's way round it is Network.framework (see [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)). The measurements, the XNU source
+Apple's way round it is Network.framework (see [`nwframework.md`](nwframework.md)). The measurements, the XNU source
 and the designs tried around it are in [`runtime.md`](runtime.md); the `setjmp` override, which takes the signal mask
 out of every continuation resume in programs that link this backend, is in [`scala-native.md`](scala-native.md).
 
@@ -322,7 +322,7 @@ descriptor's filters itself, so a close costs only the `close`. How a descriptor
 ## Another facility's ops on the same reactor
 
 A backend built on kqueue's reactors runs ops of another I/O facility beside kqueue's: the Network.framework backend's
-connections (see [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)). Such an op is a `Notified`: attempted as it is submitted, and
+connections (see [`nwframework.md`](nwframework.md)). Such an op is a `Notified`: attempted as it is submitted, and
 again each time its facility notifies the reactor for its submission's token (`KqueueReactor.notified`), until it
 finishes; cancelled, timed out and dropped on close as a command is. The facility's events come on its own threads and
 are taken in on the loop's by its `ReactorExtension`, made with the first such op, which wakes a blocked poll with a

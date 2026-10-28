@@ -46,14 +46,28 @@ class SocketDemoSuite extends DemoSuite {
   /** The stream servers checked beside `sock-serve`. */
   def otherStreamServers: Seq[StreamServer] = Nil
 
+  /** Whether the suite checks the demos' own servers and errors, or only `otherStreamServers`, for an application whose
+    * demos another suite checks.
+    */
+  def checksDemoServers: Boolean = true
+
   for (family <- Family.values) {
-    demoTest(s"stream ${family.name}: native clients, framing, fragmentation, invalid length, concurrent clients") {
-      withTempDirectory("gears-sockets-")(stream(family, _))
-    }
+    if checksDemoServers then
+      demoTest(s"stream ${family.name}: native clients, framing, fragmentation, invalid length, concurrent clients") {
+        withTempDirectory("gears-sockets-")(stream(family, _))
+      }
     for (server <- otherStreamServers if server.families.contains(family))
       demoTest(s"stream ${family.name}, ${(server.command +: server.args).mkString(" ")}: the same") {
         withTempDirectory("gears-sockets-")(stream(family, _, server))
       }
+    if checksDemoServers then demoServerChecks(family)
+  }
+  if checksDemoServers then
+    demoTest("errors: numeric addresses, ports, refused connection, cleanup, path length, UDP timeout") {
+      withTempDirectory("gears-sockets-")(errors)
+    }
+
+  private def demoServerChecks(family: Family): Unit = {
     if family != Family.Unix || hasUnixDatagrams then
       demoTest(s"datagram ${family.name}: native clients, UTF-8, empty/binary packets, queued senders") {
         withTempDirectory("gears-sockets-")(datagram(family, _))
@@ -65,9 +79,6 @@ class SocketDemoSuite extends DemoSuite {
     demoTest(s"key-value ${family.name}: pipelined commands from native and Java clients") {
       withTempDirectory("gears-sockets-")(keyValue(family, _))
     }
-  }
-  demoTest("errors: numeric addresses, ports, refused connection, cleanup, path length, UDP timeout") {
-    withTempDirectory("gears-sockets-")(errors)
   }
 
   private def endpoint(family: Family, datagram: Boolean, directory: Path): Endpoint =

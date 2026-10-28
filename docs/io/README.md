@@ -1,8 +1,9 @@
 # gears.async.io: asynchronous I/O for gears
 
-An interface for asynchronous I/O that gears programs write once and run on any backend, and two backends: kqueue on
-Scala Native (macOS, and the parts of it Linux shares) and NIO on the JVM (any platform). A third, over Apple's
-Network.framework, is built on kqueue's reactors and comes separately ([`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)). A program performs ops, built by its backend, with the `Io` the runner gives it, and gears is gears around
+An interface for asynchronous I/O that gears programs write once and run on any backend, and three backends:
+kqueue on Scala Native (macOS, and the parts of it Linux shares), the Network.framework backend on Scala Native
+(macOS, kqueue's reactors with Network.framework for TCP and connected UDP off this host), and NIO on the JVM (any
+platform). A program performs ops, built by its backend, with the `Io` the runner gives it, and gears is gears around
 them: futures, groups, cancellation, `sleep` and `withTimeout` all work, on the backend's own timers.
 
 ## Where to start reading
@@ -26,9 +27,9 @@ them: futures, groups, cancellation, `sleep` and `withTimeout` all work, on the 
 | `gears.async.io` (core, `shared/`) | the interface: `Io` and `Io.run`, `Backend` and its capabilities, `Ops`, `Slot`, addresses, socket options, `Deadline`, `BufferPool` | the rest of gears |
 | `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds (`ReactorBackend`, `CallerBackend`), `Io`'s kinds (`OnPool`, `OnCaller`), `Turns`, the checks every backend makes (`Checks`) | the interface |
 | `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`, `js/`) | the runtime (`Runner`, `ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`), the runner's knobs (`ReactorRuns`, `TakePolicy`) and what the backends share (`Blockers`, `TimerHeap`; on Native, `NativePool`, `NativeBuffer` and the Posix sockets, files and resolver) | the interface |
-| `ioKqueue`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue` and `.nio` | core |
+| `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
 | `ioTestkit` (`io-testkit/`) | the contract suites every backend runs, `BufferArena`, `higherlevel` (`gears.io.higherlevel`) with `HigherLevelChecks`, and the gears demos (`gears.io.demos`) with their command line, `DemoCommands`, each demo taking the `Io` and `Async` it runs with | core, munit, mainargs |
-| `ioKqueueDemos`, `ioNioDemos` (`io-backends/*/demos/`) | each backend's demo application: the backends it offers the demos (`DemoBackends`) and what starts their runs (`DemoRunner`, with `Io.run`); kqueue's also has the plain kqueue demos | a backend, the testkit |
+| `ioKqueueDemos`, `ioNWFrameworkDemos`, `ioNioDemos` (`io-backends/*/demos/`) | each backend's demo application: the backends it offers the demos (`DemoBackends`) and what starts their runs (`DemoRunner`, with `Io.run`); kqueue's also has the plain kqueue demos | a backend, the testkit |
 | `ioBench` (`bench/io-bench/`) | the bench (`gearsbench`): `GearsBench`'s scenarios over each platform's demo backends, kqueue's `move-bench` and `KqueueLoop` reference, the JDK's (`JdkBench`) | the demo applications |
 | `ioDemosTests` (`io-tests/`) | JVM tests driving the demo and bench executables as subprocesses (macOS) | the demo applications, the bench |
 
@@ -116,17 +117,19 @@ sees, and run on every backend. It has result-returning openers, `read`, `writeA
 window and the channel's backlog as back-pressure. `HigherLevelChecks` runs it over every backend, and the demos open,
 accept and resolve through it. The demos are written against the interface alone too: each takes the `Io` it runs
 with, over the capabilities it needs, and its `Async`, and only a backend's demo application starts a run, with the
-backend it chose (`ioKqueueDemos/run gears <command>`, `ioNioDemos/run <command> [--backend caller|reactors]`).
+backend it chose (`ioKqueueDemos/run gears <command>`,
+`ioNWFrameworkDemos/run <command> [--backend nwframework|nwframework-everywhere|kqueue]`,
+`ioNioDemos/run <command> [--backend caller|reactors]`).
 
 ## Running the suites
 
 ```sh
 sbt rootJVM/test rootNative/test   # gears core, with the interface's own checks and the runtime's
 sbt ioNio/test ioTestkitJVM/test   # the NIO backend and the testkit's own suites, on any platform (JDK 27)
-sbt ioKqueue/test ioTestkitNative/test ioDemosTests/test   # macOS only
+sbt ioKqueue/test ioNWFramework/test ioTestkitNative/test ioDemosTests/test   # macOS only
 ```
 
-The kqueue backend builds and runs on macOS only; CI runs them on a macOS runner and everything
+The kqueue and Network.framework backends build and run on macOS only; CI runs them on a macOS runner and everything
 else on Linux. The NIO pool needs `--add-opens` for the JDK's virtual-thread internals, which the build sets. The bench
 is described in [`bench.md`](bench.md).
 
@@ -142,8 +145,8 @@ is described in [`bench.md`](bench.md).
   compares with cats-effect.
 - [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend`: why each waits as it does, what was measured,
   and what was tried and dropped.
-- [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md): the Network.framework backend, which comes separately: kqueue's reactors with
-  Network.framework for TCP and connected UDP off this host, as Apple advises, and kqueue's code for the rest.
+- [`nwframework.md`](nwframework.md): kqueue's reactors with Network.framework for TCP and connected UDP off this host,
+  as Apple advises, and kqueue's code for the rest: the reference for a completion-based facility under a reactor.
 - [`files.md`](files.md): file I/O, what macOS offers for it, and the shape the file ops take.
 - [`hosts.md`](hosts.md): what each capability would be on the backends built and those discussed (io_uring, Node,
   Deno, Workers, a browser, WASI), and what that asks of the interface.

@@ -77,7 +77,8 @@ lazy val root =
 val munit = "org.scalameta" %% "munit" % "1.3.6"
 
 // Settings of the I/O libraries published beside the core, under its organization and versions: the testkit, so that
-// a backend written elsewhere can check itself against the same contracts, and the backends.
+// a backend written elsewhere can check itself against the same contracts, and the backends but Network.framework's,
+// which stays an experiment (see docs/io/nwframework.md).
 def ioLibrary(artifact: String) = Seq(
   name := artifact,
   publish / skip := false,
@@ -107,7 +108,8 @@ lazy val ioTestkit =
     .dependsOn(root)
 
 // The kqueue backend (macOS, Scala Native). Its native resources override `setjmp` and `longjmp` in every program that
-// links it with `_setjmp` and `_longjmp`, which leave the signal mask alone (see setjmp_override.S).
+// links it with `_setjmp` and `_longjmp`, which leave the signal mask alone (see setjmp_override.S): the
+// Network.framework backend's programs too, which link it.
 lazy val ioKqueue =
   (project in file("io-backends/kqueue"))
     .enablePlugins(ScalaNativePlugin)
@@ -119,6 +121,22 @@ lazy val ioKqueue =
       nativeConfig ~= { _.withMultithreading(true) }
     )
     .dependsOn(root.native, ioTestkit.native % Test)
+
+// The Network.framework backend: kqueue's reactors with Apple's Network.framework for TCP and connected UDP, and
+// kqueue's own code for the rest, with the C side in its resources (see docs/io/nwframework.md). macOS only; every
+// executable that links it needs Network.framework.
+val networkFramework: Seq[String] =
+  if (sys.props.getOrElse("os.name", "").startsWith("Mac")) Seq("-framework", "Network") else Nil
+lazy val ioNWFramework =
+  (project in file("io-backends/nwframework"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += munit % Test,
+      testFrameworks += MUnitFramework,
+      nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
+    )
+    .dependsOn(root.native, ioKqueue, ioTestkit.native % Test) // its reactors are kqueue's
 
 // The JVM's backends: NIO selectors over the JDK's selectable channels, and threads for what the JDK can only block
 // on (`NioBackend`), or each op on the calling thread (`NioOnCaller`).
@@ -153,6 +171,19 @@ lazy val ioKqueueDemos =
     )
     .dependsOn(ioKqueue, ioTestkit.native)
 
+// The Network.framework backend's demo application: the testkit's gears demos over `--backend nwframework` (the
+// default; Network.framework for IP sockets off this host, kqueue's code for the rest), `nwframework-everywhere`
+// (loopback's IP sockets on Network.framework too) and `kqueue`, as `ioNWFrameworkDemos/run <command>`.
+lazy val ioNWFrameworkDemos =
+  (project in file("io-backends/nwframework/demos"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      Compile / mainClass := Some("nwframeworkdemos.NWFrameworkDemos"),
+      nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) }
+    )
+    .dependsOn(ioNWFramework, ioTestkit.native)
+
 // NIO's demo application: the testkit's gears demos over NIO's backends, `NioOnCaller` (`--backend caller`, the
 // default) and `NioBackend` (`reactors`), as `ioNioDemos/run <command>`.
 lazy val ioNioDemos =
@@ -171,10 +202,12 @@ lazy val ioNioDemos =
     .dependsOn(ioNio, ioTestkit.jvm)
 
 // The gears bench (`GearsBench`, see docs/io/bench.md), its scenarios written against the interface alone as the demos
-// are, over the backends of each platform's demo application: on Scala Native the executable `iobench` (bench/build.sc),
-// whose `iobench gears bench` runs them over kqueue, `iobench bench` the same scenarios against `KqueueLoop` directly,
-// and `iobench gears move-bench` kqueue's moves between reactors; on the JVM (bench/build_jvm.sc) over NIO, with the
-// same scenarios on the JDK alone (`jdk-bench`). The cats-effect version of the scenarios is `ceBench`, beside it.
+// are, over the backends of each platform's demo applications: on Scala Native the executable `iobench`
+// (bench/build.sc), whose `iobench gears bench` runs them over kqueue, or with `--backend nwframework` or
+// `nwframework-everywhere` over Network.framework's demo backends, `iobench bench` the same scenarios against
+// `KqueueLoop` directly, and `iobench gears move-bench` kqueue's moves between reactors; on the JVM
+// (bench/build_jvm.sc) over NIO, with the same scenarios on the JDK alone (`jdk-bench`). The cats-effect version of the
+// scenarios is `ceBench`, beside it.
 lazy val ioBench =
   crossProject(JVMPlatform, NativePlatform)
     .crossType(CrossType.Full)
@@ -191,9 +224,9 @@ lazy val ioBench =
         "--add-opens=java.base/jdk.internal.vm=ALL-UNNAMED"
       )
     )
-    .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
+    .nativeSettings(nativeConfig ~= { _.withMultithreading(true).withLinkingOptions(_ ++ networkFramework) })
     .jvmConfigure(_.dependsOn(ioNioDemos))
-    .nativeConfigure(_.dependsOn(ioKqueueDemos))
+    .nativeConfigure(_.dependsOn(ioNWFrameworkDemos))
 
 // The bench scenarios written with cats-effect and fs2, to compare against; see bench/compare.sc. The same code on
 // Scala Native (kqueue, through bench/build.sc) and on the JVM (its selector poller, through bench/build_jvm.sc).
@@ -213,7 +246,8 @@ lazy val ceBench =
     .nativeSettings(nativeConfig ~= { _.withMultithreading(true) })
 
 // JVM tests that drive the demo applications as subprocesses (macOS only): the plain kqueue demos, the gears demos on
-// Scala Native through them and on the JVM through NIO's, and the bench of each platform.
+// Scala Native through them and through Network.framework's and on the JVM through NIO's, and the bench of each
+// platform.
 lazy val ioDemosTests =
   (project in file("io-tests"))
     .settings(
@@ -224,6 +258,10 @@ lazy val ioDemosTests =
       Test / javaOptions += {
         val binary = fileConverter.value.toPath((ioKqueueDemos / Compile / nativeLink).value)
         s"-Dkqueue.demo.binary=${binary.toAbsolutePath}"
+      },
+      Test / javaOptions += {
+        val binary = fileConverter.value.toPath((ioNWFrameworkDemos / Compile / nativeLink).value)
+        s"-Dnwframework.demo.binary=${binary.toAbsolutePath}"
       },
       Test / javaOptions += {
         val binary = fileConverter.value.toPath((ioBench.native / Compile / nativeLink).value)

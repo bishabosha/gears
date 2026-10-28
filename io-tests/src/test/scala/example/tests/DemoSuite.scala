@@ -26,6 +26,15 @@ abstract class DemoSuite extends FunSuite {
       case None       => fail("set -Dgears.bench.binary=<path to executable>, or run `sbt ioDemosTests/test`")
     }
 
+  /** Absolute path of the Network.framework backend's linked demo application, passed in by the `ioDemosTests` sbt
+    * project.
+    */
+  lazy val nwframeworkBinary: String =
+    sys.props.get("nwframework.demo.binary").orElse(sys.env.get("NWFRAMEWORK_DEMO_BINARY")) match {
+      case Some(path) => Paths.get(path).toAbsolutePath.toString
+      case None       => fail("set -Dnwframework.demo.binary=<path to executable>, or run `sbt ioDemosTests/test`")
+    }
+
   /** Arguments placed before every demo command; `Seq("gears")` runs the gears mirrors instead. */
   def commandPrefix: Seq[String] = Nil
 
