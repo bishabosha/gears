@@ -352,3 +352,11 @@ The runner was `ReactorFutures.run`, one object per platform, named for reactors
 `Io.run` now, on `Io`'s companion in the shared interface, so a program names only `Io` and its backend; each
 platform's implementation is internal (`internal.Runner`, with Scala Native's suspension support beside it), and Scala.js,
 which has no backend yet, refuses.
+
+## A time limit is a duration
+
+`Io.perform(op, timeoutMillis: Int)`, with `Backend.NoTimeout` (-1) for none, sat beside timers that take a
+`FiniteDuration`. It is `perform(op, timeout: FiniteDuration)` now, and `perform(op)` has no limit, so there is no
+sentinel to pass; the limit is kept to the millisecond, rounded up so that it is never sooner than asked, and its
+rules, what a cancelled or timed-out op leaves behind, are stated on `perform` rather than on the internal
+`Submitter.submit`. Within, the kinds of `Io` still take milliseconds (`performWithin`).

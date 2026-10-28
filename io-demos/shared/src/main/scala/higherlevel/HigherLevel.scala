@@ -35,6 +35,9 @@ import java.util.concurrent.TimeoutException
   */
 object HigherLevel {
 
+  /** How long a graceful close waits for the peer's end, by default. */
+  val Linger: scala.concurrent.duration.FiniteDuration = scala.concurrent.duration.FiniteDuration(2, "s")
+
   /** Performs the op `open` builds, which opens a handle into the slot it is given, and returns the handle. */
   private def opened[K <: AnyRef](using io: Io[Backend], async: Async)(open: Slot[K] => io.Op): K = {
     val into = Slot[K]()
@@ -116,26 +119,26 @@ object HigherLevel {
     io.perform(io.backend.ops.shutdownOutput(handle))
 
   /** Closes a connected stream without resetting it: shuts it down for writing, so that the peer reads all that was
-    * written and then the end, reads into `scratch` and discards until the peer's end, at most `timeoutMillis`, and
-    * closes. Closing with bytes from the peer unread would reset the connection, and a reset can discard the reply the
-    * peer has not read yet. A peer that resets or never ends its side is closed on anyway.
+    * written and then the end, reads into `scratch` and discards until the peer's end, at most `timeout`, and closes.
+    * Closing with bytes from the peer unread would reset the connection, and a reset can discard the reply the peer has
+    * not read yet. A peer that resets or never ends its side is closed on anyway.
     */
   def closeGracefully(using
       io: Io[StreamSockets]
-  )(handle: io.Connection, scratch: ByteBuffer, timeoutMillis: Int = 2000)(using
+  )(handle: io.Connection, scratch: ByteBuffer, timeout: scala.concurrent.duration.FiniteDuration = Linger)(using
       Async
   ): Unit =
     try {
       shutdownOutput(handle)
       val read = io.backend.ops.read(handle, scratch)
-      val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+      val deadline = System.nanoTime() + timeout.toNanos
       var open = true
       while open do {
-        val left = ((deadline - System.nanoTime()) / 1_000_000L).toInt
+        val left = deadline - System.nanoTime()
         if left <= 0 then open = false
         else {
           scratch.clear()
-          io.perform(read, left)
+          io.perform(read, scala.concurrent.duration.FiniteDuration(left, java.util.concurrent.TimeUnit.NANOSECONDS))
           open = scratch.position() > 0 // a read that adds nothing is the peer's end
         }
       }

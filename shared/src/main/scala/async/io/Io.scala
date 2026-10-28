@@ -36,21 +36,31 @@ trait Io[+B <: Backend] extends AsyncOperations {
   type UnixConnectedDatagram = backend.UnixConnectedDatagram
   type File = backend.File
 
-  /** Performs `op` with no time limit (see the other `perform`). */
-  final def perform(op: Op)(using Async): Unit = perform(op, Backend.NoTimeout)
-
   /** Performs `op` and suspends the caller until it is done: it returns when the op finishes, throws its failure, or
-    * throws `CancellationException` when the caller is cancelled first; and, unless `timeoutMillis` is negative
-    * (`Backend.NoTimeout`), throws `java.util.concurrent.TimeoutException` if the op is not done that many milliseconds
-    * after it was started, the op stopped as `Submitter.submit` says, so that a read with a timeout is one call, with
-    * no timer raced against it.
-    *
-    * Whichever way it ends, once it returns or throws the op is no longer in use anywhere: its buffers and slots are
-    * the caller's again, and its handle is as open as it was, so a cancelled or timed-out read leaves the connection
-    * usable. Cancelling the caller asks the kind to stop the op, and `perform` keeps waiting until it has. An op marked
-    * `Repeatable` may be performed again once it has returned; any other op only once.
+    * throws `CancellationException` when the caller is cancelled first. Whichever way it ends, once it returns or
+    * throws the op is no longer in use anywhere: its buffers and slots are the caller's again, and its handle is as
+    * open as it was. An op marked `Repeatable` may be performed again once it has returned; any other op only once.
     */
-  def perform(op: Op, timeoutMillis: Int)(using Async): Unit
+  final def perform(op: Op)(using Async): Unit = performWithin(op, Backend.NoTimeout)
+
+  /** Performs `op` as the other `perform` does, and throws `java.util.concurrent.TimeoutException` if it is not done
+    * `timeout` after it began: never sooner, and to the millisecond. A cancelled or timed-out op has stopped, and an op
+    * that waits for its handle before touching anything (a read, a write, an accept, a receive, a send) has then done
+    * nothing: no bytes taken, none written, nothing accepted, so a read that timed out is a wait that gave up, not a
+    * connection lost, and is how a read is given a timeout, with no timer to race it against. An op that opens leaves
+    * its slot empty and nothing open. One already running elsewhere when it is stopped, a blocking op, a file's or a
+    * name lookup, finishes, its outcome dropped unless it had already written it (see each op). A timer whose own time
+    * is longer times out the same way; a zero `timeout` gives the op until the next turn of the caller's worker.
+    */
+  final def perform(op: Op, timeout: scala.concurrent.duration.FiniteDuration)(using Async): Unit = {
+    require(timeout.length >= 0, s"A time limit is not negative: $timeout")
+    val nanos = timeout.toNanos
+    val millis = math.min((nanos + 999_999L) / 1_000_000L, Int.MaxValue.toLong).toInt // rounded up, never sooner
+    performWithin(op, millis)
+  }
+
+  /** Performs `op` with a time limit of `timeoutMillis`, none if it is negative: what each kind of `Io` does. */
+  private[io] def performWithin(op: Op, timeoutMillis: Int)(using Async): Unit
 
   /** Sleeps on a timer op of the backend's. */
   override def sleep(millis: Long)(using Async): Unit = {

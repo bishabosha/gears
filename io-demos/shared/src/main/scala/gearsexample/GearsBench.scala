@@ -532,7 +532,8 @@ object GearsBench {
           val into = Slot[Received]()
           val pooledRead = if pooled then io.backend.ops.read(fd, pool.nn, into) else null
           // The time limit, where the scenario has one: long enough never to be reached, so it costs only its arming.
-          val limit = if deadline then 60_000 else Backend.NoTimeout
+          def limited(op: io.Op): Unit =
+            if deadline then io.perform(op, scala.concurrent.duration.FiniteDuration(60, "s")) else io.perform(op)
           val blocker: Option[Blocking & io.backend.type] = if blockingFirst then Some(blocking(io)) else None
           var worked = 0L
           var i = 0
@@ -542,11 +543,11 @@ object GearsBench {
               case None    => ()
             }
             buf.clear()
-            while buf.hasRemaining() do io.perform(if freshOps then io.backend.ops.write(fd, buf) else write, limit)
+            while buf.hasRemaining() do limited(if freshOps then io.backend.ops.write(fd, buf) else write)
             if pooled then {
               var got = 0
               while got < messageSize do {
-                io.perform(pooledRead.nn, limit)
+                limited(pooledRead.nn)
                 val received = into.clear()
                 val n = received.buffer.remaining()
                 received.release()
@@ -557,7 +558,7 @@ object GearsBench {
               buf.clear()
               while buf.hasRemaining() do {
                 val before = buf.position()
-                io.perform(if freshOps then io.backend.ops.read(fd, buf) else read, limit)
+                limited(if freshOps then io.backend.ops.read(fd, buf) else read)
                 if buf.position() == before then throw new IOException("The server closed the connection")
               }
             }

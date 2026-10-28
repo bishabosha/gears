@@ -22,7 +22,7 @@ private[io] object Pools {
     require(scheduler.backend eq b, s"$scheduler drives ${scheduler.backend}'s reactors, not $b's")
     val backend: b.type = b
 
-    def perform(op: Op, timeoutMillis: Int)(using Async): Unit =
+    private[io] def performWithin(op: Op, timeoutMillis: Int)(using Async): Unit =
       performOnReactor(b, op, timeoutMillis, scheduler)
 
     /** Suspends the caller and queues its resume behind the tasks already queued; throws `CancellationException` if the

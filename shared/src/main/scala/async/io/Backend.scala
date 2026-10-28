@@ -72,8 +72,8 @@ trait Backend {
 
 object Backend {
 
-  /** No time limit, for `Io.perform` and `Submitter.submit`: any negative value means the same. */
-  inline val NoTimeout = -1
+  /** No time limit, for the time limits in milliseconds within: any negative value means the same. */
+  private[io] inline val NoTimeout = -1
 }
 
 /** Stream sockets of some family, IP or Unix, once opened (see `StreamSocketOps`): what code that accepts, reads,

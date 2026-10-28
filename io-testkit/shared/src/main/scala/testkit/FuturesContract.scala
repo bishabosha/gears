@@ -26,6 +26,7 @@ import java.nio.file.Files
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.*
+import scala.concurrent.duration.FiniteDuration
 
 import munit.FunSuite
 
@@ -391,7 +392,7 @@ trait FuturesContract extends ProgramSuite {
       val read = io.backend.ops.read(in, full)
       def refused(): Boolean =
         try {
-          io.perform(read, timeoutMillis = 2_000)
+          io.perform(read, FiniteDuration(2_000, "ms"))
           false
         } catch case _: IllegalArgumentException => true
       val before = refused()
@@ -399,7 +400,7 @@ trait FuturesContract extends ProgramSuite {
       val after = refused()
       val buf = arena.allocate(16)
       val readSome = io.backend.ops.read(in, buf)
-      while buf.position() < 5 do io.perform(readSome, timeoutMillis = 2_000)
+      while buf.position() < 5 do io.perform(readSome, FiniteDuration(2_000, "ms"))
       s"$before $after ${full.position() == full.limit()} ${text(buf)}"
     }
     def writeAll(io: Io[backend.type], out: Writable)(message: String)(using Async): Unit = {
@@ -447,12 +448,12 @@ trait FuturesContract extends ProgramSuite {
         val started = System.nanoTime()
         val timedOut =
           try {
-            io.perform(read, timeoutMillis = 20)
+            io.perform(read, FiniteDuration(20, "ms"))
             false
           } catch case _: TimeoutException => true
         val waited = System.nanoTime() - started
         io.perform(io.backend.ops.write(out, arena.of("in time".getBytes(StandardCharsets.UTF_8))))
-        io.perform(read, timeoutMillis = 5_000)
+        io.perform(read, FiniteDuration(5_000, "ms"))
         s"$timedOut ${waited >= 20_000_000L} ${buf.position()} ${text(buf)}"
       } finally {
         io.perform(io.backend.ops.close(in))
@@ -475,7 +476,7 @@ trait FuturesContract extends ProgramSuite {
           val started = System.nanoTime()
           val timedOut =
             try {
-              io.perform(op, timeoutMillis = 20)
+              io.perform(op, FiniteDuration(20, "ms"))
               false
             } catch case _: TimeoutException => true
           val waited = System.nanoTime() - started
@@ -491,7 +492,7 @@ trait FuturesContract extends ProgramSuite {
       val started = System.nanoTime()
       val timedOut =
         try {
-          io.perform(io.backend.ops.timer(60_000), timeoutMillis = 20)
+          io.perform(io.backend.ops.timer(60_000), FiniteDuration(20, "ms"))
           false
         } catch case _: TimeoutException => true
       val waited = System.nanoTime() - started
@@ -506,7 +507,7 @@ trait FuturesContract extends ProgramSuite {
         for limit <- List(20, 21, 1000)
         yield
           try {
-            io.perform(io.backend.ops.timer(20), timeoutMillis = limit)
+            io.perform(io.backend.ops.timer(20), FiniteDuration(limit.toLong, "ms"))
             true
           } catch case _: TimeoutException => false
       completed.mkString(" ")

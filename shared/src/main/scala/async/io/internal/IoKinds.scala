@@ -25,5 +25,5 @@ trait OnPool[+B <: ReactorBackend] extends Io[B] {
   * the runner, or anyone, and used from any thread. Its `yield` is gears' own, a task spawned on the scheduler.
   */
 final class OnCaller[+B <: CallerBackend](val backend: B) extends Io[B] {
-  def perform(op: Op, timeoutMillis: Int)(using Async): Unit = backend.performHere(op, timeoutMillis)
+  private[io] def performWithin(op: Op, timeoutMillis: Int)(using Async): Unit = backend.performHere(op, timeoutMillis)
 }
