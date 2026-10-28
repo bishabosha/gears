@@ -5,7 +5,7 @@ import gears.async.io.internal.ReactorBackend
 
 /** What a backend that resolves host names must do (see `ReactorContract`). */
 trait ResolveContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & ResolveBackend
+  val backend: ReactorBackend & Blocking & Pipes & Resolving
 
   test("resolve finds localhost") {
     withReactor { r =>

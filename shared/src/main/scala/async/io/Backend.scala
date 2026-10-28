@@ -18,9 +18,9 @@ import _root_.gears.async.Async
   * blocking the caller. Where the streams come from is a capability the backend mixes in, with the ops that open its
   * handles and use them: IP stream and datagram sockets (`IpStreams`, `IpDatagrams`, both `IpSockets`), regular files
   * (`Files`), pipes (`Pipes`), name resolution (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams`
-  * and `Fifos`. Code that needs a capability asks for a backend that has it (`SocketBackend`, a `Backend & IpSockets`,
-  * and the other aliases below), or for an `Io` over one (`Io[SocketBackend]`), so a backend without it, such as one in
-  * a browser, which has no sockets or files of these kinds, is refused when compiling, not when running.
+  * and `Fifos`. Code that needs a capability asks for a backend that has it, by the capability, each a `Backend`
+  * (`IpSockets`, or `IpStreams & Files` for more), or for an `Io` over one (`Io[IpSockets]`), so a backend without it,
+  * such as one in a browser, which has no sockets or files of these kinds, is refused when compiling, not when running.
   */
 trait Backend {
 
@@ -146,16 +146,3 @@ trait UnixDatagrams extends Backend {
 trait Fifos extends Backend {
   def ops: Kinded[FifoOps[Op, Handle]]
 }
-
-/** A backend with IP sockets of both transports: what a program asks for, and the other aliases likewise. */
-type SocketBackend = Backend & IpSockets
-type IpStreamBackend = Backend & IpStreams
-type IpDatagramBackend = Backend & IpDatagrams
-type StreamSocketBackend = Backend & StreamSockets
-type FileBackend = Backend & Files
-type ResolveBackend = Backend & Resolving
-type PipeBackend = Backend & Pipes
-type BlockingBackend = Backend & Blocking
-type UnixStreamBackend = Backend & UnixStreams
-type UnixDatagramBackend = Backend & UnixDatagrams
-type FifoBackend = Backend & Fifos

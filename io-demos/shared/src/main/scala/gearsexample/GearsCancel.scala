@@ -2,8 +2,8 @@ package gearsexample
 
 import gears.async.Future
 import gears.async.Future.Promise
-import gears.async.io.BlockingBackend
-import gears.async.io.PipeBackend
+import gears.async.io.Blocking
+import gears.async.io.Pipes
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.internal.ReactorBackend
@@ -57,7 +57,7 @@ object GearsCancel {
       case _                                 => false
     }
 
-  def run()(using ReactorBackend & BlockingBackend & PipeBackend): Unit = {
+  def run()(using ReactorBackend & Blocking & Pipes): Unit = {
     val leftoverInterrupted = new AtomicBoolean() // its task is still running when the program ends
     val leftoverNotified = new AtomicBoolean() // set when the program's end cancels its future
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then

@@ -1,6 +1,6 @@
 package gearsexample
 
-import gears.async.io.FifoBackend
+import gears.async.io.Fifos
 import gears.async.io.ReactorFutures
 import gears.async.io.testkit.BufferArena
 
@@ -10,7 +10,7 @@ import higherlevel.HigherLevel
 
 /** Mirror of `example.KQueueExampleFileWrite`: writes the message again after every completed write. */
 object GearsFileWrite {
-  def run(fifo: String, message: String)(using FifoBackend): Unit = {
+  def run(fifo: String, message: String)(using Fifos): Unit = {
     BufferArena.scoped { arena =>
       val bytes = message.getBytes(StandardCharsets.UTF_8)
       val buf = arena.allocate(math.max(bytes.length, 1))

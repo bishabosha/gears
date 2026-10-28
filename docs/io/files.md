@@ -9,7 +9,7 @@ and the measurements. The aio findings are from the xnu sources (`bsd/kern/kern_
 
 ## The ops
 
-`FileOps`, the ops of a `FileBackend`, which kqueue, NIO and Network.framework all are:
+`FileOps`, the ops of a `Files`, which kqueue, NIO and Network.framework all are:
 
 - `open(path, write, into)`: opens the regular file and writes its handle into a `Slot[File]`, as `accept` does a
   connection's; anything but a regular file fails the op. Opening is an op, as every opener in the interface now is,

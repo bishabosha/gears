@@ -27,7 +27,7 @@ import munit.FunSuite
 trait ReactorContract extends FunSuite {
 
   /** The backend under test: a reactor backend with blocking ops and pipes, which these checks also cover. */
-  val backend: ReactorBackend & BlockingBackend & PipeBackend
+  val backend: ReactorBackend & Blocking & Pipes
 
   /** Where the checks' buffers come from, freed when the suite ends. */
   private lazy val arena = gears.async.io.testkit.BufferArena.open()

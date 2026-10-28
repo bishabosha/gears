@@ -12,7 +12,7 @@ import java.nio.file.Path
   * read, written and synced at offsets.
   */
 trait FileContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & FileBackend
+  val backend: ReactorBackend & Blocking & Pipes & gears.async.io.Files
 
   /** Opens the file at `path` through `r` with the `open` op, throwing its failure. */
   protected def open(r: R, path: Path, write: Boolean)(using munit.Location): File = {

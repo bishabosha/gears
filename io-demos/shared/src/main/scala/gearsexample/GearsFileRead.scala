@@ -1,6 +1,6 @@
 package gearsexample
 
-import gears.async.io.FifoBackend
+import gears.async.io.Fifos
 import gears.async.io.ReactorFutures
 import gears.async.io.testkit.BufferArena
 
@@ -15,7 +15,7 @@ import higherlevel.HigherLevel
   * chunk's room. Use with a FIFO.
   */
 object GearsFileRead {
-  def run(fifo: String)(using FifoBackend): Unit = {
+  def run(fifo: String)(using Fifos): Unit = {
     BufferArena.scoped { arena =>
       val chunk = arena.allocate(1024)
       val contents = new ByteArrayOutputStream()

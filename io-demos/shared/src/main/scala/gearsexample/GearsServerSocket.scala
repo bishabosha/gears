@@ -4,11 +4,10 @@ import gears.async.Async
 import gears.async.Future
 import gears.async.io.Backend
 import gears.async.io.Io
-import gears.async.io.IpStreamBackend
+import gears.async.io.IpStreams
 import gears.async.io.ReactorFutures
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
-import gears.async.io.UnixStreamBackend
 import gears.async.io.UnixStreams
 import gears.async.io.testkit.BufferArena
 
@@ -57,9 +56,9 @@ object GearsServerSocket {
       finally arena.close()
   }
 
-  def run(sock: String)(using UnixStreamBackend & IpStreamBackend): Unit = run(UnixAddress(sock))
+  def run(sock: String)(using UnixStreams & IpStreams): Unit = run(UnixAddress(sock))
 
-  def run(address: StreamAddress)(using UnixStreamBackend & IpStreamBackend): Unit =
+  def run(address: StreamAddress)(using UnixStreams & IpStreams): Unit =
     ReactorFutures.run { io ?=>
       val server = Sockets.listen(address)
       try {

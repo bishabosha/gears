@@ -9,7 +9,7 @@ import java.util.concurrent.TimeoutException
 
 /** What a backend with IP datagram sockets must do (see `ReactorContract`), with or without IP stream sockets. */
 trait IpDatagramContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & IpDatagramBackend
+  val backend: ReactorBackend & Blocking & Pipes & IpDatagrams
 
   /** A datagram socket bound to `local`, from the `bindDatagram` op, whose failure is thrown. */
   protected def bindDatagram(r: R, local: IpAddress)(using munit.Location): BoundDatagram = {

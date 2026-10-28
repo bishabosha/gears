@@ -5,11 +5,11 @@ import gears.async.Future
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpAddress
-import gears.async.io.IpDatagramBackend
+import gears.async.io.IpDatagrams
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.UnixAddress
-import gears.async.io.UnixDatagramBackend
+import gears.async.io.UnixDatagrams
 import gears.async.io.testkit.BufferArena
 
 import java.io.IOException
@@ -27,7 +27,7 @@ object GearsDatagram {
   // Client
 
   /** Exchanges a packet with a Unix datagram server; a Unix datagram client needs its own bound path for the reply. */
-  def run(sock: String, localSock: String, message: String)(using UnixDatagramBackend): Unit = {
+  def run(sock: String, localSock: String, message: String)(using UnixDatagrams): Unit = {
     require(sock != localSock, "The client and server socket paths must be different")
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
@@ -43,7 +43,7 @@ object GearsDatagram {
   }
 
   /** Exchanges a packet with an IP datagram server; connecting the socket also assigns it an ephemeral local port. */
-  def run(address: IpAddress, message: String)(using IpDatagramBackend): Unit = {
+  def run(address: IpAddress, message: String)(using IpDatagrams): Unit = {
     BufferArena.scoped { arena =>
       val request = arena.of(message.getBytes(StandardCharsets.UTF_8))
       val response = arena.allocate(65536)
@@ -88,7 +88,7 @@ object GearsDatagram {
   // Server
 
   /** Echoes each packet on a Unix datagram socket to its sender. */
-  def serve(address: UnixAddress)(using UnixDatagramBackend): Unit =
+  def serve(address: UnixAddress)(using UnixDatagrams): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { io ?=>
@@ -101,7 +101,7 @@ object GearsDatagram {
     }
 
   /** Echoes each packet on an IP datagram socket to its sender. */
-  def serve(address: IpAddress)(using IpDatagramBackend): Unit =
+  def serve(address: IpAddress)(using IpDatagrams): Unit =
     BufferArena.scoped { arena =>
       val packet = arena.allocate(65536)
       ReactorFutures.run { io ?=>

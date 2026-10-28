@@ -9,13 +9,13 @@ import gears.async.Future.awaitAll
 import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.io.IpAddress
-import gears.async.io.PipeBackend
-import gears.async.io.ResolveBackend
+import gears.async.io.IpSockets
+import gears.async.io.Pipes
 import gears.async.io.ResolvedAddress
+import gears.async.io.Resolving
 import gears.async.io.Slot
-import gears.async.io.SocketBackend
 import gears.async.io.UnixAddress
-import gears.async.io.UnixStreamBackend
+import gears.async.io.UnixStreams
 import gears.async.io.testkit.BufferArena
 import gears.async.withTimeout
 

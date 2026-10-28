@@ -5,7 +5,6 @@ import gears.async.Future
 import gears.async.UnboundedChannel
 import gears.async.io.Io
 import gears.async.io.IpAddress
-import gears.async.io.IpDatagramBackend
 import gears.async.io.IpDatagrams
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
@@ -60,14 +59,14 @@ object GearsQuicTimers {
     var closedIdle = 0
   }
 
-  def run(connections: Int, packets: Int, interval: FiniteDuration)(using IpDatagramBackend): Unit = {
+  def run(connections: Int, packets: Int, interval: FiniteDuration)(using IpDatagrams): Unit = {
     require(connections > 0 && packets > 0, "connections and packets are positive")
     BufferArena.scoped(arena => run(connections, packets, interval, n => arena.synchronized(arena.allocate(n))))
   }
 
   /** The run, with buffers from `buffer`, which every backend's ops can fill and drain. */
   private def run(connections: Int, packets: Int, interval: FiniteDuration, buffer: Int => ByteBuffer)(using
-      IpDatagramBackend
+      IpDatagrams
   ): Unit =
     ReactorFutures.run { io ?=>
       val socket = HigherLevel.bindDatagram(IpAddress.IPv4("127.0.0.1", 0))

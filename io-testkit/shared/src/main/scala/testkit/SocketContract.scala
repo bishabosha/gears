@@ -11,7 +11,7 @@ import java.util.concurrent.TimeoutException
   * checks that use both.
   */
 trait SocketContract extends IpStreamContract with IpDatagramContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & SocketBackend
+  val backend: ReactorBackend & Blocking & Pipes & IpSockets
 
   test("an address is checked as the op is built: numeric, of its case's family, with no scope, its port in range") {
     val ops = backend.ops

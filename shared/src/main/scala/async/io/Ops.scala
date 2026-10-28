@@ -292,8 +292,8 @@ trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
   def peerAddress(handle: ConnectedDatagram): IpAddress
 }
 
-/** Regular files as ops, for a backend that has them (see `FileBackend`). A file is opened by an op, since opening does
-  * disk I/O, for the path, as reads do, and some environments can only open asynchronously; its reads and writes are
+/** Regular files as ops, for a backend that has them (see `Files`). A file is opened by an op, since opening does disk
+  * I/O, for the path, as reads do, and some environments can only open asynchronously; its reads and writes are
   * positional, as `pread` and `pwrite` are, so that one handle serves concurrent reads at different offsets and no op
   * depends on a shared file position, which io_uring has none of either. `Ops.read` and `Ops.write` on a file handle
   * read and write at the position the handle carries, as a stream, for code that treats a file as one.
@@ -335,7 +335,7 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def sync(handle: File): Op & Repeatable
 }
 
-/** Name resolution, for a backend that has it (see `ResolveBackend`). */
+/** Name resolution, for a backend that has it (see `Resolving`). */
 trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form
@@ -348,7 +348,7 @@ trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
 
-/** The ops of pipes, for a backend that has them (see `PipeBackend`): `read` on its read end, `write` on its write end.
+/** The ops of pipes, for a backend that has them (see `Pipes`): `read` on its read end, `write` on its write end.
   */
 trait PipeOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
@@ -358,7 +358,7 @@ trait PipeOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def pipe(read: Slot[Readable], write: Slot[Writable]): Op
 }
 
-/** The ops of FIFOs, for a backend that has them (see `FifoBackend`), which are then read and written as pipes are. */
+/** The ops of FIFOs, for a backend that has them (see `Fifos`), which are then read and written as pipes are. */
 trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Opens the FIFO at `path` for reading, without waiting for a writer, and completes after writing it into `into`,
@@ -398,7 +398,7 @@ trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] with SocketO
   def listen(address: UnixAddress, options: SocketOptions, into: Slot[Listener]): Op
 }
 
-/** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
+/** Blocking code as an op, for a backend that has it (see `Blocking`). */
 trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
   /** Runs `body` off the reactor thread, completing when it returns. Cancelling it skips `body` if it has not started

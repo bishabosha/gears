@@ -33,7 +33,7 @@ What this says about the interface:
 - **The capabilities split as the hosts do.** Workers have IP streams and nothing else, and only to connect; Node and
   NIO have no Unix datagrams; WASI and Workers have no Unix sockets. Each is a capability now, so each backend offers
   what it has. Connecting apart from listening is the one split left, needed only by a Workers backend.
-- **The contracts assume pipes and blocking ops.** `ReactorContract` asks for `PipeBackend` and `BlockingBackend`, since
+- **The contracts assume pipes and blocking ops.** `ReactorContract` asks for `Pipes` and `Blocking`, since
   its streams are pipes; no JavaScript host has in-process pipes, and none but WASI has a loop the contract can drive.
   A backend there would need contracts whose streams are sockets, and a way to run them on the host's loop.
 - **Files and FIFOs are where io_uring differs most**: its file ops are asynchronous at the device, with no blocker

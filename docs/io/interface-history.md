@@ -9,7 +9,7 @@ objects of each backend's own class, have a note of their own ([handles.md](hand
 
 What only some backends can do is a trait mixed into the backend, each narrowing `ops` to its own (`IpSockets`,
 `Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`), and a program asks
-for the intersection it needs (`SocketBackend & FileBackend`, or `Io[IpSockets]` in a helper). The alternative is one
+for the intersection it needs (`IpSockets & Files`, or `Io[IpSockets]` in a helper). The alternative is one
 `Backend` with every op, failing at run time where a backend lacks one. The backends differ in fact: NIO has neither
 Unix datagram sockets nor FIFOs, since the JDK has no Unix datagram channels and can only block on a FIFO, and a
 browser backend would have no sockets or files of these kinds at all. A missing capability is then a compile error at
@@ -92,14 +92,14 @@ replaced, in order:
 - **A path-dependent proof, `backend.Context`.** It could not be narrowed: a context for `r` is not one for `r` seen as a
   `ReactorBackend`.
 - **A contravariant `Context[-B]`.** It could be narrowed, but cost every helper a second context parameter.
-- **`Io` as a refinement in each capability** (`type Io <: Io & SocketBackend { type Op = ... }`), so that a backend
+- **`Io` as a refinement in each capability** (`type Io <: Io & IpSockets { type Op = ... }`), so that a backend
   with several capabilities had an `Io` with all of them. It needed no type parameter, but an `Io` was a `Backend`, and
   each reactor backend had an `Io` class restating its capabilities.
 - **A common supertype, `Facilities`**, mixed into both a backend and its `Io`, so that an `Io` was no longer a
   `Backend`. It still restated the backend's capabilities, and an `Io` had a `type Io`.
 
 Now a capability is a `Backend` narrowed to its ops and knows nothing of `Io`; `Io` is covariant, so an `Io` over a
-`SocketBackend & FileBackend` is an `Io[IpSockets]`; and handing an `Io` to the runner as if it were a backend does not
+`IpSockets & Files` is an `Io[IpSockets]`; and handing an `Io` to the runner as if it were a backend does not
 type-check, with no guard needed. The per-backend `Io` classes are gone. What it costs: a run-time test of a capability
 is on the backend (`io.backend match { case b: (Blocking & io.backend.type) => ... }`), and a value holding such a
 backend needs its type written, or the compiler loses that its `Op` is `io.Op`. The `Io` is passed explicitly because
@@ -253,7 +253,7 @@ IP sockets were still one capability, TCP and UDP together, as BSD sockets bundl
 Deno has TCP and puts UDP behind a flag, Cloudflare Workers have outbound TCP and no UDP. So the capabilities now go by
 address family and transport, one each, none implying another: `IpStreams` (`IpStreamOps`: `connect`, `listen`),
 `IpDatagrams` (`IpDatagramOps`), `UnixStreams` and `UnixDatagrams`, with `IpSockets` the alias for both IP ones, and
-`SocketBackend` for a backend with both. The contracts split alike: `IpStreamContract`, `IpDatagramContract`, and
+`IpSockets` for a backend with both. The contracts split alike: `IpStreamContract`, `IpDatagramContract`, and
 `SocketContract` for both with the checks that use both. Whether a host can listen as well as connect, which Workers
 cannot, is not split until a backend needs it.
 

@@ -89,33 +89,33 @@ class ReactorSuite extends FunSuite {
 
   test("an op on the wrong kind of handle does not compile") {
     assert(
-      compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.read(l, (null: java.nio.ByteBuffer))").nonEmpty
+      compileErrors("def a(b: IpSockets)(l: b.Listener) = b.ops.read(l, (null: java.nio.ByteBuffer))").nonEmpty
     )
     assert(
       compileErrors(
-        "def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.write(d, (null: java.nio.ByteBuffer))"
+        "def a(b: IpSockets)(d: b.BoundDatagram) = b.ops.write(d, (null: java.nio.ByteBuffer))"
       ).nonEmpty
     )
-    assert(compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.accept(c, Slot[b.Connection]())").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(l: b.Listener) = b.ops.shutdownOutput(l)").nonEmpty)
+    assert(compileErrors("def a(b: IpSockets)(c: b.Connection) = b.ops.accept(c, Slot[b.Connection]())").nonEmpty)
+    assert(compileErrors("def a(b: IpSockets)(l: b.Listener) = b.ops.shutdownOutput(l)").nonEmpty)
     assert(
-      compileErrors("def a(b: SocketBackend)(c: b.Connection) = b.ops.send(c, (null: java.nio.ByteBuffer))").nonEmpty
-    )
-    assert(
-      compileErrors(
-        "def a(b: UnixDatagramBackend)(d: b.UnixBoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
-      ).nonEmpty
+      compileErrors("def a(b: IpSockets)(c: b.Connection) = b.ops.send(c, (null: java.nio.ByteBuffer))").nonEmpty
     )
     assert(
       compileErrors(
-        "def a(b: FileBackend & SocketBackend)(c: b.Connection) = b.ops.read(c, (null: java.nio.ByteBuffer), 0L)"
+        "def a(b: UnixDatagrams)(d: b.UnixBoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
       ).nonEmpty
     )
-    assert(compileErrors("def a(b: PipeBackend)(r: b.Readable) = b.ops.write(r, (null: java.nio.ByteBuffer))").nonEmpty)
-    assert(compileErrors("def a(b: SocketBackend)(c: b.Connection): b.Listener = c").nonEmpty)
+    assert(
+      compileErrors(
+        "def a(b: Files & IpSockets)(c: b.Connection) = b.ops.read(c, (null: java.nio.ByteBuffer), 0L)"
+      ).nonEmpty
+    )
+    assert(compileErrors("def a(b: Pipes)(r: b.Readable) = b.ops.write(r, (null: java.nio.ByteBuffer))").nonEmpty)
+    assert(compileErrors("def a(b: IpSockets)(c: b.Connection): b.Listener = c").nonEmpty)
     assertEquals(
       compileErrors(
-        "def a(b: SocketBackend & FileBackend)(c: b.Connection, f: b.File) = { b.ops.read(c, (null: java.nio.ByteBuffer)); b.ops.read(f, (null: java.nio.ByteBuffer)) }"
+        "def a(b: IpSockets & Files)(c: b.Connection, f: b.File) = { b.ops.read(c, (null: java.nio.ByteBuffer)); b.ops.read(f, (null: java.nio.ByteBuffer)) }"
       ),
       ""
     )
@@ -125,39 +125,39 @@ class ReactorSuite extends FunSuite {
     "a bound datagram socket sends to an address and hears from anyone; a connected one, to and from its peer alone"
   ) {
     assert(
-      compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))").nonEmpty
+      compileErrors("def a(b: IpSockets)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))").nonEmpty
     )
     assert(
       compileErrors(
-        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
+        "def a(b: IpSockets)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
       ).nonEmpty
     )
-    assert(compileErrors("def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.receive(d, null)").nonEmpty)
+    assert(compileErrors("def a(b: IpSockets)(d: b.BoundDatagram) = b.ops.receive(d, null)").nonEmpty)
     assert(
       compileErrors(
-        "def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.receive(d, null, Slot[IpAddress]())"
+        "def a(b: IpSockets)(d: b.ConnectedDatagram) = b.ops.receive(d, null, Slot[IpAddress]())"
       ).nonEmpty
     )
-    assert(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram): b.BoundDatagram = d").nonEmpty)
+    assert(compileErrors("def a(b: IpSockets)(d: b.ConnectedDatagram): b.BoundDatagram = d").nonEmpty)
     assert(
       compileErrors(
-        "def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), null)"
+        "def a(b: UnixDatagrams)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), null)"
       ).nonEmpty
     )
     assertEquals(
       compileErrors(
-        "def a(b: SocketBackend)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
+        "def a(b: IpSockets)(d: b.BoundDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer), IpAddress.IPv4(\"h\", 1))"
       ),
       ""
     )
     assertEquals(
-      compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"),
+      compileErrors("def a(b: IpSockets)(d: b.ConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"),
       ""
     )
-    assertEquals(compileErrors("def a(b: SocketBackend)(d: b.ConnectedDatagram) = b.ops.receive(d, null)"), "")
+    assertEquals(compileErrors("def a(b: IpSockets)(d: b.ConnectedDatagram) = b.ops.receive(d, null)"), "")
     assertEquals(
       compileErrors(
-        "def a(b: UnixDatagramBackend)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"
+        "def a(b: UnixDatagrams)(d: b.UnixConnectedDatagram) = b.ops.send(d, (null: java.nio.ByteBuffer))"
       ),
       ""
     )
@@ -166,46 +166,46 @@ class ReactorSuite extends FunSuite {
   test("each address family and transport is a capability of its own: IP streams need not bring IP datagrams") {
     assert(
       compileErrors(
-        "def d(b: IpStreamBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+        "def d(b: IpStreams) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
       ).nonEmpty
     )
     assert(
       compileErrors(
-        "def c(b: IpDatagramBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
+        "def c(b: IpDatagrams) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
       ).nonEmpty
     )
     assertEquals(
-      compileErrors("def c(b: IpStreamBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"),
+      compileErrors("def c(b: IpStreams) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"),
       ""
     )
     assertEquals(
       compileErrors(
-        "def d(b: IpDatagramBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+        "def d(b: IpDatagrams) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
       ),
       ""
     )
     assertEquals(
-      compileErrors("def a(b: StreamSocketBackend)(l: b.Listener) = b.ops.accept(l, Slot[b.Connection]())"),
+      compileErrors("def a(b: StreamSockets)(l: b.Listener) = b.ops.accept(l, Slot[b.Connection]())"),
       ""
     )
-    assertEquals(compileErrors("def s(b: SocketBackend): IpStreamBackend & IpDatagramBackend = b"), "")
+    assertEquals(compileErrors("def s(b: IpSockets): IpStreams & IpDatagrams = b"), "")
   }
 
   test("Unix and IP sockets are separate capabilities: a backend with one need not have the other") {
     assert(
       compileErrors(
-        "def u(b: UnixStreamBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
+        "def u(b: UnixStreams) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"
       ).nonEmpty
     )
     assert(
       compileErrors(
-        "def u(b: UnixDatagramBackend) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
+        "def u(b: UnixDatagrams) = b.ops.bindDatagram(IpAddress.IPv4(\"h\", 1), Slot[b.BoundDatagram]())"
       ).nonEmpty
     )
-    assert(compileErrors("def u(b: SocketBackend) = b.ops.bindDatagram(UnixAddress(\"p\"), Slot())").nonEmpty)
+    assert(compileErrors("def u(b: IpSockets) = b.ops.bindDatagram(UnixAddress(\"p\"), Slot())").nonEmpty)
     assertEquals(
       compileErrors(
-        "def u(b: UnixStreamBackend & SocketBackend) = { b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]()); b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]()) }"
+        "def u(b: UnixStreams & IpSockets) = { b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]()); b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]()) }"
       ),
       ""
     )
@@ -213,41 +213,41 @@ class ReactorSuite extends FunSuite {
 
   test("only ops marked Repeatable promise they can be resubmitted") {
     assertEquals(
-      compileErrors("def repeat(b: SocketBackend)(h: b.Listener): Repeatable = b.ops.accept(h, Slot[b.Connection]())"),
+      compileErrors("def repeat(b: IpSockets)(h: b.Listener): Repeatable = b.ops.accept(h, Slot[b.Connection]())"),
       ""
     )
     assertEquals(compileErrors("def repeat(a: Reactor): Repeatable = a.ops.timer(1)"), "")
-    assert(compileErrors("def repeat(b: BlockingBackend): Repeatable = b.ops.blocking(() => ())").nonEmpty)
+    assert(compileErrors("def repeat(b: Blocking): Repeatable = b.ops.blocking(() => ())").nonEmpty)
   }
 
   test("sockets, files, pipes and name resolution are capabilities a backend has, not every backend") {
     assert(compileErrors("def c(b: Backend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())").nonEmpty)
     assert(compileErrors("def l(b: Backend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Slot[b.Listener]())").nonEmpty)
     assert(compileErrors("def p(b: Backend) = b.ops.pipe(Slot[b.Readable](), Slot[b.Writable]())").nonEmpty)
-    assert(compileErrors("def u(b: SocketBackend) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]())").nonEmpty)
+    assert(compileErrors("def u(b: IpSockets) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]())").nonEmpty)
     assert(compileErrors("def r(b: Backend) = b.ops.resolve(\"h\", Slot())").nonEmpty)
     assert(compileErrors("def f(b: Backend) = b.ops.open(\"p\", false, Slot[b.File]())").nonEmpty)
     assertEquals(
-      compileErrors("def c(b: SocketBackend) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"),
+      compileErrors("def c(b: IpSockets) = b.ops.connect(IpAddress.IPv4(\"h\", 1), Slot[b.Connection]())"),
       ""
     )
     assertEquals(
-      compileErrors("def l(b: SocketBackend) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Slot[b.Listener]())"),
+      compileErrors("def l(b: IpSockets) = b.ops.listen(IpAddress.IPv4(\"h\", 1), Slot[b.Listener]())"),
       ""
     )
     assertEquals(
-      compileErrors("def u(b: UnixStreamBackend) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]())"),
+      compileErrors("def u(b: UnixStreams) = b.ops.connect(UnixAddress(\"p\"), Slot[b.Connection]())"),
       ""
     )
     assertEquals(
-      compileErrors("def u(b: UnixStreamBackend)(h: b.Listener) = b.ops.accept(h, Slot[b.Connection]())"),
+      compileErrors("def u(b: UnixStreams)(h: b.Listener) = b.ops.accept(h, Slot[b.Connection]())"),
       ""
     )
-    assertEquals(compileErrors("def p(b: PipeBackend) = b.ops.pipe(Slot[b.Readable](), Slot[b.Writable]())"), "")
-    assertEquals(compileErrors("def r(b: ResolveBackend) = b.ops.resolve(\"h\", Slot())"), "")
-    assertEquals(compileErrors("def f(b: FileBackend) = b.ops.open(\"p\", false, Slot[b.File]())"), "")
+    assertEquals(compileErrors("def p(b: Pipes) = b.ops.pipe(Slot[b.Readable](), Slot[b.Writable]())"), "")
+    assertEquals(compileErrors("def r(b: Resolving) = b.ops.resolve(\"h\", Slot())"), "")
+    assertEquals(compileErrors("def f(b: Files) = b.ops.open(\"p\", false, Slot[b.File]())"), "")
     assertEquals(
-      compileErrors("def s(b: FileBackend)(h: b.File): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer), 0L)"),
+      compileErrors("def s(b: Files)(h: b.File): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer), 0L)"),
       ""
     )
     assertEquals(
@@ -286,7 +286,7 @@ class ReactorSuite extends FunSuite {
 
   test("blocking ops are a capability a backend has, not every backend; readiness is no backend's, only kqueue's own") {
     assert(compileErrors("def block(b: Backend) = b.ops.blocking(() => ())").nonEmpty)
-    assertEquals(compileErrors("def block(b: BlockingBackend) = b.ops.blocking(() => ())"), "")
+    assertEquals(compileErrors("def block(b: Blocking) = b.ops.blocking(() => ())"), "")
     assert(compileErrors("def ready(b: ReactorBackend & Pipes)(h: b.Readable) = b.ops.ready(h, null)").nonEmpty)
     assert(compileErrors("def now(b: ReactorBackend & Pipes)(h: b.Readable) = b.ops.readNow(h, null)").nonEmpty)
   }

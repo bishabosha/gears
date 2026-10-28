@@ -9,7 +9,7 @@ import java.util.concurrent.TimeoutException
 
 /** What a backend with IP stream sockets must do (see `ReactorContract`), with or without IP datagram sockets. */
 trait IpStreamContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & IpStreamBackend
+  val backend: ReactorBackend & Blocking & Pipes & IpStreams
 
   /** A listener on `address`, listening, from the `listen` op, whose failure is thrown. */
   protected def listen(r: R, address: IpAddress)(using munit.Location): Listener = {

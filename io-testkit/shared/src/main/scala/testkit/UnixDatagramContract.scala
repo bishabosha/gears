@@ -8,7 +8,7 @@ import java.nio.file.Files
 
 /** What a backend with Unix datagram sockets must do (see `ReactorContract`), with or without IP sockets. */
 trait UnixDatagramContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixDatagramBackend
+  val backend: ReactorBackend & Blocking & Pipes & UnixDatagrams
 
   /** A Unix datagram socket bound to `local`, from the `bindDatagram` op, whose failure is thrown. */
   protected def bindUnixDatagram(r: R, local: UnixAddress)(using munit.Location): UnixBoundDatagram = {

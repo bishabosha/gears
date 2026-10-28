@@ -6,12 +6,10 @@ import gears.async.Future
 import gears.async.Future.awaitAll
 import gears.async.io.Backend
 import gears.async.io.Blocking
-import gears.async.io.BlockingBackend
 import gears.async.io.Io
 import gears.async.io.ReactorFutures
 import gears.async.io.Received
 import gears.async.io.Slot
-import gears.async.io.StreamSocketBackend
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.internal.ReactorBackend
@@ -216,7 +214,7 @@ object GearsBench {
           }
         }
       },
-      _.isInstanceOf[BlockingBackend]
+      _.isInstanceOf[Blocking]
     ),
     Scenario(
       "blocking-io",
@@ -228,7 +226,7 @@ object GearsBench {
         ): Unit =
           pingPong(io, connect, count, deadline = false, blockingFirst = true)
       },
-      _.isInstanceOf[BlockingBackend]
+      _.isInstanceOf[Blocking]
     ),
     Scenario(
       "timers",
@@ -320,7 +318,7 @@ object GearsBench {
     * caller backend runs it on gears' own threads.
     */
   private def runOn(workers: Int, policy: TakePolicy)(using
-      backend: StreamSocketBackend
+      backend: StreamSockets
   )(
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend match {

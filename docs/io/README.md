@@ -49,7 +49,7 @@ Three axes, chosen independently of one another:
   connected (`ConnectedDatagram`, to and from its peer alone), each also Unix (`UnixBoundDatagram`,
   `UnixConnectedDatagram`), and a `File` (both, and read, written and synced at
   offsets); each opener writes its kind, and each op takes the kind it works on, so an op on the wrong kind of handle
-  does not compile. A program asks for a backend with one as `SocketBackend`, which is `Backend & IpSockets`, and
+  does not compile. A program asks for a backend with one as `IpSockets`, which is `Backend & IpSockets`, and
   likewise for the others.
 - **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
   program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
@@ -58,7 +58,7 @@ Three axes, chosen independently of one another:
   ops or handles of its own, and it is not a `Backend`. The runner gives it to the program it starts; its kinds,
   internal, are `OnPool`, on a pool of workers driving a reactor backend's reactors, which the runtime implements,
   and `OnCaller`, over a caller backend. The type names the backend, and is covariant in it, so
-  a program over a `SocketBackend & FileBackend` is given an `Io` over that backend, which a helper asking for
+  a program over a `IpSockets & Files` is given an `Io` over that backend, which a helper asking for
   `Io[IpSockets]` takes. `Io` is also the program's gears `AsyncOperations`.
 
 What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about

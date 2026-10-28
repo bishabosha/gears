@@ -8,7 +8,7 @@ import java.nio.file.Files
 
 /** What a backend with Unix stream sockets must do (see `ReactorContract`), with or without IP sockets. */
 trait UnixStreamContract extends ReactorContract {
-  val backend: ReactorBackend & BlockingBackend & PipeBackend & UnixStreamBackend
+  val backend: ReactorBackend & Blocking & Pipes & UnixStreams
 
   /** A listener on a Unix socket path, listening, as `listen` for an IP address. */
   protected def listen(r: R, address: UnixAddress)(using munit.Location): Listener = {
