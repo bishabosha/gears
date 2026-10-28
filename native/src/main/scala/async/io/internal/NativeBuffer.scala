@@ -26,6 +26,21 @@ object NativeBuffer {
     buf
   }
 
+  /** Checks, as an op is built, that the kernel can address `buf`: a buffer with native memory behind it, writable, as
+    * `allocate` and `PointerBuffer.wrap` make, and not one on the heap, as `ByteBuffer.allocate` and, on Scala Native,
+    * `ByteBuffer.allocateDirect` make, nor a read-only one; else an `IllegalArgumentException`, where the op would fail
+    * later, in its system call, with an `UnsupportedOperationException`.
+    */
+  def check(buf: ByteBuffer): Unit =
+    if !buf.hasPointer() then
+      throw new IllegalArgumentException(
+        "This backend needs a buffer with native memory behind it, from BufferArena or PointerBuffer.wrap, not one on " +
+          s"the heap (ByteBuffer.allocate, or allocateDirect, which is on the heap on Scala Native) nor a read-only one: $buf"
+      )
+
+  /** `check` on each of `bufs`. */
+  def check(bufs: Array[ByteBuffer]): Unit = bufs.foreach(check)
+
   /** The address of the buffer's first byte. */
   def pointer(buf: ByteBuffer): Ptr[Byte] =
     buf.pointer()

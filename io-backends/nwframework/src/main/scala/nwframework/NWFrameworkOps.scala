@@ -324,6 +324,7 @@ sealed abstract class NWFrameworkCommand extends Notified {
   * `buf` has no room, since a read of nothing would look like the end of the stream.
   */
 final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(buf)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
@@ -337,6 +338,7 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
 
 /** Fills `bufs` in order (see `Ops.read`), as `NWFrameworkRead` fills one (`NWFrameworkHandle.readMany`). */
 final class NWFrameworkReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
@@ -346,6 +348,7 @@ final class NWFrameworkReadMany(val handle: Handle, bufs: Array[ByteBuffer]) ext
 
 /** Drains `bufs` in order (see `Ops.write`), as `NWFrameworkWrite` drains one (`NWFrameworkHandle.writeMany`). */
 final class NWFrameworkWriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
 
@@ -528,6 +531,7 @@ final class NWFrameworkShutdownOutput(val handle: Handle) extends NWFrameworkCom
   * the stack, having sent nothing until then (see `NWFrameworkHandle.write`). With nothing remaining, done at once.
   */
 final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(buf)
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false // with no window: the bytes were handed over, and the handle tells once one is processed
 
@@ -554,6 +558,7 @@ final class NWFrameworkWrite(val handle: Handle, buf: ByteBuffer) extends NWFram
 
 /** Receives one datagram, from the peer, into `buf`, which is left flipped for reading. */
 final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(buf)
   override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Read
 
@@ -575,6 +580,7 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
   * backend (see `IpDatagramOps.send`).
   */
 final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false

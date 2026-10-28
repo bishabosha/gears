@@ -36,6 +36,7 @@ final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File])
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
+  gears.async.io.internal.NativeBuffer.check(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) {
     if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
@@ -56,6 +57,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
+  gears.async.io.internal.NativeBuffer.check(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) { // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(handle.fd)

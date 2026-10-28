@@ -24,6 +24,7 @@ import KqueueBackend.Handle
   * `buf` has no room, since a read of nothing would look like the end of the stream.
   */
 final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
+  gears.async.io.internal.NativeBuffer.check(buf)
   def interest: Interest = Interest.Read
   override def refusal: Throwable | Null =
     if buf.hasRemaining() then null else gears.async.io.internal.Checks.bufferFull(buf)
@@ -41,6 +42,7 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
 
 /** Fills `bufs` in order with one `readv`, as `ReadIntoBuffer` fills one (see `Ops.read`). */
 final class ReadIntoBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   def interest: Interest = Interest.Read
   override def refusal: Throwable | Null =
     if gears.async.io.internal.Checks.anyRemaining(bufs) then null else gears.async.io.internal.Checks.buffersFull(bufs)
@@ -58,6 +60,7 @@ final class ReadIntoBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Comman
 
 /** Drains `bufs` in order with one `writev`, as `WriteFromBuffer` drains one (see `Ops.write`). */
 final class WriteFromBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   def interest: Interest = Interest.Write
   def perform(): Boolean = !gears.async.io.internal.Checks.anyRemaining(bufs) || NonBlocking.writev(fd, bufs) >= 0
 }
@@ -100,6 +103,7 @@ final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) ext
   * at once, with no system call.
   */
 final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
+  gears.async.io.internal.NativeBuffer.check(buf)
   def interest: Interest = Interest.Write
   def perform(): Boolean = !buf.hasRemaining() || NonBlocking.write(fd, buf) >= 0
 }
@@ -170,6 +174,7 @@ final case class Connect(fd: Int) extends Command {
   */
 final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddress] | Null, unix: Boolean)
     extends Command {
+  gears.async.io.internal.NativeBuffer.check(buf)
   override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)
@@ -206,6 +211,7 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
   * connected socket, since the JDK cannot send one (see `IpDatagramOps.send`). Done once it has gone.
   */
 final class SendTo(val fd: Int, bufs: Array[ByteBuffer], to: SocketAddress | Null) extends Command {
+  gears.async.io.internal.NativeBuffer.check(bufs)
   override private[io] def waitsItsTurn: Boolean = true
   def this(fd: Int, buf: ByteBuffer, to: SocketAddress | Null) = this(fd, Array(buf), to)
   def interest: Interest = Interest.Write
