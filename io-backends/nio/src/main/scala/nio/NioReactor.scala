@@ -25,21 +25,14 @@ import java.util.concurrent.TimeoutException
   * The selector's keys belong to the channels: closing a handle cancels its keys, and the commands pending on it here
   * fail with a `ClosedChannelException` from the loop (`closed`), as `Ops.close` says and as on the kqueue backend.
   */
-final class NioReactor private (selector: Selector)
-    extends Reactor
-    with gears.async.io.internal.TimerWaiter
-    with gears.async.io.internal.LoopPromise.Owner[NioOp] {
+final class NioReactor private (selector: Selector) extends gears.async.io.internal.ReactorCore[NioOp] {
 
-  type Op = NioOp
   type Handle = NioCapabilities.Handle
 
   /** A promise of this reactor's: a `NioPromise` or one of its subclasses. */
   private type Promise = NioOp & gears.async.io.internal.LoopPromise[NioOp]
 
   def ops: Ops[Op, Handle] = NioOps
-
-  def attachment(op: Op): AnyRef | Null = op.attachment
-  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   /** What waits on one channel's key in this selector: a command for each direction, and the interest ops each wants.
     */
@@ -49,15 +42,6 @@ final class NioReactor private (selector: Selector)
     var readOps = 0
     var writeOps = 0
     var dirty = false // queued in `changed`
-  }
-
-  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may then
-    * submit the op again.
-    */
-  /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
-  private def release(op: NioOp): Unit = {
-    val claim = op.claim
-    if claim != null then claim.release(op)
   }
 
   // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
@@ -102,60 +86,6 @@ final class NioReactor private (selector: Selector)
     any
   }
 
-  private def take(op: NioOp): Completion[NioOp] = {
-    val completion = op.completion.nn
-    op.completion = null
-    release(op)
-    if op.heapIndex >= 0 then timers.remove(op)
-    op match {
-      case timer: NioTimer => timer.waiter = null // a move no longer concerns this reactor
-      case _               => ()
-    }
-    completion
-  }
-
-  // Timers whose deadline moved earlier, told from another thread, for the loop to file again (`moved`).
-  private val movedQueue = new java.util.concurrent.ConcurrentLinkedQueue[NioTimer]()
-
-  /** A pending timer's deadline moved earlier than it is filed under: filed again here, or by the loop, woken. */
-  def moved(timer: gears.async.io.internal.TimerState): Unit = timer match {
-    case t: NioTimer =>
-      if Thread.currentThread() eq loopThread then refile(t)
-      else {
-        movedQueue.add(t)
-        wakeup()
-      }
-    case _ => ()
-  }
-
-  /** Files `timer` again under its key, if it is still pending here. Loop thread only. */
-  private def refile(timer: NioTimer): Unit =
-    if timer.heapIndex >= 0 && timer.completion != null then {
-      timers.remove(timer)
-      file(timer)
-    }
-
-  /** Files the timers moved earlier from other threads since the last turn. */
-  private def deliverMoved(): Unit = {
-    var timer = movedQueue.poll()
-    while timer != null do {
-      refile(timer)
-      timer = movedQueue.poll()
-    }
-  }
-
-  /** Puts `timer` in the heap under its key (see `TimerState`). */
-  private def file(timer: NioTimer): Unit = {
-    val key = timer.key
-    timer.when = key
-    timer.filed = key
-    timer.order = nextTimerOrder
-    nextTimerOrder += 1
-    timers.add(timer)
-  }
-
-  private def complete(op: NioOp): Unit = deliverComplete(take(op), op)
-
   // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
   // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
   // after them (`Ops.close`). Loop thread only.
@@ -174,7 +104,6 @@ final class NioReactor private (selector: Selector)
       } else complete(op)
     }
   }
-  private def fail(op: NioOp, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
 
   // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
   private val ready = new java.util.ArrayDeque[NioOp]()
@@ -218,21 +147,12 @@ final class NioReactor private (selector: Selector)
   @volatile private var parked = false
   @volatile private var wakeRequested = false
 
-  // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
-  private val timers = new TimerHeap[NioOp]
-  private var nextTimerOrder = 0L
-  private var running = false
-
   // Promises submitted here whose completion has not run, and cancelled blockers whose `block` was still running.
   private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
   private val cancellingBlockers = scala.collection.mutable.HashSet.empty[NioBlocking]
 
   // Guards waking the selector against `close`.
   private object wakeLock {}
-
-  // The thread that runs the loop (see `KqueueReactor`).
-  @volatile private var loopThread: Thread = Thread.currentThread()
-  @volatile private var closed = false
 
   def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
     submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
@@ -396,16 +316,6 @@ final class NioReactor private (selector: Selector)
       }
     }
     finished
-  }
-
-  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
-    * out then (see `fireDueTimers`).
-    */
-  private def schedule(op: NioOp, milliseconds: Int): Unit = {
-    op.when = System.nanoTime() + milliseconds * 1_000_000L
-    op.order = nextTimerOrder
-    nextTimerOrder += 1
-    timers.add(op)
   }
 
   /** `command`'s key in this selector for `s`'s channel, registering the channel with no interest ops the first time.
@@ -716,7 +626,7 @@ final class NioReactor private (selector: Selector)
   /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
     * where that would be `onCancel`. Nothing if it is no longer pending.
     */
-  private def timedOut(op: NioOp): Unit = {
+  protected def timedOut(op: NioOp): Unit = {
     val completion = withdraw(op)
     if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
   }
@@ -780,8 +690,6 @@ final class NioReactor private (selector: Selector)
     pendingPromises -= promise
     completion
   }
-
-  def stop(): Unit = running = false
 
   /** Performs the commands a ready key is waiting for. Each is taken off the key first, so its completion may submit
     * the next; one not ready after all waits again, without its completion ever seeing it.
@@ -859,30 +767,6 @@ final class NioReactor private (selector: Selector)
     deliverClosing(closingDue)
   }
 
-  /** Completes the timers that are due, earliest first, and times out the ops whose time limit is; only entries
-    * scheduled before it started.
-    */
-  private def fireDueTimers(): Unit =
-    if !timers.isEmpty then {
-      val now = System.nanoTime()
-      val submittedBefore = nextTimerOrder
-      while !timers.isEmpty && timers.peek.when <= now && timers.peek.order < submittedBefore do
-        timers.poll() match {
-          case timer: NioTimer =>
-            timer.due(now) match {
-              case gears.async.io.internal.TimerState.Complete => complete(timer)
-              case gears.async.io.internal.TimerState.Expire   => fail(timer, new TimeoutException(s"$timer timed out"))
-              case _                                           => file(timer) // its deadline moved later
-            }
-          case op => timedOut(op)
-        }
-    }
-
-  def run(): Unit = {
-    loopThread = Thread.currentThread()
-    running = true
-    while running do runOnce(block = true)
-  }
 }
 
 object NioReactor {

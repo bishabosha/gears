@@ -36,14 +36,8 @@ final class KqueueReactor private (
     maxEvents: Int,
     spinPolls: Int,
     builtBy: Ops[KqueueOp, KqueueBackend.Handle]
-) extends Reactor
-    with gears.async.io.internal.TimerWaiter
-    with gears.async.io.internal.LoopPromise.Owner[KqueueOp] {
+) extends gears.async.io.internal.ReactorCore[KqueueOp] {
 
-  /** Every kqueue reactor runs the same kinds of op, so kqueue-specific code may build them directly, and an op may go
-    * to any kqueue reactor in turn (see `KqueueBackend`).
-    */
-  type Op = KqueueOp
   type Handle = KqueueBackend.Handle
 
   /** A promise of this reactor's: a `KqueuePromise` or one of its subclasses. */
@@ -51,15 +45,6 @@ final class KqueueReactor private (
 
   /** The ops of the backend that opened it: `KqueueOps`, or those of a backend built on kqueue's reactors. */
   def ops: Ops[KqueueOp, Handle] = builtBy
-
-  /** Takes a pending op's completion off it, ending the submission, and its time limit with it: the completion may then
-    * submit the op again.
-    */
-  /** Lets go of `op`'s claim on its handle (see `claim`), as its completion is taken or it finishes in `trySubmit`. */
-  private def release(op: KqueueOp): Unit = {
-    val claim = op.claim
-    if claim != null then claim.release(op)
-  }
 
   // Ops submitted here waiting for their handle's turn (see `Turns`), and those given it, from any thread, for the loop
   // to go on submitting (`deliverTurns`).
@@ -103,60 +88,6 @@ final class KqueueReactor private (
     any
   }
 
-  private def take(op: KqueueOp): Completion[KqueueOp] = {
-    val completion = op.completion.nn
-    op.completion = null
-    release(op)
-    if op.heapIndex >= 0 then timers.remove(op)
-    op match {
-      case timer: KqueueTimer => timer.waiter = null // a move no longer concerns this reactor
-      case _                  => ()
-    }
-    completion
-  }
-
-  // Timers whose deadline moved earlier, told from another thread, for the loop to file again (`moved`).
-  private val movedQueue = new java.util.concurrent.ConcurrentLinkedQueue[KqueueTimer]()
-
-  /** A pending timer's deadline moved earlier than it is filed under: filed again here, or by the loop, woken. */
-  def moved(timer: gears.async.io.internal.TimerState): Unit = timer match {
-    case t: KqueueTimer =>
-      if Thread.currentThread() eq loopThread then refile(t)
-      else {
-        movedQueue.add(t)
-        wakeup()
-      }
-    case _ => ()
-  }
-
-  /** Files `timer` again under its key, if it is still pending here. Loop thread only. */
-  private def refile(timer: KqueueTimer): Unit =
-    if timer.heapIndex >= 0 && timer.completion != null then {
-      timers.remove(timer)
-      file(timer)
-    }
-
-  /** Files the timers moved earlier from other threads since the last turn. */
-  private def deliverMoved(): Unit = {
-    var timer = movedQueue.poll()
-    while timer != null do {
-      refile(timer)
-      timer = movedQueue.poll()
-    }
-  }
-
-  /** Puts `timer` in the heap under its key (see `TimerState`). */
-  private def file(timer: KqueueTimer): Unit = {
-    val key = timer.key
-    timer.when = key
-    timer.filed = key
-    timer.order = nextTimerOrder
-    nextTimerOrder += 1
-    timers.add(timer)
-  }
-
-  private def complete(op: KqueueOp): Unit = deliverComplete(take(op), op)
-
   // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
   // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
   // after them (`Ops.close`). Loop thread only.
@@ -175,10 +106,6 @@ final class KqueueReactor private (
       } else complete(op)
     }
   }
-  private def fail(op: KqueueOp, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
-
-  def attachment(op: Op): AnyRef | Null = op.attachment
-  def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
   // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
   private val ready = new java.util.ArrayDeque[KqueueOp]()
@@ -332,10 +259,6 @@ final class KqueueReactor private (
   private val selectedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
-  // Pending timers, and pending ops with a time limit, by deadline (see `fireDueTimers`).
-  private val timers = new gears.async.io.internal.TimerHeap[KqueueOp]
-  private var nextTimerOrder = 0L
-  private var running = false
 
   // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
   private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
@@ -345,12 +268,6 @@ final class KqueueReactor private (
 
   // Guards triggering the wake event against `close`, after which the kqueue's descriptor number may be reused.
   private object wakeLock {}
-
-  // The thread that runs the loop: the one that opens the reactor, which owns it, or the one that calls `run`. A promise
-  // resolved on it needs no wake-up, because the loop delivers every resolved promise before it polls again. Not
-  // refreshed by every `runOnce`: on macOS `Thread.currentThread` is a call into thread-local storage.
-  @volatile private var loopThread: Thread = Thread.currentThread()
-  @volatile private var closed = false
 
   def submit[C <: Op](op: C, completion: Completion[C], timeoutMillis: Int): Unit =
     submitOrFinish(op, completion, finishNow = false, timeoutMillis): Unit
@@ -536,16 +453,6 @@ final class KqueueReactor private (
         if !finishNow then ready.add(connect)
         false
     }
-
-  /** Puts `op` in the timer heap, due in `milliseconds`: a timer, to complete then, or an op with a time limit, to time
-    * out then (see `fireDueTimers`).
-    */
-  private def schedule(op: KqueueOp, milliseconds: Int): Unit = {
-    op.when = System.nanoTime() + milliseconds * 1_000_000L
-    op.order = nextTimerOrder
-    nextTimerOrder += 1
-    timers.add(op)
-  }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next
     * turn if `queue`, rather than run here, and this returns true; if it would block, this returns false. For a read,
@@ -911,7 +818,7 @@ final class KqueueReactor private (
   /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
     * where that would be `onCancel`. Nothing if it is no longer pending.
     */
-  private def timedOut(op: KqueueOp): Unit = {
+  protected def timedOut(op: KqueueOp): Unit = {
     val completion = withdraw(op)
     if completion != null then settleWithdrawn(op, completion, new TimeoutException(s"$op timed out"))
   }
@@ -990,8 +897,6 @@ final class KqueueReactor private (
     pendingPromises -= promise
     completion
   }
-
-  def stop(): Unit = running = false
 
   /** `fd`'s slot, brought up to date for a submission, a read if `reading`. What it knew no longer holds if the
     * descriptor's number was closed and reused since, on any thread: it then starts over, as for a new descriptor. Nor
@@ -1229,30 +1134,6 @@ final class KqueueReactor private (
     }
   }
 
-  /** Completes the timers that are due, earliest first, and times out the ops whose time limit is. Only entries
-    * scheduled before it started fire, so a completion that submits a zero-length timer leaves it for the next turn.
-    */
-  private def fireDueTimers(): Unit =
-    if !timers.isEmpty then {
-      val now = System.nanoTime()
-      val submittedBefore = nextTimerOrder
-      while !timers.isEmpty && timers.peek.when <= now && timers.peek.order < submittedBefore do
-        timers.poll() match {
-          case timer: KqueueTimer =>
-            timer.due(now) match {
-              case gears.async.io.internal.TimerState.Complete => complete(timer)
-              case gears.async.io.internal.TimerState.Expire   => fail(timer, new TimeoutException(s"$timer timed out"))
-              case _                                           => file(timer) // its deadline moved later
-            }
-          case op => timedOut(op)
-        }
-    }
-
-  def run(): Unit = {
-    loopThread = Thread.currentThread()
-    running = true
-    while running do runOnce(block = true)
-  }
 }
 
 object KqueueReactor {
