@@ -395,30 +395,22 @@ final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]]
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val listener = selectable(classOf[ServerSocketChannel], "Accepting")
-    val clients = scala.collection.mutable.ArrayBuffer.empty[NioKinds.Connection]
-    var more = true
-    try
-      while more && clients.length < max do {
-        val client = listener.accept()
-        if client == null then more = false
-        else {
-          try client.configureBlocking(false)
-          catch {
-            case t: Throwable =>
-              client.close()
-              throw t
-          }
-          NioHandles.accepted(handle, client)
-          clients += NioKinds.connection(NioHandles.add(Selectable(client, null)))
+    val clients = gears.async.io.internal.AcceptLoop.acceptAll[NioKinds.Connection](max) {
+      val client = listener.accept()
+      if client == null then null
+      else {
+        try client.configureBlocking(false)
+        catch {
+          case t: Throwable =>
+            client.close()
+            throw t
         }
+        NioHandles.accepted(handle, client)
+        NioKinds.connection(NioHandles.add(Selectable(client, null)))
       }
-    catch {
-      case failure: Throwable =>
-        if clients.isEmpty then
-          throw failure // with some accepted, they are delivered, and the next accept fails instead
     }
-    if clients.nonEmpty then into.set(clients.toArray)
-    clients.nonEmpty
+    if clients != null then into.set(clients)
+    clients != null
   }
 }
 

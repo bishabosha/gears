@@ -133,24 +133,13 @@ final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], ma
   override def edgeTriggered: Boolean = true
   private var count = 0
   def perform(): Boolean = {
-    val clients = new Array[Int](max)
-    count = 0
-    var more = true
-    try
-      while more && count < max do {
-        val client = NonBlocking.accept(fd)
-        if client >= 0 then {
-          clients(count) = client
-          count += 1
-        } else more = false
-      }
-    catch {
-      case failure: Throwable =>
-        if count == 0 then throw failure // with some accepted, they are delivered, and the next accept fails instead
+    val clients = gears.async.io.internal.AcceptLoop.acceptAll[KqueueKinds.Connection](max) {
+      val client = NonBlocking.accept(fd)
+      if client < 0 then null else KqueueKinds.connection(KqueueHandles.accepted(fd, client))
     }
-    if count > 0 then
-      into.set(Array.tabulate(count)(i => KqueueKinds.connection(KqueueHandles.accepted(fd, clients(i)))))
-    count > 0
+    count = if clients == null then 0 else clients.length
+    if clients != null then into.set(clients)
+    clients != null
   }
   override def transferred: Int =
     count // connections, against the pending connections a listening socket's event reports
