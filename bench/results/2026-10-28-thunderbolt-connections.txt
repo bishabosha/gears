@@ -1,0 +1,16 @@
+connections across a Thunderbolt Bridge, 2026-10-28
+client: this Mac (MacBookPro18,3, M1 Pro, macOS 27.0.1), the release-fast build of 9b296dba, one worker
+server: a MacBook Pro (Mac15,8) at 169.254.210.106, `gears bench-serve --host 0.0.0.0 --port 19876 --workers 2 --backend kqueue`
+each run: `<build> gears bench --tcp --host 169.254.210.106 --no-server --backend <backend> --scenarios connections --scale 0.1`
+started with fewer than 100 of this Mac's connections to the server in TIME_WAIT (3 s after the last run exits, then
+until drained; the connections enter TIME_WAIT a moment after the client exits)
+
+us per connection
+run  kqueue  nwframework
+1    255.68  803.84
+2    263.13  755.80
+3    259.59  771.98
+median 259.59 771.98
+
+Discarded: the same against a Network.framework server (1,008 to 3,301 us), and a first run against the kqueue server
+(257 to 1,075 us), whose runs began with up to 2,000 connections in TIME_WAIT, the drain having checked too early.

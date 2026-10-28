@@ -269,7 +269,7 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
   --port 19876 --backend nwframework` (or `kqueue`), benched with `--tcp --host <its address> --no-server`. On a LAN
   nothing rate-limits the traffic; over the internet a round trip's time is the network's, so the backends would
   differ in CPU and in throughput at concurrency (`concurrent`, `pipelined`), not in latency. Measured against a VM
-  below.
+  and between two Macs below.
 
 ## Measured across hosts, against a VM
 
@@ -298,6 +298,36 @@ median of 3 runs alternating the backends (2 of kqueue's for `pipelined` and `la
   at 6,000 it connected slowly, 3,100 µs a connection. The VM showed no listen-queue overflow or dropped SYN. The
   figures above are of runs each started with fewer than 100 left, at scale 0.1; a run started with thousands left
   measures the host's ports, not either backend.
+
+## Measured between two Macs, over Thunderbolt
+
+On a real second machine and a wire: the bench client on this Mac (an M1 Pro, macOS 27.0.1, one client worker, the
+release build of 9b296dba) against `bench-serve` on a MacBook Pro (Mac15,8) with two workers, over a Thunderbolt Bridge
+(ping 0.85 ms; Wi-Fi's 8 ms, varying by a quarter between runs, hid the backends entirely). Scale 0.2, median of 3 runs
+alternating the client's backends, µs an operation; `connections` at scale 0.1, each run started with this Mac's
+`TIME_WAIT` drained (`bench/results/2026-10-28-thunderbolt-kqueue-server.json`,
+`bench/results/2026-10-28-thunderbolt-connections.txt`). The server on kqueue:
+
+| scenario | kqueue | Network.framework | ratio |
+|---|---|---|---|
+| pingpong | 79.2 | 118.9 | 1.50 |
+| pingpong-deadline | 76.4 | 118.3 | 1.55 |
+| concurrent | 9.44 | 20.3 | 2.15 |
+| pipelined | 4.44 | 5.93 | 1.34 |
+| large | 100.4 | 93.3 | 0.93 |
+| connections | 260 | 772 | 2.97 |
+
+- **A round trip costs Network.framework 40 µs more**, as on loopback (38) and to the VM (45): the cost is fixed, and
+  its share is the network's to decide, 1.5 times kqueue's on this link's 79 µs.
+- **`concurrent` is further behind than to the VM** (2.15 against 1.43): on a real link kqueue's one worker goes
+  faster, Network.framework's hops to its Dispatch threads do not.
+- **A new connection costs it three times kqueue's**, half a millisecond more.
+- **`large` is a little faster on it**, its receives taken in larger pieces.
+
+The server on Network.framework costs as much again (`bench/results/2026-10-28-thunderbolt-nwframework-server.json`):
+kqueue's client then took 115.9 µs a round trip, 37 more, and Network.framework's 147.6, so with Network.framework at
+both ends a round trip is 1.9 times kqueue's at both; `large`, 379 against 100 µs, was 3.8 times. Its `connections`
+were not measured with `TIME_WAIT` drained.
 
 ## Known limits
 

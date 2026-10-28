@@ -1,0 +1,132 @@
+{
+  "started": "2026-10-28T11:04:39+01:00",
+  "finished": "2026-10-28T11:05:00+01:00",
+  "load_average": {
+    "before": [
+      2.4,
+      3.23,
+      2.83
+    ],
+    "after": [
+      3.49,
+      3.43,
+      2.91
+    ]
+  },
+  "runs": 3,
+  "bench_args": [
+    "--tcp",
+    "--host",
+    "169.254.210.106",
+    "--no-server",
+    "--scale",
+    "0.2",
+    "--scenarios",
+    "pingpong,pingpong-deadline,concurrent,pipelined,large"
+  ],
+  "unit": "microseconds per operation",
+  "builds": [
+    {
+      "label": "kqueue",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/lan@backend=kqueue",
+      "benchmark": "kqueue",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "9b296dba5345e3ee04c082dd4519928011e64502",
+        "subject": "bench: the results of reading kevent's fields at their offsets, which docs/io/kqueue.md cites and which were never committed",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-28T10:53:42+01:00"
+      },
+      "median": {
+        "concurrent": 16.09,
+        "pipelined": 4.02,
+        "pingpong": 115.87,
+        "pingpong-deadline": 113.31,
+        "large": 379.2
+      },
+      "samples": {
+        "concurrent": [
+          16.2,
+          15.94,
+          16.09
+        ],
+        "pipelined": [
+          3.97,
+          4.02,
+          4.04
+        ],
+        "pingpong": [
+          118.71,
+          115.87,
+          113.06
+        ],
+        "pingpong-deadline": [
+          108.16,
+          113.31,
+          115.45
+        ],
+        "large": [
+          379.38,
+          373.59,
+          379.2
+        ]
+      }
+    },
+    {
+      "label": "nwframework",
+      "executable": "/private/tmp/claude-501/-Users-jamie-Workspace-gears/407a503c-d36a-4b9d-bf4e-bff90ee0a4cf/scratchpad/bench/lan@backend=nwframework",
+      "benchmark": "nwframework",
+      "build": {
+        "project": "ioKqueueDemos",
+        "commit": "9b296dba5345e3ee04c082dd4519928011e64502",
+        "subject": "bench: the results of reading kevent's fields at their offsets, which docs/io/kqueue.md cites and which were never committed",
+        "worktree_changes": false,
+        "worktree_changes_hash": null,
+        "mode": "release-fast",
+        "scala_native": "0.5.13-20261015-c3918a9-SNAPSHOT",
+        "yieldpoints": "conditional",
+        "built": "2026-10-28T10:53:42+01:00"
+      },
+      "median": {
+        "concurrent": 20.99,
+        "pipelined": 8.38,
+        "pingpong": 147.59,
+        "pingpong-deadline": 148.08,
+        "large": 385.06
+      },
+      "samples": {
+        "concurrent": [
+          21.15,
+          20.79,
+          20.99
+        ],
+        "pipelined": [
+          8.32,
+          8.38,
+          8.46
+        ],
+        "pingpong": [
+          147.59,
+          148.61,
+          147.15
+        ],
+        "pingpong-deadline": [
+          147.91,
+          148.08,
+          148.47
+        ],
+        "large": [
+          368.18,
+          385.06,
+          401.12
+        ]
+      }
+    }
+  ],
+  "failed_runs": [],
+  "incomplete": []
+}
