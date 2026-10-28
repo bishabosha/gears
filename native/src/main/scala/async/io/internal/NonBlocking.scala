@@ -47,7 +47,10 @@ object NonBlocking {
   /** Fills `buf` from `fd` between position and limit. Returns the number of bytes read, 0 if the read would block, or
     * -1 at EOF.
     */
-  def read(fd: Int, buf: ByteBuffer): Int = {
+  def read(fd: Int, buf: ByteBuffer): Int =
+    NativeBuffer.staged(buf, copyIn = false, copyOut = true)(readAddressable(fd, _))
+
+  private def readAddressable(fd: Int, buf: ByteBuffer): Int = {
     val read = Unblocked.read(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
     if read < 0 then
       if !wouldBlock then throw new IOException(s"Failed to read from descriptor $fd: ${cError()}")
@@ -66,7 +69,10 @@ object NonBlocking {
   /** Fills `bufs` from `fd` in order, as `read` fills one, with one `readv`: the bytes read, 0 if it would block, or -1
     * at end of stream, which leaves the buffers as they were.
     */
-  def readv(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int = {
+  def readv(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int =
+    NativeBuffer.staged(bufs, copyIn = false, copyOut = true)(readvAddressable(fd, _))
+
+  private def readvAddressable(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int = {
     val vectors = stackalloc[uio.iovec](math.min(bufs.length, MaxBuffers))
     val count = fill(vectors, bufs, room = true)
     val read = Unblocked.readv(fd, vectors, count)
@@ -82,7 +88,10 @@ object NonBlocking {
   /** Drains `bufs` into `fd` in order, as `write` drains one, with one `writev`: the bytes written, or -1 if it would
     * block.
     */
-  def writev(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int = {
+  def writev(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int =
+    NativeBuffer.staged(bufs, copyIn = true, copyOut = false)(writevAddressable(fd, _))
+
+  private def writevAddressable(fd: Int, bufs: Array[java.nio.ByteBuffer]): Int = {
     val vectors = stackalloc[uio.iovec](math.min(bufs.length, MaxBuffers))
     val count = fill(vectors, bufs, room = false)
     val written = Unblocked.writev(fd, vectors, count)
@@ -127,7 +136,10 @@ object NonBlocking {
   /** Drains `buf` into `fd` between position and limit. Returns the number of bytes written, or -1 if the write would
     * block.
     */
-  def write(fd: Int, buf: ByteBuffer): Int = {
+  def write(fd: Int, buf: ByteBuffer): Int =
+    NativeBuffer.staged(buf, copyIn = true, copyOut = false)(writeAddressable(fd, _))
+
+  private def writeAddressable(fd: Int, buf: ByteBuffer): Int = {
     val written = Unblocked.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
     if written < 0 then {
       if !wouldBlock then throw new IOException(s"Failed to write to descriptor $fd: ${cError()}")

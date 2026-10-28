@@ -1210,4 +1210,40 @@ trait ReactorContract extends FunSuite {
       }
     }
   }
+
+  test("any buffer is read into and written from, on the heap or not, single or several; a read-only one is written") {
+    withReactor { r =>
+      val (in, out) = pipe(r)
+      try {
+        def heap(text: String) = java.nio.ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8))
+        def received(buf: java.nio.ByteBuffer) = new String(buf.array(), 0, buf.position(), StandardCharsets.UTF_8)
+        val direct = java.nio.ByteBuffer.allocateDirect(4)
+        direct.put("dir|".getBytes(StandardCharsets.UTF_8)).flip()
+        assertEquals(run(r, backend.ops.write(out, heap("heap|"))), null)
+        assertEquals(run(r, backend.ops.write(out, direct)), null)
+        assertEquals(run(r, backend.ops.write(out, heap("ro|").asReadOnlyBuffer())), null)
+        assertEquals(run(r, backend.ops.write(out, Array(heap("a"), bytes("b"), heap("c|")))), null)
+        val into = java.nio.ByteBuffer.allocate(64)
+        var got = ""
+        while !got.endsWith("c|") do {
+          assertEquals(run(r, backend.ops.read(in, into)), null)
+          got = received(into)
+        }
+        assertEquals(got, "heap|dir|ro|abc|")
+        assertEquals(run(r, backend.ops.write(out, bytes("scattered"))), null)
+        val first = java.nio.ByteBuffer.allocate(4)
+        val second = allocate(16)
+        var total = 0
+        while total < 9 do {
+          assertEquals(run(r, backend.ops.read(in, Array(first, second))), null)
+          total = first.position() + second.position()
+        }
+        assertEquals(received(first) + text(second), "scattered")
+        intercept[IllegalArgumentException](backend.ops.read(in, java.nio.ByteBuffer.allocate(8).asReadOnlyBuffer()))
+      } finally {
+        close(r, in)
+        close(r, out)
+      }
+    }
+  }
 }

@@ -359,6 +359,16 @@ object PosixSockets {
       bufs: Array[java.nio.ByteBuffer],
       destination: Ptr[socket.sockaddr],
       destinationLength: socket.socklen_t
+  ): Boolean =
+    NativeBuffer.staged(bufs, copyIn = true, copyOut = false)(
+      sendDatagramAddressable(fd, _, destination, destinationLength)
+    )
+
+  private def sendDatagramAddressable(
+      fd: Int,
+      bufs: Array[java.nio.ByteBuffer],
+      destination: Ptr[socket.sockaddr],
+      destinationLength: socket.socklen_t
   ): Boolean = {
     val vectors = stackalloc[uio.iovec](math.min(bufs.length, NonBlocking.MaxBuffers))
     val count = NonBlocking.fill(vectors, bufs, room = false)

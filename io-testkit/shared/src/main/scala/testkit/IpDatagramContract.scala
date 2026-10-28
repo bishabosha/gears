@@ -495,4 +495,29 @@ trait IpDatagramContract extends ReactorContract {
       }
     }
   }
+
+  test("a datagram is sent from and received into any buffer, on the heap or not") {
+    withReactor { r =>
+      val receiver = bindDatagram(r, IpAddress.IPv4("127.0.0.1", 0))
+      val to = backend.ops.localAddress(receiver)
+      val sender = connectDatagram(r, null, to)
+      try {
+        def heap(text: String) = java.nio.ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8))
+        def received()(using munit.Location): String = {
+          val buf = java.nio.ByteBuffer.allocate(64)
+          assertEquals(run(r, backend.ops.receive(receiver, buf, Slot[IpAddress]())), null)
+          StandardCharsets.UTF_8.decode(buf).toString
+        }
+        assertEquals(run(r, backend.ops.send(sender, heap("on the heap"))), null)
+        assertEquals(received(), "on the heap")
+        assertEquals(run(r, backend.ops.send(sender, heap("read-only").asReadOnlyBuffer())), null)
+        assertEquals(received(), "read-only")
+        assertEquals(run(r, backend.ops.send(sender, Array(heap("mixed "), bytes("buffers")))), null)
+        assertEquals(received(), "mixed buffers")
+      } finally {
+        close(r, receiver)
+        close(r, sender)
+      }
+    }
+  }
 }

@@ -120,4 +120,13 @@ private[io] object Checks {
     */
   def alreadyPending(op: AnyRef): IllegalArgumentException =
     new IllegalArgumentException(s"An op reading, or writing, as $op does, is already pending on its handle")
+
+  /** Checks, as an op that fills `buf` is built, that it can be filled: not a read-only buffer, which no backend reads
+    * into; else an `IllegalArgumentException`. Any other buffer is taken (see `staged`).
+    */
+  def checkFillable(buf: ByteBuffer): Unit =
+    if buf.isReadOnly() then throw new IllegalArgumentException(s"A read-only buffer cannot be read into: $buf")
+
+  /** `checkFillable` on each of `bufs`. */
+  def checkFillable(bufs: Array[ByteBuffer]): Unit = bufs.foreach(checkFillable)
 }

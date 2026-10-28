@@ -366,3 +366,13 @@ rules, what a cancelled or timed-out op leaves behind, are stated on `perform` r
 The capability of files was `Files`, which collided with `java.nio.file.Files`, imported by most code that handles
 files, and claimed more than it has: it opens regular files and refuses anything else, FIFOs among them, which are
 `Fifos`. It is `RegularFiles` now, the system's own term; its ops stay `FileOps`, and its handles `File`.
+
+## Any buffer, on every backend
+
+kqueue's system calls need a buffer's own memory, which a buffer on the heap has none of, nor, on Scala Native, one
+from `ByteBuffer.allocateDirect`, which is on the heap there; nor will Scala Native give a read-only buffer's. Such a
+buffer failed in the op's system call with a bare `UnsupportedOperationException`, then was refused as the op was
+built, while NIO took it: which buffers worked depended on the backend. Now every backend takes any buffer, kqueue's
+and the Network.framework backend's copying through memory of their own for one with none (`NativeBuffer.staged`),
+so that only a buffer with native memory behind it costs no copy; and every backend refuses, as the op is built, a
+read-only buffer to read into.

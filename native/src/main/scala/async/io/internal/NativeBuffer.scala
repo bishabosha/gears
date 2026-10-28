@@ -2,6 +2,7 @@ package gears.async.io
 package internal
 
 import java.nio.ByteBuffer
+import scala.scalanative.libc.stdlib
 import scala.scalanative.memory.PointerBuffer
 import scala.scalanative.memory.PointerBufferOps.given
 import scala.scalanative.unsafe.*
@@ -26,20 +27,79 @@ object NativeBuffer {
     buf
   }
 
-  /** Checks, as an op is built, that the kernel can address `buf`: a buffer with native memory behind it, writable, as
-    * `allocate` and `PointerBuffer.wrap` make, and not one on the heap, as `ByteBuffer.allocate` and, on Scala Native,
-    * `ByteBuffer.allocateDirect` make, nor a read-only one; else an `IllegalArgumentException`, where the op would fail
-    * later, in its system call, with an `UnsupportedOperationException`.
+  /** Runs `body` with a buffer the kernel can address standing for `buf`, and returns what it returns: `buf` itself if
+    * it has native memory behind it, as `allocate` and `PointerBuffer.wrap` make; else, for one on the heap, as
+    * `ByteBuffer.allocate` and, on Scala Native, `allocateDirect` make, or a read-only one, a stand-in over memory of
+    * its own, holding `buf`'s remaining bytes if `copyIn`, so that an op takes any buffer, at a copy's cost for such a
+    * one. What `body` moves the stand-in's position over is then `buf`'s: copied back into it if `copyOut`, its
+    * position advanced as far.
     */
-  def check(buf: ByteBuffer): Unit =
-    if !buf.hasPointer() then
-      throw new IllegalArgumentException(
-        "This backend needs a buffer with native memory behind it, from BufferArena or PointerBuffer.wrap, not one on " +
-          s"the heap (ByteBuffer.allocate, or allocateDirect, which is on the heap on Scala Native) nor a read-only one: $buf"
-      )
+  inline def staged[A](buf: ByteBuffer, inline copyIn: Boolean, inline copyOut: Boolean)(
+      inline body: ByteBuffer => A
+  ): A =
+    if buf.hasPointer() then body(buf)
+    else {
+      val memory = stagingMemory(buf.remaining())
+      try {
+        val stand = standIn(buf, memory, copyIn)
+        val result = body(stand)
+        settle(buf, stand, copyOut)
+        result
+      } finally stdlib.free(memory)
+    }
 
-  /** `check` on each of `bufs`. */
-  def check(bufs: Array[ByteBuffer]): Unit = bufs.foreach(check)
+  /** As the other `staged`, for buffers taken in order: each with native memory stands for itself, the others each by a
+    * stand-in of its own.
+    */
+  inline def staged[A](bufs: Array[ByteBuffer], inline copyIn: Boolean, inline copyOut: Boolean)(
+      inline body: Array[ByteBuffer] => A
+  ): A =
+    if bufs.forall(_.hasPointer()) then body(bufs)
+    else {
+      val stands = bufs.clone()
+      val memories = scala.collection.mutable.ArrayBuffer.empty[(Int, Ptr[Byte])]
+      try {
+        for i <- bufs.indices if !bufs(i).hasPointer() do {
+          val memory = stagingMemory(bufs(i).remaining())
+          memories += ((i, memory))
+          stands(i) = standIn(bufs(i), memory, copyIn)
+        }
+        val result = body(stands)
+        for (i, _) <- memories do settle(bufs(i), stands(i), copyOut)
+        result
+      } finally for (_, memory) <- memories do stdlib.free(memory)
+    }
+
+  /** Memory for a stand-in of `size` bytes, from `malloc`. */
+  def stagingMemory(size: Int): Ptr[Byte] = {
+    val memory = stdlib.malloc(math.max(size, 1).toCSize)
+    if memory == null then throw new OutOfMemoryError(s"No native memory for a $size-byte staging buffer")
+    memory
+  }
+
+  /** A stand-in for `buf` over `memory`: its remaining bytes long, holding them if `copyIn`, positioned at 0. */
+  def standIn(buf: ByteBuffer, memory: Ptr[Byte], copyIn: Boolean): ByteBuffer = {
+    val size = buf.remaining()
+    val stand = PointerBuffer.wrap(memory, math.max(size, 1))
+    stand.limit(size)
+    if copyIn then {
+      stand.put(buf.duplicate())
+      stand.position(0)
+    }
+    stand
+  }
+
+  /** What an op did to `stand` made `buf`'s: the bytes it moved its position over copied into `buf` if `copyOut`, and
+    * `buf`'s position advanced as far.
+    */
+  def settle(buf: ByteBuffer, stand: ByteBuffer, copyOut: Boolean): Unit = {
+    val moved = stand.position()
+    if copyOut then {
+      val got = stand.duplicate()
+      got.flip()
+      buf.put(got)
+    } else buf.position(buf.position() + moved)
+  }
 
   /** The address of the buffer's first byte. */
   def pointer(buf: ByteBuffer): Ptr[Byte] =

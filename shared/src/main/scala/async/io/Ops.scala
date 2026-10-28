@@ -34,7 +34,11 @@ trait Repeatable
 
 /** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles, values of its
   * `Handle` type, `H` here (see `Backend.Handle`): reads and writes of a stream, timers, and closing. Buffers are used
-  * between position and limit, and belong to the backend while the op is being performed, until `perform` returns.
+  * between position and limit, and belong to the backend while the op is being performed, until `perform` returns. Any
+  * buffer is taken, on every backend: on the heap or not, and a read-only one to write from, though never to read into,
+  * which fails with an `IllegalArgumentException` as the op is built; a backend whose system calls need memory of their
+  * own copies through it, so that buffers with native memory behind them (`Backend.pool`'s, or on Scala Native a
+  * `PointerBuffer`'s) are the ones that cost no copy.
   *
   * A handle's kind is in its type, a subtype of `H`, so that an op on the wrong kind of handle does not compile: a
   * stream is read through a `Readable` and written through a `Writable`; a `Connection` (a connected stream socket) and

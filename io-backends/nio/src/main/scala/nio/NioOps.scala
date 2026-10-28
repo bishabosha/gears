@@ -374,6 +374,7 @@ abstract class Command extends NioOp with Repeatable {
   * `buf` has no room, where a channel's read returns 0, which would otherwise mean wait, for ever.
   */
 final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
+  gears.async.io.internal.Checks.checkFillable(buf)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
@@ -417,6 +418,7 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
 
 /** Fills `bufs` in order, as `Read` fills one, through the channel's scattering read. */
 final class ReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
+  gears.async.io.internal.Checks.checkFillable(bufs)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     if !gears.async.io.internal.Checks.anyRemaining(bufs) then throw gears.async.io.internal.Checks.buffersFull(bufs)
@@ -545,6 +547,7 @@ final class ConnectTo(
   * whose sender is its peer, `from` is null.
   */
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] | Null) extends Command {
+  gears.async.io.internal.Checks.checkFillable(buf)
   override private[nio] def waitsItsTurn: Boolean = true
   override private[nio] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)

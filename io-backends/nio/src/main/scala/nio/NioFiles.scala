@@ -42,6 +42,7 @@ sealed abstract class FileTask(val handle: Handle) extends NioBlocking with Repe
   * advances by the bytes read, so that submitting the op again goes on from there.
   */
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long) extends FileTask(handle) {
+  gears.async.io.internal.Checks.checkFillable(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = {
     val file = regularFile // a closed handle fails first

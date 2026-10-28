@@ -538,7 +538,10 @@ private[nwframework] final class NWFrameworkHandle(
       val buf = bufs(i)
       val take = math.min(buf.remaining(), n - at)
       if take > 0 then {
-        string.memcpy(region + at, gears.async.io.internal.NativeBuffer.atPosition(buf), take.toCSize)
+        // A bulk copy, so that a buffer with no native memory behind it is taken too.
+        val part = buf.duplicate()
+        part.limit(part.position() + take)
+        scala.scalanative.memory.PointerBuffer.wrap(region + at, take).put(part)
         gears.async.io.internal.NativeBuffer.advance(buf, take)
         at += take
       }

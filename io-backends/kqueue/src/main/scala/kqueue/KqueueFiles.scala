@@ -36,17 +36,19 @@ final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File])
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  gears.async.io.internal.NativeBuffer.check(buf)
+  gears.async.io.internal.Checks.checkFillable(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) {
     if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     val fd = handle.fd
-    val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
-    if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
-    val n = read.toInt
-    unlessCancelled {
-      NativeBuffer.advance(buf, n)
-      offset += n
+    NativeBuffer.staged(buf, copyIn = false, copyOut = true) { b =>
+      val read = unistd.pread(fd, NativeBuffer.atPosition(b), b.remaining().toCSize, offset.toSize)
+      if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
+      val n = read.toInt
+      unlessCancelled {
+        NativeBuffer.advance(b, n)
+        offset += n
+      }
     }
   }
 }
@@ -57,18 +59,17 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  gears.async.io.internal.NativeBuffer.check(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) { // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(handle.fd)
   }
 
-  private def writeAt(fd: Int): Unit = {
-    val written = unistd.pwrite(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
+  private def writeAt(fd: Int): Unit = NativeBuffer.staged(buf, copyIn = true, copyOut = false) { b =>
+    val written = unistd.pwrite(fd, NativeBuffer.atPosition(b), b.remaining().toCSize, offset.toSize)
     if written < 0 then throw new IOException(s"Failed to write descriptor $fd at $offset: ${cError()}")
     val n = written.toInt
     unlessCancelled {
-      NativeBuffer.advance(buf, n)
+      NativeBuffer.advance(b, n)
       offset += n
     }
   }
