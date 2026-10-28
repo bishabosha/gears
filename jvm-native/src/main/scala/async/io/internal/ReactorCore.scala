@@ -644,7 +644,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     */
   final def wakeup(): Unit = {
     wakeRequested = true
-    if parked && wakePending.compareAndSet(false, true) then
+    if (parked || signalsWhileAwake) && wakePending.compareAndSet(false, true) then
       wakeLock.synchronized {
         if !closed then wakeNow()
       }
@@ -652,6 +652,13 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
 
   /** Makes the poll the loop is blocked in, or its next one, return: kqueue's user event, or `Selector.wakeup`. */
   protected def wakeNow(): Unit
+
+  /** Whether `wakeup` signals the loop while it is awake too, once until its next poll, rather than only while it is
+    * parked: a backend's choice, by measurement. Not signalling saves a system call per wake-up, but the signal's call
+    * keeps the waking thread awake for its length, and on macOS a blocker thread that goes back to sleep at once costs
+    * the next hand-off a thread wake-up: kqueue's `blocking` went from 5.5 to 25 µs without it (docs/io/kqueue.md).
+    */
+  protected def signalsWhileAwake: Boolean = false
 
   /** Marks the loop parked, about to block in its poll, and returns whether it may: false, and unmarked, if a wake-up
     * was asked for since its last poll, so the poll must not block. A blocking poll calls `unpark` once it returns.
@@ -665,6 +672,11 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   }
 
   protected final def unpark(): Unit = parked = false
+
+  /** Whether a wake-up was asked for since the last poll: what the wake-up was for is waiting to be delivered, so a
+    * backend spinning before it blocks stops, as it would on the event the wake-up made if the loop were parked.
+    */
+  protected final def wakeAsked: Boolean = wakeRequested
 
   /** Takes the wake-ups asked for until now as answered: called after each poll, before anything it found is looked at,
     * since the turn then delivers what they were for.

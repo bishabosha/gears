@@ -427,6 +427,9 @@ final class KqueueReactor private (
     read != null || write != null
   }
 
+  /** Signals while the loop is awake too (see `ReactorCore.signalsWhileAwake`). */
+  override protected def signalsWhileAwake: Boolean = true
+
   /** Triggers the wake event (see `ReactorCore.wakeup`). */
   protected def wakeNow(): Unit =
     KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
@@ -712,7 +715,8 @@ final class KqueueReactor private (
       return KqueueLoop.pollEventsNow(kq, events, maxEvents)
     var polled = 0
     var spins = 0
-    while polled == 0 && spins < spinPolls do {
+    // Ended early by a wake-up asked for meanwhile, which signals nothing while the loop is awake (`wakeAsked`).
+    while polled == 0 && spins < spinPolls && !wakeAsked do {
       polled = KqueueLoop.pollEventsNow(kq, events, maxEvents)
       spins += 1
     }
