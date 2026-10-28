@@ -3,10 +3,9 @@ package gears.async.io
 import java.nio.ByteBuffer
 
 /** A mutable outcome of an operation, written by the op and taken by the caller with `clear`. Like a buffer, it belongs
-  * to the backend while the op is pending: the caller clears it only after the op's completion has reached them, and
-  * the handoff that delivers the completion is what makes the op's write visible. An op submitted with a slot not yet
-  * cleared fails with an `IllegalArgumentException` as it is submitted, doing nothing, since what it opened or took
-  * would have nowhere to go.
+  * to the backend while the op is being performed: the caller clears it once `perform` has returned, which is what
+  * makes the op's write visible. An op performed with a slot not yet cleared fails with an `IllegalArgumentException`,
+  * doing nothing, since what it opened or took would have nowhere to go.
   */
 final class Slot[A <: AnyRef] {
   private var value: A | Null = null
@@ -23,26 +22,25 @@ final class Slot[A <: AnyRef] {
     value = outcome.nn
   }
 
-  /** Whether nothing has been written here, or what was has been cleared: what an op checks as it is submitted. */
+  /** Whether nothing has been written here, or what was has been cleared: what an op checks as it is performed. */
   private[io] def isEmpty: Boolean = value == null
 }
 
-/** Marks an op that may be submitted again after its previous submission finished, instead of building a new one each
-  * time: an accept loop can resubmit one accept op, and a connection can resubmit one read on its buffer. Anything an
-  * op reports, such as `Accepted.accepted`, reflects its latest submission, so read it in that submission's completion.
+/** Marks an op that may be performed again once `perform` has returned, instead of building a new one each time: an
+  * accept loop can perform one accept op again and again, and a connection one read on its buffer. What the op writes,
+  * into its buffers and slots, is its latest performance's.
   */
 trait Repeatable
 
 /** The ops every backend can build, as values of its `Op` type, on I/O objects named by its handles, values of its
   * `Handle` type, `H` here (see `Backend.Handle`): reads and writes of a stream, timers, and closing. Buffers are used
-  * between position and limit, and belong to the backend while the op is being performed: on a reactor, from submission
-  * until the op's completion.
+  * between position and limit, and belong to the backend while the op is being performed, until `perform` returns.
   *
   * A handle's kind is in its type, a subtype of `H`, so that an op on the wrong kind of handle does not compile: a
   * stream is read through a `Readable` and written through a `Writable`; a `Connection` (a connected stream socket) and
-  * a `File` are both; a `Listener` accepts; a `Datagram` (IP) and a `UnixDatagram` send and receive packets. Every
-  * handle is closed with `close`. The opener of each kind writes a handle of that kind into its slot, so a program
-  * holds the kind it opened.
+  * a `File` are both; a `Listener` accepts; datagram sockets, bound (`BoundDatagram`, `UnixBoundDatagram`) or connected
+  * (`ConnectedDatagram`, `UnixConnectedDatagram`), send and receive packets. Every handle is closed with `close`. The
+  * opener of each kind writes a handle of that kind into its slot, so a program holds the kind it opened.
   *
   * Handles are opened by ops too, each kind by the capability that has it (`IpStreamOps.connect`, `PipeOps.pipe`,
   * `FileOps.open` and the rest), since opening may wait, for a connection, a bind or the disk, and some environments
@@ -50,14 +48,14 @@ trait Repeatable
   * cancelled or times out leaves its slot empty and nothing open, so a handle is the caller's from the moment it is
   * taken from the slot, and the caller closes it with `close`. Failures are `java.io.IOException`s.
   *
-  * At most one op reading a stream (a read) and one writing it is pending at a time, on whichever submitter: another
-  * submitted meanwhile fails with an `IllegalArgumentException`, doing nothing, since two reads would take the stream's
+  * At most one op reading a stream (a read) and one writing it is performed at a time, from whichever future: another
+  * performed meanwhile fails with an `IllegalArgumentException`, doing nothing, since two reads would take the stream's
   * bytes in no order, and two writes would interleave theirs. A datagram socket's receives and sends, each a whole
   * packet, and a listener's accepts, each a whole connection, take turns instead, as Go queues a socket's concurrent
-  * callers: one submitted while another receiving, sending or accepting is pending on the handle, on any submitter,
-  * waits behind it, in the order they came, and goes on once it finishes, its time limit running meanwhile, and a
-  * cancel taking it out of the queue. An op that is not `Repeatable`, every opener and `close` among them, is submitted
-  * once; submitted again it throws `IllegalStateException`.
+  * callers: one performed while another receiving, sending or accepting is under way on the handle waits behind it, in
+  * the order they came, and goes on once it finishes, its time limit running meanwhile, and a cancel taking it out of
+  * the queue. An op that is not `Repeatable`, every opener and `close` among them, is performed once; performed again
+  * it throws `IllegalStateException`.
   */
 trait Ops[Op, H <: AnyRef] {
 
@@ -90,13 +88,13 @@ trait Ops[Op, H <: AnyRef] {
 
   /** Fills `buf`, which must have room. Completes once at least one byte has been read, or at end of stream, when
     * nothing was added: compare the buffer's position before and after. A read into a buffer with no room fails with an
-    * `IllegalArgumentException` as it is submitted, reading nothing, since it could only add nothing, which means the
+    * `IllegalArgumentException` as it is performed, reading nothing, since it could only add nothing, which means the
     * end of the stream.
     */
   def read(handle: Readable, buf: ByteBuffer): Op & Repeatable
 
-  /** Drains `buf`. Completes once at least one byte has been written; resubmit while `buf` has bytes remaining. With
-    * nothing remaining, completes at once, writing nothing.
+  /** Drains `buf`. Completes once at least one byte has been written; perform it again while `buf` has bytes remaining.
+    * With nothing remaining, completes at once, writing nothing.
     */
   def write(handle: Writable, buf: ByteBuffer): Op & Repeatable
 
@@ -120,9 +118,9 @@ trait Ops[Op, H <: AnyRef] {
   }
 
   /** Completes once `duration` has passed since each submission, never before: to the nanosecond the backend can wait,
-    * which on kqueue is what `kevent` takes, and on NIO's reactors the millisecond its selector waits in. A time limit
-    * on its submission shorter than `duration` fails it with `TimeoutException` when the limit comes, as any op's does;
-    * one no shorter leaves it to complete. Not negative.
+    * which on kqueue is what `kevent` takes, and on NIO the millisecond its selector waits in. A time limit on its
+    * submission shorter than `duration` fails it with `TimeoutException` when the limit comes, as any op's does; one no
+    * shorter leaves it to complete. Not negative.
     */
   def timer(duration: scala.concurrent.duration.FiniteDuration): Op & Repeatable
 
@@ -144,13 +142,13 @@ trait Ops[Op, H <: AnyRef] {
     */
   def read(handle: Readable, pool: BufferPool, into: Slot[Received]): Op & Repeatable
 
-  /** Closes `handle`, completing once it is closed. The ops pending on it, on whichever submitter they are, have failed
-    * with an `IOException` (a closed channel's) before this completes, their completions getting `onFailure` from that
-    * submitter's loop and a `perform` waiting on one throwing it, as the JDK fails a thread blocked on a channel that
-    * is closed; its number is then free for reuse, and a listener's port for listening on again. A Unix socket path
-    * that a listener or datagram socket bound is removed with it, if the file there is still its own, not one a later
-    * listener bound in its place: checked, then removed, as no system call removes a file only if it is a given one, so
-    * a listener binding the path between the two, a few microseconds, loses its file. Fails if `handle` is not open.
+  /** Closes `handle`, completing once it is closed. The ops under way on it, from whichever future, have failed with an
+    * `IOException` (a closed channel's) before this completes, a `perform` waiting on one throwing it, as the JDK fails
+    * a thread blocked on a channel that is closed; its number is then free for reuse, and a listener's port for
+    * listening on again. A Unix socket path that a listener or datagram socket bound is removed with it, if the file
+    * there is still its own, not one a later listener bound in its place: checked, then removed, as no system call
+    * removes a file only if it is a given one, so a listener binding the path between the two, a few microseconds,
+    * loses its file. Fails if `handle` is not open.
     */
   def close(handle: H): Op
 }
@@ -299,7 +297,7 @@ trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
   * read and write at the position the handle carries, as a stream, for code that treats a file as one.
   *
   * Cancellation follows `BlockingOps.blocking`: an op not yet started is skipped, one running finishes on its thread
-  * with its result discarded, and `onCancel` runs once the thread has stopped touching the buffer. A close that comes
+  * with its result discarded, and `perform` returns once the thread has stopped touching the buffer. A close that comes
   * while an op on the file is in its system call waits for it: the op completes, as the call did, or, on the JDK, which
   * fails a call on a channel closed under it, fails with an `IOException`; the close completes after, so the descriptor
   * is never reused under the op.
@@ -316,15 +314,15 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
   def open(path: String, write: Boolean, into: Slot[File]): Op
 
   /** Fills `buf` from the file at `offset`, as `Ops.read` fills it from a stream: completes once at least one byte has
-    * been read, or at the end of the file, when nothing was added, so a caller resubmits with the offset advanced; and
-    * fails, as it does, if `buf` has no room. A negative `offset` is refused as the op is built, with an
+    * been read, or at the end of the file, when nothing was added, so a caller performs it again with the offset
+    * advanced; and fails, as it does, if `buf` has no room. A negative `offset` is refused as the op is built, with an
     * `IllegalArgumentException`, as it is for `write`.
     */
   def read(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
   /** Drains `buf` into the file at `offset`, as `Ops.write` drains it into a stream: completes once at least one byte
-    * has been written, or, if nothing remains, without writing; resubmit while `buf` has bytes remaining, with the
-    * offset advanced.
+    * has been written, or, if nothing remains, without writing; perform it again while `buf` has bytes remaining, with
+    * the offset advanced.
     */
   def write(handle: File, buf: ByteBuffer, offset: Long): Op & Repeatable
 
@@ -338,12 +336,13 @@ trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
 /** Name resolution, for a backend that has it (see `Resolving`). */
 trait ResolveOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Resolves a host name, without blocking a reactor's thread. Completes after writing its addresses, in numeric form
+  /** Resolves a host name, without blocking the caller's worker. Completes after writing its addresses, in numeric form
     * (an IPv6 one as `inet_ntop` writes it), into `into`, which must be empty; fails with an `IOException` if the name
     * cannot be resolved, or has no IPv4 or IPv6 address. An empty name, or one with a NUL in it, is refused as the op
     * is built, with an `IllegalArgumentException`. A cancel that arrives before the write leaves `into` empty, and is
-    * delivered at once, though the lookup, which cannot be interrupted, runs on to its end off the reactor, its result
-    * dropped; one after the write is too late, and the op completes. A time limit is a cancel, so it holds to its time.
+    * delivered at once, though the lookup, which cannot be interrupted, runs on to its end on a thread of its own, its
+    * result dropped; one after the write is too late, and the op completes. A time limit is a cancel, so it holds to
+    * its time.
     */
   def resolve(host: String, into: Slot[List[ResolvedAddress]]): Op
 }
@@ -401,15 +400,16 @@ trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] with SocketO
 /** Blocking code as an op, for a backend that has it (see `Blocking`). */
 trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
 
-  /** Runs `body` off the reactor thread, completing when it returns. Cancelling it skips `body` if it has not started
-    * and interrupts it if it is running; interruption is cooperative, and `onCancel` waits for `body` to return.
+  /** Runs `body` where it may block, off the threads that run the program's futures, completing when it returns.
+    * Cancelling it skips `body` if it has not started and interrupts it if it is running; interruption is cooperative,
+    * and `perform` returns only once `body` has.
     */
   def blocking(body: () => Unit): Op
 
   /** Like the other `blocking`, writing `body`'s value into `into`, which must be empty, before completing. A cancel
     * that arrives before the write discards the value, leaving `into` empty; nothing is written after a cancel. One
     * that arrives after the write is too late: the op completes, with `into` holding the value, as an op that finished
-    * before its cancel does, and the same for a time limit or a reactor closing.
+    * before its cancel does, and the same for a time limit.
     */
   def blocking[A <: AnyRef](body: () => A, into: Slot[A]): Op
 }

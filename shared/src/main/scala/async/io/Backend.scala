@@ -122,9 +122,8 @@ trait Pipes extends Backend {
 }
 
 /** Blocking code run as an op (see `BlockingOps`): where it may block, with the op's time limit and cancellation
-  * interrupting it, the same whichever the kind. On a reactor backend that is off the reactors' threads, which keeps
-  * them free; on a caller backend it is the calling thread, which may block anyway, so there the op adds only the limit
-  * and the interrupt.
+  * interrupting it, on every backend: off the threads that run the program's futures where those must not block, and on
+  * the calling thread where it may, the op then adding only the limit and the interrupt.
   */
 trait Blocking extends Backend {
   def ops: Kinded[BlockingOps[Op, Handle]]
