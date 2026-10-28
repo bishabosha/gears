@@ -226,7 +226,7 @@ object Main {
     */
   private def withBackend(
       backend: String
-  )(body: gears.async.io.ReactorBackend & IpSockets & gears.async.io.UnixStreams => Unit): Unit =
+  )(body: gears.async.io.internal.ReactorBackend & IpSockets & gears.async.io.UnixStreams => Unit): Unit =
     backend match {
       case "kqueue"                 => body(KqueueBackend)
       case "nwframework"            => body(gears.async.io.nwframework.NWFrameworkBackend)
@@ -238,7 +238,7 @@ object Main {
     }
 
   private def withReactorBackend(backend: String)(
-      body: gears.async.io.ReactorBackend & gears.async.io.IpStreams => Unit
+      body: gears.async.io.internal.ReactorBackend & gears.async.io.IpStreams => Unit
   ): Unit =
     withBackend(backend)(body)
   def main(args: Array[String]): Unit = {

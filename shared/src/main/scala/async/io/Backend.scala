@@ -5,12 +5,12 @@ import gears.async.io.internal.Reactor
 import _root_.gears.async.Async
 
 /** A way of doing I/O: the ops it can perform, the handles they name, and the pools its reads fill. How an op is
-  * performed is its kind's: a reactor backend submits its ops with completions on reactors it opens (`ReactorBackend`),
-  * and a program over it runs on a pool of workers driving them; a caller backend does each op itself on the calling
-  * thread, as NIO's `NioOnCaller` does with non-blocking channels from a thread that may block (`CallerBackend`). Ops
-  * of another backend are a different type. Building an op or using a handle performs nothing, so either may be done
-  * from any thread, and a backend performs nothing itself: a program performs its ops with an `Io` over the backend
-  * (`Io.backend`), which says where they run.
+  * performed is its kind's, which is internal: a reactor backend submits its ops on reactors it opens, and a program
+  * over it runs on a pool of workers driving them; a caller backend does each op itself on the calling thread, as NIO's
+  * `NioOnCaller` does with non-blocking channels from a thread that may block. The runner knows which
+  * (`ReactorFutures.run`). Ops of another backend are a different type. Building an op or using a handle performs
+  * nothing, so either may be done from any thread, and a backend performs nothing itself: a program performs its ops
+  * with an `Io` over the backend (`Io.backend`), which says where they run.
   *
   * What every backend has is here: streams, read and written, into the caller's buffers or into buffers of the
   * backend's (`pool`), timers, and handles closed as ops (`Ops.close`), since a backend whose I/O facility closes
@@ -18,10 +18,9 @@ import _root_.gears.async.Async
   * blocking the caller. Where the streams come from is a capability the backend mixes in, with the ops that open its
   * handles and use them: IP stream and datagram sockets (`IpStreams`, `IpDatagrams`, both `IpSockets`), regular files
   * (`Files`), pipes (`Pipes`), name resolution (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams`
-  * and `Fifos`; its kind is a reactor (`ReactorBackend`) or the caller (`CallerBackend`). Code that needs a capability
-  * asks for a backend that has it (`SocketBackend`, a `Backend & IpSockets`, and the other aliases below), or for an
-  * `Io` over one (`Io[SocketBackend]`), so a backend without it, such as one in a browser, which has no sockets or
-  * files of these kinds, is refused when compiling, not when running.
+  * and `Fifos`. Code that needs a capability asks for a backend that has it (`SocketBackend`, a `Backend & IpSockets`,
+  * and the other aliases below), or for an `Io` over one (`Io[SocketBackend]`), so a backend without it, such as one in
+  * a browser, which has no sockets or files of these kinds, is refused when compiling, not when running.
   */
 trait Backend {
 
@@ -75,28 +74,6 @@ object Backend {
 
   /** No time limit, for `Io.perform` and `Submitter.submit`: any negative value means the same. */
   inline val NoTimeout = -1
-}
-
-/** A backend that performs each op on the calling thread, which may block, as a virtual thread may: NIO's
-  * `NioOnCaller`. Its ops may be performed from anywhere, so a program over it needs no runner: its `Io` is an `Io`
-  * from the runner (`ReactorFutures.run`) performs them on the calling thread.
-  */
-trait CallerBackend extends Backend {
-
-  /** Performs `op` on the calling thread, as `Io.perform` says: what its `Io` calls. */
-  private[io] def performHere(op: Op, timeoutMillis: Int)(using Async): Unit
-}
-
-/** A backend whose ops run on reactors, `Reactor`s it opens: an op built by `ops` may be submitted to any of them, one
-  * submission at a time, so that a task moving from one reactor's thread to another's can take its ops along: once a
-  * submission has completed, failed or been cancelled on one reactor, a `Repeatable` op may go to another. A program
-  * over this backend runs on a pool of workers driving its reactors, started by the platform's runner, and performs its
-  * ops with the `Io` the runner gives it, which submits each to the reactor of the worker running the caller.
-  */
-trait ReactorBackend extends Backend with Reactor.Factory[Reactor] {
-
-  /** Opens a reactor that runs this backend's ops. Close it when done. */
-  def open(): Reactor.Of[Op, Handle]
 }
 
 /** Stream sockets of some family, IP or Unix, once opened (see `StreamSocketOps`): what code that accepts, reads,

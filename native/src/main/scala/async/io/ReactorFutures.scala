@@ -7,8 +7,8 @@ import gears.async.Future
 import gears.async.Listener
 import gears.async.io.Backend
 import gears.async.io.Io
-import gears.async.io.ReactorBackend
 import gears.async.io.internal.*
+import gears.async.io.internal.ReactorBackend
 import gears.async.native.NativeSuspend
 
 /** gears' suspension support on Scala Native, with a pool of reactor workers. */
@@ -27,7 +27,7 @@ object ReactorFutures {
     */
   def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
-      case reactors: (ReactorBackend & backend.type) => run(1)(using reactors)(program)
+      case reactors: (ReactorBackend & backend.type) => onPool(1, TakePolicy.Affine)(using reactors)(program)
       case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")
     }
 
@@ -39,6 +39,18 @@ object ReactorFutures {
     * stop, and each reactor as it prints itself.
     */
   def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
+      backend: Backend
+  )(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
+    backend match {
+      case reactors: (ReactorBackend & backend.type) => onPool(workers, policy)(using reactors)(program)
+      case _                                         =>
+        throw new IllegalArgumentException(
+          s"$backend performs its ops on the caller, so a pool of workers has nothing to run; use `run` without workers"
+        )
+    }
+
+  /** The run on a pool, over a reactor backend. */
+  private def onPool[T](workers: Int, policy: TakePolicy)(using
       backend: ReactorBackend
   )(
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T

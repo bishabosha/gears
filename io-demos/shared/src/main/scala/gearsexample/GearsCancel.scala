@@ -4,9 +4,9 @@ import gears.async.Future
 import gears.async.Future.Promise
 import gears.async.io.BlockingBackend
 import gears.async.io.PipeBackend
-import gears.async.io.ReactorBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
+import gears.async.io.internal.ReactorBackend
 import gears.async.io.testkit.BufferArena
 
 import java.nio.charset.StandardCharsets

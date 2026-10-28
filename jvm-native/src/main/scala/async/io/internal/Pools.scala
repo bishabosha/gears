@@ -5,7 +5,6 @@ import gears.async.Async
 import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
-import gears.async.io.ReactorBackend
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicReference

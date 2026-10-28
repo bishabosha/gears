@@ -1,6 +1,8 @@
 package gears.async.io
 package testkit
 
+import gears.async.io.internal.ReactorBackend
+
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeoutException

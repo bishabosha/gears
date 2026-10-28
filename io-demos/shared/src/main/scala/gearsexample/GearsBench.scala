@@ -8,7 +8,6 @@ import gears.async.io.Backend
 import gears.async.io.Blocking
 import gears.async.io.BlockingBackend
 import gears.async.io.Io
-import gears.async.io.ReactorBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.Received
 import gears.async.io.Slot
@@ -16,6 +15,7 @@ import gears.async.io.StreamSocketBackend
 import gears.async.io.StreamSockets
 import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
+import gears.async.io.internal.ReactorBackend
 import gears.async.io.testkit.BufferArena
 
 import java.io.IOException

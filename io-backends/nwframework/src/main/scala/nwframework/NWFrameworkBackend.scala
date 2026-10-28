@@ -8,11 +8,11 @@ import gears.async.io.Files
 import gears.async.io.IpDatagrams
 import gears.async.io.IpStreams
 import gears.async.io.Pipes
-import gears.async.io.ReactorBackend
 import gears.async.io.Resolving
 import gears.async.io.UnixDatagrams
 import gears.async.io.UnixStreams
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.ReactorBackend
 import gears.async.io.kqueue.KqueueBackend
 import gears.async.io.kqueue.KqueueOp
 import gears.async.io.kqueue.KqueueReactor

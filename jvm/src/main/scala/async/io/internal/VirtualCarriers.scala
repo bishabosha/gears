@@ -2,7 +2,6 @@ package gears.async.io
 package internal
 
 import gears.async.Cancellable
-import gears.async.io.ReactorBackend
 
 import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles

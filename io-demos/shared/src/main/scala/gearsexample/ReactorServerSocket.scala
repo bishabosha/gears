@@ -2,7 +2,6 @@ package gearsexample
 
 import gears.async.io.IpAddress
 import gears.async.io.IpStreams
-import gears.async.io.ReactorBackend
 import gears.async.io.Repeatable
 import gears.async.io.Slot
 import gears.async.io.StreamSockets
@@ -10,6 +9,7 @@ import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
 import gears.async.io.internal.Completion
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.ReactorBackend
 import gears.async.io.testkit.BufferArena
 
 import java.io.IOException

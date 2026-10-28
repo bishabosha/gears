@@ -1,6 +1,8 @@
 package gears.async.io
 package testkit
 
+import gears.async.io.internal.ReactorBackend
+
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 

@@ -7,10 +7,10 @@ import gears.async.io.Files
 import gears.async.io.IpDatagrams
 import gears.async.io.IpStreams
 import gears.async.io.Pipes
-import gears.async.io.ReactorBackend
 import gears.async.io.Resolving
 import gears.async.io.UnixStreams
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.ReactorBackend
 
 /** What NIO can do, for both its backends: IP and Unix stream sockets, regular files and name resolution on the blocker
   * pool, pipes and blocking ops, but neither Unix datagram sockets nor FIFOs, which the JDK cannot wait on, nor

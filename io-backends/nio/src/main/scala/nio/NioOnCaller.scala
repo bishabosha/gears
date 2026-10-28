@@ -3,7 +3,7 @@ package nio
 
 import gears.async.Async
 import gears.async.cancellationScope
-import gears.async.io.CallerBackend
+import gears.async.io.internal.CallerBackend
 import gears.async.io.internal.Interest
 
 import java.util.concurrent.CancellationException

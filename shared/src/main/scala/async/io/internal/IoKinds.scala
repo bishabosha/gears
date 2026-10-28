@@ -11,7 +11,7 @@ import _root_.gears.async.Cancellable
   * running the caller, which suspends until the reactor finishes with it. Cancelling the caller asks the reactor to
   * cancel the op, and waits until it has. Ops in flight together are futures performing them
   * (`Future(io.perform(op))`), each cancelled with its future. The pool itself is the runtime's, which implements this:
-  * it says only what a program may do on the pool, and `yield` is its alone.
+  * it says only what a program may do on the pool; `yield` is its alone.
   */
 trait OnPool[+B <: ReactorBackend] extends Io[B] {
 

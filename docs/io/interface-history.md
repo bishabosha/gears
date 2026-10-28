@@ -320,8 +320,9 @@ the refusal.
 `Backend` and `Io`, as if a program might submit ops to reactors itself or make its own `Io`. A program performs ops
 with the `Io` the runner gives it, and nothing more is supported, so they are in `gears.async.io.internal` now: what
 the runtime, the backends and their contract suites use. Submitting to a reactor directly is still possible, as
-`ReactorServerSocket` shows, but unsupported. `ReactorBackend` and `CallerBackend` stay public, as a backend's kind,
-which runners and programs choosing a backend name; `ReactorFutures.run` gives a pool's program an `Io`, no longer an
+`ReactorServerSocket` shows, but unsupported. So are a backend's kinds, `ReactorBackend` and `CallerBackend`: the
+runner tells them apart, and `ReactorFutures.run` takes any `Backend`, its pool form refusing a caller backend, which
+has nothing for a pool to run, with an `IllegalArgumentException`; it gives a pool's program an `Io`, no longer an
 `OnPool`. One reason for queueing a datagram socket's ops in the backends (see above) was that a program submitting to
 reactors itself should have the same rule; that reason is gone with this, the others stand: a backend may do better
 than queue, and an op's time limit and cancel cover its wait.

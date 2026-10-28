@@ -1,6 +1,8 @@
 package gears.async.io
 package testkit
 
+import gears.async.io.internal.ReactorBackend
+
 /** What a backend that resolves host names must do (see `ReactorContract`). */
 trait ResolveContract extends ReactorContract {
   val backend: ReactorBackend & BlockingBackend & PipeBackend & ResolveBackend

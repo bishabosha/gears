@@ -30,6 +30,10 @@ class NioOnCallerSuite extends FuturesContract {
     assertEquals(compileErrors("def k(c: NioBackend.Connection): NioBackend.Readable = c"), "")
   }
 
+  test("a pool of workers refuses a caller backend, which has nothing for it to run") {
+    intercept[IllegalArgumentException](gears.async.io.ReactorFutures.run(2)(using NioOnCaller)(42))
+  }
+
   test("a program over NioOnCaller needs no pool: its Io, an OnCaller, performs on the calling thread") {
     given VThreadSupport.type = VThreadSupport
     given VThreadScheduler.type = VThreadScheduler

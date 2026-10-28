@@ -2,7 +2,6 @@ package gears.async.io
 package internal
 
 import gears.async.Scheduler
-import gears.async.io.ReactorBackend
 
 /** A gears scheduler whose futures run on a `ReactorPool`'s workers, and so perform their ops on the workers' own
   * reactors (see `Pools.performOnReactor`): the pool itself, as on Scala Native, or a scheduler of virtual threads the

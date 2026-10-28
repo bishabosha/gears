@@ -2,6 +2,7 @@ package gears.async.io
 
 import gears.async.io.internal.Completion
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.ReactorBackend
 import gears.async.io.internal.Submitter
 
 import munit.FunSuite
@@ -278,6 +279,8 @@ class ReactorSuite extends FunSuite {
     assert(compileErrors("def f(x: _root_.gears.async.io.Completion[Any]) = x").nonEmpty)
     assert(compileErrors("def f(x: _root_.gears.async.io.OnPool[ReactorBackend]) = x").nonEmpty)
     assert(compileErrors("def f(x: _root_.gears.async.io.OnCaller[CallerBackend]) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.ReactorBackend) = x").nonEmpty)
+    assert(compileErrors("def f(x: _root_.gears.async.io.CallerBackend) = x").nonEmpty)
     assertEquals(compileErrors("def f(x: _root_.gears.async.io.internal.OnPool[ReactorBackend]) = x"), "")
   }
 

@@ -1,7 +1,6 @@
 package gears.async.io
 package internal
 
-import gears.async.io.ReactorBackend
 import gears.async.io.kqueue.KqueueBackend
 
 import munit.FunSuite

@@ -5,7 +5,6 @@ import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.Future
 import gears.async.Future.awaitAll
-import gears.async.io.ReactorBackend
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong

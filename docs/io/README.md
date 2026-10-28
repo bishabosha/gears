@@ -6,7 +6,7 @@ projects of their own:
 | where | holds | depends on |
 | --- | --- | --- |
 | `gears.async.io` (core, `shared/`) | the interface: `Backend` and its kinds and capabilities, `Io`, `Ops`, `Handle`, `Slot`, addresses, socket options, `BufferPool`, `TakePolicy` | the rest of gears |
-| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, and `Io`'s kinds `OnPool` and `OnCaller` | the interface |
+| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds `ReactorBackend` and `CallerBackend`, and `Io`'s kinds `OnPool` and `OnCaller` | the interface |
 | `gears.async.io` (core, `jvm/` and `native/`) | the runner, `ReactorFutures`, one per platform | the runtime |
 | `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
 | `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
@@ -19,7 +19,7 @@ to the runtime: the runner, in the interface's package, starts it.
 
 The public interface is `Backend` and `Io`, with the ops, handles and options they use, and the runner: a program
 performs ops with the `Io` the runner gives it. Reactors, their submissions and completions, and the kinds of `Io` are
-internal: submitting an op to a reactor directly is possible, for the runtime, the backends, their contract suites and
+internal, and so are a backend's kinds: submitting an op to a reactor directly is possible, for the runtime, the backends, their contract suites and
 a demo of it (`ReactorServerSocket`), but unsupported.
 
 What the build does not enforce: what the interface hides from programs it hides by package (`private[io]`:
