@@ -29,9 +29,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
 
   type Handle = NioCapabilities.Handle
 
-  /** A promise of this reactor's: a `NioPromise` or one of its subclasses. */
-  private type Promise = NioOp & gears.async.io.internal.LoopPromise[NioOp]
-
   def ops: Ops[Op, Handle] = NioOps
 
   /** What waits on one channel's key in this selector: a command for each direction, and the interest ops each wants.
@@ -110,9 +107,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   private val closedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Selectable]()
   private val waitingByEntry = new java.util.IdentityHashMap[Selectable, Waiting]()
 
-  // Promises resolve on other threads; they queue here and wake the selector.
-  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
-
   // Set by the first `wakeup` since the loop last selected, so later ones skip waking the selector, which a select
   // returning clears; cleared after each select, before anything it was for is looked at.
   private val wakePending = new java.util.concurrent.atomic.AtomicBoolean()
@@ -124,10 +118,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   // drains it.
   @volatile private var parked = false
   @volatile private var wakeRequested = false
-
-  // Promises submitted here whose completion has not run, and cancelled blockers whose `block` was still running.
-  private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
-  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[NioBlocking]
 
   // Guards waking the selector against `close`.
   private object wakeLock {}
@@ -376,13 +366,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     any
   }
 
-  /** Called from any thread when a promise has its result: queue it and wake the loop. */
-  private[io] def resolved(promise: Promise): Unit =
-    if !closed then {
-      resolvedQueue.add(promise)
-      if !(Thread.currentThread() eq loopThread) then wakeup()
-    }
-
   /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from the
     * loop, with `ClosedChannelException`, as `Ops.close` says.
     */
@@ -446,38 +429,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
       }
   }
 
-  /** Runs the completions of the promises resolved when it starts (see `KqueueReactor`). */
-  private def deliverResolved(): Boolean = {
-    var remaining = resolvedQueue.size()
-    var promise = if remaining > 0 then resolvedQueue.poll() else null
-    val any = promise != null
-    while promise != null do {
-      val completion = promise.completion
-      promise.completion = null
-      if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
-      pendingPromises -= promise
-      promise match {
-        case blocking: NioBlocking if blocking.cancelling != null =>
-          assert(completion == null, "a blocker queued its cancel was resubmitted")
-          val cancelled = blocking.cancelling.nn
-          val failure = blocking.cancelledBy
-          blocking.cancelling = null
-          blocking.cancelledBy = null
-          cancellingBlockers -= blocking
-          if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
-        case _ =>
-          if completion != null then {
-            val failure = promise.failure
-            if failure != null then deliverFailure(completion, promise, failure)
-            else deliverComplete(completion, promise)
-          }
-      }
-      remaining -= 1
-      promise = if remaining > 0 then resolvedQueue.poll() else null
-    }
-    any
-  }
-
   /** Cancels every pending op, interrupting blockers, then closes the selector. A blocker still running is waited for
     * before its `onCancel`. An op that had already finished, whose completion had not run yet, gets its outcome, not a
     * cancel: what it read or opened is the caller's.
@@ -524,7 +475,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         }
         resolved = resolvedQueue.poll()
       }
-      val running = scala.collection.mutable.ArrayBuffer.empty[NioBlocking]
+      val running = scala.collection.mutable.ArrayBuffer.empty[gears.async.io.internal.BlockingRun]
       // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
       val written = scala.collection.mutable.ArrayBuffer.empty[(NioBlocking, Completion[NioOp])]
       for promise <- pendingPromises.toList do {
@@ -644,14 +595,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         cancellingBlockers += blocking
       case _ => if failure == null then deliverCancel(completion, op) else deliverFailure(completion, op, failure)
     }
-
-  private def detach(promise: Promise): Completion[NioOp] | Null = {
-    val completion = promise.completion
-    promise.completion = null
-    if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
-    pendingPromises -= promise
-    completion
-  }
 
   /** Performs the commands a ready key is waiting for. Each is taken off the key first, so its completion may submit
     * the next; one not ready after all waits again, without its completion ever seeing it.

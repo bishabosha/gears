@@ -40,9 +40,6 @@ final class KqueueReactor private (
 
   type Handle = KqueueBackend.Handle
 
-  /** A promise of this reactor's: a `KqueuePromise` or one of its subclasses. */
-  private type Promise = KqueueOp & gears.async.io.internal.LoopPromise[KqueueOp]
-
   /** The ops of the backend that opened it: `KqueueOps`, or those of a backend built on kqueue's reactors. */
   def ops: Ops[KqueueOp, Handle] = builtBy
 
@@ -160,8 +157,6 @@ final class KqueueReactor private (
   // descriptors that only kqueue can report are not starved. Loop thread only.
   private var turnsWithoutPoll = 0
 
-  // Promises resolve on other threads; they queue here and a user event interrupts a blocked poll.
-  private val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
   private val WakeEvent = 0.toUSize
   KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
     KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
@@ -232,12 +227,6 @@ final class KqueueReactor private (
   private val selectedQueue = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
 
   private var slots = new Array[Slot | Null](64)
-
-  // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
-  private val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
-
-  // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
-  private val cancellingBlockers = scala.collection.mutable.HashSet.empty[KqueueBlocking]
 
   // Guards triggering the wake event against `close`, after which the kqueue's descriptor number may be reused.
   private object wakeLock {}
@@ -590,58 +579,12 @@ final class KqueueReactor private (
     read != null || write != null
   }
 
-  /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
-    * loop is not polling, so queueing is enough.
-    */
-  private[io] def resolved(promise: Promise): Unit =
-    if !closed then { // otherwise its completion was dropped by `close`
-      resolvedQueue.add(promise)
-      if !(Thread.currentThread() eq loopThread) then wakeup()
-    }
-
   def wakeup(): Unit =
     if wakePending.compareAndSet(false, true) then
       wakeLock.synchronized {
         if !closed then
           KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
       }
-
-  /** Runs the completions of the promises resolved when it starts, on the loop thread. One resolved meanwhile, such as
-    * by a completion, waits for the next turn, so completions that keep resolving promises cannot keep the loop from
-    * polling. Returns whether there were any.
-    */
-  private def deliverResolved(): Boolean = {
-    var remaining = resolvedQueue.size() // traverses the queue, which stays short
-    var promise = if remaining > 0 then resolvedQueue.poll() else null
-    val any = promise != null
-    while promise != null do {
-      val completion = promise.completion
-      promise.completion = null
-      if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
-      pendingPromises -= promise
-      promise match {
-        case blocking: KqueueBlocking if blocking.cancelling != null =>
-          // A cancelled blocker's `block` has returned, so its op's buffers and slots are the caller's again. Its
-          // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
-          assert(completion == null, "a blocker queued its cancel was resubmitted")
-          val cancelled = blocking.cancelling.nn
-          val failure = blocking.cancelledBy
-          blocking.cancelling = null
-          blocking.cancelledBy = null
-          cancellingBlockers -= blocking
-          if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
-        case _ =>
-          if completion != null then {
-            val failure = promise.failure
-            if failure != null then deliverFailure(completion, promise, failure.nn)
-            else deliverComplete(completion, promise)
-          }
-      }
-      remaining -= 1
-      promise = if remaining > 0 then resolvedQueue.poll() else null
-    }
-    any
-  }
 
   /** Cancels every pending op, interrupting blockers, then closes the kqueue. The kqueue's own filters and wake event
     * go with it. A blocker still running is waited for before its `onCancel`. An op that had already finished, whose
@@ -694,7 +637,7 @@ final class KqueueReactor private (
         }
         resolved = resolvedQueue.poll()
       }
-      val running = scala.collection.mutable.ArrayBuffer.empty[KqueueBlocking]
+      val running = scala.collection.mutable.ArrayBuffer.empty[gears.async.io.internal.BlockingRun]
       // Blockers that wrote their result: as good as finished, so they get their outcome once they return.
       val written = scala.collection.mutable.ArrayBuffer.empty[(KqueueBlocking, Completion[KqueueOp])]
       for promise <- pendingPromises.toList do {
@@ -842,15 +785,6 @@ final class KqueueReactor private (
     * `dispatch` drops its event.
     */
   private def deleteFilter(fd: Int, read: Boolean): Unit = KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
-
-  /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
-  private def detach(promise: Promise): Completion[KqueueOp] | Null = {
-    val completion = promise.completion
-    promise.completion = null
-    if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
-    pendingPromises -= promise
-    completion
-  }
 
   /** `fd`'s slot, brought up to date for a submission, a read if `reading`. What it knew no longer holds if the
     * descriptor's number was closed and reused since, on any thread: it then starts over, as for a new descriptor. Nor

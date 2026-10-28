@@ -14,6 +14,9 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     */
   type Op = O
 
+  /** A promise of this reactor's: one of the backend's ops that is a `LoopPromise`. */
+  protected type Promise = O & LoopPromise[O]
+
   def attachment(op: Op): AnyRef | Null = op.attachment
   def attach(op: Op, value: AnyRef | Null): Unit = op.attachment = value
 
@@ -146,6 +149,71 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     op.order = nextTimerOrder
     nextTimerOrder += 1
     timers.add(op)
+  }
+
+  // Promises resolve on other threads; they queue here and wake the loop.
+  protected final val resolvedQueue = new java.util.concurrent.ConcurrentLinkedQueue[Promise]()
+
+  // Promises submitted here whose completion has not run, so `close` can cancel them. Loop thread only.
+  protected final val pendingPromises = scala.collection.mutable.HashSet.empty[Promise]
+
+  // Cancelled blockers whose `block` was still running, so their `onCancel` waits for it to return. Loop thread only.
+  protected final val cancellingBlockers = scala.collection.mutable.HashSet.empty[O & LoopBlocking[O]]
+
+  /** Called from any thread when a promise has its result: queue it and wake the loop. On the loop thread itself the
+    * loop is not polling, so queueing is enough.
+    */
+  private[io] final def resolved(promise: Promise): Unit =
+    if !closed then { // otherwise its completion was dropped by `close`
+      resolvedQueue.add(promise)
+      if !(Thread.currentThread() eq loopThread) then wakeup()
+    }
+
+  /** Runs the completions of the promises resolved when it starts, on the loop thread. One resolved meanwhile, such as
+    * by a completion, waits for the next turn, so completions that keep resolving promises cannot keep the loop from
+    * polling. Returns whether there were any.
+    */
+  protected final def deliverResolved(): Boolean = {
+    var remaining = resolvedQueue.size() // traverses the queue, which stays short
+    var next = if remaining > 0 then resolvedQueue.poll() else null
+    val any = next != null
+    while next != null do {
+      val promise = next.nn // `O` is abstract, so `next` is not narrowed
+      val completion = promise.completion
+      promise.completion = null
+      if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
+      pendingPromises -= promise
+      promise match {
+        case blocking: LoopBlocking[O] @unchecked if blocking.cancelling != null =>
+          // A cancelled blocker's `block` has returned, so its op's buffers and slots are the caller's again. Its
+          // outcome is dropped: `cancel` detached it before deferring, and `submit` refuses it until now.
+          assert(completion == null, "a blocker queued its cancel was resubmitted")
+          val cancelled = blocking.cancelling.nn
+          val failure = blocking.cancelledBy
+          blocking.cancelling = null
+          blocking.cancelledBy = null
+          cancellingBlockers -= blocking
+          if failure == null then deliverCancel(cancelled, blocking) else deliverFailure(cancelled, blocking, failure)
+        case _ =>
+          if completion != null then {
+            val failure = promise.failure
+            if failure != null then deliverFailure(completion, promise, failure)
+            else deliverComplete(completion, promise)
+          }
+      }
+      remaining -= 1
+      next = if remaining > 0 then resolvedQueue.poll() else null
+    }
+    any
+  }
+
+  /** Detaches a pending promise so its outcome is never delivered. The caller skips or interrupts a blocking task. */
+  protected final def detach(promise: Promise): Completion[O] | Null = {
+    val completion = promise.completion
+    promise.completion = null
+    if promise.heapIndex >= 0 then timers.remove(promise) // its time limit ends with it
+    pendingPromises -= promise
+    completion
   }
 
   /** Fails `op`, whose time limit ran out, with `TimeoutException`: withdrawn as a cancelled op is, then `onFailure`
