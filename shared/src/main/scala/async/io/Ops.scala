@@ -306,9 +306,10 @@ trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
   *
   * Cancellation follows `BlockingOps.blocking`: an op not yet started is skipped, one running finishes on its thread
   * with its result discarded, and `perform` returns once the thread has stopped touching the buffer. A close that comes
-  * while an op on the file is in its system call waits for it: the op completes, as the call did, or, on the JDK, which
-  * fails a call on a channel closed under it, fails with an `IOException`; the close completes after, so the descriptor
-  * is never reused under the op.
+  * while an op on the file is in its system call waits for it, and the op fails as one on a closed handle does
+  * (`Ops.close`), on every backend, its buffer and offset left as they were even if the call finished first, as the JDK
+  * fails a call on a channel closed under it: a write's bytes may have reached the file. The close completes after the
+  * call, so the descriptor is never reused under the op.
   */
 trait FileOps[Op, H <: AnyRef] extends Ops[Op, H] {
 

@@ -27,10 +27,24 @@ final class OpenFile(path: String, write: Boolean, into: Slot[NioKinds.File]) ex
 /** A file op on the channel of a regular file: the handle is resolved when the task runs, so that one closed meanwhile
   * fails the op. A cancel does not interrupt it, since an interrupt closes a `FileChannel`
   * (`ClosedByInterruptException`), which would close the file under the caller: it runs to its end, as a native `pread`
-  * does on kqueue.
+  * does on kqueue. One whose handle is closed while it runs fails as an op on a closed handle does, whether the channel
+  * refused it or it finished first (`onFile`), its buffer and offset left as they were, as on kqueue.
   */
 sealed abstract class FileTask(val handle: Handle) extends NioBlocking with Repeatable {
   override protected def interruptible: Boolean = false
+
+  /** Runs `io`, the task's call on its file, failing as an op on a closed handle does if the handle was closed
+    * meanwhile: the JDK's `AsynchronousCloseException`, or a call that finished before the close took effect.
+    */
+  protected final inline def onFile[A](inline io: A): A = {
+    val result =
+      try io
+      catch case _: java.nio.channels.ClosedChannelException => throw closedNow
+    if !handle.isOpen then throw closedNow
+    result
+  }
+
+  private def closedNow: Throwable = gears.async.io.internal.HandleClosedException.pending(handle)
 
   protected def regularFile: RegularFile = NioHandles.entry(handle) match {
     case file: RegularFile => file
@@ -50,7 +64,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
     // Into a view of `buf`, its position and the offset then moved together, so that a cancel before that leaves both
     // as they were, the op ready to be submitted again.
     val view = buf.duplicate()
-    val read = file.read(view, offset) // -1 at the end
+    val read = onFile(file.read(view, offset)) // -1 at the end
     if read > 0 then
       unlessCancelled {
         buf.position(view.position())
@@ -67,7 +81,7 @@ final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset:
   def block(): Unit = {
     val file = regularFile // a closed handle fails first, with nothing to write too
     val view = buf.duplicate() // as a read's, so that a cancel leaves the buffer and offset together
-    val written = if buf.hasRemaining() then file.write(view, offset) else 0
+    val written = if buf.hasRemaining() then onFile(file.write(view, offset)) else 0
     if written > 0 then
       unlessCancelled {
         buf.position(view.position())
@@ -78,5 +92,8 @@ final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset:
 
 /** `force` (see `FileOps.sync`). */
 final class FileSync(handle: Handle) extends FileTask(handle) {
-  def block(): Unit = regularFile.force()
+  def block(): Unit = {
+    val file = regularFile
+    onFile(file.force())
+  }
 }

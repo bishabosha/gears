@@ -15,7 +15,8 @@ import KqueueBackend.Handle
 
 /** The file ops (see `FileOps`), each a blocking task on the blocker pool, since the operating system's file I/O blocks
   * for the disk: `open`, `pread`, `pwrite` and `fsync`, through posixlib's `@blocking` bindings, so that a collection
-  * need not wait for the disk either.
+  * need not wait for the disk either. Each is a use of its handle's descriptor, which a close waits for; one whose
+  * handle was closed meanwhile fails once its call is done (`KqueueHandles.checkStillOpen`), as on NIO.
   */
 
 /** Opens a regular file and publishes its handle (see `FileOps.open`). A cancel that arrives once the file is open
@@ -44,6 +45,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
     NativeBuffer.staged(buf, copyIn = false, copyOut = true) { b =>
       val read = unistd.pread(fd, NativeBuffer.atPosition(b), b.remaining().toCSize, offset.toSize)
       if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
+      KqueueHandles.checkStillOpen(handle)
       val n = read.toInt
       unlessCancelled {
         NativeBuffer.advance(b, n)
@@ -67,6 +69,7 @@ final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset:
   private def writeAt(fd: Int): Unit = NativeBuffer.staged(buf, copyIn = true, copyOut = false) { b =>
     val written = unistd.pwrite(fd, NativeBuffer.atPosition(b), b.remaining().toCSize, offset.toSize)
     if written < 0 then throw new IOException(s"Failed to write descriptor $fd at $offset: ${cError()}")
+    KqueueHandles.checkStillOpen(handle)
     val n = written.toInt
     unlessCancelled {
       NativeBuffer.advance(b, n)
@@ -80,5 +83,6 @@ final class FileSync(handle: Handle) extends KqueueBlocking with Repeatable {
   def block(): Unit = KqueueHandles.inUse(handle) {
     val fd = handle.fd
     if unistd.fsync(fd) < 0 then throw new IOException(s"Failed to sync descriptor $fd: ${cError()}")
+    KqueueHandles.checkStillOpen(handle)
   }
 }

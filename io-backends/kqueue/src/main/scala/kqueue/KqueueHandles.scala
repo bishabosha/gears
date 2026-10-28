@@ -371,6 +371,13 @@ object KqueueHandles {
     finally handle.release()
   }
 
+  /** Fails, as an op pending on a closed handle does, if `handle` was closed while a blocking op used it, once its
+    * system call is done: a close waits for the use, and a file op it raced fails rather than publish what it did, so
+    * that it fails before the close completes, as on NIO (see `FileOps`).
+    */
+  private[kqueue] def checkStillOpen(handle: Handle): Unit =
+    if !handle.isOpen then throw gears.async.io.internal.HandleClosedException.pending(handle)
+
   private[kqueue] def notOpen(handle: Handle): IOException =
     gears.async.io.internal.HandleClosedException.notOpen(handle)
 

@@ -236,6 +236,34 @@ trait FileContract extends ReactorContract {
     } finally deleteAll(dir)
   }
 
+  test("a positional read raced by a close of its file completes, or fails as a closed handle's op does, untouched") {
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = dir.resolve("large.bin")
+        Files.write(path, new Array[Byte](1 << 20))
+        val buf = allocate(1 << 20)
+        for round <- 1 to 64 do {
+          val file = open(r, path, write = false)
+          buf.clear()
+          val read = Outcome()
+          r.submit(backend.ops.read(file, buf, offset = 0), read) // on a blocker, before or as the close comes
+          val until = System.nanoTime() + (round % 8) * 25_000L // a little later each round, so the read is under way
+          while System.nanoTime() < until do Thread.onSpinWait()
+          val closed = Outcome()
+          r.submit(backend.ops.close(file), closed)
+          turnUntil(r)(read.finished && closed.finished)
+          assertEquals(closed.completed, 1, String.valueOf(closed.failure))
+          if read.completed == 1 then assert(buf.position() > 0, "a read that completed read nothing")
+          else {
+            assert(read.failure.isInstanceOf[java.nio.channels.ClosedChannelException], String.valueOf(read.failure))
+            assertEquals(buf.position(), 0, "a read that failed moved its buffer")
+          }
+        }
+      }
+    finally deleteAll(dir)
+  }
+
   test("a positional op on a closed file fails") {
     val dir = tempDir()
     try
@@ -245,7 +273,7 @@ trait FileContract extends ReactorContract {
         val file = open(r, path, write = false)
         close(r, file)
         val failure = run(r, backend.ops.read(file, allocate(4), offset = 0))
-        assert(failure.isInstanceOf[IOException], String.valueOf(failure))
+        assert(failure.isInstanceOf[java.nio.channels.ClosedChannelException], String.valueOf(failure))
       }
     finally deleteAll(dir)
   }
