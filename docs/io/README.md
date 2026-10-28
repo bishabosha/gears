@@ -34,7 +34,7 @@ program can neither forge one nor pass one backend's handle to another, whose `H
 Three axes, chosen independently of one another:
 
 - **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpStreams`,
-  `IpDatagrams`, `UnixStreams`, `UnixDatagrams`, `Files`, `Pipes`, `Resolving`, `Blocking`, `Fifos`; `IpSockets` is
+  `IpDatagrams`, `UnixStreams`, `UnixDatagrams`, `RegularFiles`, `Pipes`, `Resolving`, `Blocking`, `Fifos`; `IpSockets` is
   both IP ones. Each is a
   `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
   nothing. Sockets go by address family and transport, one capability each, none implying another: `IpStreams` and
@@ -58,7 +58,7 @@ Three axes, chosen independently of one another:
   ops or handles of its own, and it is not a `Backend`. The runner gives it to the program it starts; its kinds,
   internal, are `OnPool`, on a pool of workers driving a reactor backend's reactors, which the runtime implements,
   and `OnCaller`, over a caller backend. The type names the backend, and is covariant in it, so
-  a program over a `IpSockets & Files` is given an `Io` over that backend, which a helper asking for
+  a program over a `IpSockets & RegularFiles` is given an `Io` over that backend, which a helper asking for
   `Io[IpSockets]` takes. `Io` is also the program's gears `AsyncOperations`.
 
 What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about

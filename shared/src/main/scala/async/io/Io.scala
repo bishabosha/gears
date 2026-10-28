@@ -7,10 +7,10 @@ import _root_.gears.async.AsyncOperations
   * and capabilities are what the program uses, and adds only where they run: `perform`, and on a pool `yield`. It is
   * not a backend and has no ops of its own; its type names the backend it is over, so a program's helper asks for an
   * `Io` over a backend with the capabilities it needs, `Io[IpSockets]`, and one over a backend with more,
-  * `Io[IpSockets & Files]`, is one of those. A program gets its `Io` from the platform's runner (`Io.run`), which over
-  * a reactor backend performs each op where there is a worker, and its reactor, to run it, since a backend alone
-  * performs nothing, and over a caller backend performs it on the calling thread; how it does is internal. A program's
-  * `Io` is lexical: a future it spawns captures it, and runs where the program runs.
+  * `Io[IpSockets & RegularFiles]`, is one of those. A program gets its `Io` from the platform's runner (`Io.run`),
+  * which over a reactor backend performs each op where there is a worker, and its reactor, to run it, since a backend
+  * alone performs nothing, and over a caller backend performs it on the calling thread; how it does is internal. A
+  * program's `Io` is lexical: a future it spawns captures it, and runs where the program runs.
   *
   * It is also the program's gears `AsyncOperations`, given to it by the runner beside its `Async`: `sleep` is a timer
   * op performed, so gears' `sleep`, `withTimeout` and `Timer` run on the backend's timers, and `yield` gives up the

@@ -108,14 +108,14 @@ class ReactorSuite extends FunSuite {
     )
     assert(
       compileErrors(
-        "def a(b: Files & IpSockets)(c: b.Connection) = b.ops.read(c, (null: java.nio.ByteBuffer), 0L)"
+        "def a(b: RegularFiles & IpSockets)(c: b.Connection) = b.ops.read(c, (null: java.nio.ByteBuffer), 0L)"
       ).nonEmpty
     )
     assert(compileErrors("def a(b: Pipes)(r: b.Readable) = b.ops.write(r, (null: java.nio.ByteBuffer))").nonEmpty)
     assert(compileErrors("def a(b: IpSockets)(c: b.Connection): b.Listener = c").nonEmpty)
     assertEquals(
       compileErrors(
-        "def a(b: IpSockets & Files)(c: b.Connection, f: b.File) = { b.ops.read(c, (null: java.nio.ByteBuffer)); b.ops.read(f, (null: java.nio.ByteBuffer)) }"
+        "def a(b: IpSockets & RegularFiles)(c: b.Connection, f: b.File) = { b.ops.read(c, (null: java.nio.ByteBuffer)); b.ops.read(f, (null: java.nio.ByteBuffer)) }"
       ),
       ""
     )
@@ -245,9 +245,9 @@ class ReactorSuite extends FunSuite {
     )
     assertEquals(compileErrors("def p(b: Pipes) = b.ops.pipe(Slot[b.Readable](), Slot[b.Writable]())"), "")
     assertEquals(compileErrors("def r(b: Resolving) = b.ops.resolve(\"h\", Slot())"), "")
-    assertEquals(compileErrors("def f(b: Files) = b.ops.open(\"p\", false, Slot[b.File]())"), "")
+    assertEquals(compileErrors("def f(b: RegularFiles) = b.ops.open(\"p\", false, Slot[b.File]())"), "")
     assertEquals(
-      compileErrors("def s(b: Files)(h: b.File): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer), 0L)"),
+      compileErrors("def s(b: RegularFiles)(h: b.File): Repeatable = b.ops.read(h, (null: java.nio.ByteBuffer), 0L)"),
       ""
     )
     assertEquals(

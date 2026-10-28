@@ -1,10 +1,10 @@
 package gearsexample
 
 import gears.async.io.Blocking
-import gears.async.io.Files
 import gears.async.io.IpAddress
 import gears.async.io.IpSockets
 import gears.async.io.Pipes
+import gears.async.io.RegularFiles
 import gears.async.io.Resolving
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
@@ -25,7 +25,7 @@ import mainargs.{ParserForMethods, arg, main}
   * pool (see `gears.async.io.Io.run`).
   */
 object Main {
-  given (IpSockets & UnixStreams & Blocking & Files & Resolving & Pipes) =
+  given (IpSockets & UnixStreams & Blocking & RegularFiles & Resolving & Pipes) =
     sys.props.get("gears.io.nio.backend") match {
       case Some("reactors")      => NioBackend
       case None | Some("caller") => NioOnCaller

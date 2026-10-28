@@ -17,10 +17,11 @@ import _root_.gears.async.Async
   * asynchronously, such as Network.framework or io_uring, reports a close done through a completion rather than by
   * blocking the caller. Where the streams come from is a capability the backend mixes in, with the ops that open its
   * handles and use them: IP stream and datagram sockets (`IpStreams`, `IpDatagrams`, both `IpSockets`), regular files
-  * (`Files`), pipes (`Pipes`), name resolution (`Resolving`), blocking ops (`Blocking`), `UnixStreams`, `UnixDatagrams`
-  * and `Fifos`. Code that needs a capability asks for a backend that has it, by the capability, each a `Backend`
-  * (`IpSockets`, or `IpStreams & Files` for more), or for an `Io` over one (`Io[IpSockets]`), so a backend without it,
-  * such as one in a browser, which has no sockets or files of these kinds, is refused when compiling, not when running.
+  * (`RegularFiles`), pipes (`Pipes`), name resolution (`Resolving`), blocking ops (`Blocking`), `UnixStreams`,
+  * `UnixDatagrams` and `Fifos`. Code that needs a capability asks for a backend that has it, by the capability, each a
+  * `Backend` (`IpSockets`, or `IpStreams & RegularFiles` for more), or for an `Io` over one (`Io[IpSockets]`), so a
+  * backend without it, such as one in a browser, which has no sockets or files of these kinds, is refused when
+  * compiling, not when running.
   */
 trait Backend {
 
@@ -107,7 +108,7 @@ type IpSockets = IpStreams & IpDatagrams
   * system's file I/O blocks, as kqueue's, NIO's and Network.framework's do, asynchronously at the device where it does
   * not, as io_uring's would.
   */
-trait Files extends Backend {
+trait RegularFiles extends Backend {
   def ops: Kinded[FileOps[Op, Handle]]
 }
 

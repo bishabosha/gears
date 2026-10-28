@@ -290,10 +290,10 @@ trait IpDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
   def peerAddress(handle: ConnectedDatagram): IpAddress
 }
 
-/** Regular files as ops, for a backend that has them (see `Files`). A file is opened by an op, since opening does disk
-  * I/O, for the path, as reads do, and some environments can only open asynchronously; its reads and writes are
-  * positional, as `pread` and `pwrite` are, so that one handle serves concurrent reads at different offsets and no op
-  * depends on a shared file position, which io_uring has none of either. `Ops.read` and `Ops.write` on a file handle
+/** Regular files as ops, for a backend that has them (see `RegularFiles`). A file is opened by an op, since opening
+  * does disk I/O, for the path, as reads do, and some environments can only open asynchronously; its reads and writes
+  * are positional, as `pread` and `pwrite` are, so that one handle serves concurrent reads at different offsets and no
+  * op depends on a shared file position, which io_uring has none of either. `Ops.read` and `Ops.write` on a file handle
   * read and write at the position the handle carries, as a stream, for code that treats a file as one.
   *
   * Cancellation follows `BlockingOps.blocking`: an op not yet started is skipped, one running finishes on its thread

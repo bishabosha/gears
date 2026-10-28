@@ -8,8 +8,8 @@ objects of each backend's own class, have a note of their own ([handles.md](hand
 ## Capabilities are types, asked for by intersection
 
 What only some backends can do is a trait mixed into the backend, each narrowing `ops` to its own (`IpSockets`,
-`Files`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`), and a program asks
-for the intersection it needs (`IpSockets & Files`, or `Io[IpSockets]` in a helper). The alternative is one
+`RegularFiles`, `Pipes`, `Resolving`, `Blocking`, `UnixStreams`, `UnixDatagrams`, `Fifos`), and a program asks
+for the intersection it needs (`IpSockets & RegularFiles`, or `Io[IpSockets]` in a helper). The alternative is one
 `Backend` with every op, failing at run time where a backend lacks one. The backends differ in fact: NIO has neither
 Unix datagram sockets nor FIFOs, since the JDK has no Unix datagram channels and can only block on a FIFO, and a
 browser backend would have no sockets or files of these kinds at all. A missing capability is then a compile error at
@@ -99,7 +99,7 @@ replaced, in order:
   `Backend`. It still restated the backend's capabilities, and an `Io` had a `type Io`.
 
 Now a capability is a `Backend` narrowed to its ops and knows nothing of `Io`; `Io` is covariant, so an `Io` over a
-`IpSockets & Files` is an `Io[IpSockets]`; and handing an `Io` to the runner as if it were a backend does not
+`IpSockets & RegularFiles` is an `Io[IpSockets]`; and handing an `Io` to the runner as if it were a backend does not
 type-check, with no guard needed. The per-backend `Io` classes are gone. What it costs: a run-time test of a capability
 is on the backend (`io.backend match { case b: (Blocking & io.backend.type) => ... }`), and a value holding such a
 backend needs its type written, or the compiler loses that its `Op` is `io.Op`. The `Io` is passed explicitly because
@@ -360,3 +360,9 @@ which has no backend yet, refuses.
 sentinel to pass; the limit is kept to the millisecond, rounded up so that it is never sooner than asked, and its
 rules, what a cancelled or timed-out op leaves behind, are stated on `perform` rather than on the internal
 `Submitter.submit`. Within, the kinds of `Io` still take milliseconds (`performWithin`).
+
+## `RegularFiles`
+
+The capability of files was `Files`, which collided with `java.nio.file.Files`, imported by most code that handles
+files, and claimed more than it has: it opens regular files and refuses anything else, FIFOs among them, which are
+`Fifos`. It is `RegularFiles` now, the system's own term; its ops stay `FileOps`, and its handles `File`.

@@ -8,7 +8,7 @@ import java.nio.file.Files
 
 /** What a backend with FIFOs must do (see `ReactorContract`); with regular files too, to tell the two apart. */
 trait FifoContract extends FileContract {
-  val backend: ReactorBackend & Blocking & Pipes & Fifos & gears.async.io.Files
+  val backend: ReactorBackend & Blocking & Pipes & Fifos & RegularFiles
 
   /** A FIFO's read end from the `openFifoForReading` op, whose failure is thrown. */
   protected def openFifoForReading(r: R, path: String)(using munit.Location): Readable = {

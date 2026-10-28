@@ -14,7 +14,7 @@ API; nothing here about the unbuilt backends has been run.
 | `IpDatagrams` | yes | yes | yes | yes | yes | behind `--unstable-net` | no | no | yes |
 | `UnixStreams` | yes | yes (JDK 16+) | yes, kqueue's | yes | yes | yes, *unverified* whether stable | no | no | no |
 | `UnixDatagrams` | yes | no (no JDK channel) | yes, kqueue's | yes | no (removed from Node) | behind a flag, *unverified* | no | no | no |
-| `Files` | blocker threads | blocker threads | kqueue's | the ring, truly asynchronous | libuv's thread pool | yes | no | OPFS in a worker, a capability of its own | `wasi:filesystem` |
+| `RegularFiles` | blocker threads | blocker threads | kqueue's | the ring, truly asynchronous | libuv's thread pool | yes | no | OPFS in a worker, a capability of its own | `wasi:filesystem` |
 | `Pipes` | yes | yes | kqueue's | yes | no in-process pipe | no | no | no | no |
 | `Fifos` | yes, with `FifoWatcher` | no (can only block) | kqueue's | yes, plain reads | through `fs`, blocking the pool | *unverified* | no | no | no |
 | `Resolving` | `getaddrinfo` on a blocker | the JDK's, on a blocker | kqueue's | `getaddrinfo` on a thread | `dns.lookup` (`getaddrinfo`) | `Deno.resolveDns`, DNS only, no hosts file | no | no | `ip-name-lookup` |

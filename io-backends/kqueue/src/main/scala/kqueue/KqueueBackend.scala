@@ -4,10 +4,10 @@ package kqueue
 import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.Fifos
-import gears.async.io.Files
 import gears.async.io.IpDatagrams
 import gears.async.io.IpStreams
 import gears.async.io.Pipes
+import gears.async.io.RegularFiles
 import gears.async.io.Resolving
 import gears.async.io.UnixDatagrams
 import gears.async.io.UnixStreams
@@ -29,7 +29,7 @@ object KqueueBackend
     with UnixStreams
     with UnixDatagrams
     with Fifos
-    with Files
+    with RegularFiles
     with Resolving
     with Pipes {
   type Op = KqueueOp

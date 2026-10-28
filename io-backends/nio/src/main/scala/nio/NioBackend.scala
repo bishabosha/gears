@@ -3,10 +3,10 @@ package nio
 
 import gears.async.io.Blocking
 import gears.async.io.BufferPool
-import gears.async.io.Files
 import gears.async.io.IpDatagrams
 import gears.async.io.IpStreams
 import gears.async.io.Pipes
+import gears.async.io.RegularFiles
 import gears.async.io.Resolving
 import gears.async.io.UnixStreams
 import gears.async.io.internal.Reactor
@@ -21,7 +21,7 @@ trait NioCapabilities
     with IpStreams
     with IpDatagrams
     with UnixStreams
-    with Files
+    with RegularFiles
     with Resolving
     with Pipes {
   type Op = NioOp
