@@ -108,11 +108,6 @@ final class KqueueReactor private (
         true
     }
 
-  // Turns in a row that delivered completions without polling. A turn that delivered something skips the poll, since
-  // the completions it ran will likely submit more work; every `KqueueReactor.PollEvery` turns it polls anyway, so
-  // descriptors that only kqueue can report are not starved. Loop thread only.
-  private var turnsWithoutPoll = 0
-
   private val WakeEvent = 0.toUSize
   KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
     KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
@@ -718,7 +713,7 @@ final class KqueueReactor private (
 
   /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
     * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and
-    * skips the poll after delivering something, except every `KqueueReactor.PollEvery` turns. An error event fails the
+    * skips the poll after delivering something, except every `ReactorCore.PollEvery` turns. An error event fails the
     * command it is for (`dispatchError`); a failing poll, of the kqueue itself, throws.
     */
   def runOnce(block: Boolean): Unit = {
@@ -728,17 +723,9 @@ final class KqueueReactor private (
       deliverTurns() | deliverClosed() | deliverSelected() | deliverReady() | deliverResolved() | deliverNotified() |
         closingDue > 0
     val polled =
-      if !delivered then {
-        turnsWithoutPoll = 0
-        if block then pollBeforeBlocking(events)
-        else KqueueLoop.pollEventsNow(kq, events, maxEvents)
-      } else if turnsWithoutPoll < KqueueReactor.PollEvery then {
-        turnsWithoutPoll += 1
-        0
-      } else {
-        turnsWithoutPoll = 0
-        KqueueLoop.pollEventsNow(kq, events, maxEvents)
-      }
+      if !pollsThisTurn(delivered) then 0
+      else if !delivered && block then pollBeforeBlocking(events)
+      else KqueueLoop.pollEventsNow(kq, events, maxEvents)
     var i = 0
     while i < polled do {
       val event = events(i)
@@ -802,9 +789,6 @@ object KqueueReactor {
   private inline val Unknown = 0
   private inline val Ready = 1
   private inline val NotReady = 2
-
-  /** A loop that keeps delivering completions polls kqueue at least once in this many turns. */
-  private inline val PollEvery = 16
 
   /** Opens a reactor on a new kqueue; each poll returns up to `maxEvents` events. Before blocking for events it polls
     * without blocking up to `spinPolls` times, trading a little CPU for not sleeping when an event is about to arrive;

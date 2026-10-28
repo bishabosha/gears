@@ -547,6 +547,25 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
       }
     }
 
+  // Turns in a row that delivered completions without polling. A turn that delivered something skips the poll, since
+  // the completions it ran will likely submit more work; every `ReactorCore.PollEvery` turns it polls anyway, so
+  // handles that only a poll can report are not starved. Loop thread only.
+  private var turnsWithoutPoll = 0
+
+  /** Whether this turn of `runOnce` polls, having `delivered` completions before it or not (see `turnsWithoutPoll`).
+    */
+  protected final def pollsThisTurn(delivered: Boolean): Boolean =
+    if !delivered then {
+      turnsWithoutPoll = 0
+      true
+    } else if turnsWithoutPoll < ReactorCore.PollEvery then {
+      turnsWithoutPoll += 1
+      false
+    } else {
+      turnsWithoutPoll = 0
+      true
+    }
+
   def stop(): Unit = running = false
 
   def run(): Unit = {
@@ -557,6 +576,9 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
 }
 
 object ReactorCore {
+
+  /** A loop that keeps delivering completions polls at least once in this many turns. */
+  inline val PollEvery = 16
 
   // What `submitOwn` did with an op (see there).
   inline val Queued = 0

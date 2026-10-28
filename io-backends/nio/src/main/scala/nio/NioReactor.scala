@@ -53,9 +53,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     selectedCount += 1
   }
 
-  // Turns in a row that delivered completions without selecting (see `KqueueReactor`).
-  private var turnsWithoutPoll = 0
-
   // Handles close on other threads; their entries queue here and wake the selector, so that the commands pending on
   // them fail (see `closed`). The waiting commands are found through the reactor's own map, not the selector's key:
   // the select the wake-up ends deregisters a closed channel's key before the loop gets here. Loop thread only.
@@ -388,7 +385,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   /** Delivers commands that finished when submitted, resolved promises and regular files, fails the commands pending on
     * handles closed meanwhile, selects once, performs what it found ready, fires due timers, then delivers promises
     * resolved meanwhile. It blocks in the select only if asked to and nothing was delivered first, and skips the select
-    * after delivering something, except every `NioReactor.PollEvery` turns.
+    * after delivering something, except every `ReactorCore.PollEvery` turns.
     */
   def runOnce(block: Boolean): Unit = {
     deliverMoved()
@@ -396,18 +393,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     val delivered =
       deliverTurns() | deliverReady() | deliverResolved() | deliverAgain() | deliverClosed() | closingDue > 0
     updateInterest()
-    val select =
-      if !delivered then {
-        turnsWithoutPoll = 0
-        true
-      } else if turnsWithoutPoll < NioReactor.PollEvery then {
-        turnsWithoutPoll += 1
-        false
-      } else {
-        turnsWithoutPoll = 0
-        true
-      }
-    if select then {
+    if pollsThisTurn(delivered) then {
       selectedCount = 0
       val waitFor = !delivered && block && again.isEmpty && ready.isEmpty
       if !waitFor then selector.selectNow(collect)
@@ -443,9 +429,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
 }
 
 object NioReactor {
-
-  /** A loop that keeps delivering completions selects at least once in this many turns. */
-  private inline val PollEvery = 16
 
   /** Opens a reactor on a new selector. Close it when done. */
   def open(): NioReactor = new NioReactor(Selector.open())

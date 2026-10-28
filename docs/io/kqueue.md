@@ -331,6 +331,16 @@ each turn, a load of an atomic flag when there are none. A reactor that never ru
 no event registered. Its handle is a kqueue handle with a `foreign` object and no descriptor, which kqueue's own ops
 refuse.
 
+## What it shares with NIO's reactor
+
+What kqueue's reactor and NIO's do alike is `ReactorCore`, with what their ops keep in `LoopOp` (both in
+`jvm-native/.../internal`): the timer heap and moved deadlines, handles' turns, the ready and closing queues, promises
+and blockers, submission past the backend's own kinds, cancel and time-outs, and `close`. Each reactor keeps how it
+waits: its commands' submission (`submitOwn`, tried before any other type test), withdrawal and dropping on close, and
+`runOnce`. `runOnce` stays in each, sharing only when a turn skips the poll (`pollsThisTurn`): the two deliver what
+came between polls in different orders, kqueue failing the commands of closed descriptors before the ready queue and
+again after the timers, NIO after the resolved promises, and a shared rhythm would change one of them.
+
 ## What is open
 
 - **Cancelling a gears `Future` is expensive on Scala Native**, which `timers` shows now that it arms each timer by a
