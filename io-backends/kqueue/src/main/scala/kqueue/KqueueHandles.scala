@@ -313,7 +313,8 @@ object KqueueHandles {
   private[kqueue] def pipeDescriptors(): (Int, Int) = Descriptors.pipe()
 
   def readNow(handle: Handle, buf: ByteBuffer): Int = inUse(handle) {
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf) // reading nothing would say end of stream
+    if !buf.hasRemaining() then
+      throw gears.async.io.internal.Checks.bufferFull(buf) // reading nothing would say end of stream
     NonBlocking.read(handle.fd, buf)
   }
   def writeNow(handle: Handle, buf: ByteBuffer): Int =
@@ -494,7 +495,7 @@ object KqueueHandles {
         val v6 = addr.asInstanceOf[Ptr[in.sockaddr_in6]]
         inet.inet_ntop(family, v6.at4.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
         // An IPv4 peer of a dual-stack socket comes IPv4-mapped: reported as the IPv4 address it is, as the JDK does.
-        gears.async.io.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
+        gears.async.io.internal.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
       } else throw new IOException(s"Unsupported address family $family")
     }
   }

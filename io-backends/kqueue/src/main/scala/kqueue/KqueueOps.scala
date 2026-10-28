@@ -51,8 +51,8 @@ sealed trait KqueueOp extends gears.async.io.internal.TimerHeap.Entry {
     */
   private[kqueue] var atOnceFailure: Throwable | Null = null
 
-  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
-    * it does anything; null if its slots are empty.
+  /** The failure of an op submitted with a slot still holding a value (`Checks.notEmpty`), which fails it at once,
+    * before it does anything; null if its slots are empty.
     */
   private[io] def slotRefusal: Throwable | Null = null
 
@@ -96,11 +96,11 @@ object KqueueOps
   def read(handle: Readable, buf: ByteBuffer): ReadIntoBuffer = on(handle)(ReadIntoBuffer(fd(handle), buf))
   def write(handle: Writable, buf: ByteBuffer): WriteFromBuffer = on(handle)(WriteFromBuffer(fd(handle), buf))
   def read(handle: Readable, bufs: Array[ByteBuffer]): ReadIntoBuffers = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     on(handle)(new ReadIntoBuffers(fd(handle), bufs))
   }
   def write(handle: Writable, bufs: Array[ByteBuffer]): WriteFromBuffers = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     on(handle)(new WriteFromBuffers(fd(handle), bufs))
   }
   def accept(handle: Listener, into: Slot[Connection]): Accept = on(handle)(Accept(fd(handle), into))
@@ -109,24 +109,24 @@ object KqueueOps
     on(handle)(new AcceptAll(fd(handle), into, max))
   }
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
-    new ConnectTo(gears.async.io.Ops.ip(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Connection)
+    new ConnectTo(gears.async.io.internal.Checks.ip(address), into, options)
   }
   def connect(address: UnixAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
-    new ConnectTo(gears.async.io.Ops.unix(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
+    new ConnectTo(gears.async.io.internal.Checks.unix(address), into, options)
   }
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
-    new Listen(gears.async.io.Ops.ip(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Listener)
+    new Listen(gears.async.io.internal.Checks.ip(address), into, options)
   }
   def listen(address: UnixAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixListener)
-    new Listen(gears.async.io.Ops.unix(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixListener)
+    new Listen(gears.async.io.internal.Checks.unix(address), into, options)
   }
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
-    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, KqueueKinds.boundDatagram, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
+    new OpenDatagram(gears.async.io.internal.Checks.ip(local), null, into, KqueueKinds.boundDatagram, options)
   }
   def connectDatagram(
       local: IpAddress | Null,
@@ -134,13 +134,13 @@ object KqueueOps
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
-    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
+    val (l, r) = gears.async.io.internal.Checks.ipPair(local, remote)
     new OpenDatagram(l, r, into, KqueueKinds.connectedDatagram, options)
   }
   def bindDatagram(local: UnixAddress, options: SocketOptions, into: Slot[UnixBoundDatagram]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixBoundDatagram)
-    new OpenDatagram(gears.async.io.Ops.unix(local), null, into, KqueueKinds.unixBoundDatagram, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixBoundDatagram)
+    new OpenDatagram(gears.async.io.internal.Checks.unix(local), null, into, KqueueKinds.unixBoundDatagram, options)
   }
   def connectDatagram(
       local: UnixAddress | Null,
@@ -148,10 +148,10 @@ object KqueueOps
       options: SocketOptions,
       into: Slot[UnixConnectedDatagram]
   ): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixConnectedDatagram)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixConnectedDatagram)
     new OpenDatagram(
-      if local == null then null else gears.async.io.Ops.unix(local),
-      gears.async.io.Ops.unix(remote),
+      if local == null then null else gears.async.io.internal.Checks.unix(local),
+      gears.async.io.internal.Checks.unix(remote),
       into,
       KqueueKinds.unixConnectedDatagram,
       options
@@ -167,14 +167,14 @@ object KqueueOps
   def receive(handle: ConnectedDatagram, buf: ByteBuffer): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, null, unix = false))
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): SendTo =
-    on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.ip(to)))
+    on(handle)(new SendTo(fd(handle), buf, gears.async.io.internal.Checks.ip(to)))
   def send(handle: ConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): SendTo = {
-    gears.async.io.Ops.checkBuffers(bufs)
-    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.Ops.ip(to)))
+    gears.async.io.internal.Checks.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.internal.Checks.ip(to)))
   }
   def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): SendTo = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     on(handle)(new SendTo(fd(handle), bufs, null))
   }
   @annotation.targetName("receiveUnix")
@@ -184,16 +184,16 @@ object KqueueOps
   def receive(handle: UnixConnectedDatagram, buf: ByteBuffer): ReceiveFrom =
     on(handle)(new ReceiveFrom(fd(handle), buf, null, unix = true))
   def send(handle: UnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): SendTo =
-    on(handle)(new SendTo(fd(handle), buf, gears.async.io.Ops.unix(to)))
+    on(handle)(new SendTo(fd(handle), buf, gears.async.io.internal.Checks.unix(to)))
   @annotation.targetName("sendUnixConnected")
   def send(handle: UnixConnectedDatagram, buf: ByteBuffer): SendTo = on(handle)(new SendTo(fd(handle), buf, null))
   def send(handle: UnixBoundDatagram, bufs: Array[ByteBuffer], to: UnixAddress): SendTo = {
-    gears.async.io.Ops.checkBuffers(bufs)
-    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.Ops.unix(to)))
+    gears.async.io.internal.Checks.checkBuffers(bufs)
+    on(handle)(new SendTo(fd(handle), bufs, gears.async.io.internal.Checks.unix(to)))
   }
   @annotation.targetName("sendUnixConnectedMany")
   def send(handle: UnixConnectedDatagram, bufs: Array[ByteBuffer]): SendTo = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     on(handle)(new SendTo(fd(handle), bufs, null))
   }
   def timer(duration: scala.concurrent.duration.FiniteDuration): KqueueTimer = {
@@ -242,7 +242,7 @@ object KqueueOps
     KqueueHandles.inUse(handle) {
       val kind = KqueueHandles.socketKind(handle.fd)
       if kind == null then throw new IllegalArgumentException(s"$option applies to sockets, not $handle")
-      if !SocketOption.onSocket(option, kind.nn) then throw gears.async.io.Ops.notFor(option, kind.nn)
+      if !SocketOption.onSocket(option, kind.nn) then throw gears.async.io.internal.Checks.notFor(option, kind.nn)
       body(handle.fd, kind.nn)
     }
   }
@@ -324,7 +324,7 @@ sealed trait Opens extends KqueueOp {
   * pipes and FIFOs are: `opened` is what it opened, written into `into` by the time the op completes.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K], kind: Handle => K) extends KqueueAtOnce with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var opened = -1
   protected def open(): Int
   def perform(): Unit = {
@@ -361,7 +361,7 @@ final class OpenDatagram[K <: Handle](
 /** A FIFO, opened without waiting for its other end (see `FifoOps.openFifoForReading` and `openFifoForWriting`). */
 final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], kind: Handle => K)
     extends OpensAtOnce(into, kind) {
-  gears.async.io.Ops.checkPath(path)
+  gears.async.io.internal.Checks.checkPath(path)
   protected def open(): Int = KqueueHandles.fifoDescriptor(path, write)
 }
 
@@ -369,7 +369,7 @@ final class OpenFifo[K <: Handle](path: String, write: Boolean, into: Slot[K], k
 final class OpenPipe(read: Slot[KqueueKinds.Readable], write: Slot[KqueueKinds.Writable])
     extends KqueueAtOnce
     with Opens {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
   private var ends: (Int, Int) | Null = null
   def perform(): Unit = {
     val (in, out) = KqueueHandles.pipeDescriptors()
@@ -399,7 +399,7 @@ final class ConnectTo(
 ) extends Command
     with Opens {
   override private[io] def oneShot: Boolean = true // it opens its socket
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var socket = -1
   private var connected = false
   def fd: Int = socket
@@ -652,7 +652,7 @@ final class BlockingTask(body: () => Unit) extends KqueueBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends KqueueBlocking {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = {
     publish(into, body())
   }

@@ -376,7 +376,7 @@ final class KqueueReactor private (
     } else {
       val refusal =
         if slotRefusal != null then slotRefusal
-        else if claim != null && !claim.holds(op) then gears.async.io.Ops.alreadyPending(op)
+        else if claim != null && !claim.holds(op) then gears.async.io.internal.Checks.alreadyPending(op)
         else null
       submitHolding(op, pending, refusal, finishNow, timeoutMillis)
     }

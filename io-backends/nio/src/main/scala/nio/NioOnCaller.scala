@@ -56,7 +56,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
         val claim = command.claim
         if claim != null && !claim.take(command) then
           if command.waitsItsTurn then waitForTurn(claim, command, deadline)
-          else throw gears.async.io.Ops.alreadyPending(command)
+          else throw gears.async.io.internal.Checks.alreadyPending(command)
         try performCommand(command, deadline)
         finally if claim != null then claim.release(command)
       case timer: NioTimer =>

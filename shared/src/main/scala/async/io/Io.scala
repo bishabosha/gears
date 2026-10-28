@@ -1,10 +1,7 @@
 package gears.async.io
 
-import scala.util.Try
-
 import _root_.gears.async.Async
 import _root_.gears.async.AsyncOperations
-import _root_.gears.async.Cancellable
 
 /** What a program performs its ops with: where its backend's ops run. It has a backend (`backend`), whose ops, handles
   * and capabilities are what the program uses, and adds only where they run: `perform`, and on a pool `yield`. It is

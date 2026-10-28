@@ -3,7 +3,7 @@ package gears.async.io.internal
 import java.util.concurrent.atomic.AtomicReference
 
 /** The turn to read a handle, or to write it, which one op pending at a time holds, on any submitter (see
-  * `Ops.alreadyPending`). An op on a stream that finds it held is refused, since two reads would take the stream's
+  * `Checks.alreadyPending`). An op on a stream that finds it held is refused, since two reads would take the stream's
   * bytes in no order and two writes would interleave theirs. An op on a datagram socket or a listener, each of whose
   * receives, sends and accepts is whole, waits its turn instead (`enqueue`), behind those waiting already, as Go's fd
   * lock queues the reads and writes of a socket's concurrent callers: the turn passes to it once the op holding it lets

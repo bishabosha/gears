@@ -269,7 +269,7 @@ object PosixSockets {
   }
 
   private def createIPv4SocketAddr(host: String, port: Int)(implicit z: Zone): Ptr[socket.sockaddr] = {
-    gears.async.io.IpText.canonical(gears.async.io.IpAddress.IPv4(host, port)) // refused as an op refuses it
+    gears.async.io.internal.IpText.canonical(gears.async.io.IpAddress.IPv4(host, port)) // refused as an op refuses it
     val addr = alloc[in.sockaddr_in]()
     addr.sin_len = sizeOf[in.sockaddr_in].toUByte
     addr.sin_family = socket.AF_INET.toUShort
@@ -279,7 +279,7 @@ object PosixSockets {
   }
 
   private def createIPv6SocketAddr(host: String, port: Int)(implicit z: Zone): Ptr[socket.sockaddr] = {
-    gears.async.io.IpText.canonical(gears.async.io.IpAddress.IPv6(host, port))
+    gears.async.io.internal.IpText.canonical(gears.async.io.IpAddress.IPv6(host, port))
     val addr = alloc[in.sockaddr_in6]()
     addr.sin6_len = sizeOf[in.sockaddr_in6].toUByte
     addr.sin6_family = socket.AF_INET6.toUShort
@@ -362,7 +362,7 @@ object PosixSockets {
   ): Boolean = {
     val vectors = stackalloc[uio.iovec](math.min(bufs.length, NonBlocking.MaxBuffers))
     val count = NonBlocking.fill(vectors, bufs, room = false)
-    val length = gears.async.io.Ops.remaining(bufs)
+    val length = gears.async.io.internal.Checks.remaining(bufs)
     val message = stackalloc[socket.msghdr]()
     message.msg_name = destination.asInstanceOf[Ptr[Byte]]
     message.msg_namelen = destinationLength

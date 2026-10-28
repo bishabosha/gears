@@ -67,7 +67,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     * address of this host is Network.framework's, since other hosts reach it.
     */
   private def listensOnKqueue(address: IpAddress): Boolean =
-    loopbackOnKqueue && gears.async.io.IpText.isLoopback(address)
+    loopbackOnKqueue && gears.async.io.internal.IpText.isLoopback(address)
 
   /** Whether a socket connected to `peer` goes to kqueue rather than Network.framework: one whose peer is on this host,
     * on loopback or at another of its addresses (`nwf_is_host_address`, from `getifaddrs`), whose traffic the kernel
@@ -75,7 +75,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     * `feth`'s, never makes ready (probed on macOS 27.0).
     */
   private def connectsOnKqueue(peer: IpAddress): Boolean =
-    loopbackOnKqueue && (gears.async.io.IpText.isLoopback(peer) || NWFrameworkOps.isHostAddress(peer))
+    loopbackOnKqueue && (gears.async.io.internal.IpText.isLoopback(peer) || NWFrameworkOps.isHostAddress(peer))
 
   /** `into`, for kqueue's opener: the same handles, under kqueue's kind of the same name. */
   private def forKqueue[K <: AnyRef](into: Slot[?]): Slot[K] = into.asInstanceOf[Slot[K]]
@@ -85,11 +85,11 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   def write(handle: Writable, buf: ByteBuffer): KqueueOp & Repeatable =
     if owns(handle) then new NWFrameworkWrite(handle, buf) else KqueueOps.write(KqueueKinds.writable(handle), buf)
   def read(handle: Readable, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     if owns(handle) then new NWFrameworkReadMany(handle, bufs) else KqueueOps.read(KqueueKinds.readable(handle), bufs)
   }
   def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     if owns(handle) then new NWFrameworkWriteMany(handle, bufs)
     else KqueueOps.write(KqueueKinds.writable(handle), bufs)
   }
@@ -131,14 +131,14 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if owns(handle) then new NWFrameworkClose(handle) else KqueueOps.close(handle)
 
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
-    val ip = gears.async.io.Ops.ip(address)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Connection)
+    val ip = gears.async.io.internal.Checks.ip(address)
     if connectsOnKqueue(ip) then KqueueOps.connect(ip, options, forKqueue(into))
     else new NWFrameworkConnectTo(ip, options, into)
   }
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
-    val ip = gears.async.io.Ops.ip(address)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Listener)
+    val ip = gears.async.io.internal.Checks.ip(address)
     if listensOnKqueue(ip) then KqueueOps.listen(ip, options, forKqueue(into))
     else new NWFrameworkListen(ip, options, into)
   }
@@ -150,8 +150,8 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
-    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
+    val (l, r) = gears.async.io.internal.Checks.ipPair(local, remote)
     if connectsOnKqueue(r.nn) then KqueueOps.connectDatagram(l, r.nn, options, forKqueue(into))
     else new NWFrameworkOpenDatagram(l, r.nn, options, into)
   }
@@ -162,7 +162,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     if owns(handle) then new NWFrameworkSend(handle, Array(buf))
     else KqueueOps.send(KqueueKinds.connectedDatagram(handle), buf)
   def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): KqueueOp & Repeatable = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     if owns(handle) then new NWFrameworkSend(handle, bufs)
     else KqueueOps.send(KqueueKinds.connectedDatagram(handle), bufs)
   }
@@ -171,7 +171,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     * (see `NWFrameworkOps`).
     */
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): KqueueOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
     KqueueOps.bindDatagram(local, options, forKqueue(into))
   }
 
@@ -189,7 +189,7 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
   def option[V](handle: Handle, option: SocketOption[V]): V =
     if !owns(handle) then {
       val kind = KqueueOps.kindFor(handle, option)
-      if !supports(option, kind) then throw gears.async.io.Ops.noOption(option, kind)
+      if !supports(option, kind) then throw gears.async.io.internal.Checks.noOption(option, kind)
       KqueueOps.option(handle, option)
     } else {
       val h = NWFrameworkHandles.get(handle)
@@ -198,15 +198,15 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
         case NWFrameworkHandle.Listener => SocketOption.Kind.Listener
         case _                          => SocketOption.Kind.ConnectedDatagram
       }
-      if !SocketOption.onSocket(option, kind) then throw gears.async.io.Ops.notFor(option, kind)
-      if !supports(option, kind) then throw gears.async.io.Ops.noOption(option, kind)
+      if !SocketOption.onSocket(option, kind) then throw gears.async.io.internal.Checks.notFor(option, kind)
+      if !supports(option, kind) then throw gears.async.io.internal.Checks.noOption(option, kind)
       option match {
-        case SocketOption.NoDelay   => gears.async.io.Ops.noDelay(h.opened).asInstanceOf[V]
+        case SocketOption.NoDelay   => gears.async.io.internal.Checks.noDelay(h.opened).asInstanceOf[V]
         case SocketOption.KeepAlive =>
           val set = h.opened.get(SocketOption.KeepAlive)
           (if set == null then KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
         case SocketOption.DontFragment => (h.opened.get(SocketOption.DontFragment) == true).asInstanceOf[V]
-        case _                         => throw gears.async.io.Ops.noOption(option, kind)
+        case _                         => throw gears.async.io.internal.Checks.noOption(option, kind)
       }
     }
   def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
@@ -327,7 +327,7 @@ final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrame
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     else {
       val n = h.read(NativeBuffer.atPosition(buf), buf.remaining(), reactor, token)
       if n > 0 then NativeBuffer.advance(buf, n)
@@ -340,7 +340,7 @@ final class NWFrameworkReadMany(val handle: Handle, bufs: Array[ByteBuffer]) ext
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
-    if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.buffersFull(bufs)
+    if !gears.async.io.internal.Checks.anyRemaining(bufs) then throw gears.async.io.internal.Checks.buffersFull(bufs)
     else h.readMany(bufs, reactor, token) >= 0
 }
 
@@ -353,7 +353,7 @@ final class NWFrameworkWriteMany(val handle: Handle, bufs: Array[ByteBuffer]) ex
     if sent then {
       sent = false
       h.sent()
-    } else if !gears.async.io.Ops.anyRemaining(bufs) then true
+    } else if !gears.async.io.internal.Checks.anyRemaining(bufs) then true
     else {
       val n = h.writeMany(bufs, reactor, token)
       if n > 0 then true
@@ -370,7 +370,7 @@ final class NWFrameworkWriteMany(val handle: Handle, bufs: Array[ByteBuffer]) ex
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`). */
 final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Slot[Received])
     extends NWFrameworkCommand {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
@@ -387,7 +387,7 @@ final class NWFrameworkPooledRead(val handle: Handle, pool: NativePool, into: Sl
 final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFrameworkKinds.Connection]], max: Int)
     extends NWFrameworkCommand {
   override private[io] def waitsItsTurn: Boolean = true
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
@@ -403,7 +403,7 @@ final class NWFrameworkAcceptAll(val handle: Handle, into: Slot[Array[NWFramewor
 /** Accepts one connection on a listener, writing its handle into `into`. */
 final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Connection]) extends NWFrameworkCommand {
   override private[io] def waitsItsTurn: Boolean = true
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
@@ -424,7 +424,7 @@ final class NWFrameworkAccept(val handle: Handle, into: Slot[NWFrameworkKinds.Co
   */
 sealed abstract class NWFrameworkOpening[K <: Handle](into: Slot[K], kindOf: Handle => K) extends NWFrameworkCommand {
   override private[io] def oneShot: Boolean = true // it opens its handle
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var opened: Handle | Null = null
   private var delivered = false
   def kind: Int = NWFrameworkHandle.Connect
@@ -558,7 +558,7 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
   def kind: Int = NWFrameworkHandle.Read
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
-    if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the packet would be dropped
+    if buf.capacity() == 0 then throw gears.async.io.internal.Checks.noCapacity(buf) // the packet would be dropped
     buf.clear()
     val packet = h.receivePacket(reactor, token)
     if packet == null then false
@@ -584,7 +584,8 @@ final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends
       sent = false
       h.sent()
     } else {
-      if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.emptyPacket(bufs(0))
+      if !gears.async.io.internal.Checks.anyRemaining(bufs) then
+        throw gears.async.io.internal.Checks.emptyPacket(bufs(0))
       val done =
         if bufs.length == 1 then {
           val buf = bufs(0)
@@ -602,7 +603,7 @@ final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends
 private[nwframework] object NWFrameworkOps {
 
   /** Whether `address` is one of this host's own, asked of `getifaddrs` each time, since interfaces come and go. */
-  def isHostAddress(address: IpAddress): Boolean = gears.async.io.IpText.unmapped(address) match {
+  def isHostAddress(address: IpAddress): Boolean = gears.async.io.internal.IpText.unmapped(address) match {
     case IpAddress.IPv4(host, _) => scala.scalanative.unsafe.Zone.acquire(z => ask(host)(using z))
     case IpAddress.IPv6(host, _) => scala.scalanative.unsafe.Zone.acquire(z => ask(host)(using z))
   }

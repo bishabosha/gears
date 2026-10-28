@@ -22,8 +22,8 @@ import KqueueBackend.Handle
   * closes it again, since the handle never reaches the caller.
   */
 final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File]) extends KqueueBlocking {
-  gears.async.io.Ops.checkPath(path)
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  gears.async.io.internal.Checks.checkPath(path)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = {
     val handle = KqueueHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then KqueueHandles.close(handle)
@@ -36,9 +36,9 @@ final class OpenFile(path: String, write: Boolean, into: Slot[KqueueKinds.File])
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  gears.async.io.Ops.checkOffset(offset)
+  gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) {
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     val fd = handle.fd
     val read = unistd.pread(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize, offset.toSize)
     if read < 0 then throw new IOException(s"Failed to read descriptor $fd at $offset: ${cError()}")
@@ -56,7 +56,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long)
     extends KqueueBlocking
     with Repeatable {
-  gears.async.io.Ops.checkOffset(offset)
+  gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = KqueueHandles.inUse(handle) { // a closed handle fails first, with nothing to write too
     if buf.hasRemaining() then writeAt(handle.fd)
   }

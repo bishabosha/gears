@@ -16,8 +16,8 @@ import NioCapabilities.Handle
   * closes it again, since the handle never reaches the caller.
   */
 final class OpenFile(path: String, write: Boolean, into: Slot[NioKinds.File]) extends NioBlocking {
-  gears.async.io.Ops.checkPath(path)
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  gears.async.io.internal.Checks.checkPath(path)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = {
     val handle = NioHandles.openFile(path, write)
     if !unlessCancelled(into.set(handle)) then NioHandles.close(handle)
@@ -42,10 +42,10 @@ sealed abstract class FileTask(val handle: Handle) extends NioBlocking with Repe
   * advances by the bytes read, so that submitting the op again goes on from there.
   */
 final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: Long) extends FileTask(handle) {
-  gears.async.io.Ops.checkOffset(offset)
+  gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = {
     val file = regularFile // a closed handle fails first
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     // Into a view of `buf`, its position and the offset then moved together, so that a cancel before that leaves both
     // as they were, the op ready to be submitted again.
     val view = buf.duplicate()
@@ -62,7 +62,7 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
   * advances by the bytes written.
   */
 final class PositionalWrite(handle: Handle, buf: ByteBuffer, private var offset: Long) extends FileTask(handle) {
-  gears.async.io.Ops.checkOffset(offset)
+  gears.async.io.internal.Checks.checkOffset(offset)
   def block(): Unit = {
     val file = regularFile // a closed handle fails first, with nothing to write too
     val view = buf.duplicate() // as a read's, so that a cancel leaves the buffer and offset together

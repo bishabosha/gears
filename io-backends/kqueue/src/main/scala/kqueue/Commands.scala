@@ -25,7 +25,8 @@ import KqueueBackend.Handle
   */
 final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
-  override def refusal: Throwable | Null = if buf.hasRemaining() then null else gears.async.io.Ops.bufferFull(buf)
+  override def refusal: Throwable | Null =
+    if buf.hasRemaining() then null else gears.async.io.internal.Checks.bufferFull(buf)
   private var read = 0 // what the last perform returned: bytes, 0 for would-block, or -1 at EOF
   private var filled = false
   def perform(): Boolean = {
@@ -42,12 +43,12 @@ final case class ReadIntoBuffer(fd: Int, buf: ByteBuffer) extends Command {
 final class ReadIntoBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
   def interest: Interest = Interest.Read
   override def refusal: Throwable | Null =
-    if gears.async.io.Ops.anyRemaining(bufs) then null else gears.async.io.Ops.buffersFull(bufs)
+    if gears.async.io.internal.Checks.anyRemaining(bufs) then null else gears.async.io.internal.Checks.buffersFull(bufs)
   private var read = 0
   private var filled = false
   def perform(): Boolean = {
     read = NonBlocking.readv(fd, bufs)
-    filled = !gears.async.io.Ops.anyRemaining(bufs)
+    filled = !gears.async.io.internal.Checks.anyRemaining(bufs)
     read != 0
   }
   override def transferred: Int = read
@@ -58,14 +59,14 @@ final class ReadIntoBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Comman
 /** Drains `bufs` in order with one `writev`, as `WriteFromBuffer` drains one (see `Ops.write`). */
 final class WriteFromBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Command {
   def interest: Interest = Interest.Write
-  def perform(): Boolean = !gears.async.io.Ops.anyRemaining(bufs) || NonBlocking.writev(fd, bufs) >= 0
+  def perform(): Boolean = !gears.async.io.internal.Checks.anyRemaining(bufs) || NonBlocking.writev(fd, bufs) >= 0
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): as `ReadIntoBuffer`, into a buffer taken when
   * the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
 final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   private var read = 0
   private var filled = false
@@ -108,7 +109,7 @@ final case class WriteFromBuffer(fd: Int, buf: ByteBuffer) extends Command {
   */
 final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Command {
   override private[io] def waitsItsTurn: Boolean = true
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   def perform(): Boolean = {
@@ -125,7 +126,7 @@ final case class Accept(fd: Int, into: Slot[KqueueKinds.Connection]) extends Com
   */
 final class AcceptAll(val fd: Int, into: Slot[Array[KqueueKinds.Connection]], max: Int) extends Command {
   override private[io] def waitsItsTurn: Boolean = true
-  override private[io] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   override def edgeTriggered: Boolean = true
   private var count = 0
@@ -171,9 +172,10 @@ final class ReceiveFrom(val fd: Int, buf: ByteBuffer, from: Slot[? <: SocketAddr
     extends Command {
   override private[io] def waitsItsTurn: Boolean = true
   override private[io] def slotRefusal: Throwable | Null =
-    if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
+    if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)
   def interest: Interest = Interest.Read
-  override def refusal: Throwable | Null = if buf.capacity() > 0 then null else gears.async.io.Ops.noCapacity(buf)
+  override def refusal: Throwable | Null =
+    if buf.capacity() > 0 then null else gears.async.io.internal.Checks.noCapacity(buf)
   private var received = -1
   override def transferred: Int = received
   override def edgeTriggered: Boolean = true
@@ -209,7 +211,9 @@ final class SendTo(val fd: Int, bufs: Array[ByteBuffer], to: SocketAddress | Nul
   def interest: Interest = Interest.Write
 
   override def refusal: Throwable | Null =
-    if to == null && !gears.async.io.Ops.anyRemaining(bufs) then gears.async.io.Ops.emptyPacket(bufs(0)) else null
+    if to == null && !gears.async.io.internal.Checks.anyRemaining(bufs) then
+      gears.async.io.internal.Checks.emptyPacket(bufs(0))
+    else null
 
   def perform(): Boolean = {
     val sent =

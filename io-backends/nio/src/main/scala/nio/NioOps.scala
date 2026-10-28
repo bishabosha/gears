@@ -55,8 +55,8 @@ sealed trait NioOp extends gears.async.io.internal.TimerHeap.Entry {
   /** For a command that failed as soon as it was submitted: its failure, until its completion runs. */
   private[nio] var atOnceFailure: Throwable | Null = null
 
-  /** The failure of an op submitted with a slot still holding a value (`Ops.notEmpty`), which fails it at once, before
-    * it does anything; null if its slots are empty.
+  /** The failure of an op submitted with a slot still holding a value (`Checks.notEmpty`), which fails it at once,
+    * before it does anything; null if its slots are empty.
     */
   private[nio] def slotRefusal: Throwable | Null = null
 
@@ -98,11 +98,11 @@ object NioOps
   def read(handle: Readable, buf: ByteBuffer): Read = new Read(handle, buf)
   def write(handle: Writable, buf: ByteBuffer): Write = new Write(handle, buf)
   def read(handle: Readable, bufs: Array[ByteBuffer]): ReadMany = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     new ReadMany(handle, bufs)
   }
   def write(handle: Writable, bufs: Array[ByteBuffer]): WriteMany = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     new WriteMany(handle, bufs)
   }
   def accept(handle: Listener, into: Slot[Connection]): Accept = new Accept(handle, into)
@@ -111,24 +111,24 @@ object NioOps
     new AcceptAll(handle, into, max)
   }
   def connect(address: IpAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Connection)
-    new ConnectTo(gears.async.io.Ops.ip(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Connection)
+    new ConnectTo(gears.async.io.internal.Checks.ip(address), into, options)
   }
   def connect(address: UnixAddress, options: SocketOptions, into: Slot[Connection]): ConnectTo = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
-    new ConnectTo(gears.async.io.Ops.unix(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
+    new ConnectTo(gears.async.io.internal.Checks.unix(address), into, options)
   }
   def listen(address: IpAddress, options: SocketOptions, into: Slot[Listener]): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.Listener)
-    new Listen(gears.async.io.Ops.ip(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.Listener)
+    new Listen(gears.async.io.internal.Checks.ip(address), into, options)
   }
   def listen(address: UnixAddress, options: SocketOptions, into: Slot[Listener]): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.UnixListener)
-    new Listen(gears.async.io.Ops.unix(address), into, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.UnixListener)
+    new Listen(gears.async.io.internal.Checks.unix(address), into, options)
   }
   def bindDatagram(local: IpAddress, options: SocketOptions, into: Slot[BoundDatagram]): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
-    new OpenDatagram(gears.async.io.Ops.ip(local), null, into, NioKinds.boundDatagram, options)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.BoundDatagram)
+    new OpenDatagram(gears.async.io.internal.Checks.ip(local), null, into, NioKinds.boundDatagram, options)
   }
   def connectDatagram(
       local: IpAddress | Null,
@@ -136,8 +136,8 @@ object NioOps
       options: SocketOptions,
       into: Slot[ConnectedDatagram]
   ): NioOp = {
-    gears.async.io.Ops.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
-    val (l, r) = gears.async.io.Ops.ipPair(local, remote)
+    gears.async.io.internal.Checks.checkOptions(options, supports, SocketOption.Kind.ConnectedDatagram)
+    val (l, r) = gears.async.io.internal.Checks.ipPair(local, remote)
     new OpenDatagram(l, r, into, NioKinds.connectedDatagram, options)
   }
 
@@ -181,8 +181,8 @@ object NioOps
                 if d.isConnected then SocketOption.Kind.ConnectedDatagram else SocketOption.Kind.BoundDatagram
               case _ => throw new IllegalArgumentException(s"$option applies to sockets, not $handle")
             }
-            if !SocketOption.onSocket(option, kind) then throw gears.async.io.Ops.notFor(option, kind)
-            if !supports(option, kind) then throw gears.async.io.Ops.noOption(option, kind)
+            if !SocketOption.onSocket(option, kind) then throw gears.async.io.internal.Checks.notFor(option, kind)
+            if !supports(option, kind) then throw gears.async.io.internal.Checks.noOption(option, kind)
             (c, kind)
           case _ => throw new IllegalArgumentException(s"$option applies to sockets, not $handle")
         }
@@ -192,14 +192,14 @@ object NioOps
   def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): Receive = new Receive(handle, buf, from)
   def receive(handle: ConnectedDatagram, buf: ByteBuffer): Receive = new Receive(handle, buf, null)
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): Send =
-    new Send(handle, buf, gears.async.io.Ops.ip(to))
+    new Send(handle, buf, gears.async.io.internal.Checks.ip(to))
   def send(handle: ConnectedDatagram, buf: ByteBuffer): Send = new Send(handle, buf, null)
   def send(handle: BoundDatagram, bufs: Array[ByteBuffer], to: IpAddress): Send = {
-    gears.async.io.Ops.checkBuffers(bufs)
-    new Send(handle, bufs, gears.async.io.Ops.ip(to))
+    gears.async.io.internal.Checks.checkBuffers(bufs)
+    new Send(handle, bufs, gears.async.io.internal.Checks.ip(to))
   }
   def send(handle: ConnectedDatagram, bufs: Array[ByteBuffer]): Send = {
-    gears.async.io.Ops.checkBuffers(bufs)
+    gears.async.io.internal.Checks.checkBuffers(bufs)
     new Send(handle, bufs, null)
   }
   def timer(duration: scala.concurrent.duration.FiniteDuration): NioTimer = {
@@ -262,7 +262,7 @@ sealed trait Opens extends NioOp {
   * pipes are.
   */
 sealed abstract class OpensAtOnce[K <: Handle](into: Slot[K]) extends NioAtOnce with Opens {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var opened: K | Null = null
   protected def open(): K
   def perform(): Unit = {
@@ -304,7 +304,7 @@ final class OpenDatagram[K <: Handle](
 
 /** A pipe, its read end written into `read` and its write end into `write` (see `PipeOps.pipe`). */
 final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writable]) extends NioAtOnce with Opens {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(read, write)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(read, write)
   private var ends: (NioKinds.Readable, NioKinds.Writable) | Null = null
   def perform(): Unit = {
     val (in, out) = NioHandles.pipe()
@@ -376,14 +376,14 @@ abstract class Command extends NioOp with Repeatable {
 final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
-    if !buf.hasRemaining() then throw gears.async.io.Ops.bufferFull(buf)
+    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     entry.nn.read(buf) != 0
   }
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
 final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val slot = pool.take()
@@ -419,7 +419,7 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
 final class ReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
-    if !gears.async.io.Ops.anyRemaining(bufs) then throw gears.async.io.Ops.buffersFull(bufs)
+    if !gears.async.io.internal.Checks.anyRemaining(bufs) then throw gears.async.io.internal.Checks.buffersFull(bufs)
     entry.nn.read(bufs) != 0
   }
 }
@@ -427,13 +427,13 @@ final class ReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Comman
 /** Drains `bufs` in order, as `Write` drains one, through the channel's gathering write. */
 final class WriteMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
   def interest: Interest = Interest.Write
-  def perform(): Boolean = !gears.async.io.Ops.anyRemaining(bufs) || entry.nn.write(bufs) >= 0
+  def perform(): Boolean = !gears.async.io.internal.Checks.anyRemaining(bufs) || entry.nn.write(bufs) >= 0
 }
 
 /** Accepts one connection on a listener, writing the new connection's handle into `into`. */
 final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends Command {
   override private[nio] def waitsItsTurn: Boolean = true
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val client = selectable(classOf[ServerSocketChannel], "Accepting").accept()
@@ -456,7 +456,7 @@ final class Accept(val handle: Handle, into: Slot[NioKinds.Connection]) extends 
   */
 final class AcceptAll(val handle: Handle, into: Slot[Array[NioKinds.Connection]], max: Int) extends Command {
   override private[nio] def waitsItsTurn: Boolean = true
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
     val listener = selectable(classOf[ServerSocketChannel], "Accepting")
@@ -502,7 +502,7 @@ final class ConnectTo(
   override private[nio] def oneShot: Boolean = true // it opens its socket
   override private[nio] def claim: gears.async.io.internal.Turns | Null =
     null // on a socket of its own
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   private var socket: Handle | Null = null
   private var connected = false
   def handle: Handle = socket.nn
@@ -547,10 +547,11 @@ final class ConnectTo(
 final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] | Null) extends Command {
   override private[nio] def waitsItsTurn: Boolean = true
   override private[nio] def slotRefusal: Throwable | Null =
-    if from == null then null else gears.async.io.Ops.notEmpty(from.nn)
+    if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)
   def interest: Interest = Interest.Read
   def perform(): Boolean = {
-    if buf.capacity() == 0 then throw gears.async.io.Ops.noCapacity(buf) // the JDK would drop the whole packet
+    if buf.capacity() == 0 then
+      throw gears.async.io.internal.Checks.noCapacity(buf) // the JDK would drop the whole packet
     buf.clear()
     val sender = selectable(classOf[DatagramChannel], "Receiving").receive(buf)
     if sender != null then {
@@ -571,11 +572,11 @@ final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Nu
   private val target = if to == null then null else NioHandles.socketAddress(to)
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
-    val size = gears.async.io.Ops.remaining(bufs)
+    val size = gears.async.io.internal.Checks.remaining(bufs)
     if target == null then {
       // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
       // so no backend sends an empty packet on a connected socket (see `IpDatagramOps.send`).
-      if size == 0 then throw gears.async.io.Ops.emptyPacket(bufs(0))
+      if size == 0 then throw gears.async.io.internal.Checks.emptyPacket(bufs(0))
       // A connected channel's gathering write sends one datagram of all the buffers.
       (if bufs.length == 1 then channel.write(bufs(0)).toLong else channel.write(bufs)) > 0
     } else {
@@ -677,14 +678,14 @@ final class BlockingTask(body: () => Unit) extends NioBlocking {
 
 /** A blocking task whose function's value is written into `into`, for `BlockingOps.blocking`. */
 final class BlockingResultTask[A <: AnyRef](body: () => A, into: Slot[A]) extends NioBlocking {
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def block(): Unit = publish(into, body())
 }
 
 /** Resolves a host name with `InetAddress`, which blocks, on the blocker pool. */
 final class Resolve(val host: String, into: Slot[List[ResolvedAddress]]) extends NioBlocking {
-  gears.async.io.Ops.checkHost(host)
-  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.Ops.notEmpty(into)
+  gears.async.io.internal.Checks.checkHost(host)
+  override private[nio] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   override protected def detachable: Boolean = true // its cancel need not wait for the lookup
   def block(): Unit = publish(into, Resolve.addresses(host))
 }
@@ -698,11 +699,11 @@ private[nio] object Resolve {
     val addresses =
       try InetAddress.getAllByName(host).toList
       catch case e: IOException => throw new IOException(s"Failed to resolve $host: ${e.getMessage}", e)
-    gears.async.io.Ops.resolved(
+    gears.async.io.internal.Checks.resolved(
       host,
       addresses.map {
         case v4: Inet4Address => ResolvedAddress(AddressFamily.IPv4, v4.getHostAddress)
-        case v6               => ResolvedAddress(AddressFamily.IPv6, gears.async.io.IpText.ipv6(v6.getAddress))
+        case v6               => ResolvedAddress(AddressFamily.IPv6, gears.async.io.internal.IpText.ipv6(v6.getAddress))
       }
     )
   }

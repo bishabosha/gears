@@ -72,7 +72,7 @@ private[nio] final class Selectable(val channel: SelectableChannel, bound: Bound
   def write(bufs: Array[ByteBuffer]): Long = channel match {
     case gathering: java.nio.channels.GatheringByteChannel =>
       val written = gathering.write(bufs)
-      if written == 0 && gears.async.io.Ops.anyRemaining(bufs) then -1 else written
+      if written == 0 && gears.async.io.internal.Checks.anyRemaining(bufs) then -1 else written
     case _ => throw new IOException(s"$channel cannot be written")
   }
 
@@ -529,7 +529,7 @@ object NioHandles {
     */
   private[nio] def socketAddress(address: SocketAddress): java.net.SocketAddress = address match {
     case UnixAddress(path) => UnixDomainSocketAddress.of(path)
-    case ip: IpAddress     => ipSocketAddress(gears.async.io.IpText.canonical(ip)) // refused as an op refuses it
+    case ip: IpAddress => ipSocketAddress(gears.async.io.internal.IpText.canonical(ip)) // refused as an op refuses it
   }
 
   private def ipSocketAddress(address: IpAddress): java.net.SocketAddress = address match {
@@ -585,7 +585,7 @@ object NioHandles {
     case ip: InetSocketAddress =>
       ip.getAddress match {
         case v4: Inet4Address => IpAddress.IPv4(v4.getHostAddress, ip.getPort)
-        case v6               => IpAddress.IPv6(gears.async.io.IpText.ipv6(v6.getAddress), ip.getPort) // as inet_ntop
+        case v6 => IpAddress.IPv6(gears.async.io.internal.IpText.ipv6(v6.getAddress), ip.getPort) // as inet_ntop
       }
     case other => throw new IOException(s"Not an IP address: $other")
   }

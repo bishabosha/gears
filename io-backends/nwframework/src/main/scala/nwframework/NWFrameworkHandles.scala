@@ -494,7 +494,7 @@ private[nwframework] final class NWFrameworkHandle(
     checkOpen()
     if writeError != 0 then throw failure("write", writeError)
     if outputShut then throw new IOException("The connection was shut down for writing")
-    val total = gears.async.io.Ops.remaining(bufs)
+    val total = gears.async.io.internal.Checks.remaining(bufs)
     val room = if NWFrameworkHandle.SendWindow == 0 then total else NWFrameworkHandle.SendWindow - sentBytes
     if room <= 0 then {
       registerWaiting(Write, reactor, token)
@@ -519,7 +519,7 @@ private[nwframework] final class NWFrameworkHandle(
   def sendMany(bufs: Array[java.nio.ByteBuffer], reactor: KqueueReactor, token: Long): Boolean = synchronized {
     checkOpen()
     if writeError != 0 then throw failure("write", writeError)
-    val n = gears.async.io.Ops.remaining(bufs).toInt
+    val n = gears.async.io.internal.Checks.remaining(bufs).toInt
     val fits = sentBytes < NWFrameworkHandle.SendWindow
     if !fits then registerWaiting(Write, reactor, token)
     sentBytes += n
@@ -792,7 +792,7 @@ private[nwframework] object NWFrameworkHandles {
   /** `options` as the C side takes them (see `NWFrameworkIo.TcpSettings`). */
   private def tcpSettings(options: SocketOptions)(using Zone): Ptr[NWFrameworkIo.TcpSettings] = {
     val settings = alloc[NWFrameworkIo.TcpSettings]()
-    settings._1 = if gears.async.io.Ops.noDelay(options) then 1 else 0
+    settings._1 = if gears.async.io.internal.Checks.noDelay(options) then 1 else 0
     options.get(SocketOption.KeepAlive) match {
       case null                                => settings._2 = 0
       case KeepAlive.Off                       => settings._2 = 1
@@ -872,7 +872,7 @@ private[nwframework] object NWFrameworkHandles {
     } else if family == socket.AF_INET6 then {
       val v6 = addr.asInstanceOf[Ptr[in.sockaddr_in6]]
       inet.inet_ntop(family, v6.at4.asInstanceOf[Ptr[Byte]], text, 64.toUInt)
-      gears.async.io.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
+      gears.async.io.internal.IpText.unmapped(IpAddress.IPv6(fromCString(text), inet.ntohs(v6.sin6_port).toInt))
     } else throw new IOException(s"Unsupported address family $family")
   }
 }
