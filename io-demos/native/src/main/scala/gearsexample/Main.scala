@@ -6,6 +6,8 @@ import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.kqueue.KqueueBackend
 
+import scala.concurrent.duration.*
+
 import mainargs.{ParserForMethods, arg, main}
 
 /** The gears mirrors, run as `iokqueuedemos gears <command>` with the same commands and flags as the plain demos.
@@ -27,6 +29,20 @@ object Main {
   @main
   def timer(): Unit = {
     GearsTimer.run()
+  }
+  @main(
+    name = "quic-timers",
+    doc = "QUIC's acknowledgement-delay and idle timers on one deadline timer per connection, moved per packet"
+  )
+  def quicTimers(
+      @arg connections: Int = 8,
+      @arg packets: Int = 101,
+      @arg(name = "interval-micros") intervalMicros: Int = 2000,
+      @arg(doc =
+        "kqueue, nwframework (Network.framework, loopback on kqueue), or nwframework-everywhere (loopback too)"
+      ) backend: String = "kqueue"
+  ): Unit = {
+    withBackend(backend)(b => GearsQuicTimers.run(connections, packets, intervalMicros.micros)(using b))
   }
   @main
   def sockServe(@arg sock: String): Unit = {

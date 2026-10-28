@@ -12,6 +12,8 @@ import gears.async.io.UnixStreamBackend
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
 
+import scala.concurrent.duration.*
+
 import mainargs.{ParserForMethods, arg, main}
 
 /** The gears demos on the JVM, run as `sbt "ioDemosJVM/run <command>"`, with the commands and flags of
@@ -34,6 +36,17 @@ object Main {
   @main
   def timer(): Unit = {
     GearsTimer.run()
+  }
+  @main(
+    name = "quic-timers",
+    doc = "QUIC's acknowledgement-delay and idle timers on one deadline timer per connection, moved per packet"
+  )
+  def quicTimers(
+      @arg connections: Int = 8,
+      @arg packets: Int = 101,
+      @arg(name = "interval-micros") intervalMicros: Int = 2000
+  ): Unit = {
+    GearsQuicTimers.run(connections, packets, intervalMicros.micros)
   }
   @main
   def sockServe(@arg sock: String): Unit = {

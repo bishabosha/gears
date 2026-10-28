@@ -61,6 +61,15 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
     assert(!output.contains("Exception"), output)
   }
 
+  demoTest("quic-timers: each connection's deadline timer, moved per packet, acknowledges and closes it idle") {
+    for backend <- Seq("kqueue", "nwframework", "nwframework-everywhere") do {
+      val output = run("quic-timers", "--backend", backend, "--connections", "16", "--packets", "201")
+      assert(output.contains("every packet acknowledged, every connection closed idle"), s"$backend:\n$output")
+      assert(output.contains("16 connections closed idle"), s"$backend:\n$output")
+      assert(!output.contains("Exception"), s"$backend:\n$output")
+    }
+  }
+
   demoTest("bench: the NWFramework backend runs a Unix socket's scenarios on kqueue's code") {
     val output = run("bench", "--backend", "nwframework", "--scale", "0.01", "--scenarios", "pingpong")
     assert(output.linesIterator.exists(_.startsWith("bench: pingpong ")), output)
