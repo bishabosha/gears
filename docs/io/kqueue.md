@@ -342,10 +342,12 @@ refuse.
 - **A blocking task's hand-over**: passing the worker's reactor and queue to a spare thread while a task blocks, as
   cats-effect does, rather than two hops to a blocker thread and back (see `blocking-io` above).
 
-## Known: the plain key-value client's race
+## The plain key-value client's race, fixed
 
-The hand-written kqueue key-value client (`kqueueExampleKeyValue`, the `kv4`, `kv6` and `kv` commands) can write
-before its non-blocking connection has completed, and then fails with `ENOTCONN` ("Socket is not connected"): seen once
-in a full demo run on 2026-10-28, not in three reruns. It is that demo's own loop, not the reactor's; the gears demos'
-clients, which connect through the `connect` op, have no such race. The demo suite skips the key-value check against
-the plain demos until the client waits for writability after connecting.
+The hand-written kqueue key-value client (`kqueueExampleKeyValue`, the `kv4`, `kv6` and `kv` commands) failed now and
+then with `ENOTCONN` ("Socket is not connected"), seen once in a full demo run on 2026-10-28. Its send was a command
+tried as it was submitted, before the socket was writable; checking a non-blocking connect then (`SO_ERROR`) passes
+while it is still in progress, so the write went to a socket not yet connected, and its read, submitted at the start
+too, could fail the same way. Its send now waits for writability until the connection is verified, as the backend's
+own connect does (`ConnectTo.tryFirst`), and its read starts once the first send has completed. The demo suite skipped
+the check against the plain demos meanwhile, and runs it again.

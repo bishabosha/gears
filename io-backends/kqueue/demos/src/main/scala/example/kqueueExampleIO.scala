@@ -41,9 +41,15 @@ object KQueueExampleIO {
   // Shared with the gears demos, which run on every platform.
   export gearsexample.DemoIO.{FrameParser, FrameReader, InvalidFrame, StreamProtocol, drainTo, text}
 
-  /** A connecting stream socket; the connection is verified before its first use. */
+  /** A connecting stream socket; the connection is verified before its first use, which must wait for the socket to be
+    * writable first: that is when a non-blocking connect has finished, and checking before it passes while the
+    * connection is still in progress.
+    */
   final class ClientSock(val fd: Int) {
     private var connected = false
+
+    /** Whether the connection has been verified (`ensureConnected`). */
+    def isConnected: Boolean = connected
 
     def ensureConnected(): Unit = {
       if !connected then {

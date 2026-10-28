@@ -201,6 +201,9 @@ object KQueueExampleKeyValue {
     private object SendBatch extends Command {
       def fd: Int = sock.fd
       def interest: Interest = Interest.Write
+      // Until the connection is verified, wait for writability, which is when the connect has finished: tried at once,
+      // the check passes while it is still in progress, and the write fails with ENOTCONN.
+      override def tryFirst: Boolean = sock.isConnected
       def perform(): Boolean = {
         sock.ensureConnected()
         if !outbox.hasRemaining() then pack()
@@ -208,8 +211,15 @@ object KQueueExampleKeyValue {
       }
     }
 
+    private var reading = false
+
     def onComplete(command: Command): Unit = command match {
       case SendBatch =>
+        if !reading then { // connected now, so replies can be read
+          reading = true
+          inbox.clear()
+          r.submit(ReadIntoBuffer(sock.fd, inbox), this)
+        }
         if outbox.hasRemaining() || sent < batch.length then r.submit(SendBatch, this)
         else println(s"Pipelined ${batch.length} commands.")
       case read: ReadIntoBuffer =>
@@ -234,11 +244,8 @@ object KQueueExampleKeyValue {
       case _ => ()
     }
 
-    def start(): Unit = {
-      r.submit(SendBatch, this)
-      inbox.clear()
-      r.submit(ReadIntoBuffer(sock.fd, inbox), this)
-    }
+    /** Starts sending; reading starts once the first send has shown the connection made. */
+    def start(): Unit = r.submit(SendBatch, this)
   }
 
   /** Sets a counter, increments it `count` times, then reads it back, all in one pipelined batch. */
