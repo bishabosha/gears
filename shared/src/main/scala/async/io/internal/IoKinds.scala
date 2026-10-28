@@ -22,8 +22,13 @@ trait OnPool[+B <: ReactorBackend] extends Io[B] {
 }
 
 /** An `Io` on the calling thread, which may block: a caller backend's ops performed by the caller, so it may be made by
-  * the runner, or anyone, and used from any thread. Its `yield` is gears' own, a task spawned on the scheduler.
+  * the runner, or anyone, and used from any thread.
   */
 final class OnCaller[+B <: CallerBackend](val backend: B) extends Io[B] {
   private[io] def performWithin(op: Op, timeoutMillis: Int)(using Async): Unit = backend.performHere(op, timeoutMillis)
+
+  /** Gives up the caller's turn behind the threads already woken, the wake-ups of ops among them, where the platform
+    * has a way to (`Runner.yieldHere`), else as gears does (docs/io/jvm.md, "Starvation and lateness").
+    */
+  override def `yield`()(using Async): Unit = if !Runner.yieldHere() then super.`yield`()
 }

@@ -19,6 +19,9 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
 object Runner {
 
   /** A pool's workers: one per processor available to the program. */
+  /** For `OnCaller.yield`: false, to leave it to gears' own, since no caller backend runs here. */
+  private[io] def yieldHere(): Boolean = false
+
   private def Workers: Int = Runtime.getRuntime().availableProcessors()
 
   /** Runs `program` over `backend` on a pool of workers, one per available processor, each with a reactor of the

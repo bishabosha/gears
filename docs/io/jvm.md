@@ -157,6 +157,19 @@ what the OS keeps from a core when the carriers saturate them: with ops crossing
 and 2.08 (table above). The JDK's blocking channels, over runs three times longer, reached 2.26 ms p99 and 11.3 ms at
 most (`jvm-timers-on-caller-starvation.json`). The pool, whose workers are the only threads, keeps the best tail.
 
+**How `NioOnCaller` yields.** Its `yield` parks for a nanosecond (`Runner.yieldHere`): the virtual thread unmounts,
+and the JDK scheduler's timer wakes it from outside the carriers' pool, so it waits behind the threads woken before
+it, those whose handles became ready among them. It was gears' own `yield`, which resumes the caller through a task
+spawned on the scheduler. Spawned from a carrier, the task and the caller's resumption are both queued on that
+carrier's own queue, which a pool empties before it takes work from outside, where the poller's and the timer's
+wake-ups come from. With a compute future per core yielding between slices, the wake-ups waited as long as there was
+computing: `starvation`'s p50 was 520 µs, and once, in the fifth of five runs, its round trips never ran again in
+600 s, the dump showing every reader woken and waiting for a carrier. `Thread.yield` is worse: on JDK 27 a virtual
+thread that yields gets its carrier back while the carrier has nothing queued locally, and 20 of 21 runs of
+`starvation` went past 30 s, their warm-up's p99 31 ms where it finished, as `JdkBench.yieldTurn` had recorded. Parking, `starvation`'s p50 fell to 209 µs and its p99
+from 1.45 to 1.15 ms, with no run of 40 stalling, round trips unchanged; a yield now costs a trip through the timer,
+which made `mixed`'s slice of computation 39 µs, from 26. The reactor pool's `yield` is its own and was not affected.
+
 ## The retries
 
 The retry count was measured over Unix sockets and TCP, on macOS and in Linux (Docker), and under `tc netem` delay:

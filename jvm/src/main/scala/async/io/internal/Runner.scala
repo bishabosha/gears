@@ -71,6 +71,20 @@ object Runner {
     }
   }
 
+  /** Gives up the calling virtual thread's turn behind those already woken, for `OnCaller.yield`, and returns true.
+    * Parking for a nanosecond unmounts it, and the scheduler's timer wakes it from outside the carriers' pool, so it
+    * waits behind the threads woken before it, those whose ops' handles became ready among them. Neither gears' own
+    * `yield` nor `Thread.yield` does: the first resumes the caller through a task spawned on the carrier, the second,
+    * on JDK 27, gives the carrier back while it has nothing queued locally; either way it runs again before the
+    * wake-ups from outside the pool, which a pool takes once its carriers' own queues are empty. Futures computing in
+    * slices on every carrier, yielding between them, kept the ops' wake-ups from running: `starvation`'s round trips
+    * once never ran again in 600 s, and every run with `Thread.yield` stalled.
+    */
+  private[io] def yieldHere(): Boolean = {
+    java.util.concurrent.locks.LockSupport.parkNanos(1)
+    true
+  }
+
   /** Runs `program` on gears' own virtual threads, each op performed on the future's own thread. */
   private def onCaller[T](b: CallerBackend)(program: Io[b.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
     given VThreadSupport.type = VThreadSupport
