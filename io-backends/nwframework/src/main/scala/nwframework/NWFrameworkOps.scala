@@ -326,27 +326,28 @@ sealed abstract class NWFrameworkCommand extends Notified {
 final class NWFrameworkRead(val handle: Handle, buf: ByteBuffer) extends NWFrameworkCommand {
   gears.async.io.internal.Checks.checkFillable(buf)
   def kind: Int = NWFrameworkHandle.Read
+  override private[io] def refusal: Throwable | Null =
+    if buf.hasRemaining() then null else gears.async.io.internal.Checks.bufferFull(buf)
 
-  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
-    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
-    else {
-      val n = NativeBuffer.staged(buf, copyIn = false, copyOut = true) { b =>
-        val n = h.read(NativeBuffer.atPosition(b), b.remaining(), reactor, token)
-        if n > 0 then NativeBuffer.advance(b, n)
-        n
-      }
-      n >= 0
+  protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
+    val n = NativeBuffer.staged(buf, copyIn = false, copyOut = true) { b =>
+      val n = h.read(NativeBuffer.atPosition(b), b.remaining(), reactor, token)
+      if n > 0 then NativeBuffer.advance(b, n)
+      n
     }
+    n >= 0
+  }
 }
 
 /** Fills `bufs` in order (see `Ops.read`), as `NWFrameworkRead` fills one (`NWFrameworkHandle.readMany`). */
 final class NWFrameworkReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends NWFrameworkCommand {
   gears.async.io.internal.Checks.checkFillable(bufs)
   def kind: Int = NWFrameworkHandle.Read
+  override private[io] def refusal: Throwable | Null =
+    if gears.async.io.internal.Checks.anyRemaining(bufs) then null else gears.async.io.internal.Checks.buffersFull(bufs)
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
-    if !gears.async.io.internal.Checks.anyRemaining(bufs) then throw gears.async.io.internal.Checks.buffersFull(bufs)
-    else NativeBuffer.staged(bufs, copyIn = false, copyOut = true)(h.readMany(_, reactor, token)) >= 0
+    NativeBuffer.staged(bufs, copyIn = false, copyOut = true)(h.readMany(_, reactor, token)) >= 0
 }
 
 /** Drains `bufs` in order (see `Ops.write`), as `NWFrameworkWrite` drains one (`NWFrameworkHandle.writeMany`). */
@@ -563,9 +564,10 @@ final class NWFrameworkReceive(val handle: Handle, buf: ByteBuffer) extends NWFr
   gears.async.io.internal.Checks.checkFillable(buf)
   override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Read
+  override private[io] def refusal: Throwable | Null = // the packet would be dropped
+    if buf.capacity() > 0 then null else gears.async.io.internal.Checks.noCapacity(buf)
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean = {
-    if buf.capacity() == 0 then throw gears.async.io.internal.Checks.noCapacity(buf) // the packet would be dropped
     buf.clear()
     val packet = h.receivePacket(reactor, token)
     if packet == null then false
@@ -585,14 +587,15 @@ final class NWFrameworkSend(val handle: Handle, bufs: Array[ByteBuffer]) extends
   override private[io] def waitsItsTurn: Boolean = true
   def kind: Int = NWFrameworkHandle.Write
   private var sent = false
+  override private[io] def refusal: Throwable | Null =
+    if gears.async.io.internal.Checks.anyRemaining(bufs) then null
+    else gears.async.io.internal.Checks.emptyPacket(bufs(0))
 
   protected def attemptOn(h: NWFrameworkHandle, reactor: KqueueReactor): Boolean =
     if sent then {
       sent = false
       h.sent()
     } else {
-      if !gears.async.io.internal.Checks.anyRemaining(bufs) then
-        throw gears.async.io.internal.Checks.emptyPacket(bufs(0))
       val done =
         if bufs.length == 1 then {
           NativeBuffer.staged(bufs(0), copyIn = true, copyOut = false) { buf =>

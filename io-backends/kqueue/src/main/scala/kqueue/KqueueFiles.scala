@@ -39,8 +39,9 @@ final class PositionalRead(handle: Handle, buf: ByteBuffer, private var offset: 
     with Repeatable {
   gears.async.io.internal.Checks.checkFillable(buf)
   gears.async.io.internal.Checks.checkOffset(offset)
+  override private[io] def refusal: Throwable | Null =
+    if buf.hasRemaining() then null else gears.async.io.internal.Checks.bufferFull(buf)
   def block(): Unit = KqueueHandles.inUse(handle) {
-    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
     val fd = handle.fd
     NativeBuffer.staged(buf, copyIn = false, copyOut = true) { b =>
       val read = unistd.pread(fd, NativeBuffer.atPosition(b), b.remaining().toCSize, offset.toSize)

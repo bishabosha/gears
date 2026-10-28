@@ -105,10 +105,8 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         }
         (entry, key) match {
           case _ if failure != null =>
-            command.completion = pending
-            command.atOnceFailure = failure
-            if !finishNow then ready.add(command)
-            finished = finishNow
+            finished =
+              refuseNow(command, pending, failure.nn, finishNow) == gears.async.io.internal.ReactorCore.Finished
           case (s: Selectable, key: SelectionKey) =>
             val waiting = key.attachment().asInstanceOf[Waiting]
             // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.

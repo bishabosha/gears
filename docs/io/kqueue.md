@@ -338,7 +338,11 @@ What kqueue's reactor and NIO's do alike is `ReactorCore`, with what their ops k
 and blockers, submission past the backend's own kinds, cancel and time-outs, `close`, the turn itself (`runOnce`),
 and the openers' bookkeeping (`LoopOpensAtOnce`, `LoopOpensPipe`, `LoopConnects`): what an opener keeps of what it
 opened, and `abandon`, which closes it and empties its slots if the submission is withdrawn; each backend says only
-how a handle is opened and closed again. Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
+how a handle is opened and closed again. Submission refuses an op in one order on every backend, the loop reactors and
+`NioOnCaller` alike: a slot still holding a value, then the op as it stands (`LoopOp.refusal`: a read into a buffer
+with no room, a receive into one with no capacity, an empty packet on a connected socket), then its handle's turn held
+by another op. NIO and Network.framework had checked the second in `perform`, each time the op was performed, after
+the turn. Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
 test), withdrawal and dropping on close, failing what was pending on handles closed meanwhile (`deliverClosed`), what
 else it delivers each turn (`deliverOwn`: FIFOs and notified ops here, regular files and interest changes on NIO), and
 the poll (`poll`).

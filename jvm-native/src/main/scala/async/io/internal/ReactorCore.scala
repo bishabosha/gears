@@ -202,7 +202,9 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
 
   /** Submits `op`. A command tried at once that finishes queues its completion for the next turn, or, with `finishNow`,
     * takes the completion back off it uncalled, throws a failure, and returns true. An op left waiting, with a time
-    * limit, goes into the timer heap to time out when it is due.
+    * limit, goes into the timer heap to time out when it is due. Checked first, in this order, each failing the op as
+    * it is submitted: a slot still holding a value (`slotRefusal`), the op as it stands (`refusal`), and its handle's
+    * turn held by another op, which it waits for if it may (`claim`).
     */
   private def submitOrFinish[C <: Op](
       op: C,
@@ -214,16 +216,14 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     op.markSubmitted()
     require(op.completion == null, s"$op is already pending")
     val pending = completion.asInstanceOf[Completion[O]] // only ever called with `op`, which is a C
-    val slotRefusal = op.slotRefusal
+    var refusal = op.slotRefusal
+    if refusal == null then refusal = op.refusal
     val claim = op.claim
-    if slotRefusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
+    if refusal == null && claim != null && !claim.take(op) && op.waitsItsTurn then {
       queueForTurn(op, claim, pending, timeoutMillis)
       false
     } else {
-      val refusal =
-        if slotRefusal != null then slotRefusal
-        else if claim != null && !claim.holds(op) then Checks.alreadyPending(op)
-        else null
+      if refusal == null && claim != null && !claim.holds(op) then refusal = Checks.alreadyPending(op)
       submitHolding(op, pending, refusal, finishNow, timeoutMillis)
     }
   }
@@ -248,11 +248,8 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   ): Boolean = {
     var finished = false
     var waits = false
-    if refusal != null then {
-      op.completion = pending
-      op.atOnceFailure = refusal
-      if finishNow then finished = true else ready.add(op)
-    } else {
+    if refusal != null then finished = refuseNow(op, pending, refusal, finishNow) == ReactorCore.Finished
+    else {
       val own = submitOwn(op, pending, finishNow)
       if own == ReactorCore.Finished then finished = true
       else if own == ReactorCore.Waits then waits = true
@@ -423,11 +420,23 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
       true
     } catch {
       case t: Throwable =>
-        connect.completion = pending
-        connect.atOnceFailure = t
-        if !finishNow then ready.add(connect)
+        refuseNow(connect, pending, t, finishNow): Unit
         false
     }
+
+  /** Fails `op` as it is submitted, with `failure`, before it does anything: its completion queued for the next turn,
+    * or, with `finishNow`, left for `submitOrFinish` to take back and throw `failure`. Returns what `submitOwn` returns
+    * for it, `ReactorCore.Finished` or `ReactorCore.Queued`.
+    */
+  protected final def refuseNow(op: O, pending: Completion[O], failure: Throwable, finishNow: Boolean): Int = {
+    op.completion = pending
+    op.atOnceFailure = failure
+    if finishNow then ReactorCore.Finished
+    else {
+      ready.add(op)
+      ReactorCore.Queued
+    }
+  }
 
   /** Takes a pending op out of the reactor, as `cancel` describes, and returns its completion: null if it is not
     * pending here.

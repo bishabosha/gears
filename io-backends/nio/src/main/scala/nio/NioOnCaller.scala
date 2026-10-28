@@ -38,8 +38,12 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
   private[io] def performHere(op: Op, timeoutMillis: Int)(using ac: Async): Unit = {
     if ac.group.isCancelled then throw new CancellationException()
     op.markSubmitted()
-    val slotRefusal = op.slotRefusal // before anything is opened, so nothing is abandoned into the caller's slot
+    // In a reactor's order (`ReactorCore.submitOrFinish`): before anything is opened, so nothing is abandoned into the
+    // caller's slot, and before the handle's turn is looked at.
+    val slotRefusal = op.slotRefusal
     if slotRefusal != null then throw slotRefusal
+    val refusal = op.refusal
+    if refusal != null then throw refusal
     val deadline = if timeoutMillis < 0 then -1L else System.nanoTime() + timeoutMillis * 1_000_000L
     op match {
       case connect: ConnectTo =>

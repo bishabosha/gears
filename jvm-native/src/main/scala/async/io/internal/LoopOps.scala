@@ -35,6 +35,12 @@ trait LoopOp[O <: LoopOp[O]] extends TimerHeap.Entry { this: O =>
     */
   private[io] def slotRefusal: Throwable | Null = null
 
+  /** Why the op cannot be performed as it stands, such as a read into a buffer with no room, or null: then it fails as
+    * it is submitted, after `slotRefusal` and before its handle's turn is looked at, and is never performed, on a
+    * reactor and on a caller backend alike, so that no backend checks it again each time it performs the op.
+    */
+  private[io] def refusal: Throwable | Null = null
+
   /** The turn this op holds on its handle while pending (`Handle.reader` or `writer`); null for one that takes none.
     */
   private[io] def claim: Turns | Null = null

@@ -5,6 +5,7 @@ import gears.async.io.internal.Completion
 import gears.async.io.internal.DescriptorTable
 import gears.async.io.internal.Interest
 import gears.async.io.internal.Reactor
+import gears.async.io.internal.ReactorCore
 import gears.async.io.kqueue.KqueueLoop
 import gears.async.io.kqueue.KqueueLoop.Event
 
@@ -183,59 +184,11 @@ final class KqueueReactor private (
   private object wakeLock {}
 
   /** Submits a command, a connect, a close, or another facility's op (see `ReactorCore.submitOwn`). */
-  protected def submitOwn(op: KqueueOp, pending: Completion[KqueueOp], finishNow: Boolean): Int = {
-    var finished = false
-    var waits = false
-    var own = true
+  protected def submitOwn(op: KqueueOp, pending: Completion[KqueueOp], finishNow: Boolean): Int =
     op match {
-      case connect: ConnectTo if !started(connect, pending, finishNow) => finished = finishNow
-      case command: Command                                            =>
-        // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
-        val handle = command.handle
-        if handle != null && !handle.acquire() then {
-          command.completion = pending
-          command.atOnceFailure = KqueueHandles.notOpen(handle)
-          if finishNow then finished = true else ready.add(command)
-        } else
-          try {
-            val read = command.interest == Interest.Read
-            val slot = currentSlot(command.fd, read)
-            // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
-            if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
-            else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
-            command.completion = pending
-            val refusal = command.refusal
-            if refusal != null then {
-              command.atOnceFailure = refusal
-              if finishNow then finished = true else ready.add(command)
-            } else if read then {
-              val attempt =
-                slot.readReadiness == KqueueReactor.Ready ||
-                  (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
-              if attempt && performedAtOnce(command, slot, queue = !finishNow) then finished = finishNow
-              else {
-                slot.read = command
-                val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
-                if failed == null then waits = true
-                else {
-                  command.atOnceFailure = failed
-                  if finishNow then finished = true else ready.add(command)
-                }
-              }
-            } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then finished = finishNow
-            else {
-              slot.write = command
-              val failed = registrationFailure(command, slot, read = false)(
-                if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
-                else arm(command.fd, read = false)
-              )
-              if failed == null then waits = true
-              else {
-                command.atOnceFailure = failed
-                if finishNow then finished = true else ready.add(command)
-              }
-            }
-          } finally if handle != null then handle.release()
+      case connect: ConnectTo if !started(connect, pending, finishNow) =>
+        if finishNow then ReactorCore.Finished else ReactorCore.Queued
+      case command: Command   => submitCommand(command, pending, finishNow)
       case notified: Notified =>
         notified.token = nextToken
         nextToken += 1
@@ -251,27 +204,68 @@ final class KqueueReactor private (
           }
         if !done then {
           waiting.put(notified.token, notified)
-          waits = true
-        } else if notified.closes then closing.add(notified) // after the failures it causes, never in trySubmit
-        else if finishNow then finished = true
-        else ready.add(notified)
+          ReactorCore.Waits
+        } else if notified.closes then {
+          closing.add(notified) // after the failures it causes, never in trySubmit
+          ReactorCore.Queued
+        } else if finishNow then ReactorCore.Finished
+        else {
+          ready.add(notified)
+          ReactorCore.Queued
+        }
       case close: Close =>
         // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
         // until the last use ends and closes it.
         close.reset()
         close.reactor = this
         close.completion = pending
-        if close.start() then closing.add(close) // completed after the failures it causes, never in trySubmit
-        else {
+        if close.start() then {
+          closing.add(close) // completed after the failures it causes, never in trySubmit
+          ReactorCore.Queued
+        } else {
           pendingPromises += close
-          waits = true
+          ReactorCore.Waits
         }
-      case _ => own = false // a timer, a blocker or an at-once op
+      case _ => ReactorCore.NotOwn // a timer, a blocker or an at-once op
     }
-    if !own then gears.async.io.internal.ReactorCore.NotOwn
-    else if finished then gears.async.io.internal.ReactorCore.Finished
-    else if waits then gears.async.io.internal.ReactorCore.Waits
-    else gears.async.io.internal.ReactorCore.Queued
+
+  /** Submits a command: tried at once if its descriptor may be ready, else, or if that would block, registered to wait
+    * for readiness (see `ReactorCore.submitOwn`). Its refusal was checked by `ReactorCore` as it was submitted.
+    */
+  private def submitCommand(command: Command, pending: Completion[KqueueOp], finishNow: Boolean): Int = {
+    // The command's first try and its registration are a use of its handle's descriptor (see `Command.handle`).
+    val handle = command.handle
+    if handle != null && !handle.acquire() then refuseNow(command, pending, KqueueHandles.notOpen(handle), finishNow)
+    else
+      try {
+        val read = command.interest == Interest.Read
+        val slot = currentSlot(command.fd, read)
+        // Checked before trying, so that a new command cannot take data or buffer space ahead of a waiting one.
+        if read then require(slot.read == null, s"A read command is already pending on descriptor ${command.fd}")
+        else require(slot.write == null, s"A write command is already pending on descriptor ${command.fd}")
+        command.completion = pending
+        if read then {
+          val attempt =
+            slot.readReadiness == KqueueReactor.Ready ||
+              (slot.readReadiness == KqueueReactor.Unknown && command.tryFirst)
+          if attempt && performedAtOnce(command, slot, queue = !finishNow) then
+            if finishNow then ReactorCore.Finished else ReactorCore.Queued
+          else {
+            slot.read = command
+            val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+            if failed == null then ReactorCore.Waits else refuseNow(command, pending, failed, finishNow)
+          }
+        } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then
+          if finishNow then ReactorCore.Finished else ReactorCore.Queued
+        else {
+          slot.write = command
+          val failed = registrationFailure(command, slot, read = false)(
+            if command.registersReads && !slot.readRegistered then armWithReads(command.fd, slot)
+            else arm(command.fd, read = false)
+          )
+          if failed == null then ReactorCore.Waits else refuseNow(command, pending, failed, finishNow)
+        }
+      } finally if handle != null then handle.release()
   }
 
   /** Performs `command` before waiting for readiness. If it finishes, or fails, its completion is queued for the next

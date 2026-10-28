@@ -311,10 +311,9 @@ abstract class Command extends NioOp with Repeatable {
 final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
   gears.async.io.internal.Checks.checkFillable(buf)
   def interest: Interest = Interest.Read
-  def perform(): Boolean = {
-    if !buf.hasRemaining() then throw gears.async.io.internal.Checks.bufferFull(buf)
-    entry.nn.read(buf) != 0
-  }
+  override private[io] def refusal: Throwable | Null =
+    if buf.hasRemaining() then null else gears.async.io.internal.Checks.bufferFull(buf)
+  def perform(): Boolean = entry.nn.read(buf) != 0
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
@@ -355,10 +354,9 @@ final class Write(val handle: Handle, buf: ByteBuffer) extends Command {
 final class ReadMany(val handle: Handle, bufs: Array[ByteBuffer]) extends Command {
   gears.async.io.internal.Checks.checkFillable(bufs)
   def interest: Interest = Interest.Read
-  def perform(): Boolean = {
-    if !gears.async.io.internal.Checks.anyRemaining(bufs) then throw gears.async.io.internal.Checks.buffersFull(bufs)
-    entry.nn.read(bufs) != 0
-  }
+  override private[io] def refusal: Throwable | Null =
+    if gears.async.io.internal.Checks.anyRemaining(bufs) then null else gears.async.io.internal.Checks.buffersFull(bufs)
+  def perform(): Boolean = entry.nn.read(bufs) != 0
 }
 
 /** Drains `bufs` in order, as `Write` drains one, through the channel's gathering write. */
@@ -471,9 +469,9 @@ final class Receive(val handle: Handle, buf: ByteBuffer, from: Slot[IpAddress] |
   override private[io] def slotRefusal: Throwable | Null =
     if from == null then null else gears.async.io.internal.Checks.notEmpty(from.nn)
   def interest: Interest = Interest.Read
+  override private[io] def refusal: Throwable | Null = // the JDK would drop the whole packet
+    if buf.capacity() > 0 then null else gears.async.io.internal.Checks.noCapacity(buf)
   def perform(): Boolean = {
-    if buf.capacity() == 0 then
-      throw gears.async.io.internal.Checks.noCapacity(buf) // the JDK would drop the whole packet
     buf.clear()
     val sender = selectable(classOf[DatagramChannel], "Receiving").receive(buf)
     if sender != null then {
@@ -492,13 +490,18 @@ final class Send(val handle: Handle, bufs: Array[ByteBuffer], to: IpAddress | Nu
   def this(handle: Handle, buf: ByteBuffer, to: IpAddress | Null) = this(handle, Array(buf), to)
   def interest: Interest = Interest.Write
   private val target = if to == null then null else NioHandles.socketAddress(to)
+
+  // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it; so no
+  // backend sends an empty packet on a connected socket (see `IpDatagramOps.send`).
+  override private[io] def refusal: Throwable | Null =
+    if target == null && !gears.async.io.internal.Checks.anyRemaining(bufs) then
+      gears.async.io.internal.Checks.emptyPacket(bufs(0))
+    else null
+
   def perform(): Boolean = {
     val channel = selectable(classOf[DatagramChannel], "Sending")
     val size = gears.async.io.internal.Checks.remaining(bufs)
     if target == null then {
-      // A connected channel sends nothing for an empty buffer, through `write` or `send` alike, and says it sent it;
-      // so no backend sends an empty packet on a connected socket (see `IpDatagramOps.send`).
-      if size == 0 then throw gears.async.io.internal.Checks.emptyPacket(bufs(0))
       // A connected channel's gathering write sends one datagram of all the buffers.
       (if bufs.length == 1 then channel.write(bufs(0)).toLong else channel.write(bufs)) > 0
     } else {
