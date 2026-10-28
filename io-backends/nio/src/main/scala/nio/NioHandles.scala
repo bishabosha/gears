@@ -309,7 +309,9 @@ object NioHandles {
     val channel = SocketChannel.open(familyOf(address))
     selectable(channel, null) {
       channel.configureBlocking(false)
-      if address.isInstanceOf[IpAddress] then applyOptions(channel, options, SocketOption.Kind.Connection)
+      val kind =
+        if address.isInstanceOf[IpAddress] then SocketOption.Kind.Connection else SocketOption.Kind.UnixConnection
+      applyOptions(channel, options, kind)
       // A Unix socket usually connects at once; `ConnectTo` checks.
       try channel.connect(socketAddress(address))
       catch case e: java.net.ConnectException => throw NioHandles.connectFailed(e)
@@ -328,14 +330,19 @@ object NioHandles {
     NioKinds.listener(handle)
   }
 
-  /** Gives `client`, accepted by the listener `listener`, the listener's options if it is an IP one: those a connection
-    * has, `NoDelay` on unless they set it off, and its send buffer; its receive buffer it has from the listener. A
-    * client reset at once may refuse them: it is delivered all the same, its first read failing.
+  /** Gives `client`, accepted by the listener `listener`, the listener's options for the connections it accepts
+    * (`SocketOption.accepted`): for an IP one `NoDelay` on unless they set it off; for either its send buffer; its
+    * receive buffer it has from the listener. A client reset at once may refuse them: it is delivered all the same, its
+    * first read failing.
     */
   private[nio] def accepted(listener: Handle, client: SocketChannel): Unit =
     listener.entry match {
       case s: Selectable if s.accepting != null =>
-        try for (option, value) <- SocketOption.accepted(s.accepting.nn) do setOption(client, option, value)
+        val kind =
+          if s.channel.asInstanceOf[ServerSocketChannel].getLocalAddress.isInstanceOf[UnixDomainSocketAddress] then
+            SocketOption.Kind.UnixListener
+          else SocketOption.Kind.Listener
+        try for (option, value) <- SocketOption.accepted(s.accepting.nn, kind) do setOption(client, option, value)
         catch case _: IOException => ()
       case _ => ()
     }
@@ -367,7 +374,7 @@ object NioHandles {
     }
   }
 
-  /** Applies `options` to an IP socket's channel, of kind `kind`, as it opens, before it binds (see
+  /** Applies `options` to a socket's channel, of kind `kind`, as it opens, before it binds (see
     * `SocketOption.opening`); a listener's send buffer, which a `ServerSocketChannel` has none of, goes to each
     * connection it accepts instead (`accepted`).
     */
@@ -377,8 +384,9 @@ object NioHandles {
       kind: SocketOption.Kind
   ): Unit =
     for (option, value) <- SocketOption.opening(options, kind) do
-      if !(kind == SocketOption.Kind.Listener && option == SocketOption.SendBuffer) then
-        setOption(channel, option, value)
+      if !((kind == SocketOption.Kind.Listener || kind == SocketOption.Kind.UnixListener) &&
+          option == SocketOption.SendBuffer)
+      then setOption(channel, option, value)
 
   /** Sets `option` on `channel`. */
   private[nio] def setOption(channel: java.nio.channels.NetworkChannel, option: SocketOption[?], value: Any): Unit =
@@ -424,14 +432,17 @@ object NioHandles {
     case SocketOption.ReusePort     => channel.getOption(StandardSocketOptions.SO_REUSEPORT).booleanValue
   }
 
-  def listen(address: UnixAddress): NioKinds.Listener = NioKinds.listener {
+  def listen(address: UnixAddress, options: SocketOptions): NioKinds.Listener = {
     val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
     val path = Path.of(address.path)
-    selectable(channel, path) {
+    val handle = selectable(channel, path) {
       channel.configureBlocking(false)
+      applyOptions(channel, options, SocketOption.Kind.UnixListener) // before binding (see `SocketOption.opening`)
       BoundFile.replaceSocket(path) // a socket file already there, but no other kind of file
       channel.bind(socketAddress(address), Backlog)
     }
+    handle.entry.asInstanceOf[Selectable].accepting = options
+    NioKinds.listener(handle)
   }
 
   /** A datagram socket bound to `local`. */

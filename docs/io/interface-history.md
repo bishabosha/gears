@@ -335,3 +335,13 @@ with reactors it starts a pool of one worker per available processor, under the 
 runs on the caller. The knobs are internal (`ReactorRuns.run(workers, policy)`, and `TakePolicy` with it), for the
 benches, demos and tests that compare them; a caller backend given to it is refused, as a pool would have nothing to
 run.
+
+## Unix sockets take options, and what a backend supports is asked per kind
+
+Options were for IP sockets alone, though a Unix socket has buffers to size as any socket does. The Unix openers
+(`connect`, `listen`, `bindDatagram`, `connectDatagram`) take `SocketOptions` now, and the Unix ops have
+`SocketOptionOps`; of the options, the buffer sizes apply to Unix sockets, each `SocketOption.Kind` having a Unix
+counterpart, and TCP's and IP's (`NoDelay`, keepalive, don't-fragment, reuse-port) are refused on them as the op is
+built. `supports` and `canChange` take the kind of socket: on the Network.framework backend the answer differs by
+family, its Unix sockets being kqueue's, which take the buffer sizes and change them, where its own IP sockets take
+neither.

@@ -175,16 +175,23 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     KqueueOps.bindDatagram(local, options, forKqueue(into))
   }
 
-  // Socket options: those Network.framework's own sockets take, as they open only, since nothing changes them after;
-  // not the buffer sizes, which it has none of, nor `ReusePort`, since it shares no port (both of which kqueue's
-  // sockets here could take).
-  def supports(option: SocketOption[?]): Boolean =
-    option == SocketOption.NoDelay || option == SocketOption.KeepAlive || option == SocketOption.DontFragment
-  def canChange(option: SocketOption[?]): Boolean = false
-  def option[V](handle: Handle, option: SocketOption[V]): V = {
-    if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option")
-    if !owns(handle) then KqueueOps.option(handle, option)
-    else {
+  // Socket options. For IP sockets, those Network.framework's own sockets take, as they open only, since nothing
+  // changes them after, whichever socket a connection here is: not the buffer sizes, which it has none of, nor
+  // `ReusePort`, since it shares no port (both of which kqueue's sockets here could take). For Unix sockets, which are
+  // kqueue's, kqueue's.
+  def supports(option: SocketOption[?], kind: SocketOption.Kind): Boolean =
+    if kind.unix then KqueueOps.supports(option, kind)
+    else
+      option.appliesTo(kind) &&
+      (option == SocketOption.NoDelay || option == SocketOption.KeepAlive || option == SocketOption.DontFragment)
+  def canChange(option: SocketOption[?], kind: SocketOption.Kind): Boolean =
+    kind.unix && KqueueOps.canChange(option, kind)
+  def option[V](handle: Handle, option: SocketOption[V]): V =
+    if !owns(handle) then {
+      val kind = KqueueOps.kindFor(handle, option)
+      if !supports(option, kind) then throw gears.async.io.Ops.noOption(option, kind)
+      KqueueOps.option(handle, option)
+    } else {
       val h = NWFrameworkHandles.get(handle)
       val kind = h.kind match {
         case NWFrameworkHandle.Stream   => SocketOption.Kind.Connection
@@ -192,20 +199,24 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
         case _                          => SocketOption.Kind.ConnectedDatagram
       }
       if !SocketOption.onSocket(option, kind) then throw gears.async.io.Ops.notFor(option, kind)
+      if !supports(option, kind) then throw gears.async.io.Ops.noOption(option, kind)
       option match {
         case SocketOption.NoDelay   => gears.async.io.Ops.noDelay(h.opened).asInstanceOf[V]
         case SocketOption.KeepAlive =>
           val set = h.opened.get(SocketOption.KeepAlive)
           (if set == null then KeepAlive.Off else set).asInstanceOf[V] // the system's, which is off
         case SocketOption.DontFragment => (h.opened.get(SocketOption.DontFragment) == true).asInstanceOf[V]
-        case _ => throw new IllegalArgumentException(s"This backend has no socket option $option")
+        case _                         => throw gears.async.io.Ops.noOption(option, kind)
       }
     }
+  def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit = {
+    val kind = if owns(handle) then null else KqueueOps.kindFor(handle, option)
+    if kind == null || !canChange(option, kind) then
+      throw new IllegalArgumentException(
+        s"$option cannot be changed on this backend's open IP sockets, only given as they open"
+      )
+    KqueueOps.setOption(handle, option, value)
   }
-  def setOption[V](handle: Handle, option: SocketOption[V], value: V): Unit =
-    throw new IllegalArgumentException(
-      s"$option cannot be changed on this backend's open sockets, only given as they open"
-    )
   def receive(handle: BoundDatagram, buf: ByteBuffer, from: Slot[IpAddress]): KqueueOp & Repeatable =
     KqueueOps.receive(KqueueKinds.boundDatagram(handle), buf, from)
   def send(handle: BoundDatagram, buf: ByteBuffer, to: IpAddress): KqueueOp & Repeatable =
@@ -214,12 +225,19 @@ final class NWFrameworkOps private[nwframework] (loopbackOnKqueue: Boolean)
     KqueueOps.send(KqueueKinds.boundDatagram(handle), bufs, to)
 
   // Kqueue's alone.
-  def connect(address: UnixAddress, into: Slot[Connection]): KqueueOp = KqueueOps.connect(address, forKqueue(into))
-  def listen(address: UnixAddress, into: Slot[Listener]): KqueueOp = KqueueOps.listen(address, forKqueue(into))
-  def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): KqueueOp =
-    KqueueOps.bindDatagram(local, forKqueue(into))
-  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): KqueueOp =
-    KqueueOps.connectDatagram(local, remote, forKqueue(into))
+  def connect(address: UnixAddress, options: SocketOptions, into: Slot[Connection]): KqueueOp =
+    KqueueOps.connect(address, options, forKqueue(into))
+  def listen(address: UnixAddress, options: SocketOptions, into: Slot[Listener]): KqueueOp =
+    KqueueOps.listen(address, options, forKqueue(into))
+  def bindDatagram(local: UnixAddress, options: SocketOptions, into: Slot[UnixBoundDatagram]): KqueueOp =
+    KqueueOps.bindDatagram(local, options, forKqueue(into))
+  def connectDatagram(
+      local: UnixAddress | Null,
+      remote: UnixAddress,
+      options: SocketOptions,
+      into: Slot[UnixConnectedDatagram]
+  ): KqueueOp =
+    KqueueOps.connectDatagram(local, remote, options, forKqueue(into))
   @annotation.targetName("receiveUnix")
   def receive(handle: UnixBoundDatagram, buf: ByteBuffer, from: Slot[UnixAddress]): KqueueOp & Repeatable =
     KqueueOps.receive(KqueueKinds.unixBoundDatagram(handle), buf, from)

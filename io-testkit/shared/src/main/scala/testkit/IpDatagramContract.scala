@@ -278,7 +278,7 @@ trait IpDatagramContract extends ReactorContract {
       backend.ops
         .bindDatagram(IpAddress.IPv4("127.0.0.1", 0), SocketOptions.default.set(SocketOption.NoDelay, true), Slot())
     )
-    if backend.ops.supports(SocketOption.ReceiveBuffer) then
+    if backend.ops.supports(SocketOption.ReceiveBuffer, SocketOption.Kind.BoundDatagram) then
       withReactor { r =>
         val into = Slot[BoundDatagram]()
         val options = SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536)
@@ -314,14 +314,17 @@ trait IpDatagramContract extends ReactorContract {
       .getOrElse(-1)
 
   test("DontFragment given as a datagram socket opens is its own, read back, and changed where the backend can") {
-    assume(backend.ops.supports(SocketOption.DontFragment), "this backend has no don't-fragment option")
+    assume(
+      backend.ops.supports(SocketOption.DontFragment, SocketOption.Kind.BoundDatagram),
+      "this backend has no don't-fragment option"
+    )
     withReactor { r =>
       val plain = boundWith(r, SocketOptions.default)
       val dontFragment = boundWith(r, SocketOptions.default.set(SocketOption.DontFragment, true))
       try {
         assertEquals(backend.ops.option(plain, SocketOption.DontFragment), false, "the system's, off")
         assertEquals(backend.ops.option(dontFragment, SocketOption.DontFragment), true)
-        if backend.ops.canChange(SocketOption.DontFragment) then {
+        if backend.ops.canChange(SocketOption.DontFragment, SocketOption.Kind.BoundDatagram) then {
           backend.ops.setOption(plain, SocketOption.DontFragment, true)
           assertEquals(backend.ops.option(plain, SocketOption.DontFragment), true)
         } else intercept[IllegalArgumentException](backend.ops.setOption(plain, SocketOption.DontFragment, true))
@@ -333,7 +336,10 @@ trait IpDatagramContract extends ReactorContract {
   }
 
   test("with DontFragment a datagram larger than the path's MTU fails to send, where without it it goes fragmented") {
-    assume(backend.ops.supports(SocketOption.DontFragment) && backend.ops.supports(SocketOption.SendBuffer))
+    assume(
+      backend.ops.supports(SocketOption.DontFragment, SocketOption.Kind.BoundDatagram) && backend.ops
+        .supports(SocketOption.SendBuffer, SocketOption.Kind.BoundDatagram)
+    )
     val mtu = loopbackMtu
     assume(mtu > 0 && mtu + 1000 <= 65507, s"loopback's MTU, $mtu, leaves no room for a datagram larger than it")
     val size = mtu + 1000
@@ -356,7 +362,10 @@ trait IpDatagramContract extends ReactorContract {
   }
 
   test("ReusePort lets bound datagram sockets that set it share a port, refusing one that does not") {
-    assume(backend.ops.supports(SocketOption.ReusePort), "this backend has no reuse-port option")
+    assume(
+      backend.ops.supports(SocketOption.ReusePort, SocketOption.Kind.BoundDatagram),
+      "this backend has no reuse-port option"
+    )
     val reuse = SocketOptions.default.set(SocketOption.ReusePort, true)
     withReactor { r =>
       val first = boundWith(r, reuse)
@@ -375,7 +384,7 @@ trait IpDatagramContract extends ReactorContract {
   }
 
   test("a connected datagram socket takes no ReusePort, and no backend changes it on an open socket") {
-    if backend.ops.supports(SocketOption.ReusePort) then
+    if backend.ops.supports(SocketOption.ReusePort, SocketOption.Kind.BoundDatagram) then
       intercept[IllegalArgumentException](
         backend.ops.connectDatagram(
           null,
@@ -384,7 +393,7 @@ trait IpDatagramContract extends ReactorContract {
           Slot()
         )
       )
-    assert(!backend.ops.canChange(SocketOption.ReusePort))
+    assert(!backend.ops.canChange(SocketOption.ReusePort, SocketOption.Kind.BoundDatagram))
   }
 
   test(

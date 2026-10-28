@@ -146,4 +146,49 @@ trait UnixDatagramContract extends ReactorContract {
       }
     finally deleteAll(dir)
   }
+
+  test("a Unix datagram socket takes the buffer sizes where the backend has them, and refuses IP's options") {
+    import SocketOption.Kind.{UnixBoundDatagram, UnixConnectedDatagram}
+    for option <- List(SocketOption.NoDelay, SocketOption.KeepAlive, SocketOption.DontFragment, SocketOption.ReusePort)
+    do assert(!backend.ops.supports(option, UnixBoundDatagram), s"$option")
+    intercept[IllegalArgumentException](
+      backend.ops.bindDatagram(
+        UnixAddress("/nowhere.sock"),
+        SocketOptions.default.set(SocketOption.DontFragment, true),
+        Slot[UnixBoundDatagram]()
+      )
+    )
+    assume(
+      backend.ops.supports(SocketOption.ReceiveBuffer, UnixBoundDatagram) &&
+        backend.ops.supports(SocketOption.SendBuffer, UnixConnectedDatagram),
+      "this backend has no buffer sizes for Unix datagram sockets"
+    )
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val path = UnixAddress(dir.resolve("buffers.sock").toString)
+        val boundInto = Slot[UnixBoundDatagram]()
+        val bound = opened(
+          r,
+          boundInto,
+          backend.ops.bindDatagram(path, SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536), boundInto)
+        )
+        val connectedInto = Slot[UnixConnectedDatagram]()
+        val connected = opened(
+          r,
+          connectedInto,
+          backend.ops
+            .connectDatagram(null, path, SocketOptions.default.set(SocketOption.SendBuffer, 65536), connectedInto)
+        )
+        try {
+          assert(backend.ops.option(bound, SocketOption.ReceiveBuffer) >= 65536)
+          assert(backend.ops.option(connected, SocketOption.SendBuffer) >= 65536)
+          intercept[IllegalArgumentException](backend.ops.option(bound, SocketOption.DontFragment))
+        } finally {
+          close(r, connected)
+          close(r, bound)
+        }
+      }
+    finally deleteAll(dir)
+  }
 }

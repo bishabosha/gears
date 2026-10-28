@@ -532,7 +532,7 @@ trait IpStreamContract extends ReactorContract {
   }
 
   test("a connection has NoDelay on at both ends unless it is set off, given to the client or to the listener") {
-    assert(backend.ops.supports(SocketOption.NoDelay), "every backend has NoDelay")
+    assert(backend.ops.supports(SocketOption.NoDelay, SocketOption.Kind.Connection), "every backend has NoDelay")
     withReactor { r =>
       connected(r, SocketOptions.default, SocketOptions.default) { (client, server) =>
         assertEquals(backend.ops.option(client, SocketOption.NoDelay), true)
@@ -547,7 +547,10 @@ trait IpStreamContract extends ReactorContract {
   }
 
   test("keepalive given as a socket opens is the connection's, and the listener's is each accepted one's") {
-    assume(backend.ops.supports(SocketOption.KeepAlive), "this backend has no keepalive option")
+    assume(
+      backend.ops.supports(SocketOption.KeepAlive, SocketOption.Kind.Connection),
+      "this backend has no keepalive option"
+    )
     val on = KeepAlive.On(30, 5, 3)
     withReactor { r =>
       connected(r, SocketOptions.default.set(SocketOption.KeepAlive, on), SocketOptions.default) { (client, server) =>
@@ -561,7 +564,10 @@ trait IpStreamContract extends ReactorContract {
   }
 
   test("a buffer size given as a socket opens is a request the system meets at least") {
-    for option <- List(SocketOption.ReceiveBuffer, SocketOption.SendBuffer) if backend.ops.supports(option) do
+    for
+      option <- List(SocketOption.ReceiveBuffer, SocketOption.SendBuffer)
+      if backend.ops.supports(option, SocketOption.Kind.Connection)
+    do
       withReactor { r =>
         connected(r, SocketOptions.default, SocketOptions.default.set(option, 65536)) { (client, _) =>
           val size = backend.ops.option(client, option)
@@ -574,12 +580,12 @@ trait IpStreamContract extends ReactorContract {
     withReactor { r =>
       connected(r, SocketOptions.default, SocketOptions.default) { (client, _) =>
         def check[V](option: SocketOption[V], value: V, readsBack: Boolean)(using munit.Location): Unit =
-          if !backend.ops.supports(option) then {
+          if !backend.ops.supports(option, SocketOption.Kind.Connection) then {
             intercept[IllegalArgumentException](backend.ops.option(client, option))
             intercept[IllegalArgumentException](
               backend.ops.connect(IpAddress.IPv4("127.0.0.1", 9), SocketOptions.default.set(option, value), Slot())
             )
-          } else if !backend.ops.canChange(option) then
+          } else if !backend.ops.canChange(option, SocketOption.Kind.Connection) then
             intercept[IllegalArgumentException](backend.ops.setOption(client, option, value))
           else {
             backend.ops.setOption(client, option, value)
@@ -599,7 +605,10 @@ trait IpStreamContract extends ReactorContract {
   }
 
   test("ReusePort lets listeners that set it share a port, refusing one that does not; a connection takes none") {
-    assume(backend.ops.supports(SocketOption.ReusePort), "this backend has no reuse-port option")
+    assume(
+      backend.ops.supports(SocketOption.ReusePort, SocketOption.Kind.Listener),
+      "this backend has no reuse-port option"
+    )
     val reuse = SocketOptions.default.set(SocketOption.ReusePort, true)
     intercept[IllegalArgumentException](backend.ops.connect(IpAddress.IPv4("127.0.0.1", 9), reuse, Slot()))
     withReactor { r =>
@@ -619,7 +628,8 @@ trait IpStreamContract extends ReactorContract {
   }
 
   test("a stream socket takes no DontFragment, which is for datagram sockets") {
-    if backend.ops.supports(SocketOption.DontFragment) then
+    assert(!backend.ops.supports(SocketOption.DontFragment, SocketOption.Kind.Connection))
+    if backend.ops.supports(SocketOption.DontFragment, SocketOption.Kind.BoundDatagram) then
       intercept[IllegalArgumentException](
         backend.ops.connect(
           IpAddress.IPv4("127.0.0.1", 9),

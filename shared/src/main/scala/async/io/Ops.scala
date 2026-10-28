@@ -375,17 +375,27 @@ trait FifoOps[Op, H <: AnyRef] extends Ops[Op, H] {
 /** The ops of Unix domain stream sockets, for a backend that has them (see `UnixStreams`): opened here, and used as IP
   * stream sockets are, by the stream ops (`StreamSocketOps`, and `read` and `write`).
   */
-trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] {
+trait UnixStreamOps[Op, H <: AnyRef] extends StreamSocketOps[Op, H] with SocketOptionOps[Op, H] {
 
   /** Opens a stream socket and connects it to `address`, as `IpStreamOps.connect` does to an IP address. */
-  def connect(address: UnixAddress, into: Slot[Connection]): Op
+  final def connect(address: UnixAddress, into: Slot[Connection]): Op = connect(address, SocketOptions.default, into)
+
+  /** As the other `connect`, the socket opening with `options`, of those that apply to a Unix connection: the buffer
+    * sizes (see `SocketOptions`).
+    */
+  def connect(address: UnixAddress, options: SocketOptions, into: Slot[Connection]): Op
 
   /** Opens a stream socket listening on `address`, as `IpStreamOps.listen` does on an IP address, replacing a socket
     * file already there, as a restarted server's would be, and one a running server uses too; any other kind of file
     * there fails the op with an `IOException`, and is left. Checked, then replaced: a file put there between the two, a
     * few microseconds, is replaced as well.
     */
-  def listen(address: UnixAddress, into: Slot[Listener]): Op
+  final def listen(address: UnixAddress, into: Slot[Listener]): Op = listen(address, SocketOptions.default, into)
+
+  /** As the other `listen`, the listener opening with `options`, of those that apply to a Unix listener, and each
+    * connection it accepts with its send buffer (see `SocketOptions`).
+    */
+  def listen(address: UnixAddress, options: SocketOptions, into: Slot[Listener]): Op
 }
 
 /** Blocking code as an op, for a backend that has it (see `BlockingBackend`). */
@@ -407,15 +417,28 @@ trait BlockingOps[Op, H <: AnyRef] extends Ops[Op, H] {
 /** The ops of Unix domain datagram sockets, for a backend that has them (see `UnixDatagrams`), as `IpDatagramOps` are
   * for IP ones: bound, or connected to one peer.
   */
-trait UnixDatagramOps[Op, H <: AnyRef] extends Ops[Op, H] {
+trait UnixDatagramOps[Op, H <: AnyRef] extends SocketOptionOps[Op, H] {
 
   /** Opens a datagram socket bound to `local`, as `IpDatagramOps.bindDatagram` does. */
-  def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): Op
+  final def bindDatagram(local: UnixAddress, into: Slot[UnixBoundDatagram]): Op =
+    bindDatagram(local, SocketOptions.default, into)
+
+  /** As the other `bindDatagram`, the socket opening with `options`, of those that apply to it: the buffer sizes. */
+  def bindDatagram(local: UnixAddress, options: SocketOptions, into: Slot[UnixBoundDatagram]): Op
 
   /** Opens a datagram socket connected to `remote`, bound to `local` if given, as `IpDatagramOps.connectDatagram` does.
     * A client that wants replies on a socket of its own, rather than this one, binds a `local` path.
     */
-  def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): Op
+  final def connectDatagram(local: UnixAddress | Null, remote: UnixAddress, into: Slot[UnixConnectedDatagram]): Op =
+    connectDatagram(local, remote, SocketOptions.default, into)
+
+  /** As the other `connectDatagram`, the socket opening with `options`, of those that apply to it. */
+  def connectDatagram(
+      local: UnixAddress | Null,
+      remote: UnixAddress,
+      options: SocketOptions,
+      into: Slot[UnixConnectedDatagram]
+  ): Op
 
   /** Receives one packet on a bound Unix datagram socket, as `IpDatagramOps.receive` does on an IP one; an unnamed
     * sender has the empty path.
@@ -456,15 +479,23 @@ private[io] object Ops {
   /** Checks the options an opener of a socket of kind `kind` is given as it is built: each one the backend `supports`,
     * and that applies to such a socket; else an `IllegalArgumentException`.
     */
-  def checkOptions(options: SocketOptions, supports: SocketOption[?] => Boolean, kind: SocketOption.Kind): Unit =
+  def checkOptions(
+      options: SocketOptions,
+      supports: (SocketOption[?], SocketOption.Kind) => Boolean,
+      kind: SocketOption.Kind
+  ): Unit =
     for option <- options.options do {
-      if !supports(option) then throw new IllegalArgumentException(s"This backend has no socket option $option here")
       if !option.appliesTo(kind) then throw notFor(option, kind)
+      if !supports(option, kind) then throw noOption(option, kind)
     }
+
+  /** The failure of `option`, which applies to sockets of kind `kind`, on a backend that has it not for them here. */
+  def noOption(option: SocketOption[?], kind: SocketOption.Kind): IllegalArgumentException =
+    new IllegalArgumentException(s"This backend has no socket option $option for a ${kind.description} here")
 
   /** The failure of `option` on a socket of a kind it does not apply to. */
   def notFor(option: SocketOption[?], kind: SocketOption.Kind): IllegalArgumentException =
-    new IllegalArgumentException(s"$option does not apply to a ${kind.toString.toLowerCase}")
+    new IllegalArgumentException(s"$option does not apply to a ${kind.description}")
 
   /** Whether a stream socket opening with `options` has `NoDelay` on: unless they set it off. */
   def noDelay(options: SocketOptions): Boolean = options.get(SocketOption.NoDelay) != false

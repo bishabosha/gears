@@ -49,7 +49,8 @@ object KqueueHandles {
     @volatile var boundPath: String | Null = null
     @volatile var boundFile: PosixFileOps.FileId | Null = null // the socket file it bound there
     @volatile var ipv6 = false // an IPv6 socket, dual stack, which reaches an IPv4 peer by its IPv4-mapped address
-    @volatile var accepting: SocketOptions | Null = null // an IP listener's, for each connection it accepts
+    @volatile var accepting: SocketOptions | Null = null // a listener's, for each connection it accepts
+    @volatile var listenerKind = SocketOption.Kind.Listener // a listener's kind, IP or Unix
   }
 
   /** `fd`'s note, made if it has none. Only the thread opening or binding a socket sets one. */
@@ -66,23 +67,24 @@ object KqueueHandles {
     */
   def handle(fd: Int): Handle = new Handle(fd)
 
-  /** The handle of a connection `listener`'s descriptor accepted as `fd`, with the listener's options, if it is an IP
-    * one: the options of the connection it accepts, `NoDelay` on unless they set it off.
+  /** The handle of a connection `listener`'s descriptor accepted as `fd`, with the listener's options for the
+    * connections it accepts (`SocketOption.accepted`): for an IP one `NoDelay` on unless they set it off.
     */
   private[kqueue] def accepted(listener: Int, fd: Int): Handle = {
     DescriptorTable.note(listener) match {
       case note: SocketNote if note.accepting != null =>
         // A connection its client reset at once refuses options (EINVAL on macOS): it is delivered all the same, and
         // its first read fails, as a reset connection's does, rather than failing the accept and the others with it.
-        try for (option, value) <- SocketOption.accepted(note.accepting.nn) do setOption(fd, option, value)
+        try
+          for (option, value) <- SocketOption.accepted(note.accepting.nn, note.listenerKind) do
+            setOption(fd, option, value)
         catch case _: IOException => ()
       case _ => ()
     }
     handle(fd)
   }
 
-  /** Applies `options` to the IP socket `fd`, of kind `kind`, as it opens, before it binds (see
-    * `SocketOption.opening`).
+  /** Applies `options` to the socket `fd`, of kind `kind`, as it opens, before it binds (see `SocketOption.opening`).
     */
   private def applyOptions(fd: Int, options: SocketOptions, kind: SocketOption.Kind): Unit =
     for (option, value) <- SocketOption.opening(options, kind) do setOption(fd, option, value)
@@ -162,7 +164,7 @@ object KqueueHandles {
       PosixSockets.intOption(fd, socket.SOL_SOCKET, PosixSockets.SO_REUSEPORT, "SO_REUSEPORT") != 0
   }
 
-  /** `fd`'s kind of socket, as an option on it asks, or null if it is not an IP socket. */
+  /** `fd`'s kind of socket, as an option on it asks, or null if it is neither an IP nor a Unix socket. */
   private[kqueue] def socketKind(fd: Int): SocketOption.Kind | Null = {
     val storage = stackalloc[socket.sockaddr_storage]()
     val length = stackalloc[socket.socklen_t]()
@@ -170,17 +172,23 @@ object KqueueHandles {
     val address = storage.asInstanceOf[Ptr[socket.sockaddr]]
     if socket.getsockname(fd, address, length) != 0 then throw new IOException(s"Not a socket: descriptor $fd")
     val family = address.sa_family.toInt
-    if family != socket.AF_INET && family != socket.AF_INET6 then null
+    val unix = family == socket.AF_UNIX
+    if family != socket.AF_INET && family != socket.AF_INET6 && !unix then null
     else if PosixSockets.intOption(fd, socket.SOL_SOCKET, socket.SO_TYPE, "SO_TYPE") == socket.SOCK_STREAM then
-      // Every IP listener this backend opens is noted (`listenStream`); macOS has no SO_ACCEPTCONN to ask.
+      // Every listener this backend opens is noted (`listenStream`); macOS has no SO_ACCEPTCONN to ask.
       DescriptorTable.note(fd) match {
-        case note: SocketNote if note.accepting != null => SocketOption.Kind.Listener
-        case _                                          => SocketOption.Kind.Connection
+        case note: SocketNote if note.accepting != null => note.listenerKind
+        case _ => if unix then SocketOption.Kind.UnixConnection else SocketOption.Kind.Connection
       }
     else {
       !length = sizeOf[socket.sockaddr_storage].toUInt
-      if socket.getpeername(fd, address, length) == 0 then SocketOption.Kind.ConnectedDatagram
-      else SocketOption.Kind.BoundDatagram
+      val connected = socket.getpeername(fd, address, length) == 0
+      (unix, connected) match {
+        case (false, true)  => SocketOption.Kind.ConnectedDatagram
+        case (false, false) => SocketOption.Kind.BoundDatagram
+        case (true, true)   => SocketOption.Kind.UnixConnectedDatagram
+        case (true, false)  => SocketOption.Kind.UnixBoundDatagram
+      }
     }
   }
 
@@ -233,7 +241,9 @@ object KqueueHandles {
 
   private[kqueue] def connectStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Int =
     socketFor(address, Transport.Stream) { fd =>
-      if address.isInstanceOf[IpAddress] then applyOptions(fd, options, SocketOption.Kind.Connection)
+      val kind =
+        if address.isInstanceOf[IpAddress] then SocketOption.Kind.Connection else SocketOption.Kind.UnixConnection
+      applyOptions(fd, options, kind)
       connectTo(fd, address)
     }
 
@@ -245,11 +255,13 @@ object KqueueHandles {
     */
   private[kqueue] def listenStream(address: SocketAddress, options: SocketOptions = SocketOptions.default): Int =
     socketFor(address, Transport.Stream) { fd =>
-      if address.isInstanceOf[IpAddress] then {
-        PosixSockets.setReuseAddress(fd)
-        applyOptions(fd, options, SocketOption.Kind.Listener) // before binding and listening (see `SocketOption`)
-        noteOf(fd).accepting = options
-      }
+      val ip = address.isInstanceOf[IpAddress]
+      if ip then PosixSockets.setReuseAddress(fd)
+      val kind = if ip then SocketOption.Kind.Listener else SocketOption.Kind.UnixListener
+      applyOptions(fd, options, kind) // before binding and listening (see `SocketOption`)
+      val note = noteOf(fd)
+      note.listenerKind = kind
+      note.accepting = options // which also tells `socketKind` it is a listener
       bindTo(fd, address)
       PosixSockets.listen(fd, PosixSockets.maxConnections)
     }
@@ -281,12 +293,13 @@ object KqueueHandles {
     val either = if local != null then local else remote
     require(either != null, "A datagram socket needs a local or a remote address")
     socketFor(either, Transport.Datagram) { fd =>
-      if either.isInstanceOf[IpAddress] then
-        applyOptions(
-          fd,
-          options,
-          if remote == null then SocketOption.Kind.BoundDatagram else SocketOption.Kind.ConnectedDatagram
-        )
+      val kind = (either.isInstanceOf[IpAddress], remote == null) match {
+        case (true, true)   => SocketOption.Kind.BoundDatagram
+        case (true, false)  => SocketOption.Kind.ConnectedDatagram
+        case (false, true)  => SocketOption.Kind.UnixBoundDatagram
+        case (false, false) => SocketOption.Kind.UnixConnectedDatagram
+      }
+      applyOptions(fd, options, kind)
       if local != null then bindTo(fd, local)
       if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
     }

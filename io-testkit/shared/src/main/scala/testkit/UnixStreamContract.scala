@@ -171,4 +171,63 @@ trait UnixStreamContract extends ReactorContract {
       }
     finally deleteAll(dir)
   }
+
+  test("a Unix stream socket takes the buffer sizes where the backend has them, and refuses TCP's options") {
+    import SocketOption.Kind.{UnixConnection, UnixListener}
+    for option <- List(SocketOption.NoDelay, SocketOption.KeepAlive, SocketOption.DontFragment, SocketOption.ReusePort)
+    do {
+      assert(!backend.ops.supports(option, UnixConnection) && !backend.ops.supports(option, UnixListener), s"$option")
+      assert(!backend.ops.canChange(option, UnixConnection), s"$option")
+    }
+    intercept[IllegalArgumentException](
+      backend.ops.connect(UnixAddress("/nowhere.sock"), SocketOptions.default.set(SocketOption.NoDelay, true), Slot())
+    )
+    intercept[IllegalArgumentException](
+      backend.ops.listen(UnixAddress("/nowhere.sock"), SocketOptions.default.set(SocketOption.NoDelay, true), Slot())
+    )
+    assume(
+      backend.ops.supports(SocketOption.ReceiveBuffer, UnixListener) &&
+        backend.ops.supports(SocketOption.SendBuffer, UnixListener) &&
+        backend.ops.supports(SocketOption.ReceiveBuffer, UnixConnection),
+      "this backend has no buffer sizes for Unix sockets"
+    )
+    val dir = tempDir()
+    try
+      withReactor { r =>
+        val address = UnixAddress(dir.resolve("buffers.sock").toString)
+        val listening = Slot[Listener]()
+        val listenerOptions =
+          SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536).set(SocketOption.SendBuffer, 65536)
+        val listener = opened(r, listening, backend.ops.listen(address, listenerOptions, listening))
+        try {
+          val into = Slot[Connection]()
+          val connected = Outcome()
+          r.submit(
+            backend.ops.connect(address, SocketOptions.default.set(SocketOption.ReceiveBuffer, 65536), into),
+            connected
+          )
+          val accepted = Slot[Connection]()
+          val acceptDone = Outcome()
+          r.submit(backend.ops.accept(listener, accepted), acceptDone)
+          turnUntil(r)(acceptDone.finished && connected.finished)
+          assertEquals(connected.completed, 1, String.valueOf(connected.failure))
+          assertEquals(acceptDone.completed, 1, String.valueOf(acceptDone.failure))
+          val client = into.clear()
+          val server = accepted.clear()
+          try {
+            assert(backend.ops.option(client, SocketOption.ReceiveBuffer) >= 65536, "the client's receive buffer")
+            assert(backend.ops.option(server, SocketOption.SendBuffer) >= 65536, "the listener's, on what it accepts")
+            intercept[IllegalArgumentException](backend.ops.option(client, SocketOption.NoDelay))
+            if backend.ops.canChange(SocketOption.SendBuffer, UnixConnection) then {
+              backend.ops.setOption(client, SocketOption.SendBuffer, 131072)
+              assert(backend.ops.option(client, SocketOption.SendBuffer) >= 131072, "changed")
+            } else intercept[IllegalArgumentException](backend.ops.setOption(client, SocketOption.SendBuffer, 131072))
+          } finally {
+            closeAlone(client)
+            closeAlone(server)
+          }
+        } finally closeAlone(listener)
+      }
+    finally deleteAll(dir)
+  }
 }
