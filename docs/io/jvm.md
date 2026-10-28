@@ -49,6 +49,14 @@ program on gears' own virtual threads, on the JDK's scheduler, and hands it an `
 A time limit runs from the call. It bounds the yields and the wait, the selector's `select` being given what is left,
 so an op whose time runs out throws `TimeoutException` having done nothing.
 
+**A close** marks the handle closed, closes the channel and wakes the callers waiting on its selectors, then returns:
+each woken caller tries its command again, which throws the JDK's `ClosedChannelException`. So a `perform` waiting on
+the handle fails because of the close, and can no longer succeed once it has begun, but may throw after the close's
+`perform` has returned, on its own thread: a caller backend has no turn to order the two in. Waiting for the woken
+callers inside the close would not order them either, since each throws after leaving its wait, and would make a close
+block on other threads. The reactors keep the stronger order of `Ops.close` for an op pending on the reactor the close
+runs on.
+
 **Cancellation** sets a flag and calls `Selector.wakeup()` on the selector the caller waits in, or unparks a timer.
 Nothing is interrupted, the handle stays open, and a later read gets the data. Each wait is a `Cancellable` linked to
 the caller's group (`cancellationScope`), so cancelling the future ends it.
