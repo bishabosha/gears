@@ -89,7 +89,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
         false
     }
 
-  /** Submits a command, a connect or a close (see `ReactorCore.submitOwn`). */
+  /** Submits a command or a connect (see `ReactorCore.submitOwn`). */
   protected def submitOwn(op: NioOp, pending: Completion[NioOp], finishNow: Boolean): Int = {
     var finished = false
     var waits = false
@@ -152,12 +152,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
             }
           case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
         }
-      case close: Close =>
-        close.completion = pending
-        try close.perform()
-        catch case t: Throwable => close.atOnceFailure = t
-        closing.add(close) // completed after the failures it causes, never in trySubmit
-      case _ => own = false // a timer, a blocker or an at-once op
+      case _ => own = false // a timer, a blocker or an at-once op, a close among them (`LoopOp.closes`)
     }
     if !own then gears.async.io.internal.ReactorCore.NotOwn
     else if finished then gears.async.io.internal.ReactorCore.Finished

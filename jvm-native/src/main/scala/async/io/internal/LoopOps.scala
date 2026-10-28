@@ -47,6 +47,12 @@ trait LoopOp[O <: LoopOp[O]] extends TimerHeap.Entry { this: O =>
   /** Whether it may be submitted only once: an op that is not `Repeatable`, or a command that opens or closes. */
   private[io] def oneShot: Boolean = !this.isInstanceOf[Repeatable]
 
+  /** Whether it closes a handle: then however it finishes, at once, from another thread or notified, its completion
+    * runs at the end of a later turn than the one it finished in (`ReactorCore.closing`), after that turn has failed
+    * the ops pending on the handle there, so that a close completes after the failures it causes (`Ops.close`).
+    */
+  private[io] def closes: Boolean = false
+
   /** The caller's own data, kept across submissions and never read by the reactor (`Reactor.attachment`). */
   private[io] var attachment: AnyRef | Null = null
 }

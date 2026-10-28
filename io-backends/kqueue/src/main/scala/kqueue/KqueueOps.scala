@@ -396,6 +396,7 @@ final class ConnectTo(
   * ends, on whose thread the descriptor is closed and this completed, as a promise is from another thread.
   */
 final class Close(val handle: Handle) extends KqueuePromise {
+  override private[io] def closes: Boolean = true
 
   /** Starts closing: true if that finished here, the descriptor closed or the close failed, its failure in
     * `atOnceFailure`; false if the last use of the descriptor closes it, completing this.
@@ -500,9 +501,6 @@ abstract class Notified extends KqueueOp with Repeatable {
 
   /** After a submission withdrawn: closes what it opened, which never reaches the caller. */
   private[io] def abandon(): Unit = ()
-
-  /** Whether it closes a handle, so that its completion runs after the failures that causes (see `Ops.close`). */
-  private[io] def closes: Boolean = false
 }
 
 /** Another I/O facility a kqueue reactor drives, besides kqueue: one whose events come on threads of its own, such as

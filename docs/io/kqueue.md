@@ -347,6 +347,16 @@ first one made redundant; NIO failed them after the ready queue and resolved pro
 both, directly, before anything else it delivers. Only the order of completions within a turn changed; a close still
 fails its handle's ops at the start of the turn after it is noticed, and wakes a blocked poll.
 
+A close op's own completion goes through `ReactorCore` too, however it finishes (`LoopOp.closes`): at once, as a
+promise completed by the last use of the descriptor on another thread or on the loop's own, or notified, as
+Network.framework's close of a listener is. It is queued in `closing` and runs at the end of the next turn, after that
+turn's `deliverClosed`. Only a close done at once had been: one that waited for a use in progress completed as any
+promise does, so a use ending on the loop thread, in a completion or a dispatch, closed the descriptor and resolved the
+close in the middle of a turn, and the close completed at its end, a turn before the read pending on the handle failed;
+and Network.framework's notified close completed as soon as it was notified. Cancelling a close whose completion is
+queued now returns false, as for any op that has finished: before, kqueue's close, a promise, was detached from the
+queue it was in, and the loop failed taking its completion again.
+
 ## What is open
 
 - **Cancelling a gears `Future` is expensive on Scala Native**, which `timers` shows now that it arms each timer by a

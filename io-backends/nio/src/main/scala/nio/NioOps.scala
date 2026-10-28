@@ -284,6 +284,7 @@ final class OpenPipe(read: Slot[NioKinds.Readable], write: Slot[NioKinds.Writabl
 
 /** Closes a handle (see `Ops.close`): at once, as `NioHandles.close` does. */
 final class Close(val handle: Handle) extends NioAtOnce {
+  override private[io] def closes: Boolean = true
   def perform(): Unit = NioHandles.close(handle)
 }
 

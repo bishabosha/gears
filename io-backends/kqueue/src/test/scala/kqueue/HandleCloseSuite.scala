@@ -92,4 +92,40 @@ class HandleCloseSuite extends munit.FunSuite {
       }
     }
   }
+
+  test("a close op that the last use closes completes after the failure of the read pending on the handle") {
+    Zone.acquire { implicit z =>
+      KqueueReactor.scoped() { r =>
+        val (in, out) = KqueueHandles.pipe()
+        val order = scala.collection.mutable.ArrayBuffer.empty[String]
+        r.submit(
+          KqueueOps.read(in, NativeBuffer.allocate(16)),
+          new Completion[KqueueOp] {
+            def onComplete(op: KqueueOp): Unit = order += "read completed"
+            override def onFailure(op: KqueueOp, failure: Throwable): Unit = order += "read failed"
+          }
+        )
+        r.runOnce(block = false) // the read waits
+        // A use of the descriptor on the loop thread, in a timer's completion, during which the close is submitted: the
+        // use's end closes the descriptor, and resolves the close, in the middle of the turn.
+        r.submit(
+          new KqueueTimer(0),
+          _ =>
+            KqueueHandles.inUse(in) {
+              r.submit(
+                KqueueOps.close(in),
+                new Completion[KqueueOp] {
+                  def onComplete(op: KqueueOp): Unit = order += "closed"
+                  override def onFailure(op: KqueueOp, failure: Throwable): Unit = order += s"close failed: $failure"
+                }
+              )
+            }
+        )
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while order.size < 2 && System.nanoTime() < deadline do r.runOnce(block = false)
+        assertEquals(order.toList, List("read failed", "closed"))
+        KqueueHandles.close(out)
+      }
+    }
+  }
 }

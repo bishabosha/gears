@@ -92,7 +92,7 @@ final class KqueueReactor private (
       val op = waiting.getOrNull(t) // no `Option` for each: a token no longer waiting is simply not found
       if op != null then {
         waiting -= t
-        if attemptedNotified(op, first = false) then finish(op)
+        if attemptedNotified(op, first = false) then deliverFinished(op) // a close's queued (`closing`)
         else waiting.put(t, op)
       }
     }

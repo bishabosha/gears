@@ -85,10 +85,15 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     any
   }
 
-  // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
-  // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
-  // after them (`Ops.close`). Loop thread only.
+  // Close ops that finished (`LoopOp.closes`), at once, from another thread or notified, whose completions run at the
+  // end of the turn after the one they were queued in: by then that reactor has delivered the failures of the ops they
+  // ended there, so that a close completes after them (`Ops.close`). Loop thread only.
   protected final val closing = new java.util.ArrayDeque[O]()
+
+  /** Runs the completion of `op`, which finished on the loop thread: now, as `finish` does, unless it closes a handle,
+    * whose completion is queued in `closing` instead.
+    */
+  protected final def deliverFinished(op: O): Unit = if op.closes then closing.add(op) else finish(op)
 
   /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
   protected final def deliverClosing(due: Int): Unit = {
@@ -283,7 +288,9 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
             op.completion = pending
             try atOnce.perform()
             catch case t: Throwable => op.atOnceFailure = t
-            if finishNow then finished = true else ready.add(op)
+            if op.closes then closing.add(op) // completed after the failures it causes, never in trySubmit
+            else if finishNow then finished = true
+            else ready.add(op)
           case _ => throw new IllegalStateException(s"Unexpected op $op")
         }
     }
@@ -346,7 +353,11 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
         case _ =>
           if completion != null then {
             val failure = promise.failure
-            if failure != null then deliverFailure(completion, promise, failure)
+            if promise.closes then { // completed after the failures it causes, at the end of the next turn
+              promise.completion = completion
+              promise.atOnceFailure = failure
+              closing.add(promise)
+            } else if failure != null then deliverFailure(completion, promise, failure)
             else deliverComplete(completion, promise)
           }
       }
@@ -415,7 +426,8 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
         op match {
           case timer: LoopTimer[?] => if timer.heapIndex < 0 then null else take(op)
           case blocking: LoopBlocking[?] if !blocking.cancelUnlessCommitted() => null // it wrote its result: finishing
-          case _: LoopPromise[?]                                              => detach(op.asInstanceOf[Promise])
+          case p: LoopPromise[?] => // one no longer pending is a close that finished, queued in `closing`
+            if pendingPromises.contains(p.asInstanceOf[Promise]) then detach(p.asInstanceOf[Promise]) else null
           case _ => null // an at-once op, performed when submitted, so finished
         }
     }
