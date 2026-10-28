@@ -7,6 +7,7 @@ import gears.async.io.PipeBackend
 import gears.async.io.ReactorFutures
 import gears.async.io.Slot
 import gears.async.io.internal.ReactorBackend
+import gears.async.io.internal.ReactorRuns
 import gears.async.io.testkit.BufferArena
 
 import java.nio.charset.StandardCharsets
@@ -62,7 +63,7 @@ object GearsCancel {
     val leftoverStopped = new AtomicBoolean() // whether its task had stopped by then
     BufferArena.scoped { arena =>
       val buf = arena.allocate(64)
-      ReactorFutures.run(workers = 1) { io ?=>
+      ReactorRuns.run(1) { io ?=>
         // Everything below runs on the reactor's thread, so ops go straight to the reactor.
         val (readFd, writeFd) = HigherLevel.pipe()
         try {

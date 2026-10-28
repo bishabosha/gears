@@ -99,7 +99,7 @@ message to the old reactor, and `EV_DISPATCH` filters, so that a moved descripto
 
 ## Take policies
 
-`TakePolicy` (`gears.async.io`) says which of a worker's tasks others may take:
+`TakePolicy` (`gears.async.io.internal`, chosen with `ReactorRuns.run`) says which of a worker's tasks others may take:
 
 - `Free`: any queued task. Resumes join `local` in order with everything else.
 - `Affine`, the default: only tasks that are not resumes from the worker's own reactor, such as new futures and

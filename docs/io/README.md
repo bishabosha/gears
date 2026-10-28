@@ -5,8 +5,8 @@ projects of their own:
 
 | where | holds | depends on |
 | --- | --- | --- |
-| `gears.async.io` (core, `shared/`) | the interface: `Backend` and its kinds and capabilities, `Io`, `Ops`, `Handle`, `Slot`, addresses, socket options, `BufferPool`, `TakePolicy` | the rest of gears |
-| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds `ReactorBackend` and `CallerBackend`, and `Io`'s kinds `OnPool` and `OnCaller` | the interface |
+| `gears.async.io` (core, `shared/`) | the interface: `Backend` and its kinds and capabilities, `Io`, `Ops`, `Handle`, `Slot`, addresses, socket options, `BufferPool` | the rest of gears |
+| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds `ReactorBackend` and `CallerBackend`, `Io`'s kinds `OnPool` and `OnCaller`, and the runner's knobs, `ReactorRuns` and `TakePolicy` | the interface |
 | `gears.async.io` (core, `jvm/` and `native/`) | the runner, `ReactorFutures`, one per platform | the runtime |
 | `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
 | `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |

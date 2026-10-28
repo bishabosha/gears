@@ -326,3 +326,12 @@ has nothing for a pool to run, with an `IllegalArgumentException`; it gives a po
 `OnPool`. One reason for queueing a datagram socket's ops in the backends (see above) was that a program submitting to
 reactors itself should have the same rule; that reason is gone with this, the others stand: a backend may do better
 than queue, and an op's time limit and cancel cover its wait.
+
+## The runner chooses its pool
+
+`ReactorFutures.run` took a pool's size and its `TakePolicy` as a program's choice, with one worker unless told
+otherwise. A program should not need to know how its futures are carried, so `run` now has no knobs: over a backend
+with reactors it starts a pool of one worker per available processor, under the affine policy, and over any other it
+runs on the caller. The knobs are internal (`ReactorRuns.run(workers, policy)`, and `TakePolicy` with it), for the
+benches, demos and tests that compare them; a caller backend given to it is refused, as a pool would have nothing to
+run.

@@ -21,36 +21,28 @@ object ReactorSupport extends AsyncSupport with NativeSuspend {
   */
 object ReactorFutures {
 
-  /** Runs `program` on one worker, the calling thread, and returns what it returns (see the other `run`). Scala Native
-    * suspends futures on a pool's workers, which run reactors, so the backend must be a reactor backend. A program's
-    * `Io` is not a `Backend`, so starting a run over one is refused when compiling.
+  /** A pool's workers: one per processor available to the program. */
+  private def Workers: Int = Runtime.getRuntime().availableProcessors()
+
+  /** Runs `program` over `backend` on a pool of workers, one per available processor, each with a reactor of the
+    * backend's (see `ReactorPool`), the calling thread the first, and returns what it returns, rethrowing its failure.
+    * The program starts as a future, and is given an `Io` over the backend as a context parameter, with which it
+    * performs its ops and which is its `AsyncOperations`; the workers run until it finishes. Scala Native suspends
+    * futures on a pool's workers, so the backend must have reactors. With `GEARS_POOL_STATS=1`, the pool's counters are
+    * printed once its workers stop. A program's `Io` is not a `Backend`, so starting a run over one is refused when
+    * compiling.
     */
   def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
-      case reactors: (ReactorBackend & backend.type) => onPool(1, TakePolicy.Affine)(using reactors)(program)
+      case reactors: (ReactorBackend & backend.type) => onPool(Workers, TakePolicy.Affine)(using reactors)(program)
       case _ => throw new IllegalArgumentException(s"$backend has no reactors, and Scala Native runs futures on them")
     }
 
-  /** Runs `program` on a pool of `workers` workers, each with a reactor of `backend`'s (see `ReactorPool`): the calling
-    * thread becomes the first. The program starts as a future, is given an `Io` over the backend on the pool as a
-    * context parameter, with which it performs its ops and which is its `AsyncOperations`; the workers run until it
-    * finishes, and what it returns is returned. `policy` says which tasks a worker out of work may take from another. A
-    * failure of the program is rethrown. With `GEARS_POOL_STATS=1`, the pool's counters are printed once its workers
-    * stop, and each reactor as it prints itself.
+  /** Runs `program` on a pool of `workers` workers driving `backend`'s reactors, under `policy`: `run`'s pool, and
+    * `internal.ReactorRuns`'s, whose callers choose them. The program is given an `Io` over the backend on the pool, as
+    * a context parameter, and what it returns is returned; a failure of the program is rethrown.
     */
-  def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
-      backend: Backend
-  )(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    backend match {
-      case reactors: (ReactorBackend & backend.type) => onPool(workers, policy)(using reactors)(program)
-      case _                                         =>
-        throw new IllegalArgumentException(
-          s"$backend performs its ops on the caller, so a pool of workers has nothing to run; use `run` without workers"
-        )
-    }
-
-  /** The run on a pool, over a reactor backend. */
-  private def onPool[T](workers: Int, policy: TakePolicy)(using
+  private[io] def onPool[T](workers: Int, policy: TakePolicy)(using
       backend: ReactorBackend
   )(
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T

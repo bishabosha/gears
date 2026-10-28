@@ -6,9 +6,9 @@ import gears.async.io.IpAddress
 import gears.async.io.PipeBackend
 import gears.async.io.ResolveBackend
 import gears.async.io.SocketBackend
-import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreamBackend
+import gears.async.io.internal.TakePolicy
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
 

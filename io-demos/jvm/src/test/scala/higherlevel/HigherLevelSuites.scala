@@ -4,6 +4,7 @@ import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.io.Io
 import gears.async.io.ReactorFutures
+import gears.async.io.internal.ReactorRuns
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
 
@@ -20,5 +21,5 @@ class NioReactorsHigherLevelSuite extends HigherLevelChecks {
   val backend: NioBackend.type = NioBackend
 
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    ReactorFutures.run(workers = 4)(using backend)(body)
+    ReactorRuns.run(4)(using backend)(body)
 }

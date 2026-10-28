@@ -1,4 +1,5 @@
 package gears.async.io
+package internal
 
 /** Which of a worker's tasks other workers may take when they run out of work. */
 enum TakePolicy {

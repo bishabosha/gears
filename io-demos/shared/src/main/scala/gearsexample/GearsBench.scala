@@ -13,9 +13,10 @@ import gears.async.io.Received
 import gears.async.io.Slot
 import gears.async.io.StreamSocketBackend
 import gears.async.io.StreamSockets
-import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
 import gears.async.io.internal.ReactorBackend
+import gears.async.io.internal.ReactorRuns
+import gears.async.io.internal.TakePolicy
 import gears.async.io.testkit.BufferArena
 
 import java.io.IOException
@@ -323,7 +324,7 @@ object GearsBench {
   )(
       program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> Unit
   ): Unit = backend match {
-    case reactors: (ReactorBackend & backend.type) => ReactorFutures.run(workers, policy)(using reactors)(program)
+    case reactors: (ReactorBackend & backend.type) => ReactorRuns.run(workers, policy)(using reactors)(program)
     case _                                         => ReactorFutures.run(using backend)(program)
   }
 

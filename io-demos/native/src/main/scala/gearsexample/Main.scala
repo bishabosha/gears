@@ -2,8 +2,8 @@ package gearsexample
 
 import gears.async.io.IpAddress
 import gears.async.io.IpSockets
-import gears.async.io.TakePolicy
 import gears.async.io.UnixAddress
+import gears.async.io.internal.TakePolicy
 import gears.async.io.kqueue.KqueueBackend
 
 import scala.concurrent.duration.*

@@ -8,6 +8,7 @@ import gears.async.VThreadScheduler
 import gears.async.VThreadSupport
 import gears.async.io.Io
 import gears.async.io.internal.OnCaller
+import gears.async.io.internal.ReactorRuns
 import gears.async.io.internal.ReactorScheduler
 import gears.async.io.nio.NioBackend
 import gears.async.io.nio.NioOnCaller
@@ -30,8 +31,8 @@ class NioOnCallerSuite extends FuturesContract {
     assertEquals(compileErrors("def k(c: NioBackend.Connection): NioBackend.Readable = c"), "")
   }
 
-  test("a pool of workers refuses a caller backend, which has nothing for it to run") {
-    intercept[IllegalArgumentException](gears.async.io.ReactorFutures.run(2)(using NioOnCaller)(42))
+  test("a pool of workers, an internal knob, refuses a caller backend, which has nothing for it to run") {
+    intercept[IllegalArgumentException](ReactorRuns.run(2)(using NioOnCaller)(42))
   }
 
   test("a program over NioOnCaller needs no pool: its Io, an OnCaller, performs on the calling thread") {
@@ -100,7 +101,7 @@ abstract class ReactorFuturesSuite(workers: Int) extends FuturesContract {
   val backend: NioBackend.type = NioBackend
 
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    ReactorFutures.run(workers)(using backend)(body)
+    ReactorRuns.run(workers)(using backend)(body)
 }
 
 class ReactorCarriersSuite extends ReactorFuturesSuite(workers = 1) {

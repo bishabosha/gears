@@ -28,35 +28,27 @@ import scala.util.Try
   */
 object ReactorFutures {
 
-  /** Runs `program` over `backend`, whichever its kind, and returns what it returns: on a pool of one worker for a
-    * reactor backend (see the other `run`), on gears' own virtual threads for a caller backend. A program's `Io` is not
-    * a `Backend`, so starting a run over one is refused when compiling.
+  /** A pool's workers: one per processor available to the program. */
+  private def Workers: Int = Runtime.getRuntime().availableProcessors()
+
+  /** Runs `program` over `backend` and returns what it returns, rethrowing its failure: on a pool of workers, one per
+    * available processor, driving the backend's reactors, if it has them; else on gears' own virtual threads, each op
+    * performed on the future's own thread. The program is given an `Io` over the backend, as a context parameter, with
+    * which it performs its ops and which is its `AsyncOperations`. A program's `Io` is not a `Backend`, so starting a
+    * run over one is refused when compiling.
     */
   def run[T](using backend: Backend)(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
     backend match {
-      case reactors: (ReactorBackend & backend.type) => onPool(1, TakePolicy.Affine)(using reactors)(program)
+      case reactors: (ReactorBackend & backend.type) => onPool(Workers, TakePolicy.Affine)(using reactors)(program)
       case caller: (CallerBackend & backend.type)    => onCaller(caller)(program)
       case other => throw new IllegalArgumentException(s"$other is neither a reactor backend nor a caller backend")
     }
 
-  /** Runs `program` on a pool of `workers` workers driving reactors of `backend`'s, which carry the program's futures,
-    * run until it finishes and are closed afterwards; `policy` says which tasks a worker out of work may take from
-    * another. The program is given an `Io` over the backend on the pool, as a context parameter, and what it returns is
-    * returned; a failure of the program is rethrown.
+  /** Runs `program` on a pool of `workers` workers driving `backend`'s reactors, under `policy`: `run`'s pool, and
+    * `internal.ReactorRuns`'s, whose callers choose them. The program is given an `Io` over the backend on the pool, as
+    * a context parameter, and what it returns is returned; a failure of the program is rethrown.
     */
-  def run[T](workers: Int, policy: TakePolicy = TakePolicy.Affine)(using
-      backend: Backend
-  )(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    backend match {
-      case reactors: (ReactorBackend & backend.type) => onPool(workers, policy)(using reactors)(program)
-      case _                                         =>
-        throw new IllegalArgumentException(
-          s"$backend performs its ops on the caller, so a pool of workers has nothing to run; use `run` without workers"
-        )
-    }
-
-  /** The run on a pool, over a reactor backend. */
-  private def onPool[T](workers: Int, policy: TakePolicy)(using
+  private[io] def onPool[T](workers: Int, policy: TakePolicy)(using
       backend: ReactorBackend
   )(program: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T = {
     VirtualCarriers.check()

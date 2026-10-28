@@ -4,6 +4,7 @@ package kqueue
 import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.io.Io
+import gears.async.io.internal.ReactorRuns
 import gears.async.io.kqueue.KqueueBackend
 import gears.async.io.testkit.FuturesContract
 
@@ -12,7 +13,7 @@ abstract class KqueueFuturesSuite(workers: Int) extends FuturesContract with Kqu
   val backend: KqueueBackend.type = KqueueBackend
 
   protected def running[T](body: Io[backend.type] ?=> (Async.Spawn, AsyncOperations) ?=> T): T =
-    ReactorFutures.run(workers)(using backend)(body)
+    ReactorRuns.run(workers)(using backend)(body)
 }
 
 class KqueueFuturesOnOneSuite extends KqueueFuturesSuite(workers = 1)
