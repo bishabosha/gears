@@ -1,0 +1,43 @@
+# Across hosts: the bench client on this Mac (macOS 27.0, arm64, release build of 2026-10-28, one client worker),
+# against bench-serve in a tart VM (tahoe-base, macOS 26, 4 vCPUs, kqueue backend, 2 workers) over bridge100.
+# round backend line; scale 0.2, --connections 32; the host was not otherwise idle.
+1 kqueue bench: pingpong                10000     1.295         7720   129.54
+1 kqueue bench: pingpong-deadline       10000     1.258         7949   125.80
+1 kqueue bench: concurrent              20000     0.479        41729    23.96
+1 kqueue bench: connections              4000     1.988         2012   497.07
+1 kqueue bench: pipelined               40000     0.211       189609     5.27
+1 kqueue bench: large                     400     0.069         5789   172.73
+1 nwframework bench: pingpong                10000     1.736         5759   173.65
+1 nwframework bench: pingpong-deadline       10000     1.712         5843   171.16
+1 nwframework bench: concurrent              20000     0.588        34013    29.40
+1 nwframework bench: connections              4000     3.972         1007   993.01
+1 nwframework bench: pipelined               40000     0.266       150548     6.64
+1 nwframework bench: large                     400     0.070         5713   175.04
+2 kqueue bench: pingpong                10000     1.374         7276   137.43
+2 kqueue bench: pingpong-deadline       10000     1.310         7632   131.02
+2 kqueue bench: concurrent              20000     0.414        48327    20.69
+2 kqueue bench: connections              4000    27.898          143  6974.44
+2 kqueue bench: pipelined               40000     0.207       193127     5.18
+2 kqueue bench: large                     400     0.067         5939   168.39
+2 nwframework bench: pingpong                10000     1.673         5977   167.31
+2 nwframework bench: pingpong-deadline       10000     1.727         5790   172.70
+2 nwframework bench: concurrent              20000     0.603        33147    30.17
+2 nwframework bench: connections              4000     7.925          505  1981.21
+2 nwframework bench: pipelined               40000     0.269       148633     6.73
+2 nwframework bench: large                     400     0.062         6495   153.97
+3 kqueue bench: pingpong                10000     1.262         7922   126.23
+3 kqueue bench: pingpong-deadline       10000     1.276         7834   127.65
+3 kqueue bench: concurrent              20000     0.418        47889    20.88
+3 nwframework bench: pingpong                10000     1.826         5477   182.58
+3 nwframework bench: pingpong-deadline       10000     1.732         5773   173.22
+3 nwframework bench: concurrent              20000     0.597        33528    29.83
+3 nwframework bench: connections              4000    11.419          350  2854.77
+3 nwframework bench: pipelined               40000     0.272       147164     6.80
+3 nwframework bench: large                     400     0.068         5909   169.22
+# connections alone, scale 0.1, each run started with the host's TIME_WAIT to the server drained below 100:
+1 kqueue bench: connections              2000     0.928         2156   463.93
+1 nwframework bench: connections              2000     1.906         1049   952.87
+2 kqueue bench: connections              2000     1.025         1951   512.68
+2 nwframework bench: connections              2000     1.834         1091   916.83
+3 kqueue bench: connections              2000     0.989         2023   494.35
+3 nwframework bench: connections              2000     1.915         1045   957.40

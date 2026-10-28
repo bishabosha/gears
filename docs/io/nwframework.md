@@ -268,7 +268,36 @@ connections exhaust the ephemeral ports). This is the state-in-C build with the 
   does on both backends. A real interface needs a second machine running `iokqueuedemos gears bench-serve --host 0.0.0.0
   --port 19876 --backend nwframework` (or `kqueue`), benched with `--tcp --host <its address> --no-server`. On a LAN
   nothing rate-limits the traffic; over the internet a round trip's time is the network's, so the backends would
-  differ in CPU and in throughput at concurrency (`concurrent`, `pipelined`), not in latency. Not measured yet.
+  differ in CPU and in throughput at concurrency (`concurrent`, `pipelined`), not in latency. Measured against a VM
+  below.
+
+## Measured across hosts, against a VM
+
+Off this host, where the backend uses Network.framework as it does in use: the bench client on this Mac (macOS 27.0,
+one client worker, the release build of 2026-10-28) against `bench-serve` with the kqueue backend and two workers, in a
+tart VM (`tahoe-base`, macOS 26, four virtual CPUs) over `bridge100`, a virtual network with no wire. Scale 0.2,
+median of 3 runs alternating the backends (2 of kqueue's for `pipelined` and `large`, whose third run broke off in
+`connections`, below), µs an operation; the host was not otherwise idle (`bench/results/native-across-hosts-vm.txt`).
+
+| scenario | kqueue | Network.framework | ratio |
+|---|---|---|---|
+| pingpong | 129.5 | 173.7 | 1.34 |
+| pingpong-deadline | 127.7 | 172.7 | 1.35 |
+| concurrent | 20.9 | 29.8 | 1.43 |
+| pipelined | 5.22 | 6.73 | 1.29 |
+| large | 170.6 | 169.2 | 0.99 |
+| connections | 494 | 953 | 1.93 |
+
+- **Over a network the gap is the same in µs, and so far smaller in proportion.** A round trip costs Network.framework
+  about 45 µs more, as over loopback (55 against 17, 38 more), but the network's own time, 130 µs here where loopback's
+  is 17, makes that 1.34 times kqueue's, not 3.2; a new connection 1.9 times, not 7.
+- **Large messages are the network's**: `large` is the same on both, the virtual link the limit.
+- **`connections` needs the host's `TIME_WAIT` drained.** The client closes first, so each connection leaves a port in
+  `TIME_WAIT` on this Mac for 30 s (twice `net.inet.tcp.msl`, 15 s); with 8,000 of them to the server, half the
+  ephemeral range, macOS failed new connects with `ETIMEDOUT` ("Operation timed out"), not with a port shortage, and
+  at 6,000 it connected slowly, 3,100 µs a connection. The VM showed no listen-queue overflow or dropped SYN. The
+  figures above are of runs each started with fewer than 100 left, at scale 0.1; a run started with thousands left
+  measures the host's ports, not either backend.
 
 ## Known limits
 
