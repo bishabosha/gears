@@ -52,6 +52,51 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   protected final def complete(op: O): Unit = deliverComplete(take(op), op)
   protected final def fail(op: O, failure: Throwable): Unit = deliverFailure(take(op), op, failure)
 
+  /** Runs the completion of `op`, which finished: `onFailure` with the failure it kept (`atOnceFailure`), if any, else
+    * `onComplete`.
+    */
+  protected final def finish(op: O): Unit = {
+    val failure = op.atOnceFailure
+    if failure != null then {
+      op.atOnceFailure = null
+      fail(op, failure)
+    } else complete(op)
+  }
+
+  // Commands that finished as soon as they were submitted, and other ops that finished without waiting, whose
+  // completions run on the next turn. Loop thread only.
+  protected final val ready = new java.util.ArrayDeque[O]()
+
+  /** Runs the completions of the ops that finished when submitted, as many as were queued when it started: a completion
+    * that submits a command which finishes at once is left for the next turn, so one busy handle cannot keep the loop
+    * from polling. Returns whether there were any.
+    */
+  protected final def deliverReady(): Boolean = {
+    var count = ready.size
+    val any = count > 0
+    while count > 0 do {
+      val op = ready.poll().nn
+      count -= 1
+      finish(op)
+    }
+    any
+  }
+
+  // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
+  // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
+  // after them (`Ops.close`). Loop thread only.
+  protected final val closing = new java.util.ArrayDeque[O]()
+
+  /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
+  protected final def deliverClosing(due: Int): Unit = {
+    var n = due
+    while n > 0 do {
+      val op = closing.poll().nn
+      n -= 1
+      finish(op)
+    }
+  }
+
   // Timers whose deadline moved earlier, told from another thread, for the loop to file again (`moved`).
   private val movedQueue = new java.util.concurrent.ConcurrentLinkedQueue[O & LoopTimer[O]]()
 

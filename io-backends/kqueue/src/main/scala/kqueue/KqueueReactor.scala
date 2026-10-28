@@ -88,28 +88,6 @@ final class KqueueReactor private (
     any
   }
 
-  // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
-  // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
-  // after them (`Ops.close`). Loop thread only.
-  private val closing = new java.util.ArrayDeque[KqueueOp]()
-
-  /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
-  private def deliverClosing(due: Int): Unit = {
-    var n = due
-    while n > 0 do {
-      val op = closing.poll().nn
-      n -= 1
-      val failure = op.atOnceFailure
-      if failure != null then {
-        op.atOnceFailure = null
-        fail(op, failure)
-      } else complete(op)
-    }
-  }
-
-  // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
-  private val ready = new java.util.ArrayDeque[KqueueOp]()
-
   // Another facility's ops waiting to be notified, by the token of their submission (`Notified`). Loop thread only.
   private val waiting = scala.collection.mutable.LongMap.empty[Notified]
   private var nextToken = 1L
@@ -161,13 +139,8 @@ final class KqueueReactor private (
       val op = waiting.getOrNull(t) // no `Option` for each: a token no longer waiting is simply not found
       if op != null then {
         waiting -= t
-        if attemptedNotified(op, first = false) then {
-          val failure = op.atOnceFailure
-          if failure != null then {
-            op.atOnceFailure = null
-            fail(op, failure)
-          } else complete(op)
-        } else waiting.put(t, op)
+        if attemptedNotified(op, first = false) then finish(op)
+        else waiting.put(t, op)
       }
     }
     any
@@ -564,25 +537,6 @@ final class KqueueReactor private (
         }
       }
       packed = selectedQueue.poll()
-    }
-    any
-  }
-
-  /** Runs the completions of the commands that finished when submitted, as many as were queued when it started: a
-    * completion that submits a command which finishes at once is left for the next turn, so one busy descriptor cannot
-    * keep the loop from polling. Returns whether there were any.
-    */
-  private def deliverReady(): Boolean = {
-    var count = ready.size
-    val any = count > 0
-    while count > 0 do {
-      val op = ready.poll().nn
-      count -= 1
-      val failure = op.atOnceFailure
-      if failure != null then {
-        op.atOnceFailure = null
-        fail(op, failure)
-      } else complete(op)
     }
     any
   }

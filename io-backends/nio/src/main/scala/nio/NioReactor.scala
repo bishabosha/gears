@@ -86,28 +86,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     any
   }
 
-  // Close ops that closed their handle at once, whose completions run at the end of the turn after the one they were
-  // queued in: by then that reactor has delivered the failures of the ops they ended there, so that a close completes
-  // after them (`Ops.close`). Loop thread only.
-  private val closing = new java.util.ArrayDeque[NioOp]()
-
-  /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
-  private def deliverClosing(due: Int): Unit = {
-    var n = due
-    while n > 0 do {
-      val op = closing.poll().nn
-      n -= 1
-      val failure = op.atOnceFailure
-      if failure != null then {
-        op.atOnceFailure = null
-        fail(op, failure)
-      } else complete(op)
-    }
-  }
-
-  // Commands that finished as soon as they were submitted, whose completions run on the next turn. Loop thread only.
-  private val ready = new java.util.ArrayDeque[NioOp]()
-
   // Commands on regular files that were not done: a file is always ready, so they are performed again each turn.
   private val again = new java.util.ArrayDeque[Command]()
 
@@ -369,22 +347,6 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
       }
     if done && queue then ready.add(command)
     done
-  }
-
-  /** Runs the completions of the commands that finished when submitted, as many as were queued when it started. */
-  private def deliverReady(): Boolean = {
-    var count = ready.size
-    val any = count > 0
-    while count > 0 do {
-      val op = ready.poll().nn
-      count -= 1
-      val failure = op.atOnceFailure
-      if failure != null then {
-        op.atOnceFailure = null
-        fail(op, failure)
-      } else complete(op)
-    }
-    any
   }
 
   /** Performs a command whose handle is ready, and hands its completion the result; returns whether it is done. */
