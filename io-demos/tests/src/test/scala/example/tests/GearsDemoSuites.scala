@@ -80,6 +80,7 @@ class GearsKQueueDemoSuite extends KQueueDemoSuite with GearsBenchCheck {
   * cannot (see `IpDatagramOps.send`); empty packets to the server, from Java's own clients, are still echoed.
   */
 class GearsSocketDemoSuite extends SocketDemoSuite {
+  override protected def keyValueSkipped: String | Null = null
   override def commandPrefix: Seq[String] = Seq("gears")
   override def sendsEmptyConnectedDatagrams: Boolean = false
   override def otherStreamServers: Seq[StreamServer] = Seq(
@@ -119,6 +120,7 @@ class JvmGearsDemoSuite extends KQueueDemoSuite with GearsBenchCheck with OnJvm 
 }
 
 class JvmGearsSocketDemoSuite extends SocketDemoSuite with OnJvm {
+  override protected def keyValueSkipped: String | Null = null
   def backend = "caller"
 }
 
@@ -127,6 +129,7 @@ class JvmReactorsGearsDemoSuite extends KQueueDemoSuite with GearsBenchCheck wit
 }
 
 class JvmReactorsGearsSocketDemoSuite extends SocketDemoSuite with OnJvm {
+  override protected def keyValueSkipped: String | Null = null
   def backend = "reactors"
   override def otherStreamServers: Seq[StreamServer] = Seq(StreamServer("reactor-sock", Nil))
 }

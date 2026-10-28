@@ -341,3 +341,11 @@ refuse.
 - **Batching registrations**, revisited for workloads of short connections or many cancelled one-shot waits.
 - **A blocking task's hand-over**: passing the worker's reactor and queue to a spare thread while a task blocks, as
   cats-effect does, rather than two hops to a blocker thread and back (see `blocking-io` above).
+
+## Known: the plain key-value client's race
+
+The hand-written kqueue key-value client (`kqueueExampleKeyValue`, the `kv4`, `kv6` and `kv` commands) can write
+before its non-blocking connection has completed, and then fails with `ENOTCONN` ("Socket is not connected"): seen once
+in a full demo run on 2026-10-28, not in three reruns. It is that demo's own loop, not the reactor's; the gears demos'
+clients, which connect through the `connect` op, have no such race. The demo suite skips the key-value check against
+the plain demos until the client waits for writability after connecting.
