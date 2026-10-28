@@ -51,8 +51,12 @@ object KqueueBackend
     * that no use starts after, and the descriptor itself once no use is in progress, by the closer if none is, and
     * otherwise by the last use to end, on its own thread, so that the number is not reused under a use and nobody waits
     * for one (`close`).
+    *
+    * A handle with a `foreign` object is not a descriptor but another facility's I/O object, which a backend built on
+    * kqueue's reactors adds (see `Notified`), such as a Network.framework connection. Its `fd` is -1, kqueue's ops
+    * refuse it, and only its own backend's ops use it.
     */
-  final class Handle private[kqueue] (private[kqueue] val fd: Int) {
+  final class Handle private[kqueue] (private[kqueue] val fd: Int, private[io] val foreign: AnyRef | Null = null) {
     // The sign bit: closed. The rest: how many uses of the descriptor are in progress.
     private val state = new java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -99,7 +103,7 @@ object KqueueBackend
       }
     }
 
-    override def toString: String = s"Handle($fd)"
+    override def toString: String = if foreign == null then s"Handle($fd)" else s"Handle($foreign)"
   }
 
   private[io] object Handle {

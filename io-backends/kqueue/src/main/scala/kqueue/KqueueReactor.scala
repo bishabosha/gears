@@ -25,16 +25,89 @@ import scala.scalanative.unsigned.*
   * blocks, so setting or cancelling one costs no syscall, and an op that times out is withdrawn as a cancelled one is,
   * with `onFailure` instead of `onCancel`; `wakeup`, and blocking tasks finishing on other threads, wake the loop with
   * a user event. Each submission is its own kevent call, and each poll returns up to `maxEvents` events.
+  *
+  * It also runs ops of another I/O facility, for a backend built on kqueue's reactors (`Notified`): attempted when
+  * submitted and again when the facility notifies the reactor for them, with that facility's events taken in each turn
+  * by its `ReactorExtension`, which wakes a blocked poll with a user event of its own.
   */
 final class KqueueReactor private (
     val kq: Int,
     maxEvents: Int,
-    spinPolls: Int
+    spinPolls: Int,
+    builtBy: Ops[KqueueOp, KqueueBackend.Handle]
 ) extends gears.async.io.internal.ReactorCore[KqueueOp] {
 
   type Handle = KqueueBackend.Handle
 
-  def ops: Ops[KqueueOp, Handle] = KqueueOps
+  /** The ops of the backend that opened it: `KqueueOps`, or those of a backend built on kqueue's reactors. */
+  def ops: Ops[KqueueOp, Handle] = builtBy
+
+  // Another facility's ops waiting to be notified, by the token of their submission (`Notified`). Loop thread only.
+  private val waiting = scala.collection.mutable.LongMap.empty[Notified]
+  private var nextToken = 1L
+
+  // Tokens of those ops their facility notified: from this thread, unboxed; and from any other, boxed, which is rare,
+  // such as another reactor taking in events of a handle an op here waits on.
+  private val notifiedHere = new KqueueReactor.Tokens
+  private val notifiedElsewhere = new java.util.concurrent.ConcurrentLinkedQueue[java.lang.Long]()
+
+  /** The other facility this reactor drives, if any (see `ReactorExtension`). */
+  @volatile private[io] var extension: ReactorExtension | Null = null
+
+  /** The reactor's extension, made by `make` if it has none, its user event registered. Loop thread only. */
+  private[io] def extend(make: => ReactorExtension): ReactorExtension = {
+    val existing = extension
+    if existing != null then existing
+    else {
+      KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.addUser(events(0), KqueueReactor.ExtensionEvent))
+      val made = make
+      extension = made
+      made
+    }
+  }
+
+  /** The other facility tells the reactor that the op of `token`, waiting here, is worth attempting again. Any thread.
+    */
+  private[io] def notified(token: Long): Unit =
+    if Thread.currentThread() eq loopThread then notifiedHere.add(token)
+    else {
+      notifiedElsewhere.add(token)
+      wakeup()
+    }
+
+  /** Takes in the extension's events, which notify the ops they finish, then attempts the ops notified: one that
+    * finishes has its completion run; one that must still wait arranged again to be notified by its attempt. A token no
+    * longer waiting, a cancelled op's, is dropped. Returns whether there were any.
+    */
+  private def deliverNotified(): Boolean = {
+    val ext = extension
+    var any = ext != null && ext.deliver()
+    var token = notifiedElsewhere.poll()
+    while token != null do {
+      notifiedHere.add(token.longValue)
+      token = notifiedElsewhere.poll()
+    }
+    while !notifiedHere.isEmpty do {
+      any = true
+      val t = notifiedHere.poll()
+      val op = waiting.getOrNull(t) // no `Option` for each: a token no longer waiting is simply not found
+      if op != null then {
+        waiting -= t
+        if attemptedNotified(op, first = false) then deliverFinished(op) // a close's queued (`closing`)
+        else waiting.put(t, op)
+      }
+    }
+    any
+  }
+
+  /** Attempts `op`: true if it finished, or failed, with the failure kept for its completion. */
+  private def attemptedNotified(op: Notified, first: Boolean): Boolean =
+    try op.attempt(this, first)
+    catch {
+      case t: Throwable =>
+        op.atOnceFailure = t
+        true
+    }
 
   private val WakeEvent = 0.toUSize
   KqueueLoop.createAndRegisterEvents(kq, 1) { events =>
@@ -103,13 +176,37 @@ final class KqueueReactor private (
 
   private var slots = new Array[Slot | Null](64)
 
-  /** Submits a command, a connect, or a close (see `ReactorCore.submitOwn`). */
+  /** Submits a command, a connect, a close, or another facility's op (see `ReactorCore.submitOwn`). */
   protected def submitOwn(op: KqueueOp, pending: Completion[KqueueOp], finishNow: Boolean): Int =
     op match {
       case connect: ConnectTo if !started(connect, pending, finishNow) =>
         if finishNow then ReactorCore.Finished else ReactorCore.Queued
-      case command: Command => submitCommand(command, pending, finishNow)
-      case close: Close     =>
+      case command: Command   => submitCommand(command, pending, finishNow)
+      case notified: Notified =>
+        notified.token = nextToken
+        nextToken += 1
+        notified.completion = pending
+        val done =
+          try {
+            notified.begin()
+            attemptedNotified(notified, first = true)
+          } catch {
+            case t: Throwable => // an argument its facility refuses, too, fails the op, never a half-made submit
+              notified.atOnceFailure = t
+              true
+          }
+        if !done then {
+          waiting.put(notified.token, notified)
+          ReactorCore.Waits
+        } else if notified.closes then {
+          closing.add(notified) // after the failures it causes, never in trySubmit
+          ReactorCore.Queued
+        } else if finishNow then ReactorCore.Finished
+        else {
+          ready.add(notified)
+          ReactorCore.Queued
+        }
+      case close: Close =>
         // Closed here, as an at-once op is, unless a use of the descriptor is in progress: then pending, as a promise,
         // until the last use ends and closes it.
         close.reset()
@@ -337,19 +434,31 @@ final class KqueueReactor private (
   protected def wakeNow(): Unit =
     KqueueLoop.createAndRegisterEvents(kq, 1)(events => KqueueLoop.triggerUser(events(0), WakeEvent))
 
-  /** Drops the commands in the slots (see `ReactorCore.dropOwn`). */
+  /** Drops the commands in the slots and the other facility's ops waiting to be notified (see `ReactorCore.dropOwn`).
+    */
   protected def dropOwn(drop: KqueueOp => Unit): Unit = {
     for slot <- slots if slot != null do {
       if slot.nn.read != null then drop(slot.nn.read.nn)
       if slot.nn.write != null then drop(slot.nn.write.nn)
     }
     java.util.Arrays.fill(slots.asInstanceOf[Array[AnyRef]], null)
+    for (_, op) <- waiting.toList do {
+      op.withdraw()
+      drop(op)
+    }
+    waiting.clear()
+    notifiedHere.clear()
+    notifiedElsewhere.clear()
   }
 
-  /** Closes the kqueue: its filters and wake event go with it (see `ReactorCore.closeOwn`). */
+  /** Closes the extension, if any, and the kqueue: the kqueue's own filters and wake event go with it (see
+    * `ReactorCore.closeOwn`).
+    */
   protected def closeOwn(): Unit = {
     closedQueue.clear()
     selectedQueue.clear()
+    val ext = extension
+    if ext != null then ext.close() // nothing triggers its event from here on
     wakeLock.synchronized {
       closed = true
       KqueueLoop.close(kq) // Its filters and wake event go with it.
@@ -363,7 +472,9 @@ final class KqueueReactor private (
   private def isWriteEvent(event: Event): Boolean = KqueueLoop.isWriteEvent(event)
   private def fileIdent(event: Event): Int = KqueueLoop.fileIdent(event)
 
-  /** Takes a pending command out of its slot, deleting its one-shot filter (see `ReactorCore.withdrawOwn`). */
+  /** Takes a pending command out of its slot, deleting its one-shot filter, or another facility's op out of `waiting`
+    * (see `ReactorCore.withdrawOwn`).
+    */
   protected def withdrawOwn(op: KqueueOp): Completion[KqueueOp] | Null =
     op match {
       case command: Command =>
@@ -383,8 +494,21 @@ final class KqueueReactor private (
             take(command)
           }
         }
+      case notified: Notified =>
+        if notified.completion == null || waiting.getOrNull(notified.token) == null then null // finished, or not here
+        else {
+          waiting -= notified.token
+          notified.withdraw() // a notification already queued for it is dropped when delivered
+          take(notified)
+        }
       case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
     }
+
+  /** What an op opened (see `ReactorCore.abandon`), or another facility's op (`Notified.abandon`). */
+  override protected def abandon(op: KqueueOp): Unit = op match {
+    case notified: Notified => notified.abandon()
+    case _                  => super.abandon(op)
+  }
 
   /** Deletes a pending command's one-shot filter so it cannot wake the loop for nothing. If the caller already closed
     * the descriptor, kqueue removed the filter with it and reports `ENOENT` or `EBADF`; the op is cancelled all the
@@ -458,8 +582,8 @@ final class KqueueReactor private (
     */
   private def dispatch(event: Event): Unit =
     if KqueueLoop.isUserEvent(event) then {
-      // Resolved promises are delivered by `runOnce` itself; a wake-up was taken as answered once the poll returned
-      // (`tookWakeUps`).
+      // Resolved promises are delivered by `runOnce` itself, as are the extension's events (`deliverNotified`); a
+      // wake-up was taken as answered once the poll returned (`tookWakeUps`).
     } else dispatchFile(fileIdent(event), isWriteEvent(event), KqueueLoop.isEOF(event), KqueueLoop.data(event).toLong)
 
   /** What `dispatch` does for a descriptor's filter firing, a write's if `write`, at the end of the stream if `eof`,
@@ -563,8 +687,8 @@ final class KqueueReactor private (
   private val eventsZone = Zone.open()
   private val events = KqueueLoop.allocateQueue(maxEvents)(using eventsZone)
 
-  /** The FIFOs `FifoWatcher` found readable. */
-  protected def deliverOwn(): Boolean = deliverSelected()
+  /** The FIFOs `FifoWatcher` found readable, and the ops a facility notified (`Notified`). */
+  protected def deliverOwn(): Boolean = deliverSelected() | deliverNotified()
 
   /** Polls kqueue once and dispatches what it polled: an error event fails the command it is for (`dispatchError`); a
     * failing poll, of the kqueue itself, throws.
@@ -578,6 +702,7 @@ final class KqueueReactor private (
       if KqueueLoop.isError(event) then dispatchError(event) else dispatch(event)
       i += 1
     }
+    if polled > 0 then deliverNotified(): Unit // what the extension's event, if among them, woke the poll for
   }
 
   /** Polls without blocking up to `spinPolls` times, then blocks if nothing turned up. In request/response traffic the
@@ -640,11 +765,58 @@ object KqueueReactor {
     * without blocking up to `spinPolls` times, trading a little CPU for not sleeping when an event is about to arrive;
     * 0 blocks at once. Close it when done.
     */
-  def open(maxEvents: Int = 255, spinPolls: Int = DefaultSpinPolls): KqueueReactor = {
+  def open(maxEvents: Int = 255, spinPolls: Int = DefaultSpinPolls): KqueueReactor =
+    openFor(KqueueOps, maxEvents, spinPolls)
+
+  /** Opens a reactor for a backend built on kqueue's reactors, whose ops are `ops` (see `Notified`). */
+  private[io] def openFor(
+      ops: Ops[KqueueOp, KqueueBackend.Handle],
+      maxEvents: Int = 255,
+      spinPolls: Int = DefaultSpinPolls
+  ): KqueueReactor = {
     require(spinPolls >= 0, "spinPolls must not be negative")
-    val reactor = new KqueueReactor(KqueueLoop.open(), maxEvents, spinPolls)
+    val reactor = new KqueueReactor(KqueueLoop.open(), maxEvents, spinPolls, ops)
     all.add(reactor)
     reactor
+  }
+
+  /** The user event an extension triggers on the reactor's kqueue to wake it (see `ReactorExtension`). */
+  private[io] val ExtensionEvent: USize = 1.toUSize
+
+  /** A queue of tokens that allocates nothing per token: a ring of longs, grown when full. */
+  private final class Tokens {
+    private var ring = new Array[Long](64)
+    private var head = 0
+    private var size = 0
+
+    def isEmpty: Boolean = size == 0
+
+    def add(token: Long): Unit = {
+      if size == ring.length then {
+        val grown = new Array[Long](ring.length * 2)
+        var i = 0
+        while i < size do {
+          grown(i) = ring((head + i) % ring.length)
+          i += 1
+        }
+        ring = grown
+        head = 0
+      }
+      ring((head + size) % ring.length) = token
+      size += 1
+    }
+
+    def poll(): Long = {
+      val token = ring(head)
+      head = (head + 1) % ring.length
+      size -= 1
+      token
+    }
+
+    def clear(): Unit = {
+      head = 0
+      size = 0
+    }
   }
 
   /** Non-blocking polls before blocking, by default: the benchmark's request/response scenarios gained most of what

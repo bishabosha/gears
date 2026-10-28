@@ -90,6 +90,11 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   // ended there, so that a close completes after them (`Ops.close`). Loop thread only.
   protected final val closing = new java.util.ArrayDeque[O]()
 
+  /** Runs the completion of `op`, which finished on the loop thread: now, as `finish` does, unless it closes a handle,
+    * whose completion is queued in `closing` instead.
+    */
+  protected final def deliverFinished(op: O): Unit = if op.closes then closing.add(op) else finish(op)
+
   /** Runs the completions of the first `due` close ops queued, those queued before this turn began. */
   protected final def deliverClosing(due: Int): Unit = {
     var n = due

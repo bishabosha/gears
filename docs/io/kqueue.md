@@ -321,11 +321,15 @@ descriptor's filters itself, so a close costs only the `close`. How a descriptor
 
 ## Another facility's ops on the same reactor
 
-The Network.framework backend runs on kqueue's reactors, and comes in a pull request of its own, with what it adds to
-them: ops of another I/O facility beside kqueue's (`Notified`), attempted as they are submitted and again each time
-the facility notifies the reactor, woken by a user event of the facility's own (`ReactorExtension`), and handles for
-its I/O objects that kqueue's own ops refuse (see
-[`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)).
+A backend built on kqueue's reactors runs ops of another I/O facility beside kqueue's: the Network.framework backend's
+connections (see [`nwframework.md`](https://github.com/bishabosha/gears/blob/async-io-full-2026-10-28/docs/io/nwframework.md)). Such an op is a `Notified`: attempted as it is submitted, and
+again each time its facility notifies the reactor for its submission's token (`KqueueReactor.notified`), until it
+finishes; cancelled, timed out and dropped on close as a command is. The facility's events come on its own threads and
+are taken in on the loop's by its `ReactorExtension`, made with the first such op, which wakes a blocked poll with a
+user event of its own (`ExtensionEvent`), triggered once until the reactor drains it; the reactor asks it for events
+each turn, a load of an atomic flag when there are none. A reactor that never runs one pays nothing: no extension, and
+no event registered. Its handle is a kqueue handle with a `foreign` object and no descriptor, which kqueue's own ops
+refuse.
 
 ## What it shares with NIO's reactor
 
@@ -337,7 +341,8 @@ opened, and `abandon`, which closes it and empties its slots if the submission i
 how a handle is opened and closed again. Submission refuses an op in one order on every backend, the loop reactors and
 `NioOnCaller` alike: a slot still holding a value, then the op as it stands (`LoopOp.refusal`: a read into a buffer
 with no room, a receive into one with no capacity, an empty packet on a connected socket), then its handle's turn held
-by another op. NIO had checked the second in `perform`, each time the op was performed, after the turn. Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
+by another op. NIO and Network.framework had checked the second in `perform`, each time the op was performed, after
+the turn. Each reactor keeps how it waits: its commands' submission (`submitOwn`, tried before any other type
 test), withdrawal and dropping on close, failing what was pending on handles closed meanwhile (`deliverClosed`), what
 else it delivers each turn (`deliverOwn`: FIFOs and notified ops here, regular files and interest changes on NIO), and
 the poll (`poll`).
@@ -349,11 +354,12 @@ both, directly, before anything else it delivers. Only the order of completions 
 fails its handle's ops at the start of the turn after it is noticed, and wakes a blocked poll.
 
 A close op's own completion goes through `ReactorCore` too, however it finishes (`LoopOp.closes`): at once, as a
-promise completed by the last use of the descriptor on another thread or on the loop's own. It is queued in `closing` and runs at the end of the next turn, after that
+promise completed by the last use of the descriptor on another thread or on the loop's own, or notified, as
+Network.framework's close of a listener is. It is queued in `closing` and runs at the end of the next turn, after that
 turn's `deliverClosed`. Only a close done at once had been: one that waited for a use in progress completed as any
 promise does, so a use ending on the loop thread, in a completion or a dispatch, closed the descriptor and resolved the
-close in the middle of a turn, and the close completed at its end, a turn before the read pending on the handle failed.
-Cancelling a close whose completion is
+close in the middle of a turn, and the close completed at its end, a turn before the read pending on the handle failed;
+and Network.framework's notified close completed as soon as it was notified. Cancelling a close whose completion is
 queued now returns false, as for any op that has finished: before, kqueue's close, a promise, was detached from the
 queue it was in, and the loop failed taking its completion again.
 

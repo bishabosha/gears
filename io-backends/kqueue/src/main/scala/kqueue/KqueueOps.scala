@@ -167,6 +167,7 @@ object KqueueOps
   def read(handle: Readable, pool: BufferPool, into: Slot[Received]): PooledRead =
     on(handle)(PooledRead(fd(handle), KqueueOps.native(pool), into))
   def close(handle: Handle): KqueueOp = {
+    KqueueHandles.checkOwn(handle)
     new Close(handle)
   }
   def shutdownOutput(handle: Connection): KqueueOp = new ShutdownOutput(handle)
@@ -197,6 +198,7 @@ object KqueueOps
     * `IllegalArgumentException`.
     */
   private def onSocket[A](handle: Handle, option: SocketOption[?])(body: (Int, SocketOption.Kind) => A): A = {
+    KqueueHandles.checkOwn(handle)
     KqueueHandles.inUse(handle) {
       val kind = KqueueHandles.socketKind(handle.fd)
       if kind == null then throw new IllegalArgumentException(s"$option applies to sockets, not $handle")
@@ -252,6 +254,7 @@ object KqueueOps
 
   /** `command`, carrying `handle`, which the reactor takes for each use of the descriptor (see `Command.handle`). */
   private def on[C <: Command](handle: Handle)(command: C): C = {
+    KqueueHandles.checkOwn(handle)
     command.handle = handle
     command
   }
@@ -441,6 +444,50 @@ trait Command extends KqueueOp with Repeatable {
 final class Ready(val fd: Int, val interest: Interest) extends Command {
   def perform(): Boolean = true
   override def tryFirst: Boolean = false // the wait is the point: only kqueue says the descriptor is ready
+}
+
+/** An op for another I/O facility than kqueue's, driven by a kqueue reactor (see `ReactorExtension`), such as
+  * Network.framework's, whose outcome comes as a notification rather than as a descriptor's readiness: attempted on the
+  * loop thread as it is submitted, and again each time the facility notifies the reactor for its submission's token
+  * (`KqueueReactor.notified`), until it finishes. A backend built on kqueue's reactors subclasses it, so that its ops
+  * and kqueue's run on the same reactor. Repeatable, unless `oneShot` says otherwise.
+  */
+abstract class Notified extends KqueueOp with Repeatable {
+
+  /** The current submission's token, which a notification names. Loop thread only. */
+  private[io] var token = 0L
+
+  /** Readies a submission before its first attempt, such as by opening what it waits on; a throw fails the op. */
+  private[io] def begin(): Unit = ()
+
+  /** Tries to finish, on `reactor`'s thread, `first` as it is submitted: true once done, its results in the caller's
+    * buffers and slots; false having arranged for the facility to notify `reactor` with `token`. A failure is thrown.
+    */
+  private[io] def attempt(reactor: KqueueReactor, first: Boolean): Boolean
+
+  /** Withdraws the arrangement of a submission cancelled, timed out, or dropped as its reactor closes. */
+  private[io] def withdraw(): Unit
+
+  /** After a submission withdrawn: closes what it opened, which never reaches the caller. */
+  private[io] def abandon(): Unit = ()
+}
+
+/** Another I/O facility a kqueue reactor drives, besides kqueue: one whose events come on threads of its own, such as
+  * Network.framework's on Dispatch's, which queue them and wake the reactor with its extension event
+  * (`KqueueReactor.ExtensionEvent`, a user event on its kqueue, triggered from anywhere). The reactor takes them in on
+  * its thread each turn, and the ops they finish (`Notified`) are notified there.
+  */
+trait ReactorExtension {
+
+  /** On the loop thread, each turn: takes in what the facility delivered, notifying the ops it finishes. Returns
+    * whether anything came.
+    */
+  def deliver(): Boolean
+
+  /** On the loop thread as the reactor closes, once none of the facility's ops is pending there, before its kqueue
+    * closes: nothing may trigger the extension event after this returns.
+    */
+  def close(): Unit
 }
 
 /** A one-shot timer, `nanos` from each submission, kept in the reactor's heap while pending (`TimerState`). */
