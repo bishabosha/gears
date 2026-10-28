@@ -487,7 +487,7 @@ final class KqueueReactor private (
     wakeLock.synchronized {
       closed = true
       KqueueLoop.close(kq) // Its filters and wake event go with it.
-      KqueueLoop.freeQueue(events)
+      eventsZone.close()
       KqueueReactor.all.remove(this)
     }
   }
@@ -708,8 +708,9 @@ final class KqueueReactor private (
       }
     }
 
-  // The buffer polls fill, allocated once and freed by `close`, rather than on the stack every turn.
-  private val events = KqueueLoop.allocateQueue(maxEvents)
+  // The buffer polls fill, allocated once in a zone that `close` frees, rather than on the stack every turn.
+  private val eventsZone = Zone.open()
+  private val events = KqueueLoop.allocateQueue(maxEvents)(using eventsZone)
 
   /** Delivers commands that finished when submitted and resolved promises, polls once, dispatches what it polled, then
     * delivers promises resolved meanwhile. It blocks in the poll only if asked to and nothing was delivered first, and

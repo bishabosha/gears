@@ -7,7 +7,6 @@ import gears.async.io.internal.{Bracket, PosixErr, Unblocked}
 import java.io.IOException
 import scala.scalanative.annotation.alwaysinline
 import scala.scalanative.bsd.kevent
-import scala.scalanative.libc.stdlib
 import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.posix.errno as posixErrno
 import scala.scalanative.posix.time.timespec
@@ -253,15 +252,13 @@ object KqueueLoop {
     }
   }
 
-  /** An event buffer for `nevents` events, zeroed, for a loop that polls many times. Free it with `freeQueue`. */
-  def allocateQueue(nevents: Int): EventQueue = {
+  /** An event buffer for `nevents` events, zeroed, in `zone`, for a loop that polls many times: it lives as long as the
+    * zone.
+    */
+  def allocateQueue(nevents: Int)(using zone: Zone): EventQueue = {
     require(nevents > 0, "Event buffer capacity must be positive")
-    val events = stdlib.calloc(nevents.toCSize, eventSize)
-    if (events == null) throw new OutOfMemoryError("Failed to allocate a kqueue event buffer")
-    events
+    alloc[Byte](eventSize * nevents.toCSize)
   }
-
-  def freeQueue(events: EventQueue): Unit = stdlib.free(events)
 
   // A zero timeout for polls that must not wait, allocated once, in a zone kept for the process: setting a
   // stack-allocated one boxes its pointer.
