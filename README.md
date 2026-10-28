@@ -92,8 +92,9 @@ gears has an interface for asynchronous I/O in `gears.async.io`, on every platfo
 (`Backend`) builds ops (`Ops`) on the handles they name, with capabilities such as IP sockets,
 files, pipes and name resolution mixed in, and a program performs those ops with an `Io` over
 the backend, which is also its gears `AsyncOperations`. `Io.run` starts a program
-over a backend on the JVM and on Scala Native, on a pool of workers driving the backend's
-reactors. The runtime and what the backends share is in `gears.async.io.internal`. See
+over a backend on the JVM and on Scala Native: on a pool of workers, one per processor,
+driving the backend's reactors, or for a backend without them, such as `NioOnCaller`, on the
+calling thread. The runtime and what the backends share is in `gears.async.io.internal`. See
 [docs/io/README.md](docs/io/README.md) for the design.
 
 The backends incubate in projects of their own, each with the contract suites from `ioTestkit`:

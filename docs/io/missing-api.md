@@ -1,6 +1,6 @@
 # What the interface lacks for TLS, QUIC, HTTP and WebSockets
 
-A proposal, recorded 2026-10-27 and not yet started. Nothing in the backend interface stops these protocols being
+A proposal, recorded 2026-10-27: steps 1 to 4 of the order below done by 2026-10-28, step 5 left for follow-ups. Nothing in the backend interface stops these protocols being
 built today: each runs over reliable byte streams or datagrams, which the interface has, and TLS can run in user space
 over plain `read` and `write`, as the JDK's `SSLEngine` and rustls do. What follows is what a correct or a fast
 implementation would miss, what each backend could offer for it, and what deliberately stays out of the interface.

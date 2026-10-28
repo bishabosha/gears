@@ -1,82 +1,70 @@
-# gears.async.io: the interface, and what sits on either side of it
+# gears.async.io: asynchronous I/O for gears
 
-The interface and its runtime are part of the gears core project; the backends, the contract suites and the demos are
-projects of their own:
+An interface for asynchronous I/O that gears programs write once and run on any backend, and three backends:
+kqueue on Scala Native (macOS, and the parts of it Linux shares), the Network.framework backend on Scala Native
+(macOS, kqueue's reactors with Network.framework for TCP and connected UDP off this host), and NIO on the JVM (any
+platform). A program performs ops, built by its backend, with the `Io` the runner gives it, and gears is gears around
+them: futures, groups, cancellation, `sleep` and `withTimeout` all work, on the backend's own timers.
+
+## Where to start reading
+
+1. **The public interface**, in `shared/src/main/scala/async/io/`: `Io.scala` (running a program and performing ops),
+   `Backend.scala` (backends and their capabilities), `Ops.scala` (every op and the rules they share),
+   `SocketOptions.scala`, `Addresses.scala`, `Deadline.scala` and `BufferPool.scala`. About 1,000 lines, and all a
+   program sees.
+2. **The contract suites**, in `io-testkit/`: what every backend must do, checked the same way on each.
+   `FuturesContract` checks programs through `perform`; `ReactorContract` and the per-capability contracts
+   (`IpStreamContract`, `IpDatagramContract`, `UnixStreamContract` and the rest) check the backends underneath.
+3. **One backend**: NIO (`io-backends/nio/`) is the shortest; kqueue (`io-backends/kqueue/`) the one measured most.
+4. **The higher level**, `higherlevel` in `io-demos/`: an API with result-returning openers and streams, written
+   over the public interface alone, which shows what the interface is for.
+5. **[`interface-history.md`](interface-history.md)**, for why any of it is the shape it is.
+
+## Layout
 
 | where | holds | depends on |
 | --- | --- | --- |
-| `gears.async.io` (core, `shared/`) | the interface: `Backend` and its kinds and capabilities, `Io`, `Ops`, `Handle`, `Slot`, addresses, socket options, `BufferPool` | the rest of gears |
-| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds `ReactorBackend` and `CallerBackend`, `Io`'s kinds `OnPool` and `OnCaller`, and the runner's knobs, `ReactorRuns` and `TakePolicy` | the interface |
-| `gears.async.io` (core, `jvm/` and `native/`) | the runner's implementation, `internal.Runner`, one per platform (`Io.run` is the interface's) | the runtime |
-| `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`) | the runtime (`ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`) and what the backends share (`Blockers`, `TimerHeap`, `HandleTable`; on Native, `NativePool` and the Posix sockets, files and resolver) | the interface |
+| `gears.async.io` (core, `shared/`) | the interface: `Io` and `Io.run`, `Backend` and its capabilities, `Ops`, `Slot`, addresses, socket options, `Deadline`, `BufferPool` | the rest of gears |
+| `gears.async.io.internal` (core, `shared/`) | what runs a backend's ops, which the runtime and the backends share and programs do not use: `Submitter`, `Reactor`, `Completion`, a backend's kinds (`ReactorBackend`, `CallerBackend`), `Io`'s kinds (`OnPool`, `OnCaller`), `Turns`, the checks every backend makes (`Checks`) | the interface |
+| `gears.async.io.internal` (core, `jvm-native/`, `jvm/`, `native/`, `js/`) | the runtime (`Runner`, `ReactorPool`, `ReactorWorker`, `RunQueue`, `ReactorScheduler`, `Pools`, `VirtualCarriers`), the runner's knobs (`ReactorRuns`, `TakePolicy`) and what the backends share (`Blockers`, `TimerHeap`; on Native, `NativePool`, `NativeBuffer` and the Posix sockets, files and resolver) | the interface |
 | `ioKqueue`, `ioNWFramework`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue`, `.nwframework` and `.nio` | core |
 | `ioTestkit` (`io-testkit/`) | the contract suites every backend runs, and `BufferArena` | core, munit |
-| `ioDemos` (`io-demos/`) | the gears demos and `higherlevel`, the higher level the interface is for | the backends |
+| `ioDemos` (`io-demos/`) | the gears demos, the bench, and `higherlevel` | the backends |
 
-The interface lives in `shared/`, so it compiles on every platform gears does, Scala.js included; the runtime and the
-runners only on the JVM and Scala Native, which have threads to drive reactors with. Nothing in the interface refers
-to the runtime: the runner, in the interface's package, starts it.
+The interface is in `shared/`, so it compiles on every platform gears does, Scala.js included, where `Io.run`
+refuses until a backend exists there ([`hosts.md`](hosts.md)); the runtime runs on the JVM and Scala Native, which
+have threads to drive reactors with.
 
-The public interface is `Backend` and `Io`, with the ops, handles and options they use, and the runner: a program
-performs ops with the `Io` the runner gives it. Reactors, their submissions and completions, and the kinds of `Io` are
-internal, and so are a backend's kinds: submitting an op to a reactor directly is possible, for the runtime, the backends, their contract suites and
-a demo of it (`ReactorServerSocket`), but unsupported.
+The public interface is `Io` and `Backend`, with the ops, handles and options they use. Everything in
+`gears.async.io.internal` is unsupported: submitting an op to a reactor directly is possible, for the runtime, the
+backends, their contract suites and one demo of it (`ReactorServerSocket`), but no program needs to. What the build
+does not enforce, it hides by package (`private[io]`), which `internal` and every backend's package are under, so a
+backend outside this repository would be written in a package under `gears.async.io` too. A handle is an object of
+its backend's own class, whose constructor is private to the backend, so a program can neither forge one nor pass one
+backend's handle to another, whose `Handle` is a different type.
 
-What the build does not enforce: what the interface hides from programs it hides by package (`private[io]`:
-`CallerBackend.performHere`, `Slot.set`), which `gears.async.io.internal` and every backend's package are subpackages
-of. That keeps a program from performing a backend's ops but through an `Io`, and a backend outside this repository
-would have to be written in a package under `gears.async.io` too. A handle is an object of its backend's own class
-(`Backend.Handle`, `KqueueBackend.Handle` and the others), whose constructor is private to the backend's package, so a
-program can neither forge one nor pass one backend's handle to another, whose `Handle` is a different type.
+## The concepts
 
-## The concepts, and why they are orthogonal
-
-Three axes, chosen independently of one another:
-
-- **Capability**: what a backend can do, as traits mixed into a backend and asked for by intersection: `IpStreams`,
-  `IpDatagrams`, `UnixStreams`, `UnixDatagrams`, `RegularFiles`, `Pipes`, `Resolving`, `Blocking`, `Fifos`; `IpSockets` is
-  both IP ones. Each is a
-  `Backend` narrowed to its own `Ops`; the base `Ops` is read, write, the pooled read, timer and close, and opens
-  nothing. Sockets go by address family and transport, one capability each, none implying another: `IpStreams` and
-  `UnixStreams` each imply `StreamSockets`, the ops of a stream socket once open (`accept`, `shutdownOutput`,
-  addresses), which code serving connections of either family asks for. Every handle is opened by an op of the capability that has it (`connect`, `listen`,
-  `bindDatagram`, `connectDatagram`, `pipe`,
-  `openFifoForReading`, `openFifoForWriting`, `open`), which writes it into a slot as it completes and leaves the
-  slot empty, with nothing open, if it fails or is cancelled: opening may wait, for a connection, a bind or the disk,
-  and some environments, such as Network.framework, only open asynchronously. A handle's kind is in its type, a
-  subtype of the backend's `Handle`: `Readable` and `Writable` streams, a `Connection` (both, and shut down for
-  writing), a `Listener`, datagram sockets bound (`BoundDatagram`, sending to an address and hearing anyone) or
-  connected (`ConnectedDatagram`, to and from its peer alone), each also Unix (`UnixBoundDatagram`,
-  `UnixConnectedDatagram`), and a `File` (both, and read, written and synced at
-  offsets); each opener writes its kind, and each op takes the kind it works on, so an op on the wrong kind of handle
-  does not compile. A program asks for a backend with one as `IpSockets`, which is `Backend & IpSockets`, and
-  likewise for the others.
-- **Kind**: how a backend's ops run. A `ReactorBackend` submits them with completions on reactors it opens, and a
-  program over it runs on a pool of workers driving those reactors; a `CallerBackend` does each op on the calling
-  thread, which may block. A backend is one kind, with any set of capabilities.
-- **`Io`**: where a program's ops run. An `Io[B]` has a backend, `backend: B`, and adds only `perform`: it has no
-  ops or handles of its own, and it is not a `Backend`. The runner gives it to the program it starts; its kinds,
-  internal, are `OnPool`, on a pool of workers driving a reactor backend's reactors, which the runtime implements,
-  and `OnCaller`, over a caller backend. The type names the backend, and is covariant in it, so
-  a program over a `IpSockets & RegularFiles` is given an `Io` over that backend, which a helper asking for
-  `Io[IpSockets]` takes. `Io` is also the program's gears `AsyncOperations`.
-
-What each axis does not know: a capability says nothing about threads, kinds or `Io`; a kind says nothing about
-sockets or files; an `Io` says nothing about sockets or files either, and reaches them only through its backend. The
-runtime is reached through one contract, `OnPool`, which says what a pool offers a program (`perform` and `yield` on
-its backend's ops) and which `gears.async.io.internal.Pools.bound` implements; `yield` is `OnPool`'s alone. A program
-performs ops and nothing else: ops in flight together are futures performing them (`Future(io.perform(op))`), raced,
-awaited and cancelled as futures are. There was an `OnPool.submit`, an op started with a completion of the caller's
-own, until 2026-10-25: nothing but a bench and its own tests used it, and its submissions' membership of their group
-was half the cost of a timer. An op as a passive `Future` of its own, `performAsync`, without spawning one, is a
-direction to explore.
+- **A capability** is what a backend can do, a trait each backend mixes in and a program asks for by intersection:
+  `IpStreams`, `IpDatagrams` (`IpSockets` is both), `UnixStreams`, `UnixDatagrams`, `RegularFiles`, `Pipes`, `Fifos`,
+  `Resolving`, `Blocking`. Each narrows the backend's `Ops`; the base `Ops`, which every backend has, is read, write,
+  the pooled read, timers and close. A capability is a `Backend` itself, so a helper asks for `IpStreams` or
+  `IpStreams & RegularFiles`, and a backend without one, such as a browser's, is refused when compiling.
+- **A handle's kind** is in its type, a subtype of the backend's `Handle`: `Readable` and `Writable` streams, a
+  `Connection` (both, and shut down for writing), a `Listener`, datagram sockets bound (`BoundDatagram`) or connected
+  (`ConnectedDatagram`), each also Unix, and a `File`. Every handle is opened by an op of the capability that has it,
+  which writes it into a slot; an op takes the kind it works on, so an op on the wrong kind does not compile.
+- **`Io`** is where a program's ops run: `Io[B]` has a backend, `backend: B`, and adds only `perform`. The runner
+  gives it to the program; it is the program's gears `AsyncOperations` too. How it performs depends on the backend,
+  internally: over a backend with reactors, on a pool of workers driving them, one per processor; over one without,
+  such as `NioOnCaller`, on the calling thread.
 
 ## A program
 
 ```scala
-def echo(using io: Io[IpSockets])(client: io.Connection)(using Async): Unit = {
+def echo(using io: Io[IpStreams])(client: io.Connection)(using Async): Unit = {
   val buf = ...
-  val read = io.backend.ops.read(client, buf) // ops are the lowest level: a mutable record the caller owns, reused
+  val read = io.backend.ops.read(client, buf) // an op is a mutable record the caller owns, and reuses
   val write = io.backend.ops.write(client, buf)
   while { buf.clear(); io.perform(read); buf.position() > 0 } do {
     buf.flip()
@@ -84,72 +72,77 @@ def echo(using io: Io[IpSockets])(client: io.Connection)(using Async): Unit = {
   }
 }
 
-Io.run(using NioOnCaller) { ... echo(client) ... }
+Io.run(using NioBackend) { ... echo(client) ... }
 ```
 
-`Io.run` dispatches once by the backend's kind and returns what the program returns, as `Async.blocking`
-does; the run that takes `workers` and a `policy` exists only for a `ReactorBackend`. Inside, gears is gears:
-`Future`, `Async.group`, `sleep`, `withTimeout` and `Timer` work, the last three on the backend's timers, since the
-`Io` is the `AsyncOperations`; a future performing an op is cancelled with its group, and its op with it, which the
-group's end waits for. The runner gives the program its `Io` as
-a context parameter, alongside `Async.Spawn`, which the program names where it uses it (`io ?=>`); code over a
-program, such as the higher level, takes it as one too, named `io` (`using io: Io[IpSockets]`). An op's type and a
-handle's are path-dependent on it (`io.Op`, `io.Connection`), so `perform` is a method of `io`, and a method taking a
-handle takes the `Io` first (`def echo(using io: Io[IpSockets])(client: io.Connection)`). Time limits are an `Int` of
-milliseconds, the op's own unit.
+`Io.run` returns what the program returns, as `Async.blocking` does, and gives it its `Io` as a context parameter
+beside `Async.Spawn`. An op's type and a handle's are path-dependent on the `Io` (`io.Op`, `io.Connection`), so a
+method taking a handle takes the `Io` first. Ops in flight together are futures performing them
+(`Future(io.perform(op))`), raced, awaited and cancelled as futures are. A time limit is
+`io.perform(op, 2.seconds)`.
 
-## What the interface fixes, and what it leaves
+## The rules every backend keeps
 
-Fixed, as semantics every backend must keep, and stated on `Io.perform` where a wrapper reads them: a cancelled op
-leaves its handle usable and its buffer the caller's once `perform` returns, which waits until the kind has stopped
-the op; a time limit on a submission withdraws the op as a cancel would and fails it with
-`TimeoutException`; a reactor backend's op is performed only where a worker can run it, which the type of `Io`
-guarantees; a
-blocking op's body is skipped if cancelled before it starts and interrupted if running, and its result is never
-written after a cancel.
+Each is stated on the interface where it applies, and checked by the contract suites on every backend:
+
+- **Cancelling or timing out** an op stops it: an op that waits for its handle has done nothing, so a read that
+  timed out took no bytes and leaves the connection usable; an opener leaves its slot empty and nothing open; once
+  `perform` returns or throws, the op's buffers and slots are the caller's again (`Io.perform`).
+- **Misuse fails as the op is built**, with an `IllegalArgumentException`, never ignored: an address that is not
+  numeric, an option a backend lacks or that does not apply, an empty packet on a connected socket, a read into a
+  buffer with no room or a read-only one. I/O failures are `IOException`s.
+- **One op at a time on a stream's direction**: a second read, or write, pending is refused, since two would take or
+  interleave the stream's bytes. A datagram socket's sends and receives and a listener's accepts, each whole, take
+  turns instead, in the order they came (`Ops`).
+- **Any buffer** is taken, on the heap or not; a backend whose system calls need native memory copies through its own
+  (`Ops`).
+- **Options** are given as a socket opens, `NoDelay` on unless set off; what a backend supports, for each kind of
+  socket, is asked of it when the program runs (`SocketOptionOps`).
+- **Closing** fails the ops waiting on the handle, completes at once, and frees the port or path (`Ops.close`).
 
 Left to a higher level, on purpose: ops, `perform` and slots are mutable records the caller owns and reuses, the
-lowest level there is. A result-returning or streaming API wraps that mutability; the interface only makes sure it
-can be written once over every backend.
+lowest level there is. A result-returning or streaming API wraps that; the interface makes sure it can be written once
+over every backend.
 
 ## The higher level
 
-`higherlevel`, in `ioDemos`, is the API that wraps the lowest level: written over the interface's public contract
-alone, in a package outside `gears.async.io` so that it sees only what a program sees, and run on every backend.
-`HigherLevel` takes the `Io` as a context parameter, and has result-returning openers (`connect`, `listen`, `bindDatagram`, `connectDatagram`, `pipe`, `openFifoForReading`, `openFifoForWriting`), `read`,
-`writeAll`, `accept` and `resolve`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel,
-with the pool's window and the channel's backlog as back-pressure, failure rethrown to the consumer, and chunks read
-ahead released when the consumer stops early. `HigherLevelChecks` runs over every backend in the demos' tests; the
-demos open their sockets, pipes and FIFOs through it, the whois demo resolves and reads through it, the key-value and
-server-socket demos accept through it, and the stream server closes through `closeGracefully`. The stream demos read
-their one frame each way with `FrameReader`, which limits each read to what the frame still needs, so `chunks`, whose
-reads fill whatever arrives, is exercised by `HigherLevelChecks` rather than by a demo.
+`higherlevel`, in `ioDemos`, is that API: written over the public interface alone, in a package outside
+`gears.async.io`, and run on every backend. It has result-returning openers, `read`, `writeAll`, `accept`, `resolve`,
+`closeGracefully`, and `chunks`, a stream over one repeatable pooled read consumed as a gears channel, with the pool's
+window and the channel's backlog as back-pressure. `HigherLevelChecks` runs it over every backend, and the demos open,
+accept and resolve through it.
 
-What the wrapper shows the interface costs it: a read's byte count is a buffer-position delta, and there are two slot
-types since a `Handle` is an unboxed `Int`, which are the mutability a higher level wraps; and a stream spawns a
-future to feed its channel, as a `Future` is the gears way to turn a loop of ops into a channel.
+## Running the suites
+
+```sh
+sbt rootJVM/test rootNative/test   # gears core, with the interface's own checks and the runtime's
+sbt ioNio/test                     # the NIO backend, on any platform (JDK 27)
+sbt ioKqueue/test ioNWFramework/test ioDemosNative/test ioDemosTests/test   # macOS only
+```
+
+The kqueue and Network.framework backends build and run on macOS only; CI runs them on a macOS runner and everything
+else on Linux. The NIO pool needs `--add-opens` for the JDK's virtual-thread internals, which the build sets. The bench
+is described in [`bench.md`](bench.md).
 
 ## Design notes
 
-- [`handles.md`](handles.md): handles outlive the I/O object they named, since numbers are reused; a generation in the
-  handle, a number that only grows, or a reference object that cannot be forged, each checked as the program runs, and
-  handles tied to gears scopes, enforced by capture checking.
-- [`files.md`](files.md): file I/O in the reactor, what macOS offers for it, and the shape the file ops take.
-- [`interface-history.md`](interface-history.md): why the interface is this shape: each decision, the alternative it
-  replaced, and why.
-- [`runtime.md`](runtime.md): the pool the reactor backends run on: workers, run queues, take policies, tasks moving
-  between threads, fairness, failures, and what macOS's per-process locks mean for scaling.
-- [`kqueue.md`](kqueue.md): the kqueue backend on Scala Native: what each op costs in system calls, how it got there,
-  and how it compares with cats-effect.
-- [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend` on the pool: why each waits as it does, what
-  was measured, and what was tried and dropped.
-- [`hosts.md`](hosts.md): what each capability, and each planned addition, would be on the backends built and those
-  discussed (io_uring, Node, Deno, Workers, a browser, WASI), and what that asks of the interface.
-- [`nwframework.md`](nwframework.md): kqueue's reactors with Network.framework for TCP and connected UDP off
-  loopback, as Apple advises, and kqueue's code for the rest: an experiment, and the reference for a completion-based
-  facility under a reactor.
+- [`interface-history.md`](interface-history.md): each decision about the interface, the alternative it replaced, and
+  why.
+- [`handles.md`](handles.md): handles outlive the I/O object they named, since numbers are reused: a generation, a
+  number that only grows, or a reference object that cannot be forged, and handles tied to gears scopes.
+- [`runtime.md`](runtime.md): the pool the reactor backends run on: workers, run queues, take policies, fairness,
+  failures, and what macOS's per-process locks mean for scaling.
+- [`kqueue.md`](kqueue.md): the kqueue backend: what each op costs in system calls, how it got there, and how it
+  compares with cats-effect.
+- [`jvm.md`](jvm.md): the JVM's backends, `NioOnCaller` and `NioBackend`: why each waits as it does, what was measured,
+  and what was tried and dropped.
+- [`nwframework.md`](nwframework.md): kqueue's reactors with Network.framework for TCP and connected UDP off this host,
+  as Apple advises, and kqueue's code for the rest: the reference for a completion-based facility under a reactor.
+- [`files.md`](files.md): file I/O, what macOS offers for it, and the shape the file ops take.
+- [`hosts.md`](hosts.md): what each capability would be on the backends built and those discussed (io_uring, Node,
+  Deno, Workers, a browser, WASI), and what that asks of the interface.
+- [`missing-api.md`](missing-api.md): what TLS, QUIC, HTTP and WebSockets need of the interface: addresses, socket
+  options, fine timers and vectored I/O, done; packet info, batched datagrams and `sendfile`, left for follow-ups.
 - [`scala-native.md`](scala-native.md): costs only Scala Native can remove, the changes proposed to it, and the
-  workarounds meanwhile (the `setjmp` override, the `Unblocked` bindings).
-- [`missing-api.md`](missing-api.md): what the interface lacks for TLS, QUIC, HTTP and WebSockets (addresses, socket
-  options, finer timers, vectored and batched I/O), a proposal not yet started.
+  workarounds meanwhile.
 - [`bench.md`](bench.md): the bench scenarios, the scripts that build and compare builds, and how to measure well.
