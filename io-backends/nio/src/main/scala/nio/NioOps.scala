@@ -299,6 +299,9 @@ abstract class Command extends NioOp with Repeatable {
   /** The key of the selector this command last waited on, kept so that waiting there again needs no lookup. */
   private[nio] var key: SelectionKey | Null = null
 
+  /** A read execution can keep its operands in a separate immutable description. */
+  private[io] final def readBuffer(buffer: ByteBuffer): Int = entry.nn.read(buffer)
+
   protected final def selectable[C <: SelectableChannel](kind: Class[C], op: String): C = entry match {
     case s: Selectable => s.as(kind, op)
     case other         => throw new IOException(s"$op needs a socket, not $other")

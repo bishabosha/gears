@@ -85,6 +85,65 @@ when publication is declined or throws. File opens in NIO and kqueue supply `Blo
 its existing cancellation lock and commit point. Resource cleanup happens before the blocking task reports that it
 has ended. Both primitives inline without allocating callbacks or adding lifecycle records.
 
+### Experiment: data descriptions and execution records
+
+`OperationRequests` explores immutable `ReadRequest(handle, buffer)` and `TimerRequest(duration)` case classes, all
+inside `gears.async.io.internal`. `NioRequestInterpreter` and `KqueueRequestInterpreter` lower them into independent
+execution records. `perform(request)` prepares a fresh record and performs it; a hot sequential loop can instead
+retain `prepare(request)` and pass that record to the existing `Io.perform` repeatedly. For example, inside an NIO
+runner:
+
+```scala
+val request = ReadRequest(readable, buffer)
+NioRequestInterpreter.perform(request)
+// Or retain the backend's execution record for sequential reuse:
+val prepared = NioRequestInterpreter.prepare(request)
+io.perform(prepared)
+```
+
+This is a representation and lowering experiment: `Backend.Op` still names an execution. Existing operation
+factories and callers use the original path, which also provides the comparison baseline. Making descriptions the
+default would require separate request and execution associated types and adapting the capability algebras and
+`Io.perform` to lower requests. The interpreter only requires `Backend`; a completion-only backend can lower data
+into its own records without inheriting readiness machinery.
+
+| Responsibility | Owner in the experiment |
+| --- | --- |
+| Handle and buffer references; relative timer duration | Description |
+| Completion source, cancellation membership, owner and generation | Execution record |
+| Pending submission, heap membership, last-attempt progress and readiness hints | Execution record |
+| Descriptor registration, persistent readiness and handle lifetime | Existing handle and poller |
+
+The read execution retains its description rather than copying the operands, so this actually exercises the extra
+indirection. Kqueue still lowers and retains the descriptor once. Timers demonstrate another valid lowering choice:
+copy the duration into the existing timer record without retaining the description. Neither path adds a promise,
+callback adapter, per-use lookup, or poller-local description cache. Prepared reuse adds no per-use execution
+allocation; convenience submission allocates a record every time. A separately allocated read description adds an
+object and a reference, while the read record replaces its two operand references with the description reference.
+Construction-allocation diagnostics count the whole source state as well as the record itself.
+
+Immutability here is shallow: buffer position and limit still change, and `ByteBuffer.equals` and `hashCode` depend
+on their contents. Descriptions must never identify pending executions in a value-based map. Equal descriptions
+prepare distinct executions and cancellation targets only the chosen record. Preparing a fresh record also does
+not license concurrent use of the same mutable buffer. Prepared reuse keeps the existing single-consumer claim,
+owner/generation guards and producer acknowledgement; separating the description does not remove those rules.
+Fresh records avoid reusing execution identity but still need ownership and acknowledged cancellation.
+
+`RequestExecutionContract` checks buffer progress, dynamic refusal, closed handles, independent preparation,
+delayed group cancellation across reuse on the same and another worker, and sibling-timer fairness under immediate
+readiness with one and four workers. `RequestCostSuite` compares the original, prepared-description and fresh-record
+paths for immediate EOF and zero-delay timers, alternating sample order after warmup. The JVM suite additionally
+reports construction allocation with escaping objects. Timing output stays outside Git; these diagnostics have no
+machine-dependent performance assertions. Run the cost suite alone when comparing, since other test suites contend
+for the same workers and CPU.
+
+The separation provides a useful backend interpretation boundary and removes lifecycle state from request values.
+It does not by itself simplify the poller's execution bookkeeping: cancellation, registration, fairness and
+resource ownership still have to meet the same contracts. Before generalizing it, decide how advancing file
+cursors, movable deadlines and one-shot operations should be expressed. Those have observable state that cannot
+simply disappear into a case class. Explicit preparation is the candidate for preserving hot-loop reuse without
+introducing an identity cache with retention and cross-worker arbitration of its own.
+
 ### Native verification through Metals MCP
 
 Metals' MCP runner delegates non-JVM suites to BSP `buildTarget/test`, so sbt links and executes the Native test

@@ -403,6 +403,12 @@ trait Command extends KqueueOp with Repeatable {
     */
   private[kqueue] var handle: KqueueBackend.Handle | Null = null
 
+  /** Binds a prepared execution to its handle and lowers the descriptor once, before it can be submitted. */
+  private[io] final def bindHandle(value: KqueueBackend.Handle): Int = {
+    handle = value
+    value.fd
+  }
+
   /** Whether the reactor may perform this command as soon as it is submitted, before waiting for readiness. True for
     * operations that simply report would-block when not ready, so trying first only saves the wait when they are.
     */
