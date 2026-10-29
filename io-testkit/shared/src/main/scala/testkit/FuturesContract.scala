@@ -39,6 +39,74 @@ import munit.FunSuite
   */
 trait FuturesContract extends ProgramSuite {
 
+  for end <- List("release", "cancel", "timeout", "close") do
+    test(s"pooled read backpressure permits sibling progress and handles $end") {
+      running { io ?=>
+        val pool = io.backend.pool(16, 1)
+        val (in, out) = pipe(io)
+        var closed = false
+        var held: gears.async.io.Received | Null = null
+        try {
+          io.perform(io.backend.ops.write(out, arena.of(Array[Byte](1))))
+          val first = Slot[gears.async.io.Received]()
+          io.perform(io.backend.ops.read(in, pool, first))
+          held = first.clear()
+          io.perform(io.backend.ops.write(out, arena.of(Array[Byte](2))))
+          val into = Slot[gears.async.io.Received]()
+          val op = io.backend.ops.read(in, pool, into)
+          val started = new java.util.concurrent.atomic.AtomicBoolean
+          val waiting = Future {
+            started.set(true)
+            if end == "timeout" then io.perform(op, 10.millis) else io.perform(op)
+          }
+          while !started.get() do io.perform(io.backend.ops.timer(0))
+          io.perform(io.backend.ops.timer(if end == "timeout" then 20 else 5))
+          if end != "timeout" then assert(waiting.poll().isEmpty)
+          end match {
+            case "release" =>
+              val returned = held.nn
+              val release = new Thread(() => returned.release())
+              release.start()
+              release.join(5000)
+              assert(!release.isAlive)
+              held = null
+            case "cancel" => waiting.cancel()
+            case "close"  => io.perform(io.backend.ops.close(in)); closed = true
+            case _        => ()
+          }
+          val result = waiting.awaitResult
+          if end == "release" then {
+            result.get
+            val chunk = into.clear()
+            try assertEquals(chunk.buffer.get(), 2.toByte)
+            finally chunk.release()
+          } else {
+            val failure = result.failed.get
+            end match {
+              case "cancel"  => assert(failure.isInstanceOf[CancellationException])
+              case "timeout" => assert(failure.isInstanceOf[TimeoutException])
+              case _         => assert(failure.isInstanceOf[IOException])
+            }
+            assert(into.isEmpty)
+            held.nn.release()
+            held = null
+            if !closed then {
+              io.perform(op) // cancellation/timeout must leave the operation and input reusable
+              val chunk = into.clear()
+              try assertEquals(chunk.buffer.get(), 2.toByte)
+              finally chunk.release()
+            }
+          }
+          assertEquals(pool.available, 1)
+        } finally {
+          if held != null then held.nn.release()
+          if !closed then io.perform(io.backend.ops.close(in))
+          io.perform(io.backend.ops.close(out))
+          pool.close()
+        }
+      }
+    }
+
   test("continuously ready reads let sibling tasks and timers progress") {
     running { io ?=>
       val (in, out) = pipe(io)

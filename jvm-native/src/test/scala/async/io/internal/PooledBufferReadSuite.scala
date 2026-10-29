@@ -82,9 +82,7 @@ class PooledBufferReadSuite extends munit.FunSuite {
     val into = Slot[Received]()
     var called = false
     try {
-      intercept[IOException] {
-        PooledBufferRead.attempt(pool, into) { _ => called = true; 1 }
-      }
+      assertEquals(PooledBufferRead.attempt(pool, into) { _ => called = true; 1 }, 0)
       assert(!called)
       assert(into.isEmpty)
       assertEquals(pool.available, 0)

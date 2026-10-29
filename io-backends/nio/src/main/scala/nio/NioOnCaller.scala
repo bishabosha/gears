@@ -100,6 +100,31 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
   private def checkCancelled()(using ac: Async): Unit =
     if ac.group.isCancelled then throw new CancellationException()
 
+  private def attemptCommand(command: Command, deadline: Long)(using Async): Boolean = {
+    val done = command.perform()
+    if done then true
+    else
+      command match {
+        case read: PooledRead if read.needsBuffer =>
+          val wait = new BufferWait(read, command.handle)
+          read.bufferWait = wait.waiter
+          try {
+            cancellationScope(wait) {
+              wait.start()
+              wait.park(remaining(deadline)): Unit
+              checkCancelled()
+              NioHandles.entry(command.handle): Unit
+              if expired(deadline) then throw new TimeoutException(s"$command timed out")
+            }
+            command.perform()
+          } finally {
+            wait.close()
+            read.stopBufferWait()
+          }
+        case _ => false
+      }
+  }
+
   private def performCommand(command: Command, deadline: Long)(using ac: Async): Unit = {
     require(command.completion == null, s"$command is already pending")
     val entry = NioHandles.entry(command.handle) // a closed handle fails the op, as it would on a reactor
@@ -109,7 +134,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
       command.finishedHere = 0
       Thread.`yield`()
     }
-    var done = command.perform()
+    var done = attemptCommand(command, deadline)
     if done then command.finishedHere += 1
     else {
       command.finishedHere = 0
@@ -118,7 +143,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
         tries -= 1
         Thread.`yield`()
         checkCancelled()
-        done = command.perform()
+        done = attemptCommand(command, deadline)
         if !done && expired(deadline) then throw new TimeoutException(s"$command timed out")
       }
     }
@@ -130,7 +155,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
             while !done do {
               wait.park(remaining(deadline)): Unit
               checkCancelled()
-              done = command.perform()
+              done = attemptCommand(command, deadline)
               if !done && expired(deadline) then throw new TimeoutException(s"$command timed out")
             }
           }
@@ -138,7 +163,7 @@ object NioOnCaller extends CallerBackend with NioCapabilities {
           while !done do {
             Thread.`yield`()
             checkCancelled()
-            done = command.perform()
+            done = attemptCommand(command, deadline)
             if !done && expired(deadline) then throw new TimeoutException(s"$command timed out")
           }
       }

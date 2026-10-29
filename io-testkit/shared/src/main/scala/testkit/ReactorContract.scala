@@ -1037,7 +1037,7 @@ trait ReactorContract extends FunSuite {
     finally pool.close()
   }
 
-  test("a pooled read fails when the pool has no buffer free, and goes on once one is released") {
+  test("a pooled read waits when the pool has no buffer free, and resumes once one is released") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
     try
       withReactor { r =>
@@ -1053,13 +1053,11 @@ trait ReactorContract extends FunSuite {
           assertEquals(pool.available, 0)
           r.submit(backend.ops.write(out, bytes("two")), Outcome())
           val second = Slot[Received]()
-          val refused = Outcome()
-          r.submit(backend.ops.read(in, pool, second), refused)
-          turnUntil(r)(refused.finished)
-          assert(refused.failure.isInstanceOf[IOException], String.valueOf(refused.failure))
-          held.release()
           val again = Outcome()
           r.submit(backend.ops.read(in, pool, second), again)
+          for _ <- 0 until 16 do r.runOnce(block = false)
+          assert(!again.finished)
+          held.release()
           turnUntil(r)(again.finished)
           assertEquals(again.completed, 1, String.valueOf(again.failure))
           val received = second.clear()
@@ -1086,6 +1084,145 @@ trait ReactorContract extends FunSuite {
     turnUntil(r)(outcome.finished)
     assertEquals(outcome.completed, 1, String.valueOf(outcome.failure))
     into.clear()
+  }
+
+  for
+    end <- List("cancel", "timeout", "handle-close", "reactor-close"); granted <- List(false, true)
+    if end != "timeout" || !granted
+  do
+    test(s"buffer-starved reads release their wait on $end (already granted: $granted)") {
+      val pool = backend.pool(16, 1)
+      try
+        withReactor { owner =>
+          val (in, out) = pipe(owner)
+          val held = receivedOf(owner, in, out, pool, "held")
+          var released = false
+          var inputClosed = false
+          val waiting = backend.open()
+          var reactorClosed = false
+          try {
+            run(owner, backend.ops.write(out, bytes("next")))
+            val into = Slot[Received]()
+            val op = backend.ops.read(in, pool, into)
+            val outcome = Outcome()
+            waiting.submit(op, outcome, if end == "timeout" then 10 else -1)
+            if granted then { held.release(); released = true }
+            end match {
+              case "cancel"       => assert(waiting.cancel(op))
+              case "timeout"      => turnUntil(waiting)(outcome.finished)
+              case "handle-close" =>
+                close(owner, in)
+                inputClosed = true
+                turnUntil(waiting)(outcome.finished)
+              case _ => waiting.close(); reactorClosed = true
+            }
+            assertEquals(outcome.completed, 0)
+            if end == "timeout" then assert(outcome.failure.isInstanceOf[TimeoutException])
+            else if end == "handle-close" then assert(outcome.failure.isInstanceOf[IOException])
+            else assertEquals(outcome.cancelled, 1)
+            if !released then { held.release(); released = true }
+            if !reactorClosed then for _ <- 0 until 16 do waiting.runOnce(false)
+            assertEquals(pool.available, 1)
+            assert(into.isEmpty)
+          } finally {
+            if !reactorClosed then waiting.close()
+            if !released then held.release()
+            if !inputClosed then close(owner, in)
+            close(owner, out)
+          }
+        }
+      finally pool.close()
+    }
+
+  test("returned buffers go to waiting readers in order without new submissions overtaking them") {
+    val pool = backend.pool(16, 1)
+    try
+      withReactor { r =>
+        val pipes = List.fill(4)(pipe(r))
+        try {
+          val held = receivedOf(r, pipes.head._1, pipes.head._2, pool, "held")
+          val readers = pipes.tail.zipWithIndex.map { case ((in, out), n) =>
+            run(r, backend.ops.write(out, bytes(n.toString)))
+            val slot = Slot[Received]()
+            val outcome = Outcome()
+            r.submit(backend.ops.read(in, pool, slot), outcome)
+            for _ <- 0 until 8 do r.runOnce(false)
+            assert(!outcome.finished)
+            (slot, outcome)
+          }
+          held.release()
+          for ((slot, outcome), n) <- readers.zipWithIndex do {
+            turnUntil(r)(outcome.finished)
+            assertEquals(outcome.completed, 1)
+            assert(readers.drop(n + 1).forall(!_._2.finished))
+            val chunk = slot.clear()
+            try assertEquals(textOf(chunk), n.toString)
+            finally chunk.release()
+          }
+          assertEquals(pool.available, 1)
+        } finally pipes.foreach { (in, out) => close(r, in); close(r, out) }
+      }
+    finally pool.close()
+  }
+
+  test("an old buffer grant cannot affect an operation reused on another poller") {
+    val pool = backend.pool(16, 1)
+    try
+      withReactor { first =>
+        withReactor { second =>
+          val (in, out) = pipe(first)
+          try {
+            val held = receivedOf(first, in, out, pool, "held")
+            run(first, backend.ops.write(out, bytes("next")))
+            val into = Slot[Received]()
+            val op = backend.ops.read(in, pool, into)
+            val old = Outcome()
+            first.submit(op, old)
+            for _ <- 0 until 8 do first.runOnce(false)
+            held.release() // queues a grant on first; leave it undelivered
+            assert(first.cancel(op))
+            val newer = Outcome()
+            second.submit(op, newer)
+            for _ <- 0 until 16 do first.runOnce(false)
+            turnUntil(second)(newer.finished)
+            assertEquals(old.cancelled, 1)
+            assertEquals(newer.completed, 1)
+            val chunk = into.clear()
+            try assertEquals(textOf(chunk), "next")
+            finally chunk.release()
+            assertEquals(pool.available, 1)
+          } finally { close(first, in); close(first, out) }
+        }
+      }
+    finally pool.close()
+  }
+
+  test("a buffer granted to an idle reader is returned so a ready reader can progress") {
+    val pool = backend.pool(16, 1)
+    try
+      withReactor { r =>
+        val (idleIn, idleOut) = pipe(r)
+        val (readyIn, readyOut) = pipe(r)
+        try {
+          val held = receivedOf(r, readyIn, readyOut, pool, "held")
+          val idle = Outcome()
+          r.submit(backend.ops.read(idleIn, pool, Slot[Received]()), idle)
+          val slot = Slot[Received]()
+          val ready = Outcome()
+          run(r, backend.ops.write(readyOut, bytes("next")))
+          r.submit(backend.ops.read(readyIn, pool, slot), ready)
+          for _ <- 0 until 16 do r.runOnce(false)
+          held.release()
+          turnUntil(r)(ready.finished)
+          assertEquals(ready.completed, 1)
+          assert(!idle.finished)
+          val chunk = slot.clear()
+          try assertEquals(textOf(chunk), "next")
+          finally chunk.release()
+          assertEquals(pool.available, 1, "the idle reader must not retain a granted buffer")
+        } finally { close(r, idleIn); close(r, idleOut); close(r, readyIn); close(r, readyOut) }
+      }
+    finally pool.close()
   }
 
   test("releasing a Received twice throws IllegalStateException, leaving the pool as it was") {

@@ -85,6 +85,32 @@ when publication is declined or throws. File opens in NIO and kqueue supply `Blo
 its existing cancellation lock and commit point. Resource cleanup happens before the blocking task reports that it
 has ended. Both primitives inline without allocating callbacks or adding lifecycle records.
 
+### Pooled-read backpressure
+
+A pooled read waits when all buffers are held; releasing a `Received` makes capacity available to the oldest queued
+reader. Applications bound memory through the pool's size and retain chunks only as long as their processing needs.
+`available` is diagnostic, not an atomic reservation or a condition applications should poll. Reads keep their usual
+cancellation and timeout semantics while waiting for capacity.
+
+`FreeListPool` keeps the CAS free stack for uncontended acquisition and release. Exhaustion adds a registration to a
+FIFO queue, checked under a separate lock. Registration publishes the wait before rechecking the free stack, closing
+the failed-acquisition/return race. Release hands a buffer directly to a queued waiter; cancelling an assigned grant
+returns it or passes it to the next reader. The queue is intrusive so withdrawing a cancelled waiter takes constant
+time. Notifications run outside its lock, and grant ownership belongs to the registration rather than a reusable op.
+
+The reactor owns a side table only while buffer waits exist. A grant queues its particular ticket on that reactor,
+which checks the ticket's identity before retrying the read. Old notifications cannot affect reuse on another
+poller. Retrying retains the original handle claim and time limit. NIO disables read interest while starved; kqueue
+retains readiness evidence without rearming a read for capacity. A bounded batch of grants is processed per turn.
+Cancellation, handle closure and reactor shutdown withdraw the registration and return unconsumed grants before
+acknowledging completion. NIO's caller backend parks its caller and wakes it on a grant, close, or cancellation.
+
+A readiness read takes a buffer only for its actual attempt. If the handle would block, it returns that buffer and
+waits for network readiness, allowing other ready connections to progress. This avoids reserving the entire pool
+for idle connections. A completion backend may need to retain its acquired buffer until the submitted operation
+finishes; it can use the same grant/withdraw protocol without readiness registration. Pool closure still requires
+that no read is pending and all chunks have been released.
+
 ### Native verification through Metals MCP
 
 Metals' MCP runner delegates non-JVM suites to BSP `buildTarget/test`, so sbt links and executes the Native test

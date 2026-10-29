@@ -148,7 +148,9 @@ final class KqueueReactor private (
             if finishNow then ReactorCore.Finished else ReactorCore.Queued
           else {
             slot.read = command
-            val failed = registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+            val failed = registrationFailure(command, slot, read = true)(
+              if !waitForBuffer(command) then waitToRead(command, slot)
+            )
             if failed == null then ReactorCore.Waits else refuseNow(command, pending, failed, finishNow)
           }
         } else if command.tryFirst && performedAtOnce(command, null, queue = !finishNow) then
@@ -170,7 +172,8 @@ final class KqueueReactor private (
     */
   private def performedAtOnce(command: Command, slot: Slot | Null, queue: Boolean): Boolean = {
     val done = attemptNow(command, queue)(command.perform())
-    if slot != null then settleAfterRead(command, slot, done, command.atOnceFailure != null, slot.readAvailable)
+    if slot != null && (done || !waitingForBuffer(command)) then
+      settleAfterRead(command, slot, done, command.atOnceFailure != null, slot.readAvailable)
     done
   }
 
@@ -480,6 +483,11 @@ final class KqueueReactor private (
         }
       } else {
         if !write && eof then slot.readEof = true
+        if !write && bufferWaitingHere(pending.nn) then {
+          slot.readReadiness = KqueueReactor.Ready
+          slot.readAvailable = data
+          return
+        }
         if write then slot.write = null else slot.read = null
         pending.nn match {
           case command: Command =>
@@ -503,7 +511,12 @@ final class KqueueReactor private (
                       failure = t
                       true
                   }
-                if !write then settleAfterRead(command, slot, done, failure != null, data)
+                if !write then {
+                  if !done && waitingForBuffer(command) then {
+                    slot.readReadiness = KqueueReactor.Ready
+                    slot.readAvailable = data
+                  } else settleAfterRead(command, slot, done, failure != null, data)
+                }
                 if !done then {
                   // Not ready after all: wait again, without the completion ever seeing it, unless waiting fails.
                   val failed =
@@ -512,7 +525,9 @@ final class KqueueReactor private (
                       registrationFailure(command, slot, read = false)(arm(ident, read = false))
                     } else {
                       slot.read = command
-                      registrationFailure(command, slot, read = true)(waitToRead(command, slot))
+                      registrationFailure(command, slot, read = true)(
+                        if !waitForBuffer(command) then waitToRead(command, slot)
+                      )
                     }
                   if failed != null then failure = failed
                 }
@@ -558,6 +573,14 @@ final class KqueueReactor private (
 
   /** The FIFOs `FifoWatcher` found readable. */
   protected def deliverOwn(): Boolean = deliverSelected()
+
+  override protected def retryBuffered(op: KqueueOp): Unit = {
+    val command = op.asInstanceOf[Command]
+    val slot = slotFor(command.fd)
+    if slot.read eq command then slot.read = null
+    slot.settleReadiness(KqueueReactor.Ready) // grant resumes an actual attempt, even before a readiness edge
+    submitCommand(command, command.completion.nn, finishNow = false): Unit
+  }
 
   /** Polls kqueue once and dispatches what it polled: an error event fails the command it is for (`dispatchError`); a
     * failing poll, of the kqueue itself, throws.

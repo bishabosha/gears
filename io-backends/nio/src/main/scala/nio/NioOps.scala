@@ -317,11 +317,15 @@ final class Read(val handle: Handle, buf: ByteBuffer) extends Command {
 }
 
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`), as `Read` fills the caller's. */
-final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received]) extends Command {
+final class PooledRead(val handle: Handle, pool: DirectPool, into: Slot[Received])
+    extends Command
+    with gears.async.io.internal.PooledRead {
+  private[io] def bufferPool: DirectPool = pool
+  private[io] def bufferSlot: Slot[Received] = into
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   def perform(): Boolean =
-    gears.async.io.internal.PooledBufferRead.attempt(pool, into)(buffer => entry.nn.read(buffer)) != 0
+    gears.async.io.internal.PooledBufferRead.attempt(this)(buffer => entry.nn.read(buffer)) != 0
 
 }
 

@@ -67,12 +67,16 @@ final class WriteFromBuffers(val fd: Int, bufs: Array[ByteBuffer]) extends Comma
 /** Fills a buffer of `pool`'s, writing it into `into` (see `Ops.read`): as `ReadIntoBuffer`, into a buffer taken when
   * the descriptor is ready, and given back if it was not after all, or if the read fails.
   */
-final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received]) extends Command {
+final case class PooledRead(fd: Int, pool: NativePool, into: Slot[Received])
+    extends Command
+    with gears.async.io.internal.PooledRead {
+  private[io] def bufferPool: NativePool = pool
+  private[io] def bufferSlot: Slot[Received] = into
   override private[io] def slotRefusal: Throwable | Null = gears.async.io.internal.Checks.notEmpty(into)
   def interest: Interest = Interest.Read
   private var read = 0
   def perform(): Boolean = {
-    read = gears.async.io.internal.PooledBufferRead.attempt(pool, into)(buffer => NonBlocking.read(fd, buffer))
+    read = gears.async.io.internal.PooledBufferRead.attempt(this)(buffer => NonBlocking.read(fd, buffer))
     read != 0
   }
   override def transferred: Int = read

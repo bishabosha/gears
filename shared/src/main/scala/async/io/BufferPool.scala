@@ -7,8 +7,9 @@ import java.nio.ByteBuffer
   * them, where one whose facility hands it chunks of its own, as Node's streams do, may hand such a chunk over as the
   * `Received` instead, so long as it is no larger. `buffers` bounds how many may be held at once, by pending reads and
   * unreleased `Received`s together, which makes the pool a window on the source: a backend that controls the source's
-  * flow may stop taking bytes while none is free, so that a read waits rather than fails. `close` frees its buffers,
-  * and must come once no read is pending on it and every `Received` from it has been released.
+  * flow may stop taking bytes while none is free. A pooled read waits for returned capacity when the pool is exhausted;
+  * cancellation or its time limit can end that wait. `close` frees its buffers, and must come once no read is pending
+  * on it and every `Received` from it has been released.
   */
 trait BufferPool extends AutoCloseable {
   def bufferSize: Int

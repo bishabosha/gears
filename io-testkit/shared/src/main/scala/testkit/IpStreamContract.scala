@@ -180,7 +180,7 @@ trait IpStreamContract extends ReactorContract {
     if outcome.failure != null then outcome.failure.nn else into.clear()
   }
 
-  test("a pooled read on a socket fails when the pool has no buffer free, and goes on once one is released") {
+  test("a pooled read on a socket waits for a released buffer without being resubmitted") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
     try
       withReactor { r =>
@@ -195,15 +195,14 @@ trait IpStreamContract extends ReactorContract {
           val refusedOutcome = Outcome()
           r.submit(backend.ops.read(server, pool, refused), refusedOutcome)
           r.submit(backend.ops.write(client, bytes("two")), Outcome())
-          turnUntil(r)(refusedOutcome.finished)
-          assert(refusedOutcome.failure.isInstanceOf[IOException], String.valueOf(refusedOutcome.failure))
+          for _ <- 0 until 16 do r.runOnce(block = false)
+          assert(!refusedOutcome.finished)
           held.release()
-          readPooled(r, server, pool) match {
-            case received: Received =>
-              assertEquals(textOf(received), "two", "the refused read left no read pending, and took nothing")
-              received.release()
-            case failure: Throwable => fail("the pooled read after the release failed", failure)
-          }
+          turnUntil(r)(refusedOutcome.finished)
+          assertEquals(refusedOutcome.completed, 1, String.valueOf(refusedOutcome.failure))
+          val received = refused.clear()
+          assertEquals(textOf(received), "two")
+          received.release()
         }
       }
     finally pool.close()

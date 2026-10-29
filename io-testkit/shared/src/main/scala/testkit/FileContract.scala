@@ -51,6 +51,43 @@ trait FileContract extends ReactorContract {
     finally deleteAll(dir)
   }
 
+  for end <- List("release", "close") do
+    test(s"a regular-file pooled read waits for capacity and handles $end") {
+      val dir = tempDir()
+      val pool = backend.pool(1, 1)
+      try
+        withReactor { r =>
+          val path = dir.resolve("pooled.txt")
+          Files.write(path, Array[Byte](1, 2))
+          val file = open(r, path, write = false)
+          var closed = false
+          var held: Received | Null = null
+          try {
+            val into = Slot[Received]()
+            assertEquals(run(r, backend.ops.read(file, pool, into)), null)
+            held = into.clear()
+            val outcome = Outcome()
+            r.submit(backend.ops.read(file, pool, into), outcome)
+            for _ <- 0 until 16 do r.runOnce(false)
+            assert(!outcome.finished)
+            if end == "close" then { close(r, file); closed = true }
+            else { held.nn.release(); held = null }
+            turnUntil(r)(outcome.finished)
+            if closed then assert(outcome.failure.isInstanceOf[IOException])
+            else {
+              assertEquals(outcome.completed, 1)
+              val chunk = into.clear()
+              try assertEquals(chunk.buffer.get(), 2.toByte)
+              finally chunk.release()
+            }
+          } finally {
+            if held != null then held.nn.release()
+            if !closed then close(r, file)
+          }
+        }
+      finally { pool.close(); deleteAll(dir) }
+    }
+
   test("a positional read starts at its offset, goes on from where it left off, and ends with nothing added") {
     val dir = tempDir()
     try

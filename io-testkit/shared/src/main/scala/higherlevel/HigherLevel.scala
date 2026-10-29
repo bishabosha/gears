@@ -188,14 +188,12 @@ object HigherLevel {
   }
 
   /** The bytes of `handle` as `Chunks`: a future reads into the pool's buffers with one repeatable op and sends each
-    * chunk on a channel of `backlog` chunks, which is the back-pressure: the reader holds at most `backlog` chunks in
-    * the channel, one it is sending and one its read is filling, so the pool needs `backlog + 2` buffers, and the
-    * consumer's unreleased chunks come out of the rest. Cancelling the group cancels the read, as it would any future's
-    * op; a chunk in the reader's hands when it is cancelled, one a `send` did not deliver, is released by the reader
-    * itself.
+    * chunk on a channel of `backlog` chunks. Both the channel and the pool bound read-ahead: a smaller or shared pool
+    * makes the reader wait until a consumer returns a buffer. Consumers must release held chunks before awaiting more
+    * than the pool can supply. Cancelling the group cancels the read, as it would any future's op; a chunk in the
+    * reader's hands when it is cancelled, one a `send` did not deliver, is released by the reader itself.
     */
   def chunks(using io: Io[Backend])(handle: io.Readable, pool: BufferPool, backlog: Int)(using Async.Spawn): Chunks = {
-    require(pool.buffers >= backlog + 2, s"a backlog of $backlog needs a pool of ${backlog + 2} buffers")
     val channel = BufferedChannel[Option[Received]](backlog)
     val reader = Future {
       val into = Slot[Received]()

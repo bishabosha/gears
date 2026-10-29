@@ -46,6 +46,27 @@ object NioCapabilities {
     */
   final class Handle private[nio] (private[nio] val entry: Entry) {
     @volatile private var open = true
+    private var closeWatchers: java.util.ArrayList[Runnable] | Null = null
+
+    /** Used only by buffer-starved reads, which have no readiness wait to wake on close. */
+    private[nio] def watchClose(wake: Runnable): Runnable = {
+      val added = synchronized {
+        if !open then false
+        else {
+          if closeWatchers == null then closeWatchers = new java.util.ArrayList[Runnable]()
+          closeWatchers.nn.add(wake)
+          true
+        }
+      }
+      if !added then wake.run()
+      () =>
+        synchronized {
+          if closeWatchers != null then {
+            closeWatchers.nn.remove(wake)
+            if closeWatchers.nn.isEmpty then closeWatchers = null
+          }
+        }
+    }
 
     // The turns of the ops pending on it, one reading and one writing at a time, on any submitter: each takes its
     // direction's as it is submitted, or waits for it if it may, and lets it go as its completion is taken (`Turns`).
@@ -56,9 +77,16 @@ object NioCapabilities {
     private[nio] def isOpen: Boolean = open
 
     /** Marks it closed; false if it already was. */
-    private[nio] def markClosed(): Boolean = synchronized {
-      val was = open
-      open = false
+    private[nio] def markClosed(): Boolean = {
+      var was = false
+      val watchers = synchronized {
+        was = open
+        open = false
+        val saved = closeWatchers
+        closeWatchers = null
+        saved
+      }
+      if watchers != null then watchers.forEach(_.run())
       was
     }
 

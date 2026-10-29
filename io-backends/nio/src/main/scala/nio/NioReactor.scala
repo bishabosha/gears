@@ -100,23 +100,35 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
             command.completion = pending
             if attemptNow(command, queue = !finishNow)(command.perform()) then finished = finishNow
             else {
-              val ops = command.selectOps(s.channel)
-              if read then {
-                waiting.read = command
-                waiting.readOps = ops
-              } else {
-                waiting.write = command
-                waiting.writeOps = ops
+              try {
+                val ops = if waitForBuffer(command) then 0 else command.selectOps(s.channel)
+                if read then {
+                  waiting.read = command
+                  waiting.readOps = ops
+                } else {
+                  waiting.write = command
+                  waiting.writeOps = ops
+                }
+                markChanged(key, waiting)
+                waits = true
+              } catch {
+                case failure: Throwable =>
+                  finished =
+                    refuseNow(command, pending, failure, finishNow) == gears.async.io.internal.ReactorCore.Finished
               }
-              markChanged(key, waiting)
-              waits = true
             }
           case (_: RegularFile, _) =>
             command.completion = pending
             if attemptNow(command, queue = !finishNow)(command.perform()) then finished = finishNow // always ready
             else {
-              again.add(command)
-              waits = true
+              try {
+                if !waitForBuffer(command) then again.add(command)
+                waits = true
+              } catch {
+                case failure: Throwable =>
+                  finished =
+                    refuseNow(command, pending, failure, finishNow) == gears.async.io.internal.ReactorCore.Finished
+              }
             }
           case _ => throw new IllegalStateException(s"Unexpected handle entry $entry")
         }
@@ -170,8 +182,11 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
   private def performReady(command: Command): Boolean = {
     var failure: Throwable | Null = null
     val done =
-      try command.perform()
-      catch {
+      try {
+        val done = command.perform()
+        if !done then waitForBuffer(command): Unit
+        done
+      } catch {
         case t: Throwable =>
           failure = t
           true
@@ -183,8 +198,25 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
 
   /** Performs again the commands on regular files that were not done, as many as were waiting when it started. */
   private def deliverAgain(): Boolean = gears.async.io.internal.BoundedDrain.snapshot(again) { command =>
-    if !performReady(command) then again.add(command)
+    if !performReady(command) && !waitingForBuffer(command) then again.add(command)
   }
+
+  override protected def retryBuffered(op: NioOp): Unit = {
+    val command = op.asInstanceOf[Command]
+    val key = command.key
+    if key != null && (key.selector() eq selector) then {
+      val waiting = key.attachment().asInstanceOf[Waiting]
+      if waiting.read eq command then waiting.read = null
+      markChanged(key, waiting)
+    }
+    submitOwn(command, command.completion.nn, finishNow = false): Unit
+  }
+
+  override protected def watchBufferWait(op: NioOp, wake: Runnable): Runnable | Null =
+    op.asInstanceOf[Command].entry match {
+      case _: RegularFile => op.asInstanceOf[Command].handle.watchClose(wake)
+      case _              => null
+    }
 
   /** Called from any thread when a handle this reactor registered is closed: the commands pending on it fail, from the
     * loop, with `ClosedChannelException`, as `Ops.close` says.
@@ -286,7 +318,7 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
                   take(command)
                 }
               }
-            case _: RegularFile => if again.remove(command) then take(command) else null
+            case _: RegularFile => if again.remove(command) || bufferWaitingHere(command) then take(command) else null
             case _              => null // never submitted
           }
       case _ => gears.async.io.internal.ReactorCore.NotOwnCompletion
@@ -303,7 +335,10 @@ final class NioReactor private (selector: Selector) extends gears.async.io.inter
     val read = waiting.read
     if read != null && (readyOps & waiting.readOps) != 0 then {
       waiting.read = null
-      if !performReady(read) then waiting.read = read
+      if !performReady(read) then {
+        waiting.read = read
+        if waitingForBuffer(read) then waiting.readOps = 0
+      }
     }
     val write = waiting.write
     if write != null && (readyOps & waiting.writeOps) != 0 then {

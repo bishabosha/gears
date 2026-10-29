@@ -159,3 +159,28 @@ private[nio] final class TurnWait(turns: gears.async.io.internal.Turns, op: AnyR
     LockSupport.unpark(caller)
   }
 }
+
+/** A caller waits for an actual buffer grant, not socket readiness, without spinning or retaining a selector. */
+private[nio] final class BufferWait(read: gears.async.io.internal.PooledRead, handle: NioCapabilities.Handle)
+    extends WaitHere
+    with Runnable {
+  private val caller = Thread.currentThread()
+  @volatile private var cancelled = false
+  private val pool = read.bufferPool
+  private val ownWaiter = pool.newWaiter(this)
+  val waiter: gears.async.io.internal.FreeListPool#Waiter = ownWaiter
+  private val unwatch = handle.watchClose(this)
+  def start(): Unit = pool.enqueue(ownWaiter)
+  def run(): Unit = LockSupport.unpark(caller)
+  def close(): Unit = unwatch.run()
+  def park(timeoutNanos: Long): Boolean = {
+    val deadline = if timeoutNanos < 0 then -1L else System.nanoTime() + timeoutNanos
+    var left = timeoutNanos
+    while !waiter.isReady && !cancelled && handle.isOpen && left != 0 do {
+      if deadline < 0 then LockSupport.park(this) else LockSupport.parkNanos(this, left)
+      if deadline >= 0 then left = math.max(deadline - System.nanoTime(), 0L)
+    }
+    waiter.isReady
+  }
+  def cancel(): Unit = { cancelled = true; run() }
+}

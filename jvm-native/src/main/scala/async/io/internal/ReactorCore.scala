@@ -41,6 +41,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     * submit the op again.
     */
   protected final def take(op: O): Completion[O] = {
+    clearBufferWait(op)
     val completion = op.completion.nn
     op.completion = null
     release(op)
@@ -84,6 +85,81 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
   // Commands that finished as soon as they were submitted, and other ops that finished without waiting, whose
   // completions run on the next turn. Loop thread only.
   protected final val ready = new java.util.ArrayDeque[O]()
+
+  // This side table exists only while exhausted pooled reads are pending. Tickets, rather than reused ops, cross threads.
+  private final class BufferTicket(val op: O, val read: PooledRead) extends Runnable {
+    val pool = read.bufferPool
+    val waiter: pool.Waiter = pool.newWaiter(this)
+    var unwatch: Runnable | Null = null
+    def run(): Unit = wakeLock.synchronized {
+      if !closed then {
+        buffersCome.add(this)
+        if !(Thread.currentThread() eq loopThread) then wakeup()
+      }
+    }
+  }
+  private var bufferWaits: java.util.IdentityHashMap[O, BufferTicket] | Null = null
+  private val buffersCome = new java.util.concurrent.ConcurrentLinkedQueue[BufferTicket]()
+
+  protected final def waitingForBuffer(op: O): Boolean = op match {
+    case read: PooledRead => read.needsBuffer
+    case _                => false
+  }
+
+  /** Called only after an unfinished attempt, before arming readiness or retrying a regular file. */
+  protected final def waitForBuffer(op: O): Boolean = op match {
+    case read: PooledRead if read.needsBuffer =>
+      if read.bufferWait == null then {
+        val ticket = new BufferTicket(op, read)
+        if bufferWaits == null then bufferWaits = new java.util.IdentityHashMap[O, BufferTicket]()
+        bufferWaits.nn.put(op, ticket)
+        read.bufferWait = ticket.waiter
+        try {
+          ticket.pool.enqueue(ticket.waiter)
+          ticket.unwatch = watchBufferWait(op, ticket)
+        } catch {
+          case failure: Throwable =>
+            clearBufferWait(op)
+            throw failure
+        }
+      }
+      true
+    case _ => false
+  }
+
+  private def clearBufferWait(op: O): Unit = {
+    val waits = bufferWaits
+    if waits != null then {
+      val ticket = waits.remove(op)
+      if waits.isEmpty then bufferWaits = null
+      if ticket != null then {
+        ticket.read.stopBufferWait()
+        if ticket.unwatch != null then ticket.unwatch.nn.run()
+      }
+    }
+  }
+
+  /** Reattempts a granted read without changing its submission, handle claim or time limit. */
+  protected def retryBuffered(op: O): Unit = throw new IllegalStateException(s"Unexpected pooled read: $op")
+  protected def watchBufferWait(op: O, wake: Runnable): Runnable | Null = null
+  protected final def bufferWaitingHere(op: O): Boolean = bufferWaits != null && bufferWaits.nn.containsKey(op)
+
+  private def deliverBuffers(): Boolean = {
+    var remaining = 256
+    var more = true
+    var delivered = false
+    while remaining > 0 && more do {
+      remaining -= 1
+      val ticket = buffersCome.poll()
+      if ticket == null then more = false
+      else if bufferWaits != null && (bufferWaits.nn.get(ticket.op) eq ticket) then {
+        delivered = true
+        try retryBuffered(ticket.op)
+        finally if bufferWaits != null && (bufferWaits.nn.get(ticket.op) eq ticket) then clearBufferWait(ticket.op)
+      }
+    }
+    delivered || !buffersCome.isEmpty
+  }
 
   /** Runs the completions of the ops that finished when submitted, as many as were queued when it started: a completion
     * that submits a command which finishes at once is left for the next turn, so one busy handle cannot keep the loop
@@ -512,6 +588,11 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
       val finished = scala.collection.mutable.ArrayBuffer.empty[(O, Completion[O], Throwable | Null)]
       def drop(op: O): Unit = dropped += ((op, take(op)))
       dropOwn(drop)
+      if bufferWaits != null then {
+        val outstanding = new java.util.ArrayList[O](bufferWaits.nn.keySet())
+        val iterator = outstanding.iterator()
+        while iterator.hasNext do drop(iterator.next())
+      }
       for op <- queued do {
         val claim = op.claim
         if claim != null then claim.withdraw(op): Unit
@@ -571,6 +652,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
       while !timers.isEmpty do drop(timers.poll())
       resolvedQueue.clear()
       closeOwn()
+      buffersCome.clear()
       running.foreach(_.waitForEnd()) // Until then they may still write to their ops' buffers and slots.
       for (blocking, completion) <- written do finished += ((blocking, completion, blocking.thrownBy))
       // Only now tell the completions, so one that throws cannot leak the reactor's resources.
@@ -600,7 +682,7 @@ abstract class ReactorCore[O <: LoopOp[O]] extends Reactor with TimerWaiter with
     deliverMoved()
     val closingDue = closing.size
     val delivered = // no short-circuiting
-      deliverClosed() | deliverTurns() | deliverReady() | deliverResolved() | deliverOwn() | closingDue > 0
+      deliverClosed() | deliverTurns() | deliverBuffers() | deliverReady() | deliverResolved() | deliverOwn() | closingDue > 0
     if pollsThisTurn(delivered) then poll(block && !delivered)
     fireDueTimers()
     deliverResolved()

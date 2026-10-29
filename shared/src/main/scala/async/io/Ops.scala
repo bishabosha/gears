@@ -138,8 +138,8 @@ trait Ops[Op, H <: AnyRef] {
 
   /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
     * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a
-    * `Received` to release. Fails if `pool` has no buffer free when the read needs one; a backend that controls its
-    * source's flow may instead stop taking bytes while none is free, so that the read waits (see `BufferPool`). A
+    * `Received` to release. If `pool` has no buffer free when the read needs one, waits for returned capacity, subject
+    * to the read's cancellation and time limit. A backend may also control its source's flow (see `BufferPool`). A
     * completion-based backend, such as Network.framework's or io_uring's, receives straight into the pool's buffer and
     * hands it over, where a read into the caller's buffer costs it a copy; one whose facility hands it chunks of its
     * own, as Node's streams do, hands such a chunk over.
