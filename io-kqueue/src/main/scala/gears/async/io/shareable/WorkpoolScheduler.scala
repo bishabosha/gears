@@ -30,9 +30,10 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
     with Io[B] {
 
   override private[async] def resumeAsync[T, R](suspension: Suspension[T, R])(arg: T)(using s: Scheduler): Unit =
-    // "awaits" are called from the thread pool only.
-    assert(members.contains(Thread.currentThread()), "SEMANTIC ERROR, resumed on non-pool thread")
-    suspension.resume(arg)
+    // Not here and now: the caller holds the listener's lock, and may hold a source's, partway through changing it.
+    members.get(Thread.currentThread()) match
+      case Some(worker) => worker.resumeNext(() => suspension.resume(arg))
+      case None         => nextWorker().submit(() => suspension.resume(arg))
 
   /** Schedule a computation with the suspension boundary already created. */
   // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
@@ -171,6 +172,13 @@ object WorkpoolScheduler {
       wake()
     }
 
+    /** Worker thread only: continuations to run as soon as the listener resuming them has returned, ahead of the rest
+      * of the timers and the inbox. Declared before `thread`, which reads it from the moment it starts.
+      */
+    private val ready = new java.util.ArrayDeque[Runnable]
+
+    private[WorkpoolScheduler] def resumeNext(continuation: Runnable): Unit = ready.addLast(continuation)
+
     private[WorkpoolScheduler] val thread = {
       val t = new Thread(() => loop())
       t.setDaemon(true)
@@ -184,7 +192,35 @@ object WorkpoolScheduler {
      */
     def tryPerform(op: Op1): Boolean
 
-    def isEmpty(): Boolean = inbox.isEmpty()
+    def isEmpty(): Boolean = inbox.isEmpty() && ready.isEmpty()
+
+    /** A worker outlives what it runs: its timers and inbox would otherwise be lost, with nothing to say so. */
+    private inline def guarded(inline body: Unit): Unit =
+      try body
+      catch case ex: Throwable => ex.printStackTrace()
+
+    /** Has a budget so that tasks resuming each other can't keep the worker from its timers and inbox. */
+    private def runReady(): Unit = {
+      var readyBudget = 32
+      while readyBudget > 0 do
+        val continuation = ready.pollFirst()
+        if continuation == null then readyBudget = 0
+        else
+          guarded(continuation.run())
+          readyBudget -= 1
+    }
+
+    /** Each timer's waiter runs before the next timer leaves the heap, so that it can still move or cancel that one. */
+    private def fireTimers(now: Long): Unit = {
+      var timerBudget = 32
+      while timerBudget > 0 do
+        val timer = nextReadyTimer(now)
+        if timer == null then timerBudget = 0
+        else
+          guarded(timer.timerWakeup(now))
+          runReady()
+          timerBudget -= 1
+    }
 
     def drainInbox(): Unit = {
       var inboxBudget = 32
@@ -193,19 +229,20 @@ object WorkpoolScheduler {
         if task == null then inboxBudget = 0
         else
           println("draining inbox task...")
-          task.run()
+          guarded(task.run())
           println(s"Processed task: $task")
+          runReady()
           inboxBudget -= 1
     }
 
     def loop(): Unit = {
       while !stopped || !isEmpty() do
         val now = System.nanoTime()
-        // Completing an op resumes its waiter here, on this thread (see `resumeAsync`), so program code runs within
-        // this batch, and may cancel an op further along it.
-        readyTimers(now).foreach(timer => timer.timerWakeup(now))
+        fireTimers(now)
+        runReady()
         drainInbox()
-        waitForDeadline(peekNextDeadline())
+        // `stop`'s wake-up may have been spent while the inbox was still draining.
+        if !stopped then waitForDeadline(peekNextDeadline())
     }
   }
 }
