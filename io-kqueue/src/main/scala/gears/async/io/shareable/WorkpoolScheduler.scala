@@ -81,11 +81,30 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
     }
   }
 
+  /** Guards `execute` and `schedule`: work given to a pool that has shut down would never run. */
+  @volatile private var isShutDown = false
+
+  private def checkRunning(): Unit =
+    if isShutDown then throw new IllegalStateException("Scheduler has shut down")
+
+  /** Stops the workers and waits for them to finish what they are running, which may be the end of the program, as a
+    * worker resumes its waiters itself. Timers still pending never fire. Call once the program has finished, from
+    * outside the pool: a worker can't wait for itself.
+    */
+  final def shutdown(): Unit = {
+    if members.contains(Thread.currentThread()) then
+      throw new IllegalStateException("Can't shut down a scheduler from one of its workers")
+    isShutDown = true
+    workerGroup.foreach(_.stop())
+    workerGroup.foreach(_.thread.join())
+  }
+
   override def execute(body: Runnable): Unit =
-    val worker = nextWorker()
+    checkRunning()
     nextWorker().submit(body)
 
   override def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+    checkRunning()
     println("scheduling task")
     val initialDelay = System.nanoTime() + delay.toNanos
     val worker = nextWorker()
@@ -144,6 +163,14 @@ object WorkpoolScheduler {
       wake()
     }
 
+    /** Once set, the worker finishes its inbox and leaves `loop`. */
+    @volatile private var stopped = false
+
+    private[WorkpoolScheduler] def stop(): Unit = {
+      stopped = true
+      wake()
+    }
+
     private[WorkpoolScheduler] val thread = {
       val t = new Thread(() => loop())
       t.setDaemon(true)
@@ -161,27 +188,24 @@ object WorkpoolScheduler {
 
     def drainInbox(): Unit = {
       var inboxBudget = 32
-      while (inboxBudget > 0) {
+      while inboxBudget > 0 do
         val task = inbox.poll()
         if task == null then inboxBudget = 0
-        else {
+        else
           println("draining inbox task...")
           task.run()
           println(s"Processed task: $task")
           inboxBudget -= 1
-        }
-      }
     }
 
     def loop(): Unit = {
-      while (true) {
+      while !stopped || !isEmpty() do
         val now = System.nanoTime()
         // Completing an op resumes its waiter here, on this thread (see `resumeAsync`), so program code runs within
         // this batch, and may cancel an op further along it.
         readyTimers(now).foreach(timer => timer.timerWakeup(now))
         drainInbox()
         waitForDeadline(peekNextDeadline())
-      }
     }
   }
 }

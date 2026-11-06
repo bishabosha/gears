@@ -49,6 +49,7 @@ object KqueueBackend
     given poolSupport: (AsyncSupport { type Scheduler = pool.Scheduler }) = pool
     given poolScheduler: pool.Scheduler = pool
     // `Async.blocking` runs its body on the calling thread.
-    Async.blocking(Future(program(using pool)).await)
+    try Async.blocking(Future(program(using pool)).await)
+    finally pool.shutdown()
   }
 }

@@ -1,8 +1,10 @@
 package gears.async.io
 package kqueue
 
+import gears.async.Async
 import gears.async.Future
 
+import java.util.concurrent.CancellationException
 import scala.concurrent.duration.*
 
 /** Timers that complete as soon as they are scheduled, so that completion races the performer's wait for it, and
@@ -10,6 +12,55 @@ import scala.concurrent.duration.*
   */
 class KqueueStressSuite extends munit.FunSuite {
   override def munitTimeout: Duration = 60.seconds
+
+  test("a run stops its workers before it returns") {
+    given KqueueBackend.type = KqueueBackend
+    val worker = Io.run { io ?=>
+      io.perform(io.backend.ops.timer(1))
+      Thread.currentThread()
+    }
+    assert(!worker.isAlive, "a worker outlived its run")
+  }
+
+  test("a run stops its workers when the program fails") {
+    given KqueueBackend.type = KqueueBackend
+    var worker: Thread | Null = null
+    intercept[IllegalStateException](Io.run { io ?=>
+      worker = Thread.currentThread()
+      throw new IllegalStateException("boom")
+    })
+    assert(!worker.nn.isAlive, "a worker outlived its run")
+  }
+
+  test("a run ending with many timers pending cancels them, and shuts down without waiting for them") {
+    given KqueueBackend.type = KqueueBackend
+    val workers = java.util.concurrent.ConcurrentHashMap.newKeySet[Thread]()
+    val scheduledRan = java.util.concurrent.atomic.AtomicBoolean(false)
+    val started = System.nanoTime()
+    val waiters = Io.run { io ?=>
+      summon[Async].scheduler.schedule(60.seconds, () => scheduledRan.set(true)): Unit
+      val waiters = for _ <- 1 to 1000 yield Future {
+        workers.add(Thread.currentThread())
+        io.perform(io.backend.ops.timer(60_000))
+      }
+      io.perform(io.backend.ops.timer(50)) // so that they are waiting
+      waiters
+    }
+    val elapsed = System.nanoTime() - started
+    assert(elapsed < 5_000_000_000L, s"it took ${elapsed / 1_000_000}ms, as if it waited for the timers")
+    assert(waiters.forall(_.poll().exists(_.failed.toOption.exists(_.isInstanceOf[CancellationException]))))
+    assert(workers.size > 0)
+    workers.forEach(worker => assert(!worker.isAlive, "a worker outlived its run"))
+    assert(!scheduledRan.get())
+  }
+
+  test("a scheduler that has shut down refuses work") {
+    val pool = KqueueScheduler(1)
+    pool.shutdown()
+    pool.shutdown() // nothing left to do
+    intercept[IllegalStateException](pool.execute(() => ()))
+    intercept[IllegalStateException](pool.schedule(1.milli, () => ()))
+  }
 
   test("many short timers all complete") {
     given KqueueBackend.type = KqueueBackend
