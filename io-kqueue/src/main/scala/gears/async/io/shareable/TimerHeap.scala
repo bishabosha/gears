@@ -30,7 +30,7 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A]  {
   private var timers: collection.mutable.PriorityQueue[A] =
     collection.mutable.PriorityQueue.empty[A]
 
-  def readyTimers(now: Long): Vector[A] = timerLock.synchronized {
+  final def readyTimers(now: Long): Vector[A] = timerLock.synchronized {
     var timerBudget = 32
     val buf = Vector.newBuilder[A]
     while timerBudget > 0 && timers.nonEmpty && timers.head.deadlineNow <= now do
@@ -39,30 +39,30 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A]  {
     buf.result()
   }
 
-  def peekNextDeadline(): Long = timerLock.synchronized {
+  final def peekNextDeadline(): Long = timerLock.synchronized {
     if timers.nonEmpty then timers.head.deadlineNow else -1
   }
 
-  def sync(): Unit = timerLock.synchronized {}
+  final def sync(): Unit = timerLock.synchronized {}
 
-  def debugTimerState() = timerLock.synchronized({
+  final def debugTimerState() = timerLock.synchronized({
     timers.toString()
   })
 
-  def addTimer(timerOp: A): Unit =
+  final def addTimer(timerOp: A): Unit =
     timerLock.synchronized {
       println("adding timer")
       timers.addOne(timerOp)
     }
     wake()
-  def removeTimer(timerOp: A): Unit =
+  final def removeTimer(timerOp: A): Unit =
     timerLock.synchronized {
       timerOp.timerCancelled()
       val (rest, _) = timers.partition(_ ne timerOp)
       timers = rest
     }
     wake()
-  def notifyDeadlineChange(): Unit =
+  final def notifyDeadlineChange(): Unit =
     timerLock.synchronized {
       // resort the priority queue to reflect any changes in deadlines
       timers = collection.mutable.PriorityQueue(timers.toSeq*)

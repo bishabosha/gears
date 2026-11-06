@@ -8,16 +8,24 @@ class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, wor
     println("Suspending Kqueue...")
     super.suspend(body)
 
+  override protected def selectWorker() = workerOfCurrentThread()
+
   override def makeWorker(id: Int): KqueueWorker = new KqueueWorker(id)
 
   class KqueueWorker(id: Int) extends WorkpoolScheduler.Worker(id, KqueueBackend) {
 
-    override def schedule(op: KqueueBackend.Op): Unit = {
+    private inline val Done = true
+    private inline val Scheduled = false
+
+    /** either schedules a waiter (false), or completes immediately (true) */
+    override def tryPerform(op: KqueueBackend.Op): Boolean = {
       op match
         case timer: KqueueMakeTimer =>
           addTimer(timer)
+          Scheduled
         case deadline: KqueueMakeDeadline =>
           addTimer(deadline)
+          Scheduled
     }
   }
 }

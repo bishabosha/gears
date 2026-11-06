@@ -31,6 +31,27 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
   @volatile private var listener: Listener[Try[Unit]] | Null = null
   @volatile private var worker: TimerHeap.TimerSource[?] | Null = null
 
+  @volatile private var timeoutDeadline = -1L
+
+  def minDeadline: Long = timersLock.synchronized(timeoutDeadline)
+
+  final def deadlineNow: Long = timersLock.synchronized {
+    minDeadline
+  }
+
+  def ownDeadline: Long = -1L
+
+  final def setTimeout(t: Int, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
+    worker = source
+    if t < 0 then timeoutDeadline = -1L
+    else
+      timeoutDeadline = System.nanoTime() + t * 1000000L
+  }
+  final def clearTimeout(): Unit = timersLock.synchronized {
+    worker = null
+    timeoutDeadline = -1L
+  }
+
   /** Forgets the last performance's outcome, for the next performance of a repeatable op. */
   protected def reset(): Unit =
     listenerLock.synchronized {
@@ -45,7 +66,7 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
 
   def wakeup(deadline: Long): Unit
 
-  final def beginAfterTimeout(deadline: Long): Unit =
+  final def beginAfterTimeout(resumedAt: Long): Unit =
     worker match
       case null =>
       case w =>
@@ -53,15 +74,14 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
         // Ensure that the timer has not been cancelled before beginning after timeout
         if !isTimerCancelled then
           println(s"WAKING UP OP")
-          wakeup(deadline)
+          val timeoutDeadline0 = timeoutDeadline
+          val ownDeadline0 = ownDeadline
+          if (timeoutDeadline0 >= 0 && resumedAt <= timeoutDeadline0) || (ownDeadline0 >= 0 && resumedAt <= ownDeadline0) then
+            fail(new TimeoutException("operation timed out"))
+          else
+            wakeup(resumedAt)
           println(s"POST WAKEUP OP")
 
-  final def registerTimerSource(source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
-    worker = source
-  }
-  final def clearTimerSource(): Unit = timersLock.synchronized {
-    worker = null
-  }
   final def requestTimerSort(): Unit = timersLock.synchronized {
     val w = worker
     if w != null then
@@ -139,18 +159,6 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
 abstract class AbstractMakeTimerOp(duration: FiniteDuration)
     extends RepeatableAbstractTimerHeapOp {
 
-  @volatile private var timeoutDeadline = -1L
-
-  def setTimeout(t: Int): Unit = {
-    if t < 0 then timeoutDeadline = -1L
-    else
-      timeoutDeadline = System.nanoTime() + t * 1000000L
-  }
-  def clearTimeout(): Unit = {
-    timeoutDeadline = -1L
-  }
-
-
   /** When this performance's `duration` is up: a timer counts from each submission. */
   @volatile private var initialDeadline: Long = -1L
 
@@ -159,62 +167,34 @@ abstract class AbstractMakeTimerOp(duration: FiniteDuration)
     initialDeadline = System.nanoTime() + duration.toNanos
   }
 
-  def deadlineNow: Long =
-    val t = timeoutDeadline
-    if t >= 0L then math.min(initialDeadline, t)
-    else initialDeadline
+  override def minDeadline: Long = {
+    math.min(super.minDeadline, initialDeadline)
+  }
+
+  override def ownDeadline: Long = initialDeadline
 
   def wakeup(actAfter: Long): Unit = {
-    val t = timeoutDeadline
-    if t >= 0L && actAfter >= t && t < initialDeadline then
-      fail(new TimeoutException("Operation timed out"))
-    else
-      succeed()
+    succeed()
   }
 }
 
 abstract class AbstractMakeDeadlineOp(initial: Long) extends RepeatableAbstractTimerHeapOp with Deadline {
   @volatile private var myDeadline: Long = initial
 
-  @volatile private var timeoutDeadline = -1L
-
-  private val lock = new Object
-
-  def setTimeout(t: Int): Unit = lock.synchronized {
-    if t < 0 then timeoutDeadline = -1L
-    else
-      timeoutDeadline = System.nanoTime() + t * 1000000L
-  }
-  def clearTimeout(): Unit = lock.synchronized {
-    timeoutDeadline = -1L
-  }
-
-  override def deadline: Long = lock.synchronized(myDeadline)
+  override def deadline: Long = myDeadline
 
   override def moveTo(nanoTime: Long): Unit =
     if nanoTime < 0 then throw new IllegalArgumentException("Deadline must be non-negative")
-    lock.synchronized {
-      myDeadline = nanoTime
-    }
+    myDeadline = nanoTime
     // the heap's order has changed, and the worker may be sleeping until the old deadline
     requestTimerSort()
 
-  def deadlineNow: Long = lock.synchronized {
-    val t = timeoutDeadline
-    if t >= 0L then math.min(myDeadline, t)
-    else myDeadline
+  override def minDeadline: Long = {
+    math.min(super.minDeadline, myDeadline)
   }
 
-  def wakeup(actAfter: Long): Unit = {
-    if timeoutDeadline >= 0L then
-      val timedout = lock.synchronized {
-        actAfter >= timeoutDeadline && timeoutDeadline < myDeadline
-      }
-      if timedout then
-        fail(new TimeoutException("Operation timed out"))
-      else
-        succeed()
-    else
-      succeed()
-  }
+  override def ownDeadline: Long = myDeadline
+
+  def wakeup(actAfter: Long): Unit =
+    succeed()
 }

@@ -42,28 +42,33 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
 
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
   private val workerGroup: Array[Worker[Op1, B]] = Array.tabulate(workers)(makeWorker)
-  private val members = workerGroup.map(_.thread).toSet
+  private val members = workerGroup.map(w => w.thread -> w).toMap
   private def nextWorker(): Worker[Op1, B] = {
     val index = workerTicker.getAndIncrement() % workerGroup.length
     workerGroup(index)
   }
+  protected final def workerOfCurrentThread(): Worker[Op1, B] =
+    members.getOrElse(Thread.currentThread(), throw new IllegalStateException("Current thread is not a worker"))
+
+  protected def selectWorker(): Worker[Op1, B]
 
   type Scheduler = this.type
 
   override def performWithin(op: backend.Op, timeoutMillis: Int)(using Async): Unit = {
     op.requestEntry()
     try {
-      val worker = nextWorker()
+      val worker = selectWorker()
       try {
-        op.setTimeout(timeoutMillis)
-        op.registerTimerSource(worker)
-        worker.schedule(op)
-        op.await
+        op.setTimeout(timeoutMillis, worker)
+        if !worker.tryPerform(op) then
+          try {
+            op.await
+          } finally {
+            // Cancelled: the op has stopped, so it can't fire later, into its next performance if it has one.
+            if !op.settled then worker.removeTimer(op)
+          }
       } finally {
-        // Cancelled: the op has stopped, so it can't fire later, into its next performance if it has one.
-        if !op.settled then worker.removeTimer(op)
         op.clearTimeout()
-        op.clearTimerSource()
       }
     } finally {
       op.requestExit()
@@ -92,11 +97,9 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
 object WorkpoolScheduler {
 
   trait AsyncOp extends TimerOp, Async.Source[Try[Unit]] {
-    def setTimeout(timeoutMillis: Int): Unit
+    def setTimeout(timeoutMillis: Int, source: TimerSource[?]): Unit
     def clearTimeout(): Unit
     def settled: Boolean
-    def registerTimerSource(source: TimerSource[?]): Unit
-    def clearTimerSource(): Unit
   }
 
   val SuccessUnit: Try[Unit] = Success(())
@@ -140,7 +143,11 @@ object WorkpoolScheduler {
       t
     }
 
-    def schedule(op: Op1): Unit
+    /**
+     * Attempt to perform the given operation.
+     * @return true if the operation is already completed, otherwise false which requires a subsequent await
+     */
+    def tryPerform(op: Op1): Boolean
 
     def isEmpty(): Boolean = inbox.isEmpty()
 
