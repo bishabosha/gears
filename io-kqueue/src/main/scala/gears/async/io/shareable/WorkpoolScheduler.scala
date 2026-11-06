@@ -4,6 +4,7 @@ import gears.async.Async
 import gears.async.AsyncOperations
 import gears.async.AsyncSupport
 import gears.async.Cancellable
+import gears.async.CompletionGroup
 import gears.async.Listener
 import gears.async.Scheduler
 import gears.async.io.Backend
@@ -50,6 +51,9 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
   protected final def workerOfCurrentThread(): Worker[Op1, B] =
     members.getOrElse(Thread.currentThread(), throw new IllegalStateException("Current thread is not a worker"))
 
+  /** The worker for an op. It must be the performer's own, or otherwise unable to fire the op before `await` has
+    * registered its listener, as firing takes no listener to mean that the performer was cancelled.
+    */
   protected def selectWorker(): Worker[Op1, B]
 
   type Scheduler = this.type
@@ -64,8 +68,10 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
           try {
             op.await
           } finally {
-            // Cancelled: the op has stopped, so it can't fire later, into its next performance if it has one.
-            if !op.settled then worker.removeTimer(op)
+            // Cancelled asynchronously: try to drop the timer, if it isnt dropped then
+            // it was likely removed already from the heap by the worker and so is in process of being executed.
+            if !op.settled && !worker.removeTimer(op) then
+              summon[Async].withGroup(CompletionGroup.Unlinked).await(op.settling)
           }
       } finally {
         op.clearTimeout()
@@ -87,7 +93,8 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
     worker.addTimer(timerOp)
     new Cancellable {
       override def cancel(): Unit = {
-        worker.removeTimer(timerOp)
+        timerOp.timerCancelled()
+        worker.removeTimer(timerOp): Unit
       }
     }
   }
@@ -100,6 +107,7 @@ object WorkpoolScheduler {
     def setTimeout(timeoutMillis: Int, source: TimerSource[?]): Unit
     def clearTimeout(): Unit
     def settled: Boolean
+    def settling: Async.Source[Unit]
   }
 
   val SuccessUnit: Try[Unit] = Success(())
@@ -111,7 +119,7 @@ object WorkpoolScheduler {
 
   class DoAfter(val deadlineNow: Long, body: Runnable) extends TimerOp {
     @volatile private var cancelled = false
-    def beginAfterTimeout(actAfter: Long): Unit = {
+    def timerWakeup(actAfter: Long): Unit = {
       if (!cancelled) {
         if actAfter < this.deadlineNow then throw new TimeoutException("Operation timed out")
         println("running Scheduled task")
@@ -168,9 +176,9 @@ object WorkpoolScheduler {
     def loop(): Unit = {
       while (true) {
         val now = System.nanoTime()
-        // Ops fire with the lock held, so that once `removeTimer` returns, a cancelled op is neither in the heap nor
-        // about to fire. Completing one only schedules its waiter, so no program code runs here.
-        readyTimers(now).foreach(timer => timer.beginAfterTimeout(now))
+        // Completing an op resumes its waiter here, on this thread (see `resumeAsync`), so program code runs within
+        // this batch, and may cancel an op further along it.
+        readyTimers(now).foreach(timer => timer.timerWakeup(now))
         drainInbox()
         waitForDeadline(peekNextDeadline())
       }

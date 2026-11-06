@@ -6,18 +6,20 @@ import gears.async.io.shareable.Poller
 object TimerHeap {
   trait TimerSource[A <: TimerOp] {
     def notifyDeadlineChange(): Unit
-    def sync(): Unit
     def debugTimerState(): String
     def addTimer(timerOp: A): Unit
-    def removeTimer(timerOp: A): Unit
+    /** Whether `timerOp` was taken out of the heap, and so will not fire. If not, it has already left the heap, to fire
+      * or having fired.
+      */
+    def removeTimer(timerOp: A): Boolean
     def readyTimers(now: Long): IterableOnce[A]
     def peekNextDeadline(): Long
   }
 
   trait TimerOp {
     def deadlineNow: Long
-    def timerCancelled(): Unit
-    def beginAfterTimeout(actAfter: Long): Unit
+    /** Fires the timer. It left the heap for this, under the heap's lock, so `removeTimer` can no longer stop it. */
+    def timerWakeup(actAfter: Long): Unit
   }
 }
 
@@ -43,8 +45,6 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A]  {
     if timers.nonEmpty then timers.head.deadlineNow else -1
   }
 
-  final def sync(): Unit = timerLock.synchronized {}
-
   final def debugTimerState() = timerLock.synchronized({
     timers.toString()
   })
@@ -55,13 +55,14 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A]  {
       timers.addOne(timerOp)
     }
     wake()
-  final def removeTimer(timerOp: A): Unit =
-    timerLock.synchronized {
-      timerOp.timerCancelled()
-      val (rest, _) = timers.partition(_ ne timerOp)
+  final def removeTimer(timerOp: A): Boolean =
+    val removed = timerLock.synchronized {
+      val (rest, matching) = timers.partition(_ ne timerOp)
       timers = rest
+      matching.nonEmpty
     }
     wake()
+    removed
   final def notifyDeadlineChange(): Unit =
     timerLock.synchronized {
       // resort the priority queue to reflect any changes in deadlines

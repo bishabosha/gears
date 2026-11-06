@@ -2,8 +2,11 @@ package gears.async.io.shareable
 
 import scala.util.Try
 import java.util.concurrent.atomic.AtomicReference
+import gears.async.Async
+import java.util.concurrent.CancellationException
 import gears.async.Listener
 import scala.util.Failure
+import scala.util.control.NonFatal
 import gears.async.io.Repeatable
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.TimeoutException
@@ -21,7 +24,6 @@ trait TimerHeapOp extends WorkpoolScheduler.AsyncOp, WorkpoolScheduler.Reentrant
 sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.Hooks {
   private val state = AtomicReference[Try[Unit]](null)
   private val timersLock = new Object
-  @volatile private var isTimerCancelled = false
 
   /** Guards `state` against `listener`, so that a result can't arrive between `onComplete` seeing none and registering
     * its listener, which would then wait for ever.
@@ -29,6 +31,12 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
   private val listenerLock = new Object
 
   @volatile private var listener: Listener[Try[Unit]] | Null = null
+
+  /** Guarded by `listenerLock`. The waiter on `settling`: a slot of its own, as a cancelled `await` is resumed before
+    * its listener is dropped from `listener`.
+    */
+  private var settlingListener: Listener[Unit] | Null = null
+
   @volatile private var worker: TimerHeap.TimerSource[?] | Null = null
 
   @volatile private var timeoutDeadline = -1L
@@ -57,52 +65,87 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
     listenerLock.synchronized {
       state.set(null)
       listener = null
-    }
-    timersLock.synchronized {
-      isTimerCancelled = false
+      settlingListener = null
     }
 
   def settled: Boolean = state.get() != null
 
-  def wakeup(deadline: Long): Unit
+  /** Completes when the op settles, for a performer cancelled after its timer left the heap. */
+  final lazy val settling: Async.Source[Unit] = new Async.Source[Unit] {
+    override def poll(k: Listener[Unit]): Boolean =
+      settled && k.completeNow((), this)
 
-  final def beginAfterTimeout(resumedAt: Long): Unit =
-    worker match
-      case null =>
-      case w =>
-        w.sync() // let the timer heap potentially cancel us.
-        // Ensure that the timer has not been cancelled before beginning after timeout
-        if !isTimerCancelled then
-          println(s"WAKING UP OP")
-          val timeoutDeadline0 = timeoutDeadline
-          val ownDeadline0 = ownDeadline
-          if (timeoutDeadline0 >= 0 && resumedAt <= timeoutDeadline0) || (ownDeadline0 >= 0 && resumedAt <= ownDeadline0) then
-            fail(new TimeoutException("operation timed out"))
-          else
-            wakeup(resumedAt)
-          println(s"POST WAKEUP OP")
+    override def onComplete(k: Listener[Unit]): Unit = {
+      val alreadySettled = listenerLock.synchronized {
+        val current = settled
+        if !current then {
+          if settlingListener != null then throw new IllegalStateException("Listener already registered")
+          settlingListener = k
+        }
+        current
+      }
+      if alreadySettled then k.completeNow((), this)
+    }
 
-  final def requestTimerSort(): Unit = timersLock.synchronized {
-    val w = worker
-    if w != null then
-      w.notifyDeadlineChange()
-  }
-  final def timerCancelled(): Unit = timersLock.synchronized {
-    isTimerCancelled = true
+    override def dropListener(k: Listener[Unit]): Unit = listenerLock.synchronized {
+      if settlingListener eq k then settlingListener = null
+    }
   }
 
-  final def settle(result: Try[Unit]): Unit = {
-    val l = listenerLock.synchronized {
-      if !state.compareAndSet(null, result) then throw new IllegalStateException("Already settled")
+  /** The op's work once it is due, past any time limit, giving its outcome. Runs only for a consumer guaranteed to
+    * receive that outcome, with the consumer's lock held, so it must be short and must not block. The `resumedAt`
+    * parameter indicates the current time.
+    */
+  def wakeup(resumedAt: Long): Try[Unit]
+
+  /** Always settles the op: a performer that lost the race to `removeTimer` waits for this before it leaves. The op's
+    * work is done only with its listener locked, so that a cancel either leaves it undone or gets its outcome delivered.
+    * No listener means a cancelled one: see `WorkpoolScheduler.selectWorker`.
+    */
+  final def timerWakeup(resumedAt: Long): Unit =
+    println(s"WAKING UP OP")
+    val consumer = listenerLock.synchronized {
       val waiting = listener
       listener = null
       waiting
     }
-    if l != null then l.completeNow(result, this)
+    if consumer != null && consumer.acquireLock() then
+      val timeoutDeadline0 = timeoutDeadline
+      val ownDeadline0 = ownDeadline
+      // The limit decides only if it has passed and came first: at a tie the op has made its own deadline.
+      // A throwing `wakeup` becomes the outcome: only `complete` releases the consumer's lock, and resumes it.
+      val result =
+        try
+          if timeoutDeadline0 >= 0 && resumedAt >= timeoutDeadline0 && (ownDeadline0 < 0 || timeoutDeadline0 < ownDeadline0)
+          then Failure(new TimeoutException("operation timed out"))
+          else wakeup(resumedAt)
+        catch case NonFatal(ex) => Failure(ex)
+      settle(result)
+      consumer.complete(result, this)
+    else
+      settle(Failure(new CancellationException()))
+    println(s"POST WAKEUP OP")
+
+  /** Takes no op lock: the heap reads `deadlineNow` under its own lock, so that order is heap, then op. */
+  final def requestTimersUpdate(): Unit = {
+    val w = worker
+    if w != null then
+      w.notifyDeadlineChange()
   }
 
-  final def succeed(): Unit = settle(WorkpoolScheduler.SuccessUnit)
-  final def fail(ex: Throwable): Unit = settle(Failure(ex))
+  private def settle(result: Try[Unit]): Unit = {
+    var settlingWaiter: Listener[Unit] | Null = null
+    val l = listenerLock.synchronized {
+      if !state.compareAndSet(null, result) then throw new IllegalStateException("Already settled")
+      val waiting = listener
+      listener = null
+      settlingWaiter = settlingListener
+      settlingListener = null
+      waiting
+    }
+    if settlingWaiter != null then settlingWaiter.nn.completeNow((), settling)
+    if l != null then l.completeNow(result, this)
+  }
 
   final override def poll(k: Listener[Try[Unit]]): Boolean =
     println("KqueueOp poll called")
@@ -168,14 +211,14 @@ abstract class AbstractMakeTimerOp(duration: FiniteDuration)
   }
 
   override def minDeadline: Long = {
-    math.min(super.minDeadline, initialDeadline)
+    val sup = super.minDeadline
+    if sup >= 0 then return math.min(sup, initialDeadline)
+    else initialDeadline
   }
 
   override def ownDeadline: Long = initialDeadline
 
-  def wakeup(actAfter: Long): Unit = {
-    succeed()
-  }
+  def wakeup(resumedAt: Long): Try[Unit] = WorkpoolScheduler.SuccessUnit
 }
 
 abstract class AbstractMakeDeadlineOp(initial: Long) extends RepeatableAbstractTimerHeapOp with Deadline {
@@ -187,14 +230,15 @@ abstract class AbstractMakeDeadlineOp(initial: Long) extends RepeatableAbstractT
     if nanoTime < 0 then throw new IllegalArgumentException("Deadline must be non-negative")
     myDeadline = nanoTime
     // the heap's order has changed, and the worker may be sleeping until the old deadline
-    requestTimerSort()
+    requestTimersUpdate()
 
   override def minDeadline: Long = {
-    math.min(super.minDeadline, myDeadline)
+    val sup = super.minDeadline
+    if sup >= 0 then return math.min(sup, myDeadline)
+    else myDeadline
   }
 
   override def ownDeadline: Long = myDeadline
 
-  def wakeup(actAfter: Long): Unit =
-    succeed()
+  def wakeup(resumedAt: Long): Try[Unit] = WorkpoolScheduler.SuccessUnit
 }
