@@ -1,4 +1,4 @@
-package gears.async.io.kqueue
+package gears.async.io.shareable
 
 import gears.async.Async
 import gears.async.AsyncOperations
@@ -16,26 +16,33 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
-import BaseWorkpoolScheduler.{ReentrantOp, AsyncOp, Worker}
-import gears.async.io.kqueue.BaseWorkpoolScheduler.TimerSource
-import gears.async.io.kqueue.BaseWorkpoolScheduler.TimerOp
-import gears.async.io.kqueue.BaseWorkpoolScheduler.DoAfter
+import WorkpoolScheduler.{ReentrantOp, AsyncOp, Worker}
+import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
+import gears.async.io.shareable.WorkpoolScheduler.DoAfter
+import gears.async.SuspendSupport
+import gears.async.io.shareable.TimerHeap
 
-abstract class BaseWorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { type Op = Op1 }](val backend: B, workers: Int)
+abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { type Op = Op1 }](val backend: B, workers: Int)
     extends Scheduler
     with AsyncSupport
-    with NativeSuspend
     with AsyncOperations
     with Io[B] {
 
-  override def suspend[T, R](body: Suspension[T, R] => R)(using Label[R]): T =
-    println("Suspending...")
-    super.suspend(body)
+  override private[async] def resumeAsync[T, R](suspension: Suspension[T, R])(arg: T)(using s: Scheduler): Unit =
+    // "awaits" are called from the thread pool only.
+    assert(members.contains(Thread.currentThread()), "SEMANTIC ERROR, resumed on non-pool thread")
+    suspension.resume(arg)
+
+  /** Schedule a computation with the suspension boundary already created. */
+  // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
+  //   s.execute(() => boundary(body))
+
 
   def makeWorker(id: Int): Worker[Op1, B]
 
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
   private val workerGroup: Array[Worker[Op1, B]] = Array.tabulate(workers)(makeWorker)
+  private val members = workerGroup.map(_.thread).toSet
   private def nextWorker(): Worker[Op1, B] = {
     val index = workerTicker.getAndIncrement() % workerGroup.length
     workerGroup(index)
@@ -68,9 +75,10 @@ abstract class BaseWorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend 
     nextWorker().submit(body)
 
   override def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
+    println("scheduling task")
     val initialDelay = System.nanoTime() + delay.toNanos
     val worker = nextWorker()
-    val timerOp = new BaseWorkpoolScheduler.DoAfter(initialDelay, body)
+    val timerOp = new WorkpoolScheduler.DoAfter(initialDelay, body)
     worker.addTimer(timerOp)
     new Cancellable {
       override def cancel(): Unit = {
@@ -81,24 +89,13 @@ abstract class BaseWorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend 
 
 }
 
-object BaseWorkpoolScheduler {
-
-  trait TimerSource {
-    def sortTimers(): Unit
-    def sync(): Unit
-  }
-
-  trait TimerOp {
-    def deadlineNow: Long
-    def timerCancelled(): Unit
-    def beginAfterTimeout(actAfter: Long): Unit
-  }
+object WorkpoolScheduler {
 
   trait AsyncOp extends TimerOp, Async.Source[Try[Unit]] {
     def setTimeout(timeoutMillis: Int): Unit
     def clearTimeout(): Unit
     def settled: Boolean
-    def registerTimerSource(source: TimerSource): Unit
+    def registerTimerSource(source: TimerSource[?]): Unit
     def clearTimerSource(): Unit
   }
 
@@ -114,7 +111,9 @@ object BaseWorkpoolScheduler {
     def beginAfterTimeout(actAfter: Long): Unit = {
       if (!cancelled) {
         if actAfter < this.deadlineNow then throw new TimeoutException("Operation timed out")
+        println("running Scheduled task")
         body.run()
+        println("finished scheduled task")
       }
     }
     def timerCancelled(): Unit = {
@@ -129,11 +128,12 @@ object BaseWorkpoolScheduler {
       new java.util.concurrent.ConcurrentLinkedQueue[Runnable]
 
     def submit(task: Runnable): Unit = {
+      println("submit scheduled...")
       inbox.add(task)
       wake()
     }
 
-    private val thread = {
+    private[WorkpoolScheduler] val thread = {
       val t = new Thread(() => loop())
       t.setDaemon(true)
       t.start()
@@ -150,6 +150,7 @@ object BaseWorkpoolScheduler {
         val task = inbox.poll()
         if task == null then inboxBudget = 0
         else {
+          println("draining inbox task...")
           task.run()
           println(s"Processed task: $task")
           inboxBudget -= 1
@@ -168,86 +169,4 @@ object BaseWorkpoolScheduler {
       }
     }
   }
-}
-
-class KqueueScheduler(workers: Int) extends BaseWorkpoolScheduler(KqueueBackend, workers) {
-  class KqueueWorker(id: Int) extends BaseWorkpoolScheduler.Worker(id, KqueueBackend) {
-    override def schedule(op: KqueueBackend.Op): Unit = {
-      op match
-        case timer: KqueueMakeTimer =>
-          addTimer(timer)
-        case deadline: KqueueMakeDeadline =>
-          addTimer(deadline)
-    }
-  }
-  override def makeWorker(id: Int): Worker[KqueueBackend.Op, KqueueBackend.type] = new KqueueWorker(id)
-}
-
-abstract class Poller {
-  private val notifier = new Object
-
-  protected def wake(): Unit = notifier.synchronized {
-    signalled = true
-    notifier.notify()
-  }
-
-  protected def isEmpty(): Boolean
-
-  def waitForDeadline(deadlineTask: Long): Unit = notifier.synchronized {
-    // Anything that arrived after the reads above has set `signalled`; the inbox may also be over budget.
-    if !signalled && isEmpty() then
-      if deadlineTask >= 0 then
-        val sleepTime = deadlineTask - System.nanoTime()
-        if sleepTime > 0 then notifier.wait(sleepTime / 1000000, (sleepTime % 1000000).toInt)
-      else notifier.wait()
-    signalled = false
-  }
-
-  /** Guarded by `notifier`. Whether there has been anything new since the worker last looked: a `notify` alone is lost
-    * if the worker is not yet waiting.
-    */
-  private var signalled = false
-}
-
-abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource  {
-  private object timerLock
-
-  private given Ordering[A]:
-    def compare(x: A, y: A): Int =
-      java.lang.Long.compare(y.deadlineNow, x.deadlineNow)
-  private var timers: collection.mutable.PriorityQueue[A] =
-    collection.mutable.PriorityQueue.empty[A]
-
-  def readyTimers(now: Long): Vector[A] = timerLock.synchronized {
-    var timerBudget = 32
-    val buf = Vector.newBuilder[A]
-    while timerBudget > 0 && timers.nonEmpty && timers.head.deadlineNow <= now do
-      timerBudget -= 1
-      buf += timers.dequeue()
-    buf.result()
-  }
-
-  def peekNextDeadline(): Long = timerLock.synchronized {
-    if timers.nonEmpty then timers.head.deadlineNow else -1
-  }
-
-  def sync(): Unit = timerLock.synchronized {}
-
-  def addTimer(timerOp: A): Unit =
-    timerLock.synchronized {
-      timers.addOne(timerOp)
-    }
-    wake()
-  def removeTimer(timerOp: A): Unit =
-    timerLock.synchronized {
-      timerOp.timerCancelled()
-      val (rest, _) = timers.partition(_ ne timerOp)
-      timers = rest
-    }
-    wake()
-  def sortTimers(): Unit =
-    timerLock.synchronized {
-      timers = collection.mutable.PriorityQueue(timers.toSeq*)
-    }
-    wake()
 }
