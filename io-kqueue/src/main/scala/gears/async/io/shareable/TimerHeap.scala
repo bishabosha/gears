@@ -12,7 +12,8 @@ object TimerHeap {
       * or having fired.
       */
     def removeTimer(timerOp: A): Boolean
-    def readyTimers(now: Long): IterableOnce[A]
+    /** Takes the next timer due by `now` out of the heap, or gives null if none is. */
+    def nextReadyTimer(now: Long): A | Null
     def peekNextDeadline(): Long
   }
 
@@ -32,13 +33,8 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A]  {
   private var timers: collection.mutable.PriorityQueue[A] =
     collection.mutable.PriorityQueue.empty[A]
 
-  final def readyTimers(now: Long): Vector[A] = timerLock.synchronized {
-    var timerBudget = 32
-    val buf = Vector.newBuilder[A]
-    while timerBudget > 0 && timers.nonEmpty && timers.head.deadlineNow <= now do
-      timerBudget -= 1
-      buf += timers.dequeue()
-    buf.result()
+  final def nextReadyTimer(now: Long): A | Null = timerLock.synchronized {
+    if timers.nonEmpty && timers.head.deadlineNow <= now then timers.dequeue() else null
   }
 
   final def peekNextDeadline(): Long = timerLock.synchronized {
