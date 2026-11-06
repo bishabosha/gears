@@ -1,93 +1,52 @@
 package gears.async.io.kqueue
 
-import gears.async.Async
 import gears.async.io.Deadline
-import gears.async.io.Io
 import gears.async.io.Repeatable
 
-import scala.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration.FiniteDuration
 
-sealed trait KqueueOp extends BaseWorkpoolScheduler.TimerOp, BaseWorkpoolScheduler.ReentrantOp
+sealed trait KqueueOp
 
-sealed abstract class WaiterAbstractKqueueOp extends KqueueOp {
-  private var waiter: BaseWorkpoolScheduler.Waiter | Null = null
-  def accessWaiter: BaseWorkpoolScheduler.Waiter | Null = waiter
-  def setWaiter(waiter: BaseWorkpoolScheduler.Waiter): Unit = {
-    this.waiter = waiter
+/** Timer descriptions are reusable; completion and queue membership belong to each performance. */
+sealed abstract class KqueueTimerOp extends KqueueOp with Repeatable {
+  private val active = new AtomicReference[TimerWait](null)
+
+  private[kqueue] def deadlineAt(startedAt: Long): Long
+
+  private[kqueue] final def attach(wait: TimerWait): Unit =
+    if !active.compareAndSet(null, wait) then throw new IllegalArgumentException("The timer is already being performed")
+
+  private[kqueue] final def detach(wait: TimerWait): Unit = {
+    if !active.compareAndSet(wait, null) then throw new IllegalStateException("Not this timer's active performance")
   }
-  def clearWaiter(): Unit = {
-    this.waiter = null
+
+  protected final def movedEarlier(): Unit = {
+    val wait = active.get()
+    if wait != null then wait.requestUpdate()
   }
 }
 
-sealed abstract class SingleUseAbstractKqueueOp extends WaiterAbstractKqueueOp {
-  @volatile private var spent = false
-  def requestEntry(): Unit = {
-    if spent then throw new IllegalStateException("Already consumed")
-    spent = true
-  }
-  def requestExit(): Unit = {
-    if !spent then throw new IllegalStateException("Not spent")
-  }
-}
-
-sealed abstract class RepeatableAbstractKqueueOp extends WaiterAbstractKqueueOp with Repeatable {
-  @volatile private var entered = false
-  def requestEntry(): Unit = {
-    if entered then throw new IllegalStateException("Concurrent entry not allowed")
-    entered = true
-  }
-  def requestExit(): Unit = {
-    if !entered then throw new IllegalStateException("Not entered")
-    entered = false
-  }
-}
-
+sealed abstract class KqueueDeadlineOp extends KqueueTimerOp with Deadline
 sealed trait KqueueReadableOp extends KqueueOp
-
 sealed trait KqueueWritableOp extends KqueueOp
-
-sealed trait KqueueTimerOp extends KqueueOp
-
-sealed trait KqueueDeadlineOp extends KqueueOp with Deadline
-
 sealed trait KqueueCloseOp extends KqueueOp
 
-private[kqueue] final class KqueueMakeTimer(duration: FiniteDuration)
-    extends RepeatableAbstractKqueueOp
-    with KqueueTimerOp {
-  val deadlineNow: Long = System.nanoTime() + duration.toNanos
-  def beginAfterTimeout(actAfter: Long): Unit = {
-    if actAfter < this.deadlineNow then
-      accessWaiter match
-        case null => () // TODO: what now?
-        case w    => w.timeout()
-    else
-      accessWaiter match
-        case null => ()
-        case w    => w.trySucceed()
-  }
+private[kqueue] final class KqueueMakeTimer(duration: FiniteDuration) extends KqueueTimerOp {
+  private val nanos = duration.toNanos
+  override private[kqueue] def deadlineAt(startedAt: Long): Long = startedAt + nanos
 }
 
-private[kqueue] final class KqueueMakeDeadline(initial: Long) extends RepeatableAbstractKqueueOp with KqueueDeadlineOp {
-  @volatile private var myDeadline: Long = initial
+private[kqueue] final class KqueueMakeDeadline(initial: Long) extends KqueueDeadlineOp {
+  private val at = new AtomicLong(initial)
+  override def deadline: Long = at.get()
 
-  override def deadline: Long = synchronized(myDeadline)
-
-  override def moveTo(nanoTime: Long): Unit = synchronized {
-    myDeadline = nanoTime
+  override def moveTo(nanoTime: Long): Unit = {
+    val previous = at.getAndSet(nanoTime)
+    // Later moves need no queue command: the owner rechecks at the old, earlier wakeup.
+    if nanoTime - previous < 0 then movedEarlier()
   }
 
-  def deadlineNow: Long = deadline
-  def beginAfterTimeout(actAfter: Long): Unit = {
-    if actAfter < this.deadlineNow then
-      accessWaiter match
-        case null => () // TODO: what now?
-        case w    => w.timeout()
-    else
-      accessWaiter match
-        case null => ()
-        case w    => w.trySucceed()
-  }
+  override private[kqueue] def deadlineAt(startedAt: Long): Long = at.get()
 }

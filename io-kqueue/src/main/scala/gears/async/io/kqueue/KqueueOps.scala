@@ -1,7 +1,6 @@
 package gears.async.io.kqueue
 
 import gears.async.io.BufferPool
-import gears.async.io.Deadline
 import gears.async.io.Ops
 import gears.async.io.PipeOps
 import gears.async.io.Received
@@ -29,7 +28,10 @@ sealed trait KqueueCoreOps extends KqueueBaseOps {
 
   override def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueWritableOp & Repeatable = ???
 
-  override def timer(duration: FiniteDuration): KqueueTimerOp & Repeatable = KqueueMakeTimer(duration)
+  override def timer(duration: FiniteDuration): KqueueTimerOp & Repeatable = {
+    require(duration.length >= 0, s"A timer's time is not negative: $duration")
+    KqueueMakeTimer(duration)
+  }
 
   override def deadlineTimer(nanoTime: Long): KqueueDeadlineOp & Repeatable = KqueueMakeDeadline(nanoTime)
 
@@ -38,4 +40,4 @@ sealed trait KqueueCoreOps extends KqueueBaseOps {
   override def close(handle: KqueueHandle): KqueueCloseOp = ???
 }
 
-object KqueueOps extends KqueueBaseOps with KqueueCoreOps with KqueuePipeOps {}
+object KqueueOps extends KqueueCoreOps with KqueuePipeOps
