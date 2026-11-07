@@ -29,7 +29,10 @@ sealed trait KqueueCoreOps extends KqueueBaseOps {
 
   override def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueWritableOp & Repeatable = ???
 
-  override def timer(duration: FiniteDuration): KqueueTimerOp & Repeatable = KqueueMakeTimer(duration)
+  override def timer(duration: FiniteDuration): KqueueTimerOp & Repeatable = {
+    if duration.length < 0 then throw new IllegalArgumentException(s"A timer's time is not negative: $duration")
+    KqueueMakeTimer(duration)
+  }
 
   override def deadlineTimer(nanoTime: Long): KqueueDeadlineOp & Repeatable = KqueueMakeDeadline(nanoTime)
 

@@ -53,7 +53,7 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
     worker = source
     if t < 0 then timeoutDeadline = -1L
     else
-      timeoutDeadline = System.nanoTime() + t * 1000000L
+      timeoutDeadline = TimerHeap.deadlineAfter(t * 1000000L)
   }
   final def clearTimeout(): Unit = timersLock.synchronized {
     worker = null
@@ -103,7 +103,6 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
     * No listener means a cancelled one: see `WorkpoolScheduler.selectWorker`.
     */
   final def timerWakeup(resumedAt: Long): Unit =
-    println(s"WAKING UP OP")
     val consumer = listenerLock.synchronized {
       val waiting = listener
       listener = null
@@ -124,13 +123,12 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
       consumer.complete(result, this)
     else
       settle(Failure(new CancellationException()))
-    println(s"POST WAKEUP OP")
 
   /** Takes no op lock: the heap reads `deadlineNow` under its own lock, so that order is heap, then op. */
   final def requestTimersUpdate(): Unit = {
     val w = worker
     if w != null then
-      w.notifyDeadlineChange()
+      w.notifyDeadlineChange(this)
   }
 
   private def settle(result: Try[Unit]): Unit = {
@@ -148,7 +146,6 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
   }
 
   final override def poll(k: Listener[Try[Unit]]): Boolean =
-    println("KqueueOp poll called")
     state.get() match
       case null => false
       case data => k.completeNow(data, this)
@@ -160,7 +157,6 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
         if listener != null then
           throw new IllegalStateException("Listener already registered")
         listener = k
-        println("registered listener to KqueueOp of class " + k.getClass)
       }
       current
     }
@@ -207,7 +203,7 @@ abstract class AbstractMakeTimerOp(duration: FiniteDuration)
 
   override def onEntry(): Unit = {
     super.onEntry()
-    initialDeadline = System.nanoTime() + duration.toNanos
+    initialDeadline = TimerHeap.deadlineAfter(duration.toNanos)
   }
 
   override def minDeadline: Long = {
@@ -228,9 +224,10 @@ abstract class AbstractMakeDeadlineOp(initial: Long) extends RepeatableAbstractT
 
   override def moveTo(nanoTime: Long): Unit =
     if nanoTime < 0 then throw new IllegalArgumentException("Deadline must be non-negative")
+    val earlier = nanoTime < myDeadline
     myDeadline = nanoTime
-    // the heap's order has changed, and the worker may be sleeping until the old deadline
-    requestTimersUpdate()
+    // The worker may be sleeping until the old deadline. If it is moved later, the heap finds out when that comes round.
+    if earlier then requestTimersUpdate()
 
   override def minDeadline: Long = {
     val sup = super.minDeadline

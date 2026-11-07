@@ -133,6 +133,65 @@ class KqueueSchedulingSuite extends munit.FunSuite {
     }
   }
 
+  test("a pending deadline moved later returns at the new deadline, and one moved earlier at once") {
+    onPool(2) { io ?=>
+      val later = io.backend.ops.deadlineTimer(System.nanoTime() + 10_000_000L)
+      val target = System.nanoTime() + 60_000_000L
+      val waitingLater = Future { io.perform(later); System.nanoTime() }
+      later.moveTo(target)
+      val returnedLater = waitingLater.await // not within `assert`, which holds a monitor as it evaluates its condition
+      assert(returnedLater >= target, "it returned at the old deadline")
+
+      val earlier = io.backend.ops.deadlineTimer(System.nanoTime() + 60_000_000_000L)
+      val waitingEarlier = Future { io.perform(earlier); System.nanoTime() }
+      AsyncOperations.sleep(20)
+      val moved = System.nanoTime()
+      earlier.moveTo(moved)
+      val returnedEarlier = waitingEarlier.await
+      assert(returnedEarlier - moved < 5_000_000_000L, "it waited for the old deadline")
+    }
+  }
+
+  test("a time too long for the clock is far off, not due at once") {
+    onPool(2) { io ?=>
+      val ran = java.util.concurrent.atomic.AtomicBoolean(false)
+      val cancellable = summon[Async].scheduler.schedule(Long.MaxValue.nanos, () => ran.set(true))
+      val waiter = Future(io.perform(io.backend.ops.timer(Long.MaxValue.nanos)))
+      AsyncOperations.sleep(50)
+      assert(!ran.get(), "a scheduled body ran at once")
+      assert(waiter.poll().isEmpty, "a timer completed at once")
+      cancellable.cancel()
+      waiter.cancel()
+      val outcome = waiter.awaitResult
+      assert(outcome.isFailure)
+    }
+  }
+
+  test("a negative timer is refused") {
+    intercept[IllegalArgumentException](KqueueBackend.ops.timer((-1).milli))
+  }
+
+  test("every task a pool accepts as it shuts down is run") {
+    for _ <- 1 to 300 do {
+      val pool = KqueueScheduler(2)
+      val ran = AtomicInteger(0)
+      val accepted = AtomicInteger(0)
+      val submitter = new Thread(() =>
+        try
+          while true do {
+            pool.execute(() => ran.incrementAndGet(): Unit)
+            accepted.incrementAndGet()
+          }
+        catch case _: IllegalStateException => ()
+      )
+      submitter.start()
+      spin(100_000L)
+      pool.shutdown()
+      submitter.join()
+      assertEquals(ran.get(), accepted.get())
+    }
+  }
+
   test("a run ending with work still in the inbox shuts down") {
     onPool(1) {
       for _ <- 1 to 100 do summon[Async].scheduler.execute(() => spin(100_000L))
