@@ -4,10 +4,6 @@ import gears.async.native.NativeSuspend
 import gears.async.io.shareable.WorkpoolScheduler
 
 class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, workers) with NativeSuspend {
-  override def suspend[T, R](body: Suspension[T, R] => R)(using Label[R]): T =
-    println("Suspending Kqueue...")
-    super.suspend(body)
-
   override protected def selectWorker() = workerOfCurrentThread()
 
   override def makeWorker(id: Int): KqueueWorker = new KqueueWorker(id)

@@ -11,7 +11,6 @@ import gears.async.io.Backend
 import gears.async.io.Io
 import gears.async.native.NativeSuspend
 
-import scala.concurrent.TimeoutException
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Success
@@ -33,7 +32,8 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
     // Not here and now: the caller holds the listener's lock, and may hold a source's, partway through changing it.
     members.get(Thread.currentThread()) match
       case Some(worker) => worker.resumeNext(() => suspension.resume(arg))
-      case None         => nextWorker().submit(() => suspension.resume(arg))
+      // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
+      case None         => nextWorker().submit(() => suspension.resume(arg)): Unit
 
   /** Schedule a computation with the suspension boundary already created. */
   // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
@@ -46,7 +46,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
   private val workerGroup: Array[Worker[Op1, B]] = Array.tabulate(workers)(makeWorker)
   private val members = workerGroup.map(w => w.thread -> w).toMap
   private def nextWorker(): Worker[Op1, B] = {
-    val index = workerTicker.getAndIncrement() % workerGroup.length
+    val index = Math.floorMod(workerTicker.getAndIncrement(), workerGroup.length)
     workerGroup(index)
   }
   protected final def workerOfCurrentThread(): Worker[Op1, B] =
@@ -102,14 +102,13 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
 
   override def execute(body: Runnable): Unit =
     checkRunning()
-    nextWorker().submit(body)
+    // The check alone can pass just before the workers leave.
+    if !nextWorker().submit(body) then throw new IllegalStateException("Scheduler has shut down")
 
   override def schedule(delay: FiniteDuration, body: Runnable): Cancellable = {
     checkRunning()
-    println("scheduling task")
-    val initialDelay = System.nanoTime() + delay.toNanos
     val worker = nextWorker()
-    val timerOp = new WorkpoolScheduler.DoAfter(initialDelay, body)
+    val timerOp = new WorkpoolScheduler.DoAfter(TimerHeap.deadlineAfter(delay.toNanos), body)
     worker.addTimer(timerOp)
     new Cancellable {
       override def cancel(): Unit = {
@@ -140,12 +139,7 @@ object WorkpoolScheduler {
   class DoAfter(val deadlineNow: Long, body: Runnable) extends TimerOp {
     @volatile private var cancelled = false
     def timerWakeup(actAfter: Long): Unit = {
-      if (!cancelled) {
-        if actAfter < this.deadlineNow then throw new TimeoutException("Operation timed out")
-        println("running Scheduled task")
-        body.run()
-        println("finished scheduled task")
-      }
+      if !cancelled then body.run()
     }
     def timerCancelled(): Unit = {
       cancelled = true
@@ -158,14 +152,18 @@ object WorkpoolScheduler {
     private val inbox: java.util.concurrent.ConcurrentLinkedQueue[Runnable] =
       new java.util.concurrent.ConcurrentLinkedQueue[Runnable]
 
-    def submit(task: Runnable): Unit = {
-      println("submit scheduled...")
+    /** Whether the worker has taken `task`, which it refuses once it has left `loop`. */
+    def submit(task: Runnable): Boolean = {
       inbox.add(task)
       wake()
+      !exited || !inbox.remove(task)
     }
 
     /** Once set, the worker finishes its inbox and leaves `loop`. */
     @volatile private var stopped = false
+
+    /** Set as the worker leaves `loop`, for `submit` to take back a task that came too late for it. */
+    @volatile private var exited = false
 
     private[WorkpoolScheduler] def stop(): Unit = {
       stopped = true
@@ -228,9 +226,7 @@ object WorkpoolScheduler {
         val task = inbox.poll()
         if task == null then inboxBudget = 0
         else
-          println("draining inbox task...")
           guarded(task.run())
-          println(s"Processed task: $task")
           runReady()
           inboxBudget -= 1
     }
@@ -243,6 +239,11 @@ object WorkpoolScheduler {
         drainInbox()
         // `stop`'s wake-up may have been spent while the inbox was still draining.
         if !stopped then waitForDeadline(peekNextDeadline())
+      exited = true
+      // A task added before `exited` showed is either run here or taken back by `submit`, never lost.
+      while !isEmpty() do
+        drainInbox()
+        runReady()
     }
   }
 }

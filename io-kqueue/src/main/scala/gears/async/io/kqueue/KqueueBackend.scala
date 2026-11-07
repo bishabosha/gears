@@ -14,10 +14,9 @@ import scala.concurrent.duration.FiniteDuration
 
 /** The kqueue backend
   *
-  * A program runs on gears' forkjoin threadpool, and each op is attempted by the thread performing it: tried at once
-  * with a non-blocking operation, and if it would block, waited for on a polling thread, which runs kqueue, and tried
-  * again once woken. Timers are managed by a heap and gate how long polling blocks for. Files are managed on a blocking
-  * thread-pool.
+  * A program runs on a pool of workers (`KqueueScheduler`), each with its own inbox and heap of timers. An op is
+  * performed on the worker of the thread performing it, whose heap holds its deadline, and which resumes the performer
+  * once it completes. So far only timers are implemented, and a worker waits on a monitor rather than on kqueue.
   */
 object KqueueBackend
     extends Backend
@@ -43,7 +42,7 @@ object KqueueBackend
 
   def pool(bufferSize: Int, buffers: Int): BufferPool = new NativePool(bufferSize, buffers)
 
-  /** Runs `program` on gears' virtual threads, each op performed by the future performing it. */
+  /** Runs `program` on a pool of one worker for each processor, shutting it down afterwards. */
   private[io] def run[T](program: Io[this.type] ?=> Async.Spawn ?=> T): T = {
     val pool = KqueueScheduler(Runtime.getRuntime.availableProcessors)
     given poolSupport: (AsyncSupport { type Scheduler = pool.Scheduler }) = pool
