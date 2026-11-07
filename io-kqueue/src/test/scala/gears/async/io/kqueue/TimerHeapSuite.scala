@@ -120,6 +120,15 @@ class TimerHeapSuite extends munit.FunSuite {
     }
   }
 
+  test("a timer with no deadline is refused, as it would fire at once") {
+    val heap = Heap()
+    val timer = new FakeTimer(-1) {
+      override def hasDeadline: Boolean = false
+    }
+    intercept[IllegalArgumentException](heap.addTimer(timer))
+    assertEquals(heap.peekNextDeadline(), -1L)
+  }
+
   test("a deadline past the end of the clock stays there") {
     assertEquals(TimerHeap.deadlineAfter(Long.MaxValue), Long.MaxValue)
     val soon = TimerHeap.deadlineAfter(1000L)
