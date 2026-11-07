@@ -22,6 +22,12 @@ object TimerHeap {
 
   trait TimerOp {
     def deadlineNow: Long
+
+    /** Whether there is a deadline at all. If not, `deadlineNow` means nothing, and the op stays off the heap: only what
+      * completes it can fire it.
+      */
+    def hasDeadline: Boolean = true
+
     /** Fires the timer. It left the heap for this, under the heap's lock, so `removeTimer` can no longer stop it. */
     def timerWakeup(actAfter: Long): Unit
 
@@ -133,6 +139,7 @@ abstract class TimerHeap[A <: TimerOp] extends Poller with TimerSource[A] {
 
   /** Wakes the worker only for a new earliest deadline: otherwise it wakes in time as it is. */
   final def addTimer(timerOp: A): Unit = {
+    if !timerOp.hasDeadline then throw new IllegalArgumentException("Only an op with a deadline goes on the heap")
     val isNext = timerLock.synchronized {
       if size == heap.length then heap = java.util.Arrays.copyOf(heap, 2 * size)
       timerOp.heapKey = timerOp.deadlineNow

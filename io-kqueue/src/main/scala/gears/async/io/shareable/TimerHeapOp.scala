@@ -49,6 +49,12 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
 
   def ownDeadline: Long = -1L
 
+  /** Whether `ownDeadline` means anything. It can't say so itself: a deadline that has passed may be negative. */
+  protected def hasOwnDeadline: Boolean = false
+
+  /** Read while the op is being performed, as `clearTimeout` drops the time limit. */
+  final override def hasDeadline: Boolean = hasOwnDeadline || timeoutDeadline >= 0
+
   final def setTimeout(t: Int, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
     worker = source
     if t < 0 then timeoutDeadline = -1L
@@ -98,9 +104,9 @@ sealed abstract class AbstractTimerHeapOp extends TimerHeapOp with TimerHeapOp.H
     */
   def wakeup(resumedAt: Long): Try[Unit]
 
-  /** Always settles the op: a performer that lost the race to `removeTimer` waits for this before it leaves. The op's
-    * work is done only with its listener locked, so that a cancel either leaves it undone or gets its outcome delivered.
-    * No listener means a cancelled one: see `WorkpoolScheduler.selectWorker`.
+  /** Always settles the op: a performer whose `Worker.withdraw` found it firing waits for this before it leaves. The
+    * op's work is done only with its listener locked, so that a cancel either leaves it undone or gets its outcome
+    * delivered. No listener means a cancelled one: see `WorkpoolScheduler.selectWorker`.
     */
   final def timerWakeup(resumedAt: Long): Unit =
     val consumer = listenerLock.synchronized {
@@ -214,6 +220,8 @@ abstract class AbstractMakeTimerOp(duration: FiniteDuration)
 
   override def ownDeadline: Long = initialDeadline
 
+  override protected def hasOwnDeadline: Boolean = true
+
   def wakeup(resumedAt: Long): Try[Unit] = WorkpoolScheduler.SuccessUnit
 }
 
@@ -236,6 +244,8 @@ abstract class AbstractMakeDeadlineOp(initial: Long) extends RepeatableAbstractT
   }
 
   override def ownDeadline: Long = myDeadline
+
+  override protected def hasOwnDeadline: Boolean = true
 
   def wakeup(resumedAt: Long): Try[Unit] = WorkpoolScheduler.SuccessUnit
 }

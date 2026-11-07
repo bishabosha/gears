@@ -69,9 +69,8 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
           try {
             op.await
           } finally {
-            // Cancelled asynchronously: try to drop the timer, if it isnt dropped then
-            // it was likely removed already from the heap by the worker and so is in process of being executed.
-            if !op.settled && !worker.removeTimer(op) then
+            // Cancelled asynchronously: a firing still under way must finish before the op can be performed again.
+            if !op.settled && !worker.withdraw(op) then
               summon[Async].withGroup(CompletionGroup.Unlinked).await(op.settling)
           }
       } finally {
@@ -185,10 +184,17 @@ object WorkpoolScheduler {
     }
 
     /**
-     * Attempt to perform the given operation.
+     * Attempt to perform the given operation, putting it on the heap only if it `hasDeadline`.
      * @return true if the operation is already completed, otherwise false which requires a subsequent await
      */
     def tryPerform(op: Op1): Boolean
+
+    /** Takes back an op whose performer was cancelled, from any thread, as that performer can resume on another worker.
+      *
+      * @return
+      *   true if nothing will fire the op now, false if it has left the heap to fire, which will settle it.
+      */
+    def withdraw(op: Op1): Boolean = !op.hasDeadline || removeTimer(op)
 
     def isEmpty(): Boolean = inbox.isEmpty() && ready.isEmpty()
 
