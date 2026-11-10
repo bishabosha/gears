@@ -20,6 +20,7 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import WorkpoolScheduler.{AsyncOp, ReentrantOp, Worker}
 
@@ -47,6 +48,23 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, B <: Backend { ty
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
   private val workerGroup: Array[Worker[Op1, B]] = Array.tabulate(workers)(makeWorker)
   private val members = workerGroup.map(w => w.thread -> w).toMap
+
+  /** The group the program runs under (see `Backend.run`), which a fatal error in any worker cancels: the workers go
+    * on, as they must for the program to unwind, but nothing should be built on what a fatal error left behind.
+    */
+  val rootGroup: CompletionGroup = CompletionGroup()
+
+  private val firstFatal = new java.util.concurrent.atomic.AtomicReference[Throwable | Null](null)
+
+  /** The first fatal error a worker met, or null. Whoever runs the program rethrows it once the program has ended. */
+  final def fatalFailure: Throwable | Null = firstFatal.get()
+
+  private def failFatally(failure: Throwable): Unit = {
+    firstFatal.compareAndSet(null, failure): Unit
+    rootGroup.cancel()
+  }
+
+  workerGroup.foreach(_.onFatal = failFatally)
   // Only now: a worker's thread started as the worker was made would run it before its subclass had its fields.
   workerGroup.foreach(_.thread.start())
   private def nextWorker(): Worker[Op1, B] = {
@@ -212,11 +230,18 @@ object WorkpoolScheduler {
 
     /** A worker outlives what it runs, as event loops do: it can't be replaced, and its timers and inbox would be lost
       * with it. What a task throws, of any kind, is reported to the thread's uncaught exception handler, as it would be
-      * had it ended the thread, so that a program can install its own; by default that prints it.
+      * had it ended the thread, so that a program can install its own; by default that prints it. A fatal error
+      * also cancels the program (see `rootGroup`).
       */
     private inline def guarded(inline body: Unit): Unit =
       try body
-      catch case failure: Throwable => reportFailure(failure)
+      catch
+        case failure: Throwable =>
+          reportFailure(failure)
+          if !NonFatal(failure) then onFatal(failure)
+
+    /** Set by the scheduler before the worker's thread starts: what a fatal error does beyond being reported. */
+    private[WorkpoolScheduler] var onFatal: Throwable => Unit = _ => ()
 
     private def reportFailure(failure: Throwable): Unit = {
       val current = Thread.currentThread()
