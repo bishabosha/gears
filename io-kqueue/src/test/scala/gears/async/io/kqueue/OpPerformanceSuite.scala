@@ -8,6 +8,7 @@ import gears.async.Future
 import gears.async.Future.Promise
 import gears.async.cancellationScope
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
@@ -44,7 +45,7 @@ private[kqueue] final class SlowScheduler
     with NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
   def heapOfCurrentWorker(): String = workerOfCurrentThread().debugTimerState()
-  override def makeWorker(id: Int) = new WorkpoolScheduler.Worker[SlowOp, SlowBackend.type](id, SlowBackend) {
+  override def makeWorker(id: Int) = new WorkpoolScheduler.Worker[SlowOp, SlowBackend.type](id, SlowBackend) with MonitorPoller {
     override def performOp(op: SlowOp)(using Async): Unit = {
       addTimer(op)
       op.parkUntilSettled()

@@ -307,6 +307,7 @@ object WorkpoolScheduler {
       while !isEmpty() do
         drainInbox()
         runReady()
+      close()
     }
   }
 }

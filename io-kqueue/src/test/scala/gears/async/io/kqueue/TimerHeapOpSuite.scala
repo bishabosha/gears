@@ -13,6 +13,7 @@ import gears.async.io.shareable.TimerHeap
 import gears.async.io.shareable.TimerHeap.TimerOp
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.TimerHeapOp.Outcome
+import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.WorkpoolScheduler
 
 import java.util.concurrent.CancellationException
@@ -239,7 +240,8 @@ class TimerHeapOpSuite extends munit.FunSuite {
   }
 
   test("a firing for a time limit is a timeout, though the performer has taken the op off the heap meanwhile") {
-    val heap = new TimerHeap[TimerOp] {
+    val heap = new TimerHeap[TimerOp] with MonitorPoller {
+      protected def id: Int = 0
       override protected def isEmpty(): Boolean = true
     }
     val op = LimitedOnly()
@@ -261,7 +263,8 @@ class TimerHeapOpSuite extends munit.FunSuite {
   }
 
   test("an op performed again with no time limit forgets the last one") {
-    val heap = new TimerHeap[TimerOp] {
+    val heap = new TimerHeap[TimerOp] with MonitorPoller {
+      protected def id: Int = 0
       override protected def isEmpty(): Boolean = true
     }
     val op = LimitedOnly()
