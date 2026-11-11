@@ -6,6 +6,7 @@ import gears.async.AsyncSupport
 import gears.async.Future
 import gears.async.Future.Promise
 import gears.async.io.shareable.RepeatableAbstractTimerHeapOp
+import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
@@ -37,9 +38,9 @@ private[kqueue] final class WaitingScheduler
     with NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
   override def makeWorker(id: Int) = new WorkpoolScheduler.Worker[WaitingOp, WaitingBackend.type](id, WaitingBackend) {
-    override def tryPerform(op: WaitingOp): Boolean = {
+    override def performOp(op: WaitingOp)(using Async): Unit = {
       if op.hasDeadline then addTimer(op)
-      false
+      op.parkUntilSettled()
     }
   }
 }
@@ -73,7 +74,7 @@ class NoDeadlineOpSuite extends munit.FunSuite {
       val outcome = performer.awaitResult
       assert(isCancelled(outcome), outcome.toString)
       assert(op.settled)
-      assert(isCancelled(op.poll().get), op.poll().toString)
+      assertEquals(op.poll(), Some(CancelledSentinel))
       assert(!op.claimAtDeadline())
     }
   }

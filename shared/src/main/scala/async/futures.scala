@@ -221,13 +221,15 @@ object Future:
 
     link()
     ac.support.scheduleBoundary:
-      val result = Async.withNewCompletionGroup(innerGroup)(Try({
-        val r = body
-        checkCancellation()
-        r
-      }).recoverWith { case _: InterruptedException | _: CancellationException =>
-        Failure(new CancellationException())
-      })(using FutureAsync(CompletionGroup.Unlinked))
+      val result = Async.withNewCompletionGroup(innerGroup) {
+        Try({
+          val r = body
+          checkCancellation()
+          r
+        }).recoverWith { case _: InterruptedException | _: CancellationException =>
+          Failure(new CancellationException())
+        }
+      }(using FutureAsync(CompletionGroup.Unlinked))
       complete(result)
 
   end RunnableFuture
