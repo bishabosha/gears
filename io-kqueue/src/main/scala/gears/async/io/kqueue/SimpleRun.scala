@@ -8,8 +8,11 @@ import gears.async.io.Io
 import gears.async.io.Pipes
 import gears.async.io.Slot
 
+import java.io.IOException
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.given
+import scala.scalanative.memory.PointerBuffer
+import scala.scalanative.unsafe.Zone
 
 def testProgram(io: Io[Pipes])(using Async): Unit =
   println("here we go...")
@@ -29,8 +32,24 @@ def testProgram(io: Io[Pipes])(using Async): Unit =
   println(
     s"pipe created with read: $read, write: $write in thread: ${Thread.currentThread().getName}"
   )
+  Zone {
+    val ptr = summon[Zone].alloc(1024)
+    val buffer = PointerBuffer.wrap(ptr, 1024)
+    try io.perform(io.backend.ops.read(read, buffer))
+    catch
+      case e: IOException =>
+        println(s"read failed observed in thread: ${Thread.currentThread().getName}. ${e.getMessage}")
+  }
   io.perform(io.backend.ops.close(read))
   println(s"pipe-read closed in thread: ${Thread.currentThread().getName}")
+  Zone {
+    val ptr = summon[Zone].alloc(1024)
+    val buffer = PointerBuffer.wrap(ptr, 1024)
+    try io.perform(io.backend.ops.read(read, buffer))
+    catch
+      case e: IOException =>
+        println(s"read failed observed in thread: ${Thread.currentThread().getName}. ${e.getMessage}")
+  }
   io.perform(io.backend.ops.close(write))
   println(s"pipe-write closed in thread: ${Thread.currentThread().getName}")
 

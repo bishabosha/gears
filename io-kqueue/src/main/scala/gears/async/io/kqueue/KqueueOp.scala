@@ -6,11 +6,14 @@ import gears.async.io.Deadline
 import gears.async.io.Io
 import gears.async.io.Repeatable
 import gears.async.io.Slot
+import gears.async.io.posix.PosixKernelHandle
 import gears.async.io.posix.PosixPipeOpener
+import gears.async.io.posix.PosixReadOps
 import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.RepeatableAbstractTimerHeapOp
 import gears.async.io.shareable.SingleUseAbstractTimerHeapOp
 import gears.async.io.shareable.TimerHeap
@@ -18,6 +21,7 @@ import gears.async.io.shareable.TimerHeapOp
 import gears.async.io.shareable.TimerHeapOp.Outcome
 import gears.async.io.shareable.WorkpoolScheduler
 
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.FiniteDuration
@@ -37,6 +41,14 @@ sealed trait KqueuePipeOp extends KqueueOp
 sealed trait KqueueDeadlineOp extends KqueueOp with Deadline
 
 sealed trait KqueueCloseOp extends KqueueOp
+
+trait KqueueReadOps extends PosixReadOps:
+  type ReadableHandle = KqueueReadable
+
+private[kqueue] final class KqueueRead(handle: KqueueReadable, buf: ByteBuffer)
+    extends AbstractReadOp(handle, buf),
+      KqueueReadableOp,
+      KqueueReadOps
 
 private[kqueue] final class KqueueCloseHandle(handle: KqueueHandle) extends AbstractCloseOp(handle) with KqueueCloseOp
 

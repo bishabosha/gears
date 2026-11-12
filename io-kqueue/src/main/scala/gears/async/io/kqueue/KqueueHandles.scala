@@ -7,7 +7,7 @@ import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.BaseReadableHandle
 import gears.async.io.shareable.BaseWritableHandle
 
-sealed trait KqueueHandle extends BaseHandle
+sealed trait KqueueHandle extends PosixKernelHandle, BaseHandle
 
 sealed trait KqueueReadable extends KqueueHandle, BaseReadableHandle
 sealed trait KqueueWritable extends KqueueHandle, BaseWritableHandle

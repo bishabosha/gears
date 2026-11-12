@@ -9,6 +9,7 @@ import gears.async.io.Slot
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.TimerHeapOp.Outcome
 
+import java.nio.ByteBuffer
 import java.sql.Time
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -306,11 +307,6 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
   }
 }
 
-trait PipeOpener:
-  type PipeReadable <: BaseReadableHandle
-  type PipeWritable <: BaseWritableHandle
-  def pipe(): (read: PipeReadable, write: PipeWritable)
-
 sealed trait TimeoutOnWake extends TimerHeapOp {
   final def wakeup(resumedAt: Long): Outcome = Failure(new TimeoutException("Operation timed out"))
 }
@@ -331,6 +327,29 @@ abstract class AbstractCloseOp(val handle: BaseHandle) extends SingleUseAbstract
       })
       false
 }
+
+trait NonBlockingReadOps:
+  type ReadableHandle <: BaseReadableHandle
+  def _readHandle(handle: ReadableHandle, buf: ByteBuffer): Int
+
+abstract class AbstractReadOp[H <: BaseReadableHandle](handle: H, buf: ByteBuffer)
+    extends RepeatableAbstractTimerHeapOp,
+      NonBlockingReadOps,
+      TimeoutOnWake {
+
+  type ReadableHandle = H
+
+  final def actImmediate(): Boolean =
+    handle.claimWork()
+    try
+      _readHandle(handle, buf) != 0
+    finally handle.releaseWork()
+}
+
+trait PipeOpener:
+  type PipeReadable <: BaseReadableHandle
+  type PipeWritable <: BaseWritableHandle
+  def pipe(): (read: PipeReadable, write: PipeWritable)
 
 abstract class AbstractMakePipeOp[PR <: BaseReadableHandle, PW <: BaseWritableHandle](
     readSlot: Slot[PR],

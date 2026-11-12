@@ -236,7 +236,7 @@ object WorkpoolScheduler {
       */
     def performOp(op: Op1)(using Async): Unit
 
-    def peformClose(op: Op1 & AbstractCloseOp)(using Async): Unit =
+    def performClose(op: Op1 & AbstractCloseOp)(using Async): Unit =
       var shouldWait = false
       if op.hasDeadline then
         addTimer(op)

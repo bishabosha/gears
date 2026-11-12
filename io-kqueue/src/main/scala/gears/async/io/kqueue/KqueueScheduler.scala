@@ -5,6 +5,8 @@ import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
+import java.io.IOException
+
 class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, workers), NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
 
@@ -24,7 +26,12 @@ class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, wor
         case pipe: KqueueMakePipe =>
           pipe.perform()
         case close: KqueueCloseHandle =>
-          peformClose(close)
+          performClose(close)
+        case read: KqueueRead =>
+          if read.actImmediate() then
+            // completed immediately
+            ()
+          else throw new IOException("Read operation could not be completed immediately")
     }
   }
 }
