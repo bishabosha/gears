@@ -17,7 +17,7 @@ sealed trait KqueueBaseOps extends Ops[KqueueOp, KqueueHandle] {
 }
 
 sealed trait KqueuePipeOps extends KqueueBaseOps with PipeOps[KqueueOp, KqueueHandle] {
-  override def pipe(read: Slot[Readable], write: Slot[Writable]): KqueueOp = ???
+  override def pipe(read: Slot[Readable], write: Slot[Writable]): KqueuePipeOp = KqueueMakePipe(read, write)
 }
 
 sealed trait KqueueCoreOps extends KqueueBaseOps {

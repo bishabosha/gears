@@ -5,6 +5,7 @@ import gears.async.CompletionGroup
 import gears.async.Listener
 import gears.async.io.Deadline
 import gears.async.io.Repeatable
+import gears.async.io.Slot
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.TimerHeapOp.Outcome
 
@@ -288,6 +289,30 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
       entered.set(false)
     }
   }
+}
+
+trait PipeOpener:
+  type PipeReadable <: BaseReadableHandle
+  type PipeWritable <: BaseWritableHandle
+  def pipe(): (read: PipeReadable, write: PipeWritable)
+
+sealed abstract class ImmediateOp extends SingleUseAbstractTimerHeapOp {
+  final def wakeup(resumedAt: Long): Outcome = Failure(new TimeoutException("Operation timed out"))
+  def perform(): Unit
+}
+
+abstract class AbstractMakePipeOp[PR <: BaseReadableHandle, PW <: BaseWritableHandle](
+    readSlot: Slot[PR],
+    writeSlot: Slot[PW]
+) extends ImmediateOp,
+      PipeOpener {
+  type PipeReadable <: PR
+  type PipeWritable <: PW
+
+  final def perform(): Unit =
+    val pair = pipe()
+    readSlot.set(pair.read)
+    writeSlot.set(pair.write)
 }
 
 abstract class AbstractMakeTimerOp(duration: FiniteDuration) extends RepeatableAbstractTimerHeapOp {
