@@ -38,7 +38,7 @@ sealed trait KqueueCoreOps extends KqueueBaseOps {
 
   override def read(handle: Readable, pool: BufferPool, into: Slot[Received]): KqueueReadableOp & Repeatable = ???
 
-  override def close(handle: KqueueHandle): KqueueCloseOp = ???
+  override def close(handle: KqueueHandle): KqueueCloseOp = KqueueCloseHandle(handle)
 }
 
 object KqueueOps extends KqueueBaseOps with KqueueCoreOps with KqueuePipeOps {}

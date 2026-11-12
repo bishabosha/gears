@@ -23,6 +23,8 @@ class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, wor
           deadline.parkUntilSettled()
         case pipe: KqueueMakePipe =>
           pipe.perform()
+        case close: KqueueCloseHandle =>
+          peformClose(close)
     }
   }
 }

@@ -28,7 +28,8 @@ object TimerHeapOp {
 
   case object CancelledSentinel
   case object TimerFired
-  type State = Try[Unit] | TimerFired.type | CancelledSentinel.type | Null
+  case object CloseFired
+  type State = Try[Unit] | CloseFired.type | TimerFired.type | CancelledSentinel.type | Null
   type Outcome = Try[Unit] | CancelledSentinel.type
 }
 
@@ -142,17 +143,17 @@ sealed abstract class AbstractTimerHeapOp
 
   final override def poll(): Option[Outcome] =
     state.get() match
-      case null                   => None
-      case data: Try[Unit]        => Some(data)
-      case CancelledSentinel      => Some(CancelledSentinel)
-      case TimerHeapOp.TimerFired => None
+      case null                                            => None
+      case data: Try[Unit]                                 => Some(data)
+      case CancelledSentinel                               => Some(CancelledSentinel)
+      case TimerHeapOp.TimerFired | TimerHeapOp.CloseFired => None
 
   private final def pollListener(state: TimerHeapOp.State, k: Listener[Outcome]): Boolean =
     state match
-      case null                   => false
-      case data: Try[Unit]        => k.completeNow(data, this)
-      case CancelledSentinel      => k.completeNow(CancelledSentinel, this)
-      case TimerHeapOp.TimerFired => false
+      case null                                            => false
+      case data: Try[Unit]                                 => k.completeNow(data, this)
+      case CancelledSentinel                               => k.completeNow(CancelledSentinel, this)
+      case TimerHeapOp.TimerFired | TimerHeapOp.CloseFired => false
 
   final override protected def addListener(k: Listener[Outcome]): Unit = synchronized:
     if listener != null then throw new IllegalStateException("Listener already registered")
@@ -185,6 +186,20 @@ sealed abstract class AbstractTimerHeapOp
 
   final def claimAtDeadline(): Boolean = {
     state.compareAndSet(null, TimerHeapOp.TimerFired)
+  }
+
+  final def claimAtCloseFire(): Boolean = {
+    state.compareAndSet(null, TimerHeapOp.CloseFired)
+  }
+
+  protected def completeFromCloseFire(result: Outcome): Unit = {
+    // Settled and its listener taken as one step, which `requestExit` waits for: a performer that sees the outcome and
+    // leaves can't have its next performance's listener taken for this one.
+    val waiting = synchronized {
+      if !state.compareAndSet(TimerHeapOp.CloseFired, result) then throw new IllegalStateException("Did not claim work")
+      removeListener()
+    }
+    if waiting != null then waiting.completeNow(result, this): Unit
   }
 
   final def setTimeout(t: Int, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
@@ -296,9 +311,25 @@ trait PipeOpener:
   type PipeWritable <: BaseWritableHandle
   def pipe(): (read: PipeReadable, write: PipeWritable)
 
-sealed abstract class ImmediateOp extends SingleUseAbstractTimerHeapOp {
+sealed trait TimeoutOnWake extends TimerHeapOp {
   final def wakeup(resumedAt: Long): Outcome = Failure(new TimeoutException("Operation timed out"))
+}
+
+sealed abstract class ImmediateOp extends SingleUseAbstractTimerHeapOp, TimeoutOnWake {
   def perform(): Unit
+}
+
+abstract class AbstractCloseOp(val handle: BaseHandle) extends SingleUseAbstractTimerHeapOp, TimeoutOnWake {
+  final def pollClose(): Boolean =
+    if handle.requestClose() then true
+    else
+      handle.onComplete(Listener.acceptingListener[Try[Unit]] { (res, _) =>
+        // TODO: !!IMPORTANT, if this was not a single use op then we'd have to protect
+        // against Re-entrancy here, as removing listeners is best effort.
+        if claimAtCloseFire() then completeFromCloseFire(res)
+        else () // so far only could be cancelled or timer fired
+      })
+      false
 }
 
 abstract class AbstractMakePipeOp[PR <: BaseReadableHandle, PW <: BaseWritableHandle](

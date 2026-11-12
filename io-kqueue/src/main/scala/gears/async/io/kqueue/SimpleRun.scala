@@ -24,9 +24,16 @@ def testProgram(io: Io[Pipes])(using Async): Unit =
   val pRead = Slot[io.Readable]()
   val pWrite = Slot[io.Writable]()
   io.perform(io.backend.ops.pipe(pRead, pWrite))
+  val read = pRead.clear()
+  val write = pWrite.clear()
   println(
-    s"pipe created with read: ${pRead.clear()}, write: ${pWrite.clear()} in thread: ${Thread.currentThread().getName}"
+    s"pipe created with read: $read, write: $write in thread: ${Thread.currentThread().getName}"
   )
+  io.perform(io.backend.ops.close(read))
+  println(s"pipe-read closed in thread: ${Thread.currentThread().getName}")
+  io.perform(io.backend.ops.close(write))
+  println(s"pipe-write closed in thread: ${Thread.currentThread().getName}")
+
   // io.perform(io.backend.ops.timer(500))
   // println("done")
 

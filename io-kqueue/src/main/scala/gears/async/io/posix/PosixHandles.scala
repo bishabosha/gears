@@ -5,11 +5,16 @@ import gears.async.io.shareable.PipeOpener
 import _root_.gears.async.io.shareable.AbstractBaseHandle
 import _root_.gears.async.io.shareable.BaseReadableHandle
 import _root_.gears.async.io.shareable.BaseWritableHandle
+import _root_.gears.async.io.shareable.HandleState
 
 abstract class PosixKernelHandle(val fd: Int) extends AbstractBaseHandle:
   open() // construction is acquisition of the handle
 
-  def cleanup(): Unit = Descriptors.closeHandle(fd)
+  final def cleanup()(using ClosePermit): Boolean =
+    Descriptors.closeHandle(fd)
+    if !compareAndSetState(HandleState.ClosingState, HandleState.ClosedState) then
+      throw new IllegalStateException("Concurrent cleanup detected")
+    true
 
 trait PosixPipeOpener extends PipeOpener:
   type PipeReadable <: PosixKernelHandle & BaseReadableHandle

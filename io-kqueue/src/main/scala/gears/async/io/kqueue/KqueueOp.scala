@@ -7,6 +7,7 @@ import gears.async.io.Io
 import gears.async.io.Repeatable
 import gears.async.io.Slot
 import gears.async.io.posix.PosixPipeOpener
+import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
@@ -36,6 +37,8 @@ sealed trait KqueuePipeOp extends KqueueOp
 sealed trait KqueueDeadlineOp extends KqueueOp with Deadline
 
 sealed trait KqueueCloseOp extends KqueueOp
+
+private[kqueue] final class KqueueCloseHandle(handle: KqueueHandle) extends AbstractCloseOp(handle) with KqueueCloseOp
 
 private[kqueue] final class KqueueMakePipe(readSlot: Slot[KqueueReadable], writeSlot: Slot[KqueueWritable])
     extends AbstractMakePipeOp(readSlot, writeSlot)

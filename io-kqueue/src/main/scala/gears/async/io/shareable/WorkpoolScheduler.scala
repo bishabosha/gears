@@ -236,6 +236,14 @@ object WorkpoolScheduler {
       */
     def performOp(op: Op1)(using Async): Unit
 
+    def peformClose(op: Op1 & AbstractCloseOp)(using Async): Unit =
+      var shouldWait = false
+      if op.hasDeadline then
+        addTimer(op)
+        shouldWait = true
+      if !op.pollClose() then shouldWait = true
+      if shouldWait then op.parkUntilSettled()
+
     def isEmpty(): Boolean = inbox.isEmpty() && ready.isEmpty()
 
     /** A worker outlives what it runs, as event loops do: it can't be replaced, and its timers and inbox would be lost
