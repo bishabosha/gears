@@ -1,8 +1,9 @@
 # gears.async.io: asynchronous I/O for gears
 
 An interface for asynchronous I/O that gears programs write once and run on any backend, the contract suites every
-backend is checked against, demos written against the interface alone, and a reference backend on the JDK that exists
-to pass the contracts, not to be fast. A program performs ops, built by its backend, with the `Io` that `Io.run` gives
+backend is checked against, demos written against the interface alone, a reference backend on the JDK that exists
+to pass the contracts, not to be fast, and two backends that are: kqueue on Scala Native (macOS) and NIO on the JVM,
+over a runtime of reactors driven by a pool of workers. A program performs ops, built by its backend, with the `Io` that `Io.run` gives
 it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep` on the backend's own timers.
 
 ## Where to start reading
@@ -17,6 +18,9 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 3. **The reference backend**, `io-reference/`: the semantics on the JDK's channels, over a plain selector poll.
 4. **SimpleIO**, `gears.io.testkit.SimpleIO` in `io-testkit/`: an API with result-returning openers and streams,
    written over the public interface alone, which shows what the interface is for.
+5. **The reactor backends**: the runtime (`io-runtime/`, [`runtime.md`](runtime.md)), then NIO (`io-backends/nio/`,
+   [`jvm.md`](jvm.md)), the shorter, or kqueue (`io-backends/kqueue/`, [`kqueue.md`](kqueue.md)), the one measured most.
+6. **[`interface-history.md`](interface-history.md)**, for why any of it is the shape it is.
 
 ## Layout
 
@@ -26,6 +30,11 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 | `ioTestkit` (`io-testkit/`, JVM, Scala Native and Scala.js) | the contract suites and `BufferArena` (`gears.async.io.testkit`), `SimpleIO` with `SimpleIOChecks` (`gears.io.testkit`), and the gears demos (`gears.io.demos`) with their command line, `DemoCommands` | core, munit, mainargs |
 | `ioReference` (`io-reference/`, JVM) | the reference backend, `gears.async.io.reference.ReferenceBackend`, and its suites | core, the testkit's contracts |
 | `ioReferenceDemos` (`io-reference/demos/`) | the demos over the reference backend: `ioReferenceDemos/run <command>` | the reference backend, the testkit |
+| `ioRuntime` (`io-runtime/`, JVM and Scala Native) | the reactor runtime, `gears.async.io.internal`: reactors and their ops (`Reactor`, `Completion`, `ReactorCore`), the pool of workers that drives them (`ReactorPool`, `ReactorWorker`, `RunQueue`, `TakePolicy`), a backend's kinds (`ReactorBackend`, `CallerBackend`), which implement `Backend.run`, and `Io`'s (`OnPool`, `OnCaller`); the runner's knobs (`ReactorRuns`); what the backends share (`Blockers`, `TimerHeap`, `Checks`, `IpAddresses`; on Native the Posix sockets, files and resolver). Its tests have `ReactorChecks`, what only the `Reactor` API shows | core |
+| `ioKqueue`, `ioNio` (`io-backends/`) | the backends, in `gears.async.io.kqueue` and `.nio` | the runtime |
+| `ioKqueueDemos`, `ioNioDemos` (`io-backends/*/demos/`) | each backend's demo application: the backends it offers the demos and what starts their runs; kqueue's also has the plain kqueue demos | a backend, the testkit |
+| `ioBench`, `ceBench` (`bench/`) | the bench ([`bench.md`](bench.md)): `GearsBench`'s scenarios over each platform's backends, and the same with cats-effect | the demo applications |
+| `ioDemosTests` (`io-tests/`) | JVM tests driving the demo and bench executables as subprocesses (macOS) | the demo applications, the bench |
 
 The interface is in `shared/`, so it compiles on every platform gears does, and so does the testkit, though only the
 JVM has a backend to run its contracts and demos on yet. A backend outside this repository is written in a package
@@ -51,6 +60,8 @@ A backend can start with `OpsContract`, which requires no handle fixture or opti
 | `FifoContract` | `Fifos` and host filesystem setup |
 | `FifoFileContract` | `Fifos & RegularFiles`, checking that the two kinds are distinguished |
 | `ResolveContract`, `SimpleIOResolveChecks` | `Resolving` |
+| `ConcurrentRunsContract` | `Pipes`, and host threads: two runs at once sharing handles and ops |
+| `RunEndContract` | `Blocking & Pipes`, and host threads: what a run leaves when its program returns |
 
 A stream fixture supplies independently closable, connected, buffered byte-stream ends; closing the write end delivers
 EOF after queued bytes. Allow at least 64 bytes of setup writes before a reader starts; transfer and chunk sizes may
@@ -180,12 +191,25 @@ repeatable pooled read consumed as a gears channel, with the pool's window and t
 the capabilities it needs, and its `Async`, and only a backend's demo application starts a run:
 `ioReferenceDemos/run <command>`.
 
+## The reactor backends
+
+kqueue and NIO run the same contracts as the reference backend, each suite over a backend on `Io.run`'s pool, a
+worker per processor, and again on a pool of one (`ReactorRuns.run(1)`), where every future shares one reactor; NIO's
+also over `NioOnCaller`, which performs each op on its caller. A backend's own suites add what only it has (kqueue's
+`ready`, `readNow` and `writeNow`) and `ReactorChecks`. The design notes: [`runtime.md`](runtime.md) (the pool),
+[`kqueue.md`](kqueue.md), [`jvm.md`](jvm.md) (NIO and the JVM's carriers), [`scala-native.md`](scala-native.md),
+[`handles.md`](handles.md), [`files.md`](files.md), [`hosts.md`](hosts.md) (other hosts),
+[`missing-api.md`](missing-api.md) and [`bench.md`](bench.md).
+
 ## Running the suites
 
 ```
 sbt --client ioReference/test        # capability contracts, futures and SimpleIO over the reference backend
 sbt --client ioTestkitJVM/test       # the testkit's own tests
 sbt --client 'ioTestkitNative/compile; ioTestkitJS/compile'
+sbt --client 'ioRuntimeJVM/test; ioNio/test'                  # on JDK 25 or later
+sbt --client 'ioBenchJVM/compile'                              # on JDK 27: JdkBench's StructuredTaskScope
+sbt --client 'ioRuntimeNative/test; ioKqueue/test; ioDemosTests/test'   # on macOS; io-tests on JDK 27, as it runs the bench
 ```
 
 A backend written elsewhere depends on `gears-io-testkit` and extends the contracts of the capabilities it has, as
