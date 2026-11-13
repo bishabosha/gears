@@ -242,7 +242,7 @@ sealed abstract class AbstractTimerHeapOp
     stillWaiting
   }
 
-  final def setTimeout(t: Int, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
+  final def setTimeout(t: Long, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
     // Whatever the op's state: it goes on this heap even if it was cancelled as it was entered, and `clearTimeout`
     // must know where to take it from.
     worker = source

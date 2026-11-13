@@ -1,9 +1,9 @@
 package gears.async.io.kqueue
 
 import gears.async.io.BufferPool
+import gears.async.io.ByteStreams
 import gears.async.io.Deadline
-import gears.async.io.Ops
-import gears.async.io.PipeOps
+import gears.async.io.Pipes
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.Slot
@@ -11,12 +11,14 @@ import gears.async.io.Slot
 import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
 
-sealed trait KqueueBaseOps extends Ops[KqueueOp, KqueueHandle] {
+sealed trait KqueueBaseOps extends ByteStreams {
+  override type Op = KqueueOp
+  override type Handle = KqueueHandle
   override type Readable = KqueueReadable
   override type Writable = KqueueWritable
 }
 
-sealed trait KqueuePipeOps extends KqueueBaseOps with PipeOps[KqueueOp, KqueueHandle] {
+sealed trait KqueuePipeOps extends KqueueBaseOps with Pipes {
   override def pipe(read: Slot[Readable], write: Slot[Writable]): KqueuePipeOp = KqueueMakePipe(read, write)
 }
 

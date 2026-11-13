@@ -25,7 +25,7 @@ import scala.util.Failure
 class KqueueReadinessSuite extends munit.FunSuite {
   override def munitTimeout: Duration = 60.seconds
 
-  private def onPool[T](workers: Int)(program: Io[KqueueBackend.type] ?=> Async.Spawn ?=> T): T = {
+  private def onPool[T](workers: Int)(program: Io[KqueueOps.type] ?=> Async.Spawn ?=> T): T = {
     val pool = KqueueScheduler(workers)
     given poolSupport: (AsyncSupport { type Scheduler = pool.Scheduler }) = pool
     given poolScheduler: pool.Scheduler = pool
@@ -33,7 +33,7 @@ class KqueueReadinessSuite extends munit.FunSuite {
     finally pool.shutdown()
   }
 
-  private def pipe()(using io: Io[KqueueBackend.type], async: Async): (KqueueReadable, KqueueWritable) = {
+  private def pipe()(using io: Io[KqueueOps.type], async: Async): (KqueueReadable, KqueueWritable) = {
     val read = Slot[KqueueReadable]()
     val write = Slot[KqueueWritable]()
     io.perform(KqueueOps.pipe(read, write))

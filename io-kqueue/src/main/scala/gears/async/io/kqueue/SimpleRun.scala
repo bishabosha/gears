@@ -18,16 +18,16 @@ import scala.scalanative.unsafe.Zone
 def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
   println("here we go...")
   try
-    io.perform(io.backend.ops.timer(500))
+    io.perform(io.ops.timer(500))
     println(s"after timer observed in thread: ${Thread.currentThread().getName}")
   catch
     case e: CancellationException =>
       println(s"timer cancelled observed in thread: ${Thread.currentThread().getName}")
     case e: TimeoutException => println(s"timer timed out observed in thread: ${Thread.currentThread().getName}")
 
-  val pRead = Slot[io.Readable]()
-  val pWrite = Slot[io.Writable]()
-  io.perform(io.backend.ops.pipe(pRead, pWrite))
+  val pRead = Slot[io.ops.Readable]()
+  val pWrite = Slot[io.ops.Writable]()
+  io.perform(io.ops.pipe(pRead, pWrite))
   val read = pRead.clear()
   val write = pWrite.clear()
   println(
@@ -42,7 +42,7 @@ def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
       val ptr = zone.alloc(1024)
       val buffer = PointerBuffer.wrap(ptr, 1024)
       try
-        io.perform(io.backend.ops.read(read, buffer))
+        io.perform(io.ops.read(read, buffer))
         println(s"read succeeded observed in thread: ${Thread.currentThread().getName}")
         buffer.flip()
         val v = java.nio.charset.StandardCharsets.UTF_8.decode(buffer).toString()
@@ -50,7 +50,7 @@ def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
       catch
         case e: IOException =>
           println(s"read failed observed in thread: ${Thread.currentThread().getName}. ${e.getMessage}")
-      io.perform(io.backend.ops.close(read))
+      io.perform(io.ops.close(read))
       println(s"pipe-read closed in thread: ${Thread.currentThread().getName}")
     }
 
@@ -62,12 +62,12 @@ def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
       buffer2.put(messageBytes)
       buffer2.flip()
       try
-        io.perform(io.backend.ops.write(write, buffer2))
+        io.perform(io.ops.write(write, buffer2))
         println(s"write succeeded observed in thread: ${Thread.currentThread().getName}")
       catch
         case e: IOException =>
           println(s"write failed observed in thread: ${Thread.currentThread().getName}. ${e.getMessage}")
-      io.perform(io.backend.ops.close(write))
+      io.perform(io.ops.close(write))
       println(s"pipe-write closed in thread: ${Thread.currentThread().getName}")
     }
 
@@ -76,7 +76,7 @@ def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
 
   } finally zone.close()
 
-  // io.perform(io.backend.ops.timer(500))
+  // io.perform(io.ops.timer(500))
   // println("done")
 
 @main def simpleRun(): Unit = {
