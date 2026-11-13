@@ -3,44 +3,100 @@ package gears.async.io.shareable
 import gears.async.Async
 import gears.async.Future
 import gears.async.Listener
-import gears.async.io.{shareable => ClosingState}
-import gears.async.io.{shareable => UnenteredState}
 
 import java.io.IOException
 import java.nio.channels.ClosedChannelException
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import scala.util.Try
 
+/** A handle's state and the work claimed on it, in one word, so that each changes with regard to the other in one
+  * step: the state in the top byte, and in the 56 bits below it the count of the work now claimed.
+  */
 object HandleState:
   inline val UnenteredState = 0
-  inline val IdleState = 1
-  inline val BusyState = 2
-  inline val ClosingState = 3
-  inline val ClaimingState = 4
-  inline val ReleasingState = 5
-  inline val ClosedState = -1
-  type State = UnenteredState.type | IdleState.type | BusyState.type | ClosingState.type | ClaimingState.type |
-    ReleasingState.type | ClosedState.type
+  inline val OpenState = 1
+  inline val ClosingState = 2
+  inline val ClosedState = 3
+  type State = UnenteredState.type | OpenState.type | ClosingState.type | ClosedState.type
 
   def showState(state: State): String =
     state match
       case UnenteredState => "Unentered"
-      case IdleState      => "Idle"
-      case BusyState      => "Busy"
+      case OpenState      => "Open"
       case ClosingState   => "Closing"
-      case ClaimingState  => "Claiming"
-      case ReleasingState => "Releasing"
       case ClosedState    => "Closed"
 
+  private inline val StateShift = 56
+
+  /** The most work that can be claimed at once, and the mask of its count in the word. */
+  inline val MaxClaimed = 0x00ffffffffffffffL
+
+  private inline def stateOf(word: Long): Int = (word >>> StateShift).toInt
+  private inline def claimedOf(word: Long): Long = word & MaxClaimed
+  private inline def wordOf(state: Int, claimed: Long): Long = (state.toLong << StateShift) | claimed
+
   sealed abstract class Holder:
-    private val state = AtomicInteger(UnenteredState)
-    final def getState: State = state.get().asInstanceOf[State]
-    final def setState(newState: State): Unit = state.set(newState)
+    private val word = AtomicLong(wordOf(UnenteredState, 0L))
+
+    final def getState: State = stateOf(word.get()).asInstanceOf[State]
+
+    /** How much work is claimed on the handle now. */
+    final def claimedWork: Long = claimedOf(word.get())
+
+    /** Moves from `expected` to `newState`, whatever work is claimed, which stays as it is. */
     final def compareAndSetState(expected: State, newState: State): Boolean =
-      state.compareAndSet(expected, newState)
-    final def compareAndExchangeState(expected: State, newState: State): State =
-      state.compareAndExchange(expected, newState).asInstanceOf[State]
+      var result = false
+      var done = false
+      while !done do
+        val current = word.get()
+        if stateOf(current) != expected then done = true
+        else if word.compareAndSet(current, wordOf(newState, claimedOf(current))) then
+          result = true
+          done = true
+      result
+
+    /** Claims work if the handle is open: the state it was found in, which is `OpenState` if the work was claimed. */
+    protected final def claimIfOpen(): State =
+      var found: Int = UnenteredState
+      var done = false
+      while !done do
+        val current = word.get()
+        found = stateOf(current)
+        if found != OpenState then done = true
+        else if claimedOf(current) == MaxClaimed then throw new IllegalStateException("Too much work claimed")
+        else done = word.compareAndSet(current, current + 1)
+      found.asInstanceOf[State]
+
+    /** Gives back work claimed with `claimIfOpen`, which a handle that has begun to close still lets its work do:
+      * whether that was the last of a closing handle's, for the caller then to close it.
+      */
+    protected final def releaseClaimed(): Boolean =
+      var last = false
+      var done = false
+      while !done do
+        val current = word.get()
+        if claimedOf(current) == 0 then
+          throw new IllegalStateException(s"Releasing work when none is claimed (${showState(getState)})")
+        else if word.compareAndSet(current, current - 1) then
+          last = stateOf(current) == ClosingState && claimedOf(current) == 1
+          done = true
+      last
+
+    /** Begins the close of an open handle: the state it was found in, and, if that was `OpenState`, whether no work
+      * was claimed, for the caller then to close it; otherwise the last work to be released does.
+      */
+    protected final def beginClose(): (found: State, idle: Boolean) =
+      var found: Int = UnenteredState
+      var idle = false
+      var done = false
+      while !done do
+        val current = word.get()
+        found = stateOf(current)
+        if found != OpenState then done = true
+        else if word.compareAndSet(current, wordOf(ClosingState, claimedOf(current))) then
+          idle = claimedOf(current) == 0
+          done = true
+      (found.asInstanceOf[State], idle)
 
 trait BaseHandle extends HandleState.Holder:
   def open(): Unit
@@ -78,7 +134,7 @@ trait BaseReadableHandle extends BaseHandle
 trait BaseWritableHandle extends BaseHandle
 
 abstract class AbstractBaseHandle extends BaseHandle:
-  import HandleState.{BusyState, ClaimingState, ClosedState, ClosingState, IdleState, ReleasingState, UnenteredState}
+  import HandleState.{ClosedState, ClosingState, OpenState, UnenteredState}
 
   opaque type ClosePermit = Unit
 
@@ -210,86 +266,29 @@ abstract class AbstractBaseHandle extends BaseHandle:
     if listener != null then listener.forgetHandle(this)
 
   final def open(): Unit =
-    if compareAndSetState(UnenteredState, IdleState) then ()
+    if compareAndSetState(UnenteredState, OpenState) then ()
     else throw new IllegalStateException("Handle is already open or closed")
 
-  private val active = AtomicLong(0L) // TODO: long wrap around? (unlikely in practice)
   final def claimWork(): Unit =
-    var done = false
-    while !done do
-      getState match
-        case IdleState =>
-          if compareAndSetState(IdleState, ClaimingState) then
-            active.incrementAndGet()
-            if !compareAndSetState(ClaimingState, BusyState) then
-              throw new IllegalStateException("Failed to transition from ClaimingState to BusyState")
-            done = true
-        case BusyState =>
-          if compareAndSetState(BusyState, ClaimingState) then
-            active.incrementAndGet()
-            if !compareAndSetState(ClaimingState, BusyState) then
-              throw new IllegalStateException("Failed to transition from ClaimingState to BusyState")
-            done = true
-        case ClaimingState | ReleasingState =>
-          // spin until the state changes
-          done = false
-        case ClosedState | ClosingState =>
-          throw new ClosedChannelException()
-        case UnenteredState =>
-          throw new IOException("Handle is not open")
+    claimIfOpen() match
+      case OpenState                  => ()
+      case ClosedState | ClosingState => throw new ClosedChannelException()
+      case UnenteredState             => throw new IOException("Handle is not open")
 
+  /** Work claimed is released even once the handle is closing: the last of it then closes the handle. */
   final def releaseWork(): Unit =
-    // ALLOW TO RELEASE WORK EVEN IF HANDLE IS CLOSING
-    var done = false
-    while !done do
-      getState match
-        case BusyState =>
-          if compareAndSetState(BusyState, ReleasingState) then
-            val remaining = active.decrementAndGet()
-            val transition: HandleState.State = if remaining == 0 then IdleState else BusyState
-            if !compareAndSetState(ReleasingState, transition) then
-              throw new IllegalStateException(
-                "Failed to transition from ReleasingState to " + HandleState.showState(transition)
-              )
-            done = true
-        case ClosingState =>
-          val remaining = active.decrementAndGet()
-          if remaining == 0 then
-            given ClosePermit = ()
-            val _ = closeHandle()
-          done = true
-        case ReleasingState | ClaimingState =>
-          // spin until the state changes
-          done = false
-        case ClosedState =>
-          throw new IOException("Handle is closed")
-        case UnenteredState =>
-          throw new IOException("Handle is not open")
-        case IdleState =>
-          throw new IllegalStateException("Releasing work when handle is idle")
+    if releaseClaimed() then
+      given ClosePermit = ()
+      val _ = closeHandle()
 
   final def requestClose(): Boolean =
-    var done = false
-    var closed = false
-    while !done do
-      getState match
-        case IdleState =>
-          if compareAndSetState(IdleState, ClosingState) then
-            given ClosePermit = ()
-            closed = closeHandle()
-            done = true
-        case BusyState =>
-          if compareAndSetState(BusyState, ClosingState) then
-            // will cleanup when work is released
-            done = true
-        case ClaimingState | ReleasingState =>
-          // spin until the state changes
-          done = false
-        case ClosedState =>
-          done = true
-          closed = true
-        case ClosingState =>
-          done = true
-        case UnenteredState =>
-          throw new IllegalStateException("Handle is not open")
-    closed
+    val begun = beginClose()
+    begun.found match
+      case OpenState =>
+        if begun.idle then
+          given ClosePermit = ()
+          closeHandle()
+        else false // the last work released closes it
+      case ClosingState   => false
+      case ClosedState    => true
+      case UnenteredState => throw new IllegalStateException("Handle is not open")
