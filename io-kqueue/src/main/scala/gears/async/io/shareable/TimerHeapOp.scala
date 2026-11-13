@@ -386,24 +386,28 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
   /** One attempt at the work, which must not block, with the handle's work claimed: whether it was done. */
   protected def attempt(): Boolean
 
-  /** Has `worker` hold this op as waiting and report when the handle is ready. Called with the handle's work claimed,
-    * so not while it closes.
+  /** Makes this op the handle's waiter, which the handle may refuse, and has `worker` report when the handle is
+    * ready. Called with the handle's work claimed, so not while it closes.
     */
   protected def register(worker: W): Unit
 
-  /** Takes this op back from `worker`, wherever it has got to: a second call finds nothing to do. */
+  /** Takes this op back from the handle and `worker`, if it is still the handle's waiter: a second call, or one for
+    * an op the handle refused, finds nothing to do.
+    */
   protected def unregister(worker: W): Unit
 
-  /** The handle's close begins by completing these, before it releases anything (see `AbstractBaseHandle`): the op
-    * fails as a closed channel's does, and is taken from the worker while the handle is still what it was registered
-    * as. No later performance can be mistaken for this one, as none gets past `claimWork` on a closing handle.
+  /** The worker this performance waits on, for `handleClosing`, which comes from whichever thread closes. */
+  @volatile private var waitingOn: W | Null = null
+
+  /** The handle's close begins with this, before it releases anything (see `AbstractBaseHandle`): the op fails as a
+    * closed channel's does, and is taken from its worker while the handle is still what it was registered as. No
+    * later performance can be mistaken for this one, as none gets past `claimWork` on a closing handle.
     */
-  private final class OnHandleClose(worker: W) extends Listener[Try[Unit]] {
-    val lock = null
-    def complete(data: Try[Unit], source: Async.Source[Try[Unit]]): Unit =
-      try if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
-      finally unregister(worker)
-  }
+  final def handleClosing(): Unit =
+    try if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
+    finally
+      val worker = waitingOn
+      if worker != null then unregister(worker.nn)
 
   final def actImmediate(): Boolean =
     handle.claimWork()
@@ -431,16 +435,15 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
     * or cancel. The performer is on `worker`'s thread, so the handle can't be reported ready before it has parked.
     */
   final def awaitReady(worker: W)(using Async): Unit =
-    val closing = OnHandleClose(worker)
-    handle.claimWork()
-    try register(worker)
-    finally handle.releaseWork()
+    waitingOn = worker
     try
-      handle.onClose(closing)
+      handle.claimWork()
+      try register(worker)
+      finally handle.releaseWork()
       parkUntilSettled()
     finally
-      handle.dropOnClose(closing)
       unregister(worker)
+      waitingOn = null
 }
 
 trait NonBlockingReadOps:

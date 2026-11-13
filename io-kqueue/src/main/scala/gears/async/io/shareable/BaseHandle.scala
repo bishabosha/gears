@@ -45,8 +45,19 @@ object HandleState:
 trait BaseHandle extends HandleState.Holder:
   def open(): Unit
   def requestClose(): Boolean
-  def onClose(k: Listener[Try[Unit]]): Unit
-  def dropOnClose(k: Listener[Try[Unit]]): Unit
+
+  /** Makes `op` the handle's waiter for reads, or for writes, if the handle accepts it: what a handle accepts is its
+    * own to decide, and it refuses with an `IllegalArgumentException`.
+    */
+  def setWaiter(read: Boolean, op: ReadinessOp): Unit
+
+  /** Whether `op` was the handle's waiter, and no longer is. */
+  def clearWaiter(read: Boolean, op: ReadinessOp): Boolean
+
+  def hasWaiter(read: Boolean): Boolean
+
+  /** The handle's waiter, claimed with `claimAtReady` while still its waiter, or null if there is none to claim. */
+  def claimWaiter(read: Boolean): ReadinessOp | Null
   def onComplete(k: Listener[Try[Unit]]): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
@@ -65,7 +76,8 @@ abstract class AbstractBaseHandle extends BaseHandle:
   def cleanup()(using ClosePermit): Boolean
 
   final private def closeHandle()(using ClosePermit): Boolean =
-    onClosePromise.complete(WorkpoolScheduler.SuccessUnit)
+    failWaiter(read = true)
+    failWaiter(read = false)
     val closedSync = cleanup()
     if closedSync then
       assert(getState == ClosedState)
@@ -74,7 +86,6 @@ abstract class AbstractBaseHandle extends BaseHandle:
 
   // TODO: promise uses locks, need a nicer lock-free mechanism for close notification
   private val closePromise: Future.Promise[Unit] = Future.Promise()
-  private val onClosePromise: Future.Promise[Unit] = Future.Promise()
 
   protected def completeClose(): Unit =
     closePromise.complete(WorkpoolScheduler.SuccessUnit)
@@ -82,12 +93,43 @@ abstract class AbstractBaseHandle extends BaseHandle:
   final def onComplete(k: Listener[Try[Unit]]): Unit =
     closePromise.onComplete(k)
 
-  final def onClose(k: Listener[Try[Unit]]): Unit =
-    onClosePromise.onComplete(k)
+  /** The ops waiting for the handle to be readable, and to be writable. Guarded by this handle's monitor, which is
+    * what makes a claim and a clear exclude each other (see `ReadinessOp.claimAtReady`).
+    */
+  private var readWaiter: ReadinessOp | Null = null
+  private var writeWaiter: ReadinessOp | Null = null
 
-  /** Best effort, as `Source` has it: a close that has begun may still complete `k`. */
-  final def dropOnClose(k: Listener[Try[Unit]]): Unit =
-    onClosePromise.dropListener(k)
+  /** Whether the handle accepts `op` as its waiter while `pending` is. By default one op waits in each direction, and
+    * a second is refused; one that has settled, whose performer has yet to clear it, is not waiting, and gives way.
+    */
+  protected def acceptsWaiter(read: Boolean, op: ReadinessOp, pending: ReadinessOp | Null): Boolean =
+    pending == null || pending.settled
+
+  final def setWaiter(read: Boolean, op: ReadinessOp): Unit = synchronized {
+    if !acceptsWaiter(read, op, if read then readWaiter else writeWaiter) then
+      throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
+    if read then readWaiter = op else writeWaiter = op
+  }
+
+  final def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = synchronized {
+    val held = (if read then readWaiter else writeWaiter) eq op
+    if held then if read then readWaiter = null else writeWaiter = null
+    held
+  }
+
+  final def hasWaiter(read: Boolean): Boolean = synchronized {
+    (if read then readWaiter else writeWaiter) != null
+  }
+
+  final def claimWaiter(read: Boolean): ReadinessOp | Null = synchronized {
+    val op = if read then readWaiter else writeWaiter
+    if op != null && op.claimAtReady() then op else null
+  }
+
+  /** First in a close, before anything is released: whoever waits fails, and takes itself back from its worker. */
+  private def failWaiter(read: Boolean): Unit =
+    val op = synchronized(if read then readWaiter else writeWaiter)
+    if op != null then op.handleClosing()
 
   final def open(): Unit =
     if compareAndSetState(UnenteredState, IdleState) then ()

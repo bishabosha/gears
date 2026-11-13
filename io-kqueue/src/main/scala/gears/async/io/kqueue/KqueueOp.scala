@@ -50,20 +50,20 @@ trait KqueueReadOps extends PosixReadOps:
   type WorkerSource = KqueuePoller
 
   final def _registerRead(worker: KqueuePoller, handle: KqueueReadable, op: ReadinessOp): Unit =
-    worker.registerWaiter(handle.fd, read = true, op)
+    worker.registerWaiter(handle, read = true, op)
 
   final def _clearRead(worker: KqueuePoller, handle: KqueueReadable, op: ReadinessOp): Unit =
-    worker.clearWaiter(handle.fd, read = true, op)
+    worker.clearWaiter(handle, read = true, op)
 
 trait KqueueWriteOps extends PosixWriteOps:
   type WriteableHandle = KqueueWritable
   type WorkerSource = KqueuePoller
 
   final def _registerWrite(worker: KqueuePoller, handle: KqueueWritable, op: ReadinessOp): Unit =
-    worker.registerWaiter(handle.fd, read = false, op)
+    worker.registerWaiter(handle, read = false, op)
 
   final def _clearWrite(worker: KqueuePoller, handle: KqueueWritable, op: ReadinessOp): Unit =
-    worker.clearWaiter(handle.fd, read = false, op)
+    worker.clearWaiter(handle, read = false, op)
 
 private[kqueue] final class KqueueRead(handle: KqueueReadable, buf: ByteBuffer)
     extends AbstractReadOp[KqueueReadable, KqueuePoller](handle, buf),
