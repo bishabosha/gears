@@ -9,8 +9,14 @@ import gears.async.Future
 import java.nio.ByteBuffer
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.*
+import scala.scalanative.posix.unistd
+import scala.scalanative.unsafe.*
+import scala.scalanative.unsigned.*
 import scala.util.Failure
 
 /** Reads and writes that find their pipe not ready: they wait for the worker's kqueue to report it, and stop waiting
@@ -214,6 +220,56 @@ class KqueueReadinessSuite extends munit.FunSuite {
       io.perform(KqueueOps.write(out, bytes("ok")))
       reader.await
       assertEquals(text(buf), "ok")
+      io.perform(KqueueOps.close(in))
+      io.perform(KqueueOps.close(out))
+    }
+  }
+
+  test("a handle that stopped waiting leaves its listener, so a worker that is kept busy can't hold up its next wait") {
+    onPool(2) { io ?=>
+      val (in, out) = pipe()
+
+      // A read that waits makes its worker the handle's listener.
+      val listenerThread = new AtomicReference[String]("")
+      val first = Future {
+        listenerThread.set(Thread.currentThread().getName())
+        io.perform(KqueueOps.read(in, ByteBuffer.allocate(1)))
+      }
+      AsyncOperations.sleep(50)
+      io.perform(KqueueOps.write(out, bytes("a")))
+      first.await
+
+      // Then the handle is only read when it has something: each write is reported to the listener, to no waiter.
+      var i = 0
+      while i < 64 do
+        io.perform(KqueueOps.write(out, bytes("b")))
+        AsyncOperations.sleep(2)
+        io.perform(KqueueOps.read(in, ByteBuffer.allocate(1)))
+        i += 1
+
+      // The program keeps the listener's worker busy, and a read on the other worker has to wait.
+      val busyFor = 1500L
+      val busy = new AtomicBoolean(false)
+      val reading = new AtomicBoolean(false)
+      val waited = new AtomicLong(-1L)
+      val futures = List.fill(8)(Future {
+        val onListener = Thread.currentThread().getName() == listenerThread.get()
+        if onListener && busy.compareAndSet(false, true) then Thread.sleep(busyFor)
+        else if !onListener && reading.compareAndSet(false, true) then
+          while !busy.get() do Thread.sleep(1)
+          val start = System.nanoTime()
+          val writer = new Thread(() => {
+            Thread.sleep(100)
+            val byte = stackalloc[Byte]()
+            unistd.write(out.fd, byte, 1.toCSize): Unit
+          })
+          writer.start()
+          io.perform(KqueueOps.read(in, ByteBuffer.allocate(1)))
+          waited.set((System.nanoTime() - start) / 1_000_000L)
+      })
+      futures.foreach(_.await)
+      assert(busy.get() && waited.get() >= 0, "the futures did not reach both workers")
+      assert(waited.get() < busyFor - 500, s"the read waited ${waited.get()}ms, for the busy worker")
       io.perform(KqueueOps.close(in))
       io.perform(KqueueOps.close(out))
     }

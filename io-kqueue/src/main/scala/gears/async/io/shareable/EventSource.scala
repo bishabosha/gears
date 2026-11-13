@@ -10,6 +10,11 @@ trait EventSource {
     */
   def holdTimer(op: TimerOp): TimerSource[?]
 
+  /** This source is no longer `handle`'s listener for reads, or for writes: it stops reporting them. Called on this
+    * source's own thread, by the handle, from `readyWaiter`.
+    */
+  def stopListening(handle: BaseHandle, read: Boolean): Unit = ()
+
   /** `handle` is closing: whatever this source keeps to find it by is dropped, before its descriptor is released. */
   def forgetHandle(handle: BaseHandle): Unit = ()
 }

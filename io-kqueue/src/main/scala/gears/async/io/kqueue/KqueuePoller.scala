@@ -33,7 +33,7 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
 
   /** Has the kqueue report `handle` each time it becomes readable, or writable, and at once if it is now: an
     * edge-triggered filter, added once and left until the handle closes, when the kernel takes it with the
-    * descriptor. An op that waits later costs no system call.
+    * descriptor, or gives this listener up (`stopListening`). An op that waits meanwhile costs no system call.
     */
   final def listen(handle: KqueueHandle, read: Boolean): Unit = {
     val fd = handle.fd
@@ -46,6 +46,19 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
     }
   }
 
+  /** Takes the filter off the kqueue, and the handle from `handles` unless this still listens for its other
+    * direction.
+    */
+  override def stopListening(handle: BaseHandle, read: Boolean): Unit = handle match
+    case handle: KqueueHandle =>
+      val fd = handle.fd
+      if !closed then KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
+      if !handle.listenedBy(!read, this) then
+        handlesLock.synchronized {
+          if fd < handles.length && (handles(fd) eq handle) then handles(fd) = null
+        }
+    case _ => ()
+
   /** Before the handle's descriptor is released, so that its number, another handle's next, never finds this one. */
   override def forgetHandle(handle: BaseHandle): Unit = handle match
     case handle: KqueueHandle =>
@@ -56,12 +69,13 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
     case _ => ()
 
   /** `fd` became ready: its handle's waiter does its work, or, finding it not ready after all, waits on for the next
-    * time. With no waiter the handle only counts it, for an op that is about to wait (see `awaitReadiness`).
+    * time. With no waiter the handle only counts it, for an op that is about to wait (see `awaitReadiness`), and to
+    * give this listener up once that has happened too often.
     */
   private def dispatch(fd: Int, read: Boolean): Unit = {
     val handle = handlesLock.synchronized(if fd < handles.length then handles(fd) else null)
     if handle != null then
-      val op = handle.readyWaiter(read)
+      val op = handle.readyWaiter(read, this)
       // If a cancel settles the op as its claim is given back, its performer clears it.
       if op != null && !op.readyWakeup() then op.releaseReady(): Unit
   }

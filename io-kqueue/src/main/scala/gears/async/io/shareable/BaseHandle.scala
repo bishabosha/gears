@@ -62,10 +62,14 @@ trait BaseHandle extends HandleState.Holder:
   /** Whether `op` was the handle's waiter, and no longer is. */
   def clearWaiter(read: Boolean, op: ReadinessOp): Boolean
 
-  /** The handle's listener reports it ready: its waiter, claimed with `claimAtReady` while still its waiter, or null
-    * if there is none to claim.
+  /** `source` reports the handle ready: its waiter, claimed with `claimAtReady` while still its waiter, or null if
+    * there is none to claim. A handle reported ready time after time with no op waiting gives up its listener, which
+    * it tells to `stopListening`: the next op that waits makes its own worker the listener.
     */
-  def readyWaiter(read: Boolean): ReadinessOp | Null
+  def readyWaiter(read: Boolean, source: EventSource): ReadinessOp | Null
+
+  /** Whether `source` is the handle's listener for reads, or for writes. */
+  def listenedBy(read: Boolean, source: EventSource): Boolean
   def onComplete(k: Listener[Try[Unit]]): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
@@ -110,8 +114,8 @@ abstract class AbstractBaseHandle extends BaseHandle:
   private var writeWaiter: ReadinessOp | Null = null
 
   /** The event source listening for the handle to be readable, and to be writable: the first an op waited on, and
-    * the same one for as long as the handle is open, so that only it is woken for the handle. Guarded by this
-    * handle's monitor.
+    * the same one for as long as ops go on waiting (see `idleReportsLimit`), so that only it is woken for the handle.
+    * Guarded by this handle's monitor.
     */
   private var readListener: EventSource | Null = null
   private var writeListener: EventSource | Null = null
@@ -154,10 +158,43 @@ abstract class AbstractBaseHandle extends BaseHandle:
     held
   }
 
-  final def readyWaiter(read: Boolean): ReadinessOp | Null = synchronized {
-    if read then readTick += 1 else writeTick += 1
-    val op = if read then readWaiter else writeWaiter
-    if op != null && op.claimAtReady() then op else null
+  /** How many times in a row the handle is reported ready with no op waiting before it gives up its listener. Until
+    * then an op that waits costs no system call; past it, the handle is taken to be one whose ops find it ready, for
+    * which the reports only wake the listener for nothing, and tie the handle's next wait to a worker that may by
+    * then be kept busy.
+    */
+  protected def idleReportsLimit: Int = 16
+
+  /** Reports with no op waiting since one last was. Guarded by this handle's monitor. */
+  private var readIdleReports = 0
+  private var writeIdleReports = 0
+
+  final def readyWaiter(read: Boolean, source: EventSource): ReadinessOp | Null = {
+    var stop = false
+    val claimed = synchronized {
+      if read then readTick += 1 else writeTick += 1
+      // A report from a source that has stopped listening, already on its way: counted above, for an op about to
+      // wait, but the waiter is its new listener's to claim.
+      if (if read then readListener else writeListener) ne source then null
+      else
+        val op = if read then readWaiter else writeWaiter
+        if op == null then
+          val idle = (if read then readIdleReports else writeIdleReports) + 1
+          stop = idle >= idleReportsLimit
+          if read then readIdleReports = if stop then 0 else idle
+          else writeIdleReports = if stop then 0 else idle
+          if stop then if read then readListener = null else writeListener = null
+          null
+        else
+          if read then readIdleReports = 0 else writeIdleReports = 0
+          if op.claimAtReady() then op else null
+    }
+    if stop then source.stopListening(this, read)
+    claimed
+  }
+
+  final def listenedBy(read: Boolean, source: EventSource): Boolean = synchronized {
+    (if read then readListener else writeListener) eq source
   }
 
   /** First in a close, before anything is released: whoever waits fails. */
