@@ -53,15 +53,9 @@ trait KqueueReadOps extends PosixReadOps:
   type ReadableHandle = KqueueReadable
   type WorkerSource = KqueuePoller
 
-  final def _listenRead(worker: KqueuePoller, handle: KqueueReadable): Unit =
-    worker.listen(handle, read = true)
-
 trait KqueueWriteOps extends PosixWriteOps:
   type WriteableHandle = KqueueWritable
   type WorkerSource = KqueuePoller
-
-  final def _listenWrite(worker: KqueuePoller, handle: KqueueWritable): Unit =
-    worker.listen(handle, read = false)
 
 private[kqueue] final class KqueueRead(handle: KqueueReadable, buf: ByteBuffer)
     extends AbstractReadOp[KqueueReadable, KqueuePoller](handle, buf),

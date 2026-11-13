@@ -397,31 +397,37 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       TimeoutOnWake,
       ReadinessOp { op =>
 
-  /** One attempt at the work, which must not block, with the handle's work claimed: whether it was done. */
-  protected def attempt(): Boolean
+  /** One attempt at the work, which must not block, with the handle's work claimed: how many bytes it moved, which
+    * may be none, as at the end of a stream, or `Blocked` if the handle was not ready, and nothing was done.
+    */
+  protected def attempt(): Int
 
   /** Whether the op waits for the handle to be readable, rather than writable. */
   protected def isRead: Boolean
 
-  /** Has `worker` report when the handle is ready, from now until the handle closes: each time it becomes ready, not
-    * for as long as it is. Called once for a handle and direction, with the handle's work claimed.
-    */
-  protected def listen(worker: W): Unit
-
   final def handleClosing(): Unit =
     if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
 
-  final def actImmediate(): Boolean =
+  private def attemptClaimed(): Int =
     handle.claimWork()
     try attempt()
     finally handle.releaseWork()
 
-  final def readyWakeup(): Boolean =
+  final def actImmediate(): Boolean = attemptClaimed() != AbstractReadinessOp.Blocked
+
+  final def readyWakeup(available: Long, source: EventSource): Boolean =
     val result: Outcome | Null =
       try
         if cancelledDuringWork then TimerHeapOp.CancelledSentinel
-        else if actImmediate() then WorkpoolScheduler.SuccessUnit
-        else null
+        else
+          val moved = attemptClaimed()
+          if moved == AbstractReadinessOp.Blocked then null
+          else
+            // All that was there as the source took its report: whatever comes after it is reported anew, so until
+            // then there is nothing, and the next op need not look. Not at the end of a stream, where nothing was
+            // moved, since no report follows it.
+            if moved > 0 && moved >= available then handle.markDrained(isRead, source)
+            WorkpoolScheduler.SuccessUnit
       catch
         case NonFatal(ex)     => Failure(ex)
         case fatal: Throwable =>
@@ -445,18 +451,13 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       val tick = handle.readinessTick(isRead)
       handle.claimWork()
       try
-        if attempt() then done = true
+        // A handle known to be drained is not tried: its listener reports it when there is something again.
+        if !handle.drainedAt(isRead, tick) && attempt() != AbstractReadinessOp.Blocked then done = true
         else
           val listener = handle.awaitReadiness(isRead, this, tick, self)
-          if listener != null then // else reported ready since the attempt: again
+          if listener != null then // else reported ready since the tick was read: again
             waiting = true
             try
-              if listener eq self then
-                try listen(self)
-                catch
-                  case failure: Throwable =>
-                    handle.listenFailed(isRead, self)
-                    throw failure
               // On the listener's heap, not the performer's: a claim the listener gives back can't then have kept
               // the time limit from firing meanwhile, as one thread does both.
               if hasDeadline then holdTimeoutOn(listener)
@@ -470,6 +471,11 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       finally handle.clearWaiter(isRead, this): Unit
 }
 
+object AbstractReadinessOp:
+
+  /** What `attempt` returns when the handle was not ready. */
+  inline val Blocked = -1
+
 trait NonBlockingReadOps:
   type ReadableHandle <: BaseReadableHandle
   type WorkerSource <: EventSource
@@ -479,7 +485,14 @@ trait NonBlockingReadOps:
 
   /** As `_readHandle`, into `bufs` in order. */
   def _readvHandle(handle: ReadableHandle, bufs: Array[ByteBuffer]): Int
-  def _listenRead(worker: WorkerSource, handle: ReadableHandle): Unit
+
+object AbstractStreamReadOp:
+
+  /** What a read moved, from what `_readHandle` gives: 0 there is a read that would block, and -1 the end of the
+    * stream, which completes the op, moving nothing.
+    */
+  inline def moved(read: Int): Int =
+    if read == 0 then AbstractReadinessOp.Blocked else if read < 0 then 0 else read
 
 /** A read of a stream, whatever it reads into. */
 abstract class AbstractStreamReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H)
@@ -490,8 +503,6 @@ abstract class AbstractStreamReadOp[H <: BaseReadableHandle, W <: EventSource](h
   type WorkerSource = W
 
   protected final def isRead: Boolean = true
-
-  protected final def listen(worker: W): Unit = _listenRead(worker, handle)
 }
 
 abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
@@ -502,8 +513,7 @@ abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle:
     super.onEntry()
     if !buf.hasRemaining() then throw new IllegalArgumentException("A read needs a buffer with room")
 
-  /** 0 is a read that would block; the end of the stream, -1, completes the op. */
-  protected final def attempt(): Boolean = _readHandle(handle, buf) != 0
+  protected final def attempt(): Int = AbstractStreamReadOp.moved(_readHandle(handle, buf))
 }
 
 /** A scattering read: into `bufs` in order, each filled before the next is begun. */
@@ -518,7 +528,7 @@ abstract class AbstractScatterReadOp[H <: BaseReadableHandle, W <: EventSource](
     if !bufs.exists(_.hasRemaining()) then
       throw new IllegalArgumentException("A scattering read needs a buffer with room")
 
-  protected final def attempt(): Boolean = _readvHandle(handle, bufs) != 0
+  protected final def attempt(): Int = AbstractStreamReadOp.moved(_readvHandle(handle, bufs))
 }
 
 /** A read into a buffer of `pool`'s, handed over through `into` as a `Received`. The buffer is taken for each attempt
@@ -535,7 +545,7 @@ abstract class AbstractPooledReadOp[H <: BaseReadableHandle, W <: EventSource](
     super.onEntry()
     if !into.isEmpty then throw new IllegalArgumentException("A pooled read needs an empty slot")
 
-  protected final def attempt(): Boolean =
+  protected final def attempt(): Int =
     val buf = pool.take()
     val read =
       try _readHandle(handle, buf)
@@ -545,11 +555,11 @@ abstract class AbstractPooledReadOp[H <: BaseReadableHandle, W <: EventSource](
           throw failure
     if read == 0 then
       pool.give(buf)
-      false
+      AbstractReadinessOp.Blocked
     else
       buf.flip() // at the end of the stream nothing was read, and the limit is 0
       into.set(pool.received(buf))
-      true
+      AbstractStreamReadOp.moved(read)
 }
 
 trait NonBlockingWriteOps:
@@ -561,7 +571,6 @@ trait NonBlockingWriteOps:
 
   /** As `_writeHandle`, from `bufs` in order. */
   def _writevHandle(handle: WriteableHandle, bufs: Array[ByteBuffer]): Int
-  def _listenWrite(worker: WorkerSource, handle: WriteableHandle): Unit
 
 /** A write to a stream, whatever it writes from. */
 abstract class AbstractStreamWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H)
@@ -572,22 +581,20 @@ abstract class AbstractStreamWriteOp[H <: BaseWritableHandle, W <: EventSource](
   type WorkerSource = W
 
   protected final def isRead: Boolean = false
-
-  protected final def listen(worker: W): Unit = _listenWrite(worker, handle)
 }
 
 abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
     extends AbstractStreamWriteOp[H, W](handle) {
 
-  /** -1 is a write that would block; with nothing to write, 0 completes the op. */
-  protected final def attempt(): Boolean = !buf.hasRemaining() || _writeHandle(handle, buf) >= 0
+  /** A write that would block is -1, which is `Blocked`; with nothing to write, the op is done, moving nothing. */
+  protected final def attempt(): Int = if buf.hasRemaining() then _writeHandle(handle, buf) else 0
 }
 
 /** A gathering write: from `bufs` in order, each drained before the next is begun. */
 abstract class AbstractGatherWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
     extends AbstractStreamWriteOp[H, W](handle) {
 
-  protected final def attempt(): Boolean = !bufs.exists(_.hasRemaining()) || _writevHandle(handle, bufs) >= 0
+  protected final def attempt(): Int = if bufs.exists(_.hasRemaining()) then _writevHandle(handle, bufs) else 0
 }
 
 trait PipeOpener:
