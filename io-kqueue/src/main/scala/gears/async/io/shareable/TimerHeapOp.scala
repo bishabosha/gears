@@ -5,6 +5,7 @@ import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
 import gears.async.io.Deadline
+import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.Slot
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
@@ -464,15 +465,30 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
 trait NonBlockingReadOps:
   type ReadableHandle <: BaseReadableHandle
   type WorkerSource <: EventSource
+
+  /** The bytes read into `buf`, 0 if the read would block, or -1 at the end of the stream. */
   def _readHandle(handle: ReadableHandle, buf: ByteBuffer): Int
+
+  /** As `_readHandle`, into `bufs` in order. */
+  def _readvHandle(handle: ReadableHandle, bufs: Array[ByteBuffer]): Int
   def _listenRead(worker: WorkerSource, handle: ReadableHandle): Unit
 
-abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+/** A read of a stream, whatever it reads into. */
+abstract class AbstractStreamReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H)
     extends AbstractReadinessOp[H, W](handle),
       NonBlockingReadOps {
 
   type ReadableHandle = H
   type WorkerSource = W
+
+  protected final def isRead: Boolean = true
+
+  protected final def listen(worker: W): Unit = _listenRead(worker, handle)
+}
+
+abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+    extends AbstractStreamReadOp[H, W](handle) {
+  if buf.isReadOnly() then throw new IllegalArgumentException("A read needs a buffer it can write to")
 
   override def onEntry(): Unit =
     super.onEntry()
@@ -480,31 +496,90 @@ abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle:
 
   /** 0 is a read that would block; the end of the stream, -1, completes the op. */
   protected final def attempt(): Boolean = _readHandle(handle, buf) != 0
+}
 
-  protected final def isRead: Boolean = true
+/** A scattering read: into `bufs` in order, each filled before the next is begun. */
+abstract class AbstractScatterReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
+    extends AbstractStreamReadOp[H, W](handle) {
+  if bufs.isEmpty then throw new IllegalArgumentException("A scattering read needs a buffer")
+  if bufs.exists(_.isReadOnly()) then
+    throw new IllegalArgumentException("A scattering read needs buffers it can write to")
 
-  protected final def listen(worker: W): Unit = _listenRead(worker, handle)
+  override def onEntry(): Unit =
+    super.onEntry()
+    if !bufs.exists(_.hasRemaining()) then
+      throw new IllegalArgumentException("A scattering read needs a buffer with room")
+
+  protected final def attempt(): Boolean = _readvHandle(handle, bufs) != 0
+}
+
+/** A read into a buffer of `pool`'s, handed over through `into` as a `Received`. The buffer is taken for each attempt
+  * and given back by one that would block, so that a read which waits holds none: a pool with no buffer free refuses
+  * the read as it is attempted.
+  */
+abstract class AbstractPooledReadOp[H <: BaseReadableHandle, W <: EventSource](
+    handle: H,
+    pool: LendingPool,
+    into: Slot[Received]
+) extends AbstractStreamReadOp[H, W](handle) {
+
+  override def onEntry(): Unit =
+    super.onEntry()
+    if !into.isEmpty then throw new IllegalArgumentException("A pooled read needs an empty slot")
+
+  protected final def attempt(): Boolean =
+    val buf = pool.take()
+    val read =
+      try _readHandle(handle, buf)
+      catch
+        case failure: Throwable =>
+          pool.give(buf)
+          throw failure
+    if read == 0 then
+      pool.give(buf)
+      false
+    else
+      buf.flip() // at the end of the stream nothing was read, and the limit is 0
+      into.set(pool.received(buf))
+      true
 }
 
 trait NonBlockingWriteOps:
   type WriteableHandle <: BaseWritableHandle
   type WorkerSource <: EventSource
+
+  /** The bytes written from `buf`, or -1 if the write would block. */
   def _writeHandle(handle: WriteableHandle, buf: ByteBuffer): Int
+
+  /** As `_writeHandle`, from `bufs` in order. */
+  def _writevHandle(handle: WriteableHandle, bufs: Array[ByteBuffer]): Int
   def _listenWrite(worker: WorkerSource, handle: WriteableHandle): Unit
 
-abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+/** A write to a stream, whatever it writes from. */
+abstract class AbstractStreamWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H)
     extends AbstractReadinessOp[H, W](handle),
       NonBlockingWriteOps {
 
   type WriteableHandle = H
   type WorkerSource = W
 
-  /** -1 is a write that would block; with nothing to write, 0 completes the op. */
-  protected final def attempt(): Boolean = !buf.hasRemaining() || _writeHandle(handle, buf) >= 0
-
   protected final def isRead: Boolean = false
 
   protected final def listen(worker: W): Unit = _listenWrite(worker, handle)
+}
+
+abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+    extends AbstractStreamWriteOp[H, W](handle) {
+
+  /** -1 is a write that would block; with nothing to write, 0 completes the op. */
+  protected final def attempt(): Boolean = !buf.hasRemaining() || _writeHandle(handle, buf) >= 0
+}
+
+/** A gathering write: from `bufs` in order, each drained before the next is begun. */
+abstract class AbstractGatherWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
+    extends AbstractStreamWriteOp[H, W](handle) {
+
+  protected final def attempt(): Boolean = !bufs.exists(_.hasRemaining()) || _writevHandle(handle, bufs) >= 0
 }
 
 trait PipeOpener:
@@ -519,6 +594,12 @@ abstract class AbstractMakePipeOp[PR <: BaseReadableHandle, PW <: BaseWritableHa
       PipeOpener {
   type PipeReadable <: PR
   type PipeWritable <: PW
+
+  /** Before anything is opened: an occupied slot could not take its end. */
+  override def onEntry(): Unit =
+    super.onEntry()
+    if !readSlot.isEmpty || !writeSlot.isEmpty then
+      throw new IllegalArgumentException("A pipe needs two empty slots")
 
   final def perform(): Unit =
     val pair = pipe()

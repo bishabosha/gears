@@ -9,6 +9,7 @@ import gears.async.io.Pipes
 import gears.async.io.Received
 import gears.async.io.Repeatable
 import gears.async.io.Slot
+import gears.async.io.shareable.LendingPool
 
 import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
@@ -44,11 +45,16 @@ sealed trait KqueueByteStreams extends ByteStreams { self: KqueueInterface & Kqu
   override def write(handle: Writable, buf: ByteBuffer): KqueueWritableOp & Repeatable =
     KqueueWrite(handle, buf)
 
-  override def read(handle: Readable, bufs: Array[ByteBuffer]): KqueueReadableOp & Repeatable = ???
+  override def read(handle: Readable, bufs: Array[ByteBuffer]): KqueueReadableOp & Repeatable =
+    KqueueScatterRead(handle, bufs)
 
-  override def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueWritableOp & Repeatable = ???
+  override def write(handle: Writable, bufs: Array[ByteBuffer]): KqueueWritableOp & Repeatable =
+    KqueueGatherWrite(handle, bufs)
 
-  override def read(handle: Readable, pool: BufferPool, into: Slot[Received]): KqueueReadableOp & Repeatable = ???
+  override def read(handle: Readable, pool: BufferPool, into: Slot[Received]): KqueueReadableOp & Repeatable =
+    pool match
+      case pool: LendingPool => KqueuePooledRead(handle, pool, into)
+      case _ => throw new IllegalArgumentException("A pooled read takes a pool of this backend's (Backend.pool)")
 }
 
 object KqueueOps extends KqueueInterface, KqueueHandles, KqueueByteStreams, KqueuePipeOps {}

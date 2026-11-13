@@ -42,7 +42,7 @@ class HandleStateSuite extends munit.FunSuite {
     assertEquals(handle.getState, HandleState.ClosedState)
     assertEquals(handle.cleanups.get(), 1)
     intercept[ClosedChannelException](handle.claimWork())
-    assert(handle.requestClose())
+    intercept[ClosedChannelException](handle.requestClose())
     assertEquals(handle.cleanups.get(), 1)
   }
 
@@ -54,6 +54,7 @@ class HandleStateSuite extends munit.FunSuite {
     assertEquals(handle.getState, HandleState.ClosingState)
     assertEquals(handle.claimedWork, 2L)
     intercept[ClosedChannelException](handle.claimWork())
+    intercept[ClosedChannelException](handle.requestClose())
     handle.releaseWork()
     assertEquals(handle.getState, HandleState.ClosingState)
     assertEquals(handle.cleanups.get(), 0)

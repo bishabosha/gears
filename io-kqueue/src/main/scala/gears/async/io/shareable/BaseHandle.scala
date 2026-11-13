@@ -289,6 +289,6 @@ abstract class AbstractBaseHandle extends BaseHandle:
           given ClosePermit = ()
           closeHandle()
         else false // the last work released closes it
-      case ClosingState   => false
-      case ClosedState    => true
-      case UnenteredState => throw new IllegalStateException("Handle is not open")
+      // Closing is done once: a second close fails as any op on a closed handle does.
+      case ClosingState | ClosedState => throw new ClosedChannelException()
+      case UnenteredState             => throw new IllegalStateException("Handle is not open")
