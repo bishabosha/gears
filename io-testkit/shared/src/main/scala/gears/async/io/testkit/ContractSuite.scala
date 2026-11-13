@@ -73,6 +73,30 @@ trait ContractSuite extends FunSuite {
   /** Gives a future just started the time to perform its op and wait in it. */
   protected def settle(io: Io[backend.Interface])(using Async): Unit = io.perform(io.ops.timer(30))
 
+  /** Waits until `latch` is counted down, by another future or a thread of the backend's, performing timers meanwhile:
+    * waiting on the latch itself would hold the caller's thread, which on a pool of workers may be the one that is to
+    * run the future that counts it down.
+    */
+  protected def awaitCount(io: Io[backend.Interface], latch: java.util.concurrent.CountDownLatch)(using Async): Unit =
+    while latch.getCount() > 0 do io.perform(io.ops.timer(1))
+
+  /** The backend's ops, as a run's `Io` has them: taken from a run of its own, for checks whose handles and ops outlive
+    * a run, and are performed in another.
+    */
+  protected final lazy val shared: ContractSuite.Shared[backend.Interface] =
+    ContractSuite.Shared(running(io ?=> io.ops))
+
+  /** An `Io` whose ops are `shared.ops`, so that what one run opens or builds is of the types another run performs. */
+  protected type SharedIo = Io[backend.Interface] { val ops: shared.ops.type }
+
+  /** Runs `body` as `running` does, checking that the run's ops are `shared.ops`, the backend's, as every run's are: a
+    * handle opened, or an op built, in one run may be used in another.
+    */
+  protected def runningShared[T](body: SharedIo ?=> Async.Spawn ?=> T): T = running { io ?=>
+    assert(io.ops.asInstanceOf[AnyRef] eq shared.ops.asInstanceOf[AnyRef], "a run's ops are not the backend's")
+    body(using io.asInstanceOf[SharedIo])
+  }
+
   /** The failure `future` ended with, or null if it completed. */
   protected def failureOf(future: Future[?])(using Async): Throwable | Null =
     future.awaitResult.failed.toOption.orNull
@@ -164,4 +188,10 @@ trait ContractSuite extends FunSuite {
     new String(out, StandardCharsets.UTF_8)
   }
 
+}
+
+object ContractSuite {
+
+  /** A backend's ops, held where they make a stable path for the types of their handles and ops. */
+  final class Shared[I](val ops: I)
 }

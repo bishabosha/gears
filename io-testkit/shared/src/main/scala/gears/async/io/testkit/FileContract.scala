@@ -224,7 +224,11 @@ trait FileContract extends FileSystemFixture {
           val read = io.ops.read(file, buf, offset = 0)
           for expected <- Seq("01", "23", "45") do {
             buf.clear()
-            readExactly(io, read, buf, expected.length)
+            while buf.hasRemaining() do {
+              val before = buf.position()
+              io.perform(read, 60.seconds) // its limit met in time, and gone with it
+              assert(buf.position() > before, "the file ended early")
+            }
             assertEquals(text(buf), expected)
           }
         } finally close(io, file)
