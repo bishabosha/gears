@@ -1,9 +1,9 @@
 package gears.async.io.kqueue
 
 import gears.async.io.kqueue.internal.KqueueLoop
+import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.Poller
-import gears.async.io.shareable.ReadinessOp
 
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
@@ -23,63 +23,47 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
     KqueueLoop.addUser(events(0), WakeEvent) // edge-triggered, registered once
   }
 
-  /** Guards the filters together with whose they are: a filter is on the kqueue only while a handle has an op
-    * waiting on this worker, and both change as one step, as a waiter can be cleared from another thread than this
-    * worker's (by a close, or by a performer that a cancel resumed elsewhere).
-    */
-  private val filtersLock = new Object
+  /** Guards `handles`, which a close clears from its own thread. */
+  private val handlesLock = new Object
 
-  /** The handle with a filter on this kqueue, by descriptor number, which is all an event names. The waiters are the
-    * handle's own. A handle may stay here after its last filter went, until its number is another's: an event that
-    * finds it finds no waiter.
+  /** The handle this kqueue listens for, by descriptor number, which is all an event names. The waiters are the
+    * handle's own.
     */
   private var handles = new Array[KqueueHandle | Null](64)
 
-  /** One-shot and level-triggered: reported once if `fd` is ready now or when it next is, then gone, so that a
-    * descriptor nobody is waiting on any more costs nothing. `dispatch` arms it again for an op still waiting.
+  /** Has the kqueue report `handle` each time it becomes readable, or writable, and at once if it is now: an
+    * edge-triggered filter, added once and left until the handle closes, when the kernel takes it with the
+    * descriptor. An op that waits later costs no system call.
     */
-  private def arm(fd: Int, read: Boolean): Unit =
-    KqueueLoop.createAndRegisterEvents(kq, 1) { changes =>
-      KqueueLoop.addFile(changes(0), fd, read, clear = false, oneShot = true)
-    }
-
-  /** Makes `op` the waiter of `handle`, which may refuse it, and has the kqueue report when it is readable, or
-    * writable.
-    */
-  final def registerWaiter(handle: KqueueHandle, read: Boolean, op: ReadinessOp): Unit = filtersLock.synchronized {
+  final def listen(handle: KqueueHandle, read: Boolean): Unit = {
     val fd = handle.fd
-    handle.setWaiter(read, op)
-    try
+    handlesLock.synchronized {
       if fd >= handles.length then handles = java.util.Arrays.copyOf(handles, Math.max(fd + 1, 2 * handles.length))
       handles(fd) = handle
-      arm(fd, read)
-    catch
-      case failure: Throwable =>
-        handle.clearWaiter(read, op): Unit
-        throw failure
+    }
+    KqueueLoop.createAndRegisterEvents(kq, 1) { changes =>
+      KqueueLoop.addFile(changes(0), fd, read, clear = true)
+    }
   }
 
-  /** Takes `op` back from `handle`, and its filter off the kqueue. An op that is no longer the handle's waiter,
-    * because it gave way, was refused or was already cleared, changes nothing: the filter is then another op's.
-    */
-  final def clearWaiter(handle: KqueueHandle, read: Boolean, op: ReadinessOp): Unit = filtersLock.synchronized {
-    if handle.clearWaiter(read, op) then
+  /** Before the handle's descriptor is released, so that its number, another handle's next, never finds this one. */
+  override def forgetHandle(handle: BaseHandle): Unit = handle match
+    case handle: KqueueHandle =>
       val fd = handle.fd
-      if !closed then KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
-      if (handles(fd) eq handle) && !handle.hasWaiter(!read) then handles(fd) = null
-  }
+      handlesLock.synchronized {
+        if fd < handles.length && (handles(fd) eq handle) then handles(fd) = null
+      }
+    case _ => ()
 
-  /** `fd` is ready: its handle's waiter does its work, or, finding it not ready after all, waits on and has the
-    * kqueue report `fd` again. A waiter that can't be claimed was settled some other way.
+  /** `fd` became ready: its handle's waiter does its work, or, finding it not ready after all, waits on for the next
+    * time. With no waiter the handle only counts it, for an op that is about to wait (see `awaitReadiness`).
     */
   private def dispatch(fd: Int, read: Boolean): Unit = {
-    val handle = filtersLock.synchronized(if fd < handles.length then handles(fd) else null)
-    val op = if handle == null then null else handle.claimWaiter(read)
-    if op != null && !op.readyWakeup() then
-      filtersLock.synchronized {
-        // The claim kept the op its handle's waiter. If a cancel settles it here, its performer clears it.
-        if op.releaseReady() then arm(fd, read)
-      }
+    val handle = handlesLock.synchronized(if fd < handles.length then handles(fd) else null)
+    if handle != null then
+      val op = handle.readyWaiter(read)
+      // If a cancel settles the op as its claim is given back, its performer clears it.
+      if op != null && !op.readyWakeup() then op.releaseReady(): Unit
   }
 
   /** Set before the kqueue is closed, which the worker does as it leaves its loop. */

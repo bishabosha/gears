@@ -6,7 +6,7 @@ trait ReadinessOp:
   /** Whether the op has its outcome, and so no longer waits, whether or not its performer has cleared it yet. */
   def settled: Boolean
 
-  /** Claims the op for the worker that found its handle ready. Only the handle calls it, from `claimWaiter`, while
+  /** Claims the op for the worker that found its handle ready. Only the handle calls it, from `readyWaiter`, while
     * the op is still its waiter: a performer can't leave, and the op be performed again, between the two.
     */
   def claimAtReady(): Boolean
@@ -20,5 +20,5 @@ trait ReadinessOp:
   /** Gives the claim back: whether the op still waits. */
   def releaseReady(): Boolean
 
-  /** The handle is closing: the op fails as a closed channel's does, and takes itself back from its event source. */
+  /** The handle is closing: the op fails as a closed channel's does. */
   def handleClosing(): Unit

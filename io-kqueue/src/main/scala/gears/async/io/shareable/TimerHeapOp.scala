@@ -250,6 +250,11 @@ sealed abstract class AbstractTimerHeapOp
     else timeoutDeadline = TimerHeap.deadlineAfter(t * 1000000L)
   }
 
+  /** Puts the op, which has a time limit, on `source`'s heap, and has `clearTimeout` take it from there. */
+  final def holdTimeoutOn(source: EventSource): Unit =
+    val heap = source.holdTimer(this)
+    timersLock.synchronized { worker = heap }
+
   /** Takes the op off its heap. The time limit stays until the next `setTimeout`: a firing still under way, which
     * `parkUntilSettled` waits for, reads it to tell whether it is the limit that has passed.
     */
@@ -386,28 +391,16 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
   /** One attempt at the work, which must not block, with the handle's work claimed: whether it was done. */
   protected def attempt(): Boolean
 
-  /** Makes this op the handle's waiter, which the handle may refuse, and has `worker` report when the handle is
-    * ready. Called with the handle's work claimed, so not while it closes.
-    */
-  protected def register(worker: W): Unit
+  /** Whether the op waits for the handle to be readable, rather than writable. */
+  protected def isRead: Boolean
 
-  /** Takes this op back from the handle and `worker`, if it is still the handle's waiter: a second call, or one for
-    * an op the handle refused, finds nothing to do.
+  /** Has `worker` report when the handle is ready, from now until the handle closes: each time it becomes ready, not
+    * for as long as it is. Called once for a handle and direction, with the handle's work claimed.
     */
-  protected def unregister(worker: W): Unit
+  protected def listen(worker: W): Unit
 
-  /** The worker this performance waits on, for `handleClosing`, which comes from whichever thread closes. */
-  @volatile private var waitingOn: W | Null = null
-
-  /** The handle's close begins with this, before it releases anything (see `AbstractBaseHandle`): the op fails as a
-    * closed channel's does, and is taken from its worker while the handle is still what it was registered as. No
-    * later performance can be mistaken for this one, as none gets past `claimWork` on a closing handle.
-    */
   final def handleClosing(): Unit =
-    try if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
-    finally
-      val worker = waitingOn
-      if worker != null then unregister(worker.nn)
+    if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
 
   final def actImmediate(): Boolean =
     handle.claimWork()
@@ -431,27 +424,48 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       completeFromReady(result)
       true
 
-  /** Waits for `worker` to find the handle ready and do the work, for the handle to close, or for the op's time limit
-    * or cancel. The performer is on `worker`'s thread, so the handle can't be reported ready before it has parked.
+  /** Does the work at once, which most often does it, or else waits for the handle's listener to find the handle
+    * ready and do it, for the handle to close, or for the op's time limit or cancel. The listener is `self`, the
+    * performer's worker, if the handle had none, and from then on whichever worker that was: it does the work and
+    * resumes the performer, which goes on from there on that worker.
     */
-  final def awaitReady(worker: W)(using Async): Unit =
-    waitingOn = worker
-    try
+  final def performWhenReady(self: W)(using Async): Unit =
+    var waiting = false
+    var done = false
+    while !done && !waiting do
+      val tick = handle.readinessTick(isRead)
       handle.claimWork()
-      try register(worker)
+      try
+        if attempt() then done = true
+        else
+          val listener = handle.awaitReadiness(isRead, this, tick, self)
+          if listener != null then // else reported ready since the attempt: again
+            waiting = true
+            try
+              if listener eq self then
+                try listen(self)
+                catch
+                  case failure: Throwable =>
+                    handle.listenFailed(isRead, self)
+                    throw failure
+              // On the listener's heap, not the performer's: a claim the listener gives back can't then have kept
+              // the time limit from firing meanwhile, as one thread does both.
+              if hasDeadline then holdTimeoutOn(listener)
+            catch
+              case failure: Throwable =>
+                handle.clearWaiter(isRead, this): Unit
+                throw failure
       finally handle.releaseWork()
-      parkUntilSettled()
-    finally
-      unregister(worker)
-      waitingOn = null
+    if waiting then
+      try parkUntilSettled()
+      finally handle.clearWaiter(isRead, this): Unit
 }
 
 trait NonBlockingReadOps:
   type ReadableHandle <: BaseReadableHandle
   type WorkerSource <: EventSource
   def _readHandle(handle: ReadableHandle, buf: ByteBuffer): Int
-  def _registerRead(worker: WorkerSource, handle: ReadableHandle, op: ReadinessOp): Unit
-  def _clearRead(worker: WorkerSource, handle: ReadableHandle, op: ReadinessOp): Unit
+  def _listenRead(worker: WorkerSource, handle: ReadableHandle): Unit
 
 abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
     extends AbstractReadinessOp[H, W](handle),
@@ -467,17 +481,16 @@ abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle:
   /** 0 is a read that would block; the end of the stream, -1, completes the op. */
   protected final def attempt(): Boolean = _readHandle(handle, buf) != 0
 
-  protected final def register(worker: W): Unit = _registerRead(worker, handle, this)
+  protected final def isRead: Boolean = true
 
-  protected final def unregister(worker: W): Unit = _clearRead(worker, handle, this)
+  protected final def listen(worker: W): Unit = _listenRead(worker, handle)
 }
 
 trait NonBlockingWriteOps:
   type WriteableHandle <: BaseWritableHandle
   type WorkerSource <: EventSource
   def _writeHandle(handle: WriteableHandle, buf: ByteBuffer): Int
-  def _registerWrite(worker: WorkerSource, handle: WriteableHandle, op: ReadinessOp): Unit
-  def _clearWrite(worker: WorkerSource, handle: WriteableHandle, op: ReadinessOp): Unit
+  def _listenWrite(worker: WorkerSource, handle: WriteableHandle): Unit
 
 abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
     extends AbstractReadinessOp[H, W](handle),
@@ -489,9 +502,9 @@ abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle
   /** -1 is a write that would block; with nothing to write, 0 completes the op. */
   protected final def attempt(): Boolean = !buf.hasRemaining() || _writeHandle(handle, buf) >= 0
 
-  protected final def register(worker: W): Unit = _registerWrite(worker, handle, this)
+  protected final def isRead: Boolean = false
 
-  protected final def unregister(worker: W): Unit = _clearWrite(worker, handle, this)
+  protected final def listen(worker: W): Unit = _listenWrite(worker, handle)
 }
 
 trait PipeOpener:

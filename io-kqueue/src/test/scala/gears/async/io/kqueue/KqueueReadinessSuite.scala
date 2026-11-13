@@ -166,6 +166,59 @@ class KqueueReadinessSuite extends munit.FunSuite {
     }
   }
 
+  test("reads that each wait, from whichever worker, are woken by the handle's one listener") {
+    onPool(4) { io ?=>
+      val (pingIn, pingOut) = pipe()
+      val (pongIn, pongOut) = pipe()
+      val rounds = 2000
+      val echo = Future {
+        val buf = ByteBuffer.allocate(1)
+        var i = 0
+        while i < rounds do
+          buf.clear()
+          io.perform(KqueueOps.read(pingIn, buf))
+          buf.flip()
+          io.perform(KqueueOps.write(pongOut, buf))
+          i += 1
+      }
+      var i = 0
+      while i < rounds do
+        // Each round from a future of its own, which the pool gives to its workers in turn.
+        val got = Future {
+          io.perform(KqueueOps.write(pingOut, ByteBuffer.wrap(Array((i % 100).toByte))))
+          val buf = ByteBuffer.allocate(1)
+          io.perform(KqueueOps.read(pongIn, buf))
+          buf.get(0)
+        }.await
+        assertEquals(got, (i % 100).toByte)
+        i += 1
+      echo.await
+      List(pingIn, pingOut, pongIn, pongOut).foreach(handle => io.perform(KqueueOps.close(handle)))
+    }
+  }
+
+  test("reads time out on whichever worker they wait from, and the handle still reads") {
+    onPool(4) { io ?=>
+      val (in, out) = pipe()
+      var i = 0
+      while i < 100 do
+        val timedOut = Future {
+          try { io.perform(KqueueOps.read(in, ByteBuffer.allocate(8)), 2.millis); false }
+          catch case _: TimeoutException => true
+        }.await
+        assert(timedOut)
+        i += 1
+      val buf = ByteBuffer.allocate(8)
+      val reader = Future(io.perform(KqueueOps.read(in, buf), 10.seconds))
+      AsyncOperations.sleep(20)
+      io.perform(KqueueOps.write(out, bytes("ok")))
+      reader.await
+      assertEquals(text(buf), "ok")
+      io.perform(KqueueOps.close(in))
+      io.perform(KqueueOps.close(out))
+    }
+  }
+
   test("many reads and writes pass through a pipe in order") {
     onPool(4) { io ?=>
       val (in, out) = pipe()

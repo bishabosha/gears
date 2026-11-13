@@ -258,13 +258,8 @@ object WorkpoolScheduler {
         op: Op1 & AbstractWriteOp[backend.Writable & BaseWritableHandle, ThisWorkerSource]
     )(using Async): Unit = performWhenReady(op)
 
-    /** Tries the op at once, which most often does it. Only an op that has to wait goes on the heap, for its time
-      * limit, and to this worker's event source.
-      */
     private def performWhenReady(op: Op1 & AbstractReadinessOp[?, ThisWorkerSource])(using Async): Unit =
-      if !op.actImmediate() then
-        if op.hasDeadline then addTimer(op)
-        op.awaitReady(asThisWorkerSource)
+      op.performWhenReady(asThisWorkerSource)
 
     def isEmpty(): Boolean = inbox.isEmpty() && ready.isEmpty()
 

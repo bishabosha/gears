@@ -171,6 +171,12 @@ abstract class TimerHeapImpl[A <: TimerOp] extends Poller with TimerHeap[A] {
     if isNext then wake()
   }
 
+  /** `EventSource.holdTimer`, for a heap that is one: the op is one of this heap's own kind, as its performer has it. */
+  final def holdTimer(timerOp: TimerOp): TimerSource[?] = {
+    addTimer(timerOp.asInstanceOf[A])
+    this
+  }
+
   /** Doesn't wake the worker, which at worst wakes for a timer no longer there, and finds nothing to do. */
   final override def removeTimer[A1 >: A <: TimerOp](timerOp: A1): Boolean = timerLock.synchronized {
     val held = holds(timerOp)

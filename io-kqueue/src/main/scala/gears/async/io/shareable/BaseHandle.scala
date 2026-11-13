@@ -46,18 +46,26 @@ trait BaseHandle extends HandleState.Holder:
   def open(): Unit
   def requestClose(): Boolean
 
+  /** Counts the times the handle was reported readable, or writable: read before an attempt, for `awaitReadiness`. */
+  def readinessTick(read: Boolean): Int
+
   /** Makes `op` the handle's waiter for reads, or for writes, if the handle accepts it: what a handle accepts is its
-    * own to decide, and it refuses with an `IllegalArgumentException`.
+    * own to decide, and it refuses with an `IllegalArgumentException`. Returns the event source that listens for the
+    * handle, which is `self` if none did, for `self` then to start listening; or null, with `op` not waiting, if the
+    * handle was reported ready since `sinceTick`, for the performer to try again.
     */
-  def setWaiter(read: Boolean, op: ReadinessOp): Unit
+  def awaitReadiness(read: Boolean, op: ReadinessOp, sinceTick: Int, self: EventSource): EventSource | Null
+
+  /** `self`, made the handle's listener by `awaitReadiness`, could not listen after all. */
+  def listenFailed(read: Boolean, self: EventSource): Unit
 
   /** Whether `op` was the handle's waiter, and no longer is. */
   def clearWaiter(read: Boolean, op: ReadinessOp): Boolean
 
-  def hasWaiter(read: Boolean): Boolean
-
-  /** The handle's waiter, claimed with `claimAtReady` while still its waiter, or null if there is none to claim. */
-  def claimWaiter(read: Boolean): ReadinessOp | Null
+  /** The handle's listener reports it ready: its waiter, claimed with `claimAtReady` while still its waiter, or null
+    * if there is none to claim.
+    */
+  def readyWaiter(read: Boolean): ReadinessOp | Null
   def onComplete(k: Listener[Try[Unit]]): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
@@ -78,6 +86,8 @@ abstract class AbstractBaseHandle extends BaseHandle:
   final private def closeHandle()(using ClosePermit): Boolean =
     failWaiter(read = true)
     failWaiter(read = false)
+    forgetListener(read = true)
+    forgetListener(read = false)
     val closedSync = cleanup()
     if closedSync then
       assert(getState == ClosedState)
@@ -99,16 +109,43 @@ abstract class AbstractBaseHandle extends BaseHandle:
   private var readWaiter: ReadinessOp | Null = null
   private var writeWaiter: ReadinessOp | Null = null
 
+  /** The event source listening for the handle to be readable, and to be writable: the first an op waited on, and
+    * the same one for as long as the handle is open, so that only it is woken for the handle. Guarded by this
+    * handle's monitor.
+    */
+  private var readListener: EventSource | Null = null
+  private var writeListener: EventSource | Null = null
+
+  /** Written under this handle's monitor. */
+  @volatile private var readTick = 0
+  @volatile private var writeTick = 0
+
+  final def readinessTick(read: Boolean): Int = if read then readTick else writeTick
+
   /** Whether the handle accepts `op` as its waiter while `pending` is. By default one op waits in each direction, and
     * a second is refused; one that has settled, whose performer has yet to clear it, is not waiting, and gives way.
     */
   protected def acceptsWaiter(read: Boolean, op: ReadinessOp, pending: ReadinessOp | Null): Boolean =
     pending == null || pending.settled
 
-  final def setWaiter(read: Boolean, op: ReadinessOp): Unit = synchronized {
-    if !acceptsWaiter(read, op, if read then readWaiter else writeWaiter) then
-      throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
-    if read then readWaiter = op else writeWaiter = op
+  final def awaitReadiness(read: Boolean, op: ReadinessOp, sinceTick: Int, self: EventSource): EventSource | Null =
+    synchronized {
+      if !acceptsWaiter(read, op, if read then readWaiter else writeWaiter) then
+        throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
+      // The listener may be another thread's, and have reported the handle ready, to no waiter, after the attempt.
+      if readinessTick(read) != sinceTick then null
+      else
+        if read then readWaiter = op else writeWaiter = op
+        var listener = if read then readListener else writeListener
+        if listener == null then
+          listener = self
+          if read then readListener = self else writeListener = self
+        listener
+    }
+
+  final def listenFailed(read: Boolean, self: EventSource): Unit = synchronized {
+    if read then { if readListener eq self then readListener = null }
+    else if writeListener eq self then writeListener = null
   }
 
   final def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = synchronized {
@@ -117,19 +154,23 @@ abstract class AbstractBaseHandle extends BaseHandle:
     held
   }
 
-  final def hasWaiter(read: Boolean): Boolean = synchronized {
-    (if read then readWaiter else writeWaiter) != null
-  }
-
-  final def claimWaiter(read: Boolean): ReadinessOp | Null = synchronized {
+  final def readyWaiter(read: Boolean): ReadinessOp | Null = synchronized {
+    if read then readTick += 1 else writeTick += 1
     val op = if read then readWaiter else writeWaiter
     if op != null && op.claimAtReady() then op else null
   }
 
-  /** First in a close, before anything is released: whoever waits fails, and takes itself back from its worker. */
+  /** First in a close, before anything is released: whoever waits fails. */
   private def failWaiter(read: Boolean): Unit =
     val op = synchronized(if read then readWaiter else writeWaiter)
     if op != null then op.handleClosing()
+
+  /** Then the listeners drop the handle, while its descriptor is still its own. What they registered with the kernel
+    * goes as the descriptor is closed.
+    */
+  private def forgetListener(read: Boolean): Unit =
+    val listener = synchronized(if read then readListener else writeListener)
+    if listener != null then listener.forgetHandle(this)
 
   final def open(): Unit =
     if compareAndSetState(UnenteredState, IdleState) then ()

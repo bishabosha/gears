@@ -16,7 +16,6 @@ import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.AbstractWriteOp
-import gears.async.io.shareable.ReadinessOp
 import gears.async.io.shareable.RepeatableAbstractTimerHeapOp
 import gears.async.io.shareable.SingleUseAbstractTimerHeapOp
 import gears.async.io.shareable.TimerHeap
@@ -49,21 +48,15 @@ trait KqueueReadOps extends PosixReadOps:
   type ReadableHandle = KqueueReadable
   type WorkerSource = KqueuePoller
 
-  final def _registerRead(worker: KqueuePoller, handle: KqueueReadable, op: ReadinessOp): Unit =
-    worker.registerWaiter(handle, read = true, op)
-
-  final def _clearRead(worker: KqueuePoller, handle: KqueueReadable, op: ReadinessOp): Unit =
-    worker.clearWaiter(handle, read = true, op)
+  final def _listenRead(worker: KqueuePoller, handle: KqueueReadable): Unit =
+    worker.listen(handle, read = true)
 
 trait KqueueWriteOps extends PosixWriteOps:
   type WriteableHandle = KqueueWritable
   type WorkerSource = KqueuePoller
 
-  final def _registerWrite(worker: KqueuePoller, handle: KqueueWritable, op: ReadinessOp): Unit =
-    worker.registerWaiter(handle, read = false, op)
-
-  final def _clearWrite(worker: KqueuePoller, handle: KqueueWritable, op: ReadinessOp): Unit =
-    worker.clearWaiter(handle, read = false, op)
+  final def _listenWrite(worker: KqueuePoller, handle: KqueueWritable): Unit =
+    worker.listen(handle, read = false)
 
 private[kqueue] final class KqueueRead(handle: KqueueReadable, buf: ByteBuffer)
     extends AbstractReadOp[KqueueReadable, KqueuePoller](handle, buf),
