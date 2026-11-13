@@ -132,20 +132,20 @@ object NonBlocking {
   //   }
   // }
 
-  // /** Drains `buf` into `fd` between position and limit. Returns the number of bytes written, or -1 if the write would
-  //   * block.
-  //   */
-  // def write(fd: Int, buf: ByteBuffer): Int =
-  //   NativeBuffer.staged(buf, copyIn = true, copyOut = false)(writeAddressable(fd, _))
+  /** Drains `buf` into `fd` between position and limit. Returns the number of bytes written, or -1 if the write would
+    * block.
+    */
+  def write(fd: Int, buf: ByteBuffer): Int =
+    NativeBuffer.staged(buf, copyIn = true, copyOut = false)(writeAddressable(fd, _))
 
-  // private def writeAddressable(fd: Int, buf: ByteBuffer): Int = {
-  //   val written = Unblocked.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
-  //   if written < 0 then {
-  //     if !wouldBlock then throw new IOException(s"Failed to write to descriptor $fd: ${cError()}")
-  //     -1
-  //   } else {
-  //     NativeBuffer.advance(buf, written.toInt)
-  //     written.toInt
-  //   }
-  // }
+  private def writeAddressable(fd: Int, buf: ByteBuffer): Int = {
+    val written = Unblocked.write(fd, NativeBuffer.atPosition(buf), buf.remaining().toCSize)
+    if written < 0 then {
+      if !wouldBlock then throw new IOException(s"Failed to write to descriptor $fd: ${cError()}")
+      -1
+    } else {
+      NativeBuffer.advance(buf, written.toInt)
+      written.toInt
+    }
+  }
 }

@@ -7,6 +7,7 @@ import gears.async.io.{shareable => ClosingState}
 import gears.async.io.{shareable => UnenteredState}
 
 import java.io.IOException
+import java.nio.channels.ClosedChannelException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import scala.util.Try
@@ -44,6 +45,8 @@ object HandleState:
 trait BaseHandle extends HandleState.Holder:
   def open(): Unit
   def requestClose(): Boolean
+  def onClose(k: Listener[Try[Unit]]): Unit
+  def dropOnClose(k: Listener[Try[Unit]]): Unit
   def onComplete(k: Listener[Try[Unit]]): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
@@ -62,6 +65,7 @@ abstract class AbstractBaseHandle extends BaseHandle:
   def cleanup()(using ClosePermit): Boolean
 
   final private def closeHandle()(using ClosePermit): Boolean =
+    onClosePromise.complete(WorkpoolScheduler.SuccessUnit)
     val closedSync = cleanup()
     if closedSync then
       assert(getState == ClosedState)
@@ -70,12 +74,20 @@ abstract class AbstractBaseHandle extends BaseHandle:
 
   // TODO: promise uses locks, need a nicer lock-free mechanism for close notification
   private val closePromise: Future.Promise[Unit] = Future.Promise()
+  private val onClosePromise: Future.Promise[Unit] = Future.Promise()
 
   protected def completeClose(): Unit =
     closePromise.complete(WorkpoolScheduler.SuccessUnit)
 
   final def onComplete(k: Listener[Try[Unit]]): Unit =
     closePromise.onComplete(k)
+
+  final def onClose(k: Listener[Try[Unit]]): Unit =
+    onClosePromise.onComplete(k)
+
+  /** Best effort, as `Source` has it: a close that has begun may still complete `k`. */
+  final def dropOnClose(k: Listener[Try[Unit]]): Unit =
+    onClosePromise.dropListener(k)
 
   final def open(): Unit =
     if compareAndSetState(UnenteredState, IdleState) then ()
@@ -102,7 +114,7 @@ abstract class AbstractBaseHandle extends BaseHandle:
           // spin until the state changes
           done = false
         case ClosedState | ClosingState =>
-          throw new IOException("Handle is closed")
+          throw new ClosedChannelException()
         case UnenteredState =>
           throw new IOException("Handle is not open")
 

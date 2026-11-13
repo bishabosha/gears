@@ -17,6 +17,7 @@ import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
 import gears.async.io.shareable.WorkpoolScheduler.DoAfter
 import gears.async.native.NativeSuspend
 
+import java.io.IOException
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Success
@@ -181,7 +182,12 @@ object WorkpoolScheduler {
   }
 
   abstract class Worker[Op1 <: TimerOp, B <: Backend { type Op = Op1 }](val id: Int, val backend: B)
-      extends TimerHeap[Op1 | DoAfter] {
+      extends TimerHeapImpl[Op1 | DoAfter],
+        EventSource {
+
+    type ThisWorkerSource <: EventSource
+    def asThisWorkerSource: this.type & ThisWorkerSource
+
     // private[kqueue] val inbox: java.util.concurrent.ArrayBlockingQueue[Runnable] =
     //   new java.util.concurrent.ArrayBlockingQueue[Runnable](1024)
     private val inbox: java.util.concurrent.ConcurrentLinkedQueue[Runnable] =
@@ -243,6 +249,22 @@ object WorkpoolScheduler {
         shouldWait = true
       if !op.pollClose() then shouldWait = true
       if shouldWait then op.parkUntilSettled()
+
+    def performRead(
+        op: Op1 & AbstractReadOp[backend.Readable & BaseReadableHandle, ThisWorkerSource]
+    )(using Async): Unit = performWhenReady(op)
+
+    def performWrite(
+        op: Op1 & AbstractWriteOp[backend.Writable & BaseWritableHandle, ThisWorkerSource]
+    )(using Async): Unit = performWhenReady(op)
+
+    /** Tries the op at once, which most often does it. Only an op that has to wait goes on the heap, for its time
+      * limit, and to this worker's event source.
+      */
+    private def performWhenReady(op: Op1 & AbstractReadinessOp[?, ThisWorkerSource])(using Async): Unit =
+      if !op.actImmediate() then
+        if op.hasDeadline then addTimer(op)
+        op.awaitReady(asThisWorkerSource)
 
     def isEmpty(): Boolean = inbox.isEmpty() && ready.isEmpty()
 
@@ -309,7 +331,7 @@ object WorkpoolScheduler {
         runReady()
         drainInbox()
         // `stop`'s wake-up may have been spent while the inbox was still draining.
-        if !stopped then waitForDeadline(peekNextDeadline())
+        if !stopped then guarded(waitForDeadline(peekNextDeadline()))
       exited = true
       // A task added before `exited` showed is either run here or taken back by `submit`, never lost.
       while !isEmpty() do

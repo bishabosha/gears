@@ -12,7 +12,7 @@ class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, wor
 
   override def makeWorker(id: Int): KqueueWorker = new KqueueWorker(id)
 
-  class KqueueWorker(id: Int) extends WorkpoolScheduler.Worker(id, KqueueBackend), KqueuePoller {
+  class KqueueWorker(id: Int) extends WorkpoolScheduler.Worker(id, KqueueBackend), KqueuePoller(255) {
 
     /** either schedules a waiter (false), or completes immediately (true) */
     override def performOp(op: KqueueBackend.Op)(using Async): Unit = {
@@ -28,10 +28,9 @@ class KqueueScheduler(workers: Int) extends WorkpoolScheduler(KqueueBackend, wor
         case close: KqueueCloseHandle =>
           performClose(close)
         case read: KqueueRead =>
-          if read.actImmediate() then
-            // completed immediately
-            ()
-          else throw new IOException("Read operation could not be completed immediately")
+          performRead(read)
+        case write: KqueueWrite =>
+          performWrite(write)
     }
   }
 }

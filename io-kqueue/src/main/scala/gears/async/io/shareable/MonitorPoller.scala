@@ -1,6 +1,9 @@
 package gears.async.io.shareable
 
-trait MonitorPoller extends Poller {
+trait MonitorPoller extends Poller, EventSource {
+  type ThisWorkerSource = MonitorPoller
+  def asThisWorkerSource: this.type & ThisWorkerSource = this
+
   private val notifier = new Object
 
   protected def wake(): Unit = notifier.synchronized {

@@ -24,7 +24,8 @@ sealed trait KqueueCoreOps extends KqueueBaseOps {
   override def read(handle: Readable, buf: ByteBuffer): KqueueReadableOp & Repeatable =
     KqueueRead(handle, buf)
 
-  override def write(handle: Writable, buf: ByteBuffer): KqueueWritableOp & Repeatable = ???
+  override def write(handle: Writable, buf: ByteBuffer): KqueueWritableOp & Repeatable =
+    KqueueWrite(handle, buf)
 
   override def read(handle: Readable, bufs: Array[ByteBuffer]): KqueueReadableOp & Repeatable = ???
 
