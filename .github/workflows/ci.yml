@@ -39,8 +39,8 @@ jobs:
     - uses: sbt/setup-sbt@v1
     - name: Test
       run: sbt rootJVM/test
-  # The I/O interface's contracts over the reference backend, the only backend so far, on the JVM; the testkit, which a
-  # backend on any platform runs, compiled for the other two.
+  # The I/O interface's contracts over the reference backend on the JVM; the testkit, which a backend on any platform
+  # runs, compiled for the other two.
   test-io:
     strategy:
       fail-fast: false
@@ -58,6 +58,105 @@ jobs:
     - uses: sbt/setup-sbt@v1
     - name: Test
       run: sbt 'ioReference/test; ioTestkitJVM/test; ioReferenceDemos/compile; ioTestkitNative/compile; ioTestkitJS/compile'
+  # The reactor runtime and the NIO backend on the JVM, with NIO's demo application, on the JDK the core is built for
+  # and on the newest: a carrier's JDK internals change between releases (JDK 27 is where a carrier's path-buffer cache
+  # handed its caller a carried thread's path), so the pool's carriers are checked on both.
+  test-io-jvm:
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [25, 27]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: coursier/cache-action@v6
+    - uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+    - uses: sbt/setup-sbt@v1
+    - name: Test
+      run: sbt 'ioRuntimeJVM/test; ioNio/test; ioNioDemos/compile'
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
+  # The bench on the JVM, built: JDK 27, since the plain JDK bench (`JdkBench`) uses the preview StructuredTaskScope
+  # API of JDK 26 onwards (`StructuredTaskScope.open`), which no earlier JDK has.
+  test-io-bench-jvm:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: coursier/cache-action@v6
+    - uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 27
+    - uses: sbt/setup-sbt@v1
+    - name: Build
+      run: sbt 'ioBenchJVM/compile; ceBenchJVM/compile'
+  # The backend for macOS alone, kqueue, which neither builds nor runs on Linux, and what uses it: the runtime on Scala
+  # Native, and the tests driving the demo and bench executables. Each step runs whether or not the one before passed,
+  # so that every suite reports. JDK 27, since the tests start the JVM bench, which needs it (see test-io-bench-jvm).
+  test-io-macos:
+    strategy:
+      fail-fast: false
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    - uses: coursier/cache-action@v6
+    - uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: 27
+    - uses: sbt/setup-sbt@v1
+    - name: Test the runtime
+      run: sbt ioRuntimeNative/test
+    - name: Test kqueue
+      if: ${{ !cancelled() }}
+      run: sbt ioKqueue/test
+    - name: Test the demos
+      if: ${{ !cancelled() }}
+      run: sbt 'ioTestkitNative/test; ioDemosTests/test'
+    - name: Report failed tests
+      if: failure()
+      # sbt 2 runs commands through its server, so CI's log shows only which suites failed; the JUnit reports have each
+      # failed test and its failure.
+      run: |
+        find . -path '*/test-reports/*.xml' -print0 | xargs -0 -r awk '
+          /<testsuite / { match($0, / name="[^"]*"/); suite = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<testcase / { match($0, / name="[^"]*"/); test = substr($0, RSTART + 7, RLENGTH - 8) }
+          /<(failure|error)[ >]/ { print "FAILED " suite " > " test; shown = 25 }
+          shown > 0 { print "    " $0; shown--; if ($0 ~ /<\/(failure|error)>/) shown = 0 }'
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.job }}
+        path: '**/test-reports/*.xml'
   test-native:
     strategy:
       fail-fast: false
