@@ -2,6 +2,7 @@ package gears.async.io
 package kqueue
 
 import gears.async.io.shareable.AbstractBaseHandle
+import gears.async.io.shareable.CloseListener
 import gears.async.io.shareable.HandleState
 
 import java.nio.channels.ClosedChannelException
@@ -61,6 +62,27 @@ class HandleStateSuite extends munit.FunSuite {
     handle.releaseWork()
     assertEquals(handle.getState, HandleState.ClosedState)
     assertEquals(handle.cleanups.get(), 1)
+  }
+
+  test("the owner of a close is told once it is done, whether it asks before or after") {
+    val told = AtomicInteger(0)
+    val owner = new CloseListener { def handleClosed(): Unit = told.incrementAndGet(): Unit }
+
+    val busy = TestHandle()
+    busy.claimWork()
+    assert(!busy.requestClose())
+    busy.onClosed(owner)
+    assertEquals(told.get(), 0)
+    intercept[IllegalStateException](busy.onClosed(owner))
+    busy.releaseWork()
+    assertEquals(told.get(), 1)
+
+    val late = TestHandle()
+    late.claimWork()
+    assert(!late.requestClose())
+    late.releaseWork() // closed before its owner asks
+    late.onClosed(owner)
+    assertEquals(told.get(), 2)
   }
 
   test("threads claiming and releasing against a close leave the handle closed once, with no work claimed") {

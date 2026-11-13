@@ -1,13 +1,10 @@
 package gears.async.io.shareable
 
-import gears.async.Async
-import gears.async.Future
-import gears.async.Listener
 
 import java.io.IOException
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.atomic.AtomicLong
-import scala.util.Try
+import java.util.concurrent.atomic.AtomicReference
 
 /** A handle's state and the work claimed on it, in one word, so that each changes with regard to the other in one
   * step: the state in the top byte, and in the 56 bits below it the count of the work now claimed.
@@ -126,12 +123,23 @@ trait BaseHandle extends HandleState.Holder:
 
   /** Whether `source` is the handle's listener for reads, or for writes. */
   def listenedBy(read: Boolean, source: EventSource): Boolean
-  def onComplete(k: Listener[Try[Unit]]): Unit
+
+  /** Has `owner` told once the handle is closed, at once if it already is. For whoever's `requestClose` began the
+    * close and returned false: a close has one owner, so one listener at most.
+    */
+  def onClosed(owner: CloseListener): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
 
 trait BaseReadableHandle extends BaseHandle
 trait BaseWritableHandle extends BaseHandle
+
+/** Told that a handle's close is done, by whichever thread finished it. */
+trait CloseListener:
+  def handleClosed(): Unit
+
+object AbstractBaseHandle:
+  private[shareable] case object Closed
 
 abstract class AbstractBaseHandle extends BaseHandle:
   import HandleState.{ClosedState, ClosingState, OpenState, UnenteredState}
@@ -154,14 +162,22 @@ abstract class AbstractBaseHandle extends BaseHandle:
       completeClose()
     closedSync
 
-  // TODO: promise uses locks, need a nicer lock-free mechanism for close notification
-  private val closePromise: Future.Promise[Unit] = Future.Promise()
+  /** Whoever waits for the close to be done: null until there is one, its owner while it waits, and `Closed` from
+    * when the close is done, whichever comes first. The owner is told exactly once, by whichever of the two comes
+    * second.
+    */
+  private val closeListener = AtomicReference[CloseListener | AbstractBaseHandle.Closed.type | Null](null)
 
   protected def completeClose(): Unit =
-    closePromise.complete(WorkpoolScheduler.SuccessUnit)
+    closeListener.getAndSet(AbstractBaseHandle.Closed) match
+      case owner: CloseListener => owner.handleClosed()
+      case _                    => ()
 
-  final def onComplete(k: Listener[Try[Unit]]): Unit =
-    closePromise.onComplete(k)
+  final def onClosed(owner: CloseListener): Unit =
+    if !closeListener.compareAndSet(null, owner) then
+      closeListener.get() match
+        case AbstractBaseHandle.Closed => owner.handleClosed()
+        case _ => throw new IllegalStateException("A close already has its owner waiting")
 
   /** The ops waiting for the handle to be readable, and to be writable. Guarded by this handle's monitor, which is
     * what makes a claim and a clear exclude each other (see `ReadinessOp.claimAtReady`).

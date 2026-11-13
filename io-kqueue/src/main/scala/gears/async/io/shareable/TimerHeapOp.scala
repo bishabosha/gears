@@ -368,17 +368,25 @@ sealed abstract class ImmediateOp extends SingleUseAbstractTimerHeapOp, TimeoutO
   def perform(): Unit
 }
 
-abstract class AbstractCloseOp(val handle: BaseHandle) extends SingleUseAbstractTimerHeapOp, TimeoutOnWake {
+abstract class AbstractCloseOp(val handle: BaseHandle)
+    extends SingleUseAbstractTimerHeapOp,
+      TimeoutOnWake,
+      CloseListener {
+
+  /** Whether the handle is closed already. If not, work claimed on it is still under way, and the last of it to be
+    * released closes the handle and tells this op, its one owner.
+    */
   final def pollClose(): Boolean =
     if handle.requestClose() then true
     else
-      handle.onComplete(Listener.acceptingListener[Try[Unit]] { (res, _) =>
-        // TODO: !!IMPORTANT, if this was not a single use op then we'd have to protect
-        // against Re-entrancy here, as removing listeners is best effort.
-        if claimAtCloseFire() then completeFromCloseFire(res)
-        else () // so far only could be cancelled or timer fired
-      })
+      handle.onClosed(this)
       false
+
+  /** The op is performed once, so this can only be for the performance that waits; it may by then have been
+    * cancelled or timed out, and the handle closes all the same.
+    */
+  final def handleClosed(): Unit =
+    if claimAtCloseFire() then completeFromCloseFire(WorkpoolScheduler.SuccessUnit)
 }
 
 /** An op that does its work when its handle is ready for it: tried at once by its performer and, if the handle was not
