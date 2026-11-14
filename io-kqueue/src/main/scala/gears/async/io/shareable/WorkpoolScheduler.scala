@@ -152,13 +152,15 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
     // The check alone can pass just before the workers leave.
     else if !nextWorker().submit(body) then throw new IllegalStateException("Scheduler has shut down")
 
-  /** A task for `thief`, which has nothing to do, from another worker's inbox, the next worker's first: or null. */
+  /** A task for `thief`, which has nothing to do, to run now, with half of what the worker it came from had to spare
+    * moved to the thief's inbox: from the next worker with tasks to spare, or null.
+    */
   private def stealFor(thief: Worker[Op1]): Runnable | Null = {
     val count = workerGroup.length
     var task: Runnable | Null = null
     var i = 1
     while task == null && i < count do
-      task = workerGroup((thief.id + i) % count).takeForThief()
+      task = workerGroup((thief.id + i) % count).takeHalfFor(thief)
       i += 1
     task
   }
@@ -286,10 +288,32 @@ object WorkpoolScheduler {
       removed
     }
 
-    /** For a worker with nothing to do: a task of this one's, which it has not come to yet, if it has more than it
-      * will come to soon (`surplus`). A worker that is merely awake does not take what another is about to run.
+    /** For `thief`, a worker with nothing to do, on its own thread: half of this worker's tasks that it has not come
+      * to yet, the oldest, if it has more than it will come to soon (`surplus`). One is returned for the thief to run
+      * now, and the rest are put in the thief's inbox; null if there is nothing to take. Half at once, not one at a
+      * time: a thief that came back for each would get few of them before this worker had run the rest, and how many
+      * would be down to how the two happened to interleave. A worker that is merely awake does not take what another
+      * is about to run.
       */
-    private[WorkpoolScheduler] def takeForThief(): Runnable | Null = if surplus then takeNext() else null
+    private[WorkpoolScheduler] def takeHalfFor(thief: Worker[?]): Runnable | Null =
+      if !surplus then null
+      else
+        var more = (queued.get() + 1) / 2 - 1 // besides the first
+        val first = takeNext()
+        if first != null then
+          while more > 0 do
+            val task = takeNext()
+            if task == null then more = 0
+            else
+              thief.adopt(task)
+              more -= 1
+        first
+
+    /** On this worker's own thread: a task taken from another worker, behind what this one already has. */
+    private def adopt(task: Runnable): Unit = {
+      queued.incrementAndGet()
+      inbox.add(task)
+    }
 
     /** Whether this worker has tasks to spare: set as it calls for a thief, and until a turn leaves its inbox empty. */
     @volatile private var surplus = false
