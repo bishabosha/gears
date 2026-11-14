@@ -38,10 +38,10 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
 
   override private[async] def resumeAsync[T, R](suspension: Suspension[T, R])(arg: T)(using s: Scheduler): Unit =
     // Not here and now: the caller holds the listener's lock, and may hold a source's, partway through changing it.
-    members.get(Thread.currentThread()) match
-      case Some(worker) => worker.resumeNext(suspension, arg)
-      // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
-      case None => nextWorker().submit(() => suspension.resume(arg)): Unit
+    val worker = workerOf(Thread.currentThread())
+    if worker != null then worker.resumeNext(suspension, arg)
+    // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
+    else nextWorker().submit(() => suspension.resume(arg)): Unit
 
   /** Schedule a computation with the suspension boundary already created. */
   // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
@@ -51,7 +51,16 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
 
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
   private val workerGroup: Array[Worker[Op1]] = Array.tabulate(workers)(makeWorker)
-  private val members = workerGroup.map(w => w.thread -> w).toMap
+
+  /** The worker of this pool that `thread` runs, or null: a worker's thread carries its worker, so this is no lookup
+    * by thread.
+    */
+  private def workerOf(thread: Thread): Worker[Op1] | Null = thread match
+    case thread: WorkpoolScheduler.WorkerThread =>
+      val worker = thread.worker
+      if worker.id < workerGroup.length && (workerGroup(worker.id) eq worker) then worker.asInstanceOf[Worker[Op1]]
+      else null // another pool's
+    case _ => null
 
   /** The group the program runs under (see `Backend.run`), which a fatal error in any worker cancels: the workers go
     * on, as they must for the program to unwind, but nothing should be built on what a fatal error left behind.
@@ -76,7 +85,9 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
     workerGroup(index)
   }
   protected final def workerOfCurrentThread(): Worker[Op1] =
-    members.getOrElse(Thread.currentThread(), throw new IllegalStateException("Current thread is not a worker"))
+    val worker = workerOf(Thread.currentThread())
+    if worker == null then throw new IllegalStateException("Current thread is not a worker")
+    worker
 
   /** The worker for an op, whose heap holds its deadline, and which fires it. An op that `tryPerform` completes must
     * not be firing when it returns, which holds for the performer's own worker: only its thread fires its timers.
@@ -113,7 +124,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
     * outside the pool: a worker can't wait for itself.
     */
   final def shutdown(): Unit = {
-    if members.contains(Thread.currentThread()) then
+    if workerOf(Thread.currentThread()) != null then
       throw new IllegalStateException("Can't shut down a scheduler from one of its workers")
     isShutDown = true
     workerGroup.foreach(_.stop())
@@ -151,6 +162,9 @@ object WorkpoolScheduler {
   }
 
   val SuccessUnit: Try[Unit] = Success(())
+
+  /** A worker's thread, which carries its worker for whoever asks which worker the current thread is. */
+  final class WorkerThread(val worker: Worker[?], body: Runnable) extends Thread(body)
 
   trait ReentrantOp extends Cancellable {
 
@@ -233,7 +247,7 @@ object WorkpoolScheduler {
       ready.addLast(Continuation(suspension, value))
 
     private[WorkpoolScheduler] val thread = {
-      val t = new Thread(() => loop())
+      val t = new WorkerThread(this, () => loop())
       t.setName(s"WorkpoolSchedulerWorker-$id")
       t.setDaemon(true)
       t
