@@ -98,6 +98,19 @@ sealed abstract class AbstractTimerHeapOp
     state.set(null)
   }
 
+  /** The worker this performance's future is pinned to, or null (see `WorkpoolScheduler.pinned`). */
+  @volatile private var pinHome: AnyRef | Null = null
+
+  final def pinnedTo(home: AnyRef | Null): Unit = pinHome = home
+
+  /** Gives the waiting performer its outcome, which resumes it. For a pinned future, the thread doing so is told
+    * where it belongs, for the scheduler to resume it there and nowhere else.
+    */
+  private def tell(waiting: Listener[Outcome], result: Outcome): Unit =
+    val home = pinHome
+    if home == null then waiting.completeNow(result, this): Unit
+    else WorkpoolScheduler.resumingAt(home)(waiting.completeNow(result, this): Unit)
+
   /** Whether this performance may have been given to something that can settle it: a worker's heap, its handle as a
     * waiter, or a close. The performer's alone to read and write.
     */
@@ -146,7 +159,7 @@ sealed abstract class AbstractTimerHeapOp
         _cancelLater = true
         null
     }
-    if waiting != null then waiting.completeNow(TimerHeapOp.CancelledSentinel, this): Unit
+    if waiting != null then tell(waiting, TimerHeapOp.CancelledSentinel)
 
   def isCancelled: Boolean = state.get() == TimerHeapOp.CancelledSentinel
 
@@ -157,7 +170,7 @@ sealed abstract class AbstractTimerHeapOp
       if !state.compareAndSet(TimerHeapOp.TimerFired, result) then throw new IllegalStateException("Did not claim work")
       takeListener()
     }
-    if waiting != null then waiting.completeNow(result, this): Unit
+    if waiting != null then tell(waiting, result)
   }
 
   private final def tryCancel(): Boolean = {
@@ -239,7 +252,7 @@ sealed abstract class AbstractTimerHeapOp
       if !state.compareAndSet(TimerHeapOp.CloseFired, result) then throw new IllegalStateException("Did not claim work")
       takeListener()
     }
-    if waiting != null then waiting.completeNow(result, this): Unit
+    if waiting != null then tell(waiting, result)
   }
 
   /** Claims the op for a worker that found its handle ready, or for its handle closing: as `claimAtDeadline`. */
@@ -253,7 +266,7 @@ sealed abstract class AbstractTimerHeapOp
       if !state.compareAndSet(TimerHeapOp.ReadyFired, result) then throw new IllegalStateException("Did not claim work")
       takeListener()
     }
-    if waiting != null then waiting.completeNow(result, this): Unit
+    if waiting != null then tell(waiting, result)
   }
 
   /** Gives back a claim made with `claimAtReady`, the handle not having been ready after all: the op waits on, and can
@@ -272,7 +285,7 @@ sealed abstract class AbstractTimerHeapOp
         if !state.compareAndSet(TimerHeapOp.ReadyFired, null) then throw new IllegalStateException("Did not claim work")
         null
     }
-    if waiting != null then waiting.completeNow(TimerHeapOp.CancelledSentinel, this): Unit
+    if waiting != null then tell(waiting, TimerHeapOp.CancelledSentinel)
     stillWaiting
   }
 
