@@ -154,18 +154,18 @@ object WorkpoolScheduler {
 
   trait ReentrantOp extends Cancellable {
 
+    /** The op is not linked to the performer's group here: it links itself for as long as it waits, in
+      * `parkUntilSettled`, and an op that is done as it is tried never does.
+      */
     inline final def performWith(inline fn: Async ?=> Unit)(using Async): Unit =
       requestEntry()
-      try
-        link()
-        try fn
-        finally unlink()
+      try fn
       finally requestExit()
 
-    /** Aquires an entry permit, on success then caller may proceed to link. */
+    /** Aquires an entry permit. */
     def requestEntry()(using Async): Unit
 
-    /** Potentially resets the entry permit. Caller should unlink first */
+    /** Potentially resets the entry permit. The op is unlinked by then. */
     def requestExit()(using Async): Unit
   }
 

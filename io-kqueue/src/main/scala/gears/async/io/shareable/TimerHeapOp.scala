@@ -60,7 +60,15 @@ sealed abstract class AbstractTimerHeapOp
   def parkUntilSettled()(using Async): Unit = {
     val out = state.get() match
       case out: Outcome => out
-      case _            => summon[Async].withGroup(CompletionGroup.Unlinked).await(this)
+      case _            =>
+        // Linked to the performer's group only now that it waits, and for as long: an op that is done as it is
+        // tried has nothing a cancel could stop. A group already cancelled cancels the op as it is linked.
+        link()
+        try
+          state.get() match
+            case out: Outcome => out
+            case _            => summon[Async].withGroup(CompletionGroup.Unlinked).await(this)
+        finally unlink()
     out match
       case result: Try[Unit]             => result.get
       case TimerHeapOp.CancelledSentinel => throw new CancellationException()
@@ -243,13 +251,17 @@ sealed abstract class AbstractTimerHeapOp
     stillWaiting
   }
 
-  final def setTimeout(t: Long, source: TimerHeap.TimerSource[?]): Unit = timersLock.synchronized {
-    // Whatever the op's state: it goes on this heap even if it was cancelled as it was entered, and `clearTimeout`
-    // must know where to take it from.
-    worker = source
-    if t < 0 then timeoutDeadline = -1L
-    else timeoutDeadline = TimerHeap.deadlineAfter(t * 1000000L)
-  }
+  final def setTimeout(t: Long, source: TimerHeap.TimerSource[?]): Unit =
+    // An op with no time limit and no deadline of its own never goes on a heap: there is nothing to record, nor for
+    // `clearTimeout` to take back. Read without the lock, as only the performer, one at a time, writes these.
+    if t >= 0 || hasOwnDeadline || worker != null || timeoutDeadline >= 0 then
+      timersLock.synchronized {
+        // Whatever the op's state: it goes on this heap even if it was cancelled as it was entered, and
+        // `clearTimeout` must know where to take it from.
+        worker = source
+        if t < 0 then timeoutDeadline = -1L
+        else timeoutDeadline = TimerHeap.deadlineAfter(t * 1000000L)
+      }
 
   /** Puts the op, which has a time limit, on `source`'s heap, and has `clearTimeout` take it from there. */
   final def holdTimeoutOn(source: EventSource): Unit =
@@ -260,12 +272,13 @@ sealed abstract class AbstractTimerHeapOp
     * `parkUntilSettled` waits for, reads it to tell whether it is the limit that has passed.
     */
   final def clearTimeout(): Unit =
-    val w = timersLock.synchronized {
-      val w = worker
-      worker = null
-      w
-    }
-    if w != null then w.removeTimer(this)
+    if worker != null then // else it was on no heap: see `setTimeout`
+      val w = timersLock.synchronized {
+        val w = worker
+        worker = null
+        w
+      }
+      if w != null then w.removeTimer(this)
 
   /** Takes no op lock: the heap reads `deadlineNow` under its own lock, so that order is heap, then op. */
   final def requestTimersUpdate(): Unit = {
