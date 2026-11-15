@@ -4,6 +4,7 @@ package node
 import gears.async.Async
 import gears.async.js.UnsafeJsAsyncFromSync
 
+import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
 import scala.scalajs.js
 
@@ -42,8 +43,23 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Interface {
+object NodeOps extends Pipes {
   type Op = NodeOp
+  type Handle = NodeHandle
+  type Readable = ReadEnd
+  type Writable = WriteEnd
+
+  private def fillable(buf: ByteBuffer): ByteBuffer = {
+    if buf.isReadOnly() then throw new IllegalArgumentException(s"A read-only buffer cannot be read into: $buf")
+    buf
+  }
+
+  private def several(bufs: Array[ByteBuffer]): Array[ByteBuffer] = {
+    if bufs.isEmpty then throw new IllegalArgumentException("A vectored op takes at least one buffer")
+    bufs
+  }
+
+  // ---- Every backend's
 
   def timer(duration: FiniteDuration): NodeOp & Repeatable = {
     if duration.length < 0 then throw new IllegalArgumentException(s"A timer's time is not negative: $duration")
@@ -51,4 +67,28 @@ object NodeOps extends Interface {
   }
 
   def deadlineTimer(nanoTime: Long): NodeOp & Repeatable & Deadline = new DeadlineOp(nanoTime)
+
+  // ---- Streams
+
+  def read(handle: ReadEnd, buf: ByteBuffer): NodeOp & Repeatable = new ReadOp(handle, Array(fillable(buf)))
+
+  def write(handle: WriteEnd, buf: ByteBuffer): NodeOp & Repeatable = new WriteOp(handle, Array(buf))
+
+  def read(handle: ReadEnd, bufs: Array[ByteBuffer]): NodeOp & Repeatable = {
+    several(bufs).foreach(fillable)
+    new ReadOp(handle, bufs)
+  }
+
+  def write(handle: WriteEnd, bufs: Array[ByteBuffer]): NodeOp & Repeatable = new WriteOp(handle, several(bufs))
+
+  def read(handle: ReadEnd, pool: BufferPool, into: Slot[Received]): NodeOp & Repeatable = pool match {
+    case ours: NodePool => new PooledReadOp(handle, ours, into)
+    case other          => throw new IllegalArgumentException(s"Not a pool of this backend's: $other")
+  }
+
+  def close(handle: NodeHandle): NodeOp = new CloseOp(handle)
+
+  // ---- Pipes
+
+  def pipe(read: Slot[ReadEnd], write: Slot[WriteEnd]): NodeOp = new PipeOp(read, write)
 }
