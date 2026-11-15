@@ -56,6 +56,9 @@ private[node] final class SocketStream(socket: js.Dynamic, readable: Boolean, wr
   def take(max: Int): Int8Array = {
     val chunk = socket.read(math.min(max, available))
     if chunk == null then throw new IOException("Node had no bytes of those it said were ready")
+    // A read of exactly what was left does not have Node say that the end, if it has come already, is next: only a
+    // read that finds nothing does, so one is made, which takes nothing.
+    if socket.readableLength.asInstanceOf[Int] == 0 then socket.read(0): Unit
     Buffers.signed(chunk.asInstanceOf[Uint8Array])
   }
 

@@ -54,6 +54,27 @@ class NodeSocketStreamSuite extends StreamContract with IpStreamFixture with Nod
 
 class NodeIpStreamSuite extends IpStreamContract with NodeSuite {
   val backend: Backend { type Interface <: IpStreams } = NodeBackend
+
+  // Node says a stream has ended only to a read that finds nothing, not to one that takes exactly what was left.
+  test("a read that takes exactly the bytes left, the peer's end already in, is followed by a read at the end") {
+    running { io ?=>
+      val (listener, connect) = listenAndConnect(io)
+      try {
+        val (client, server) = pair(io, listener)(connect())
+        try {
+          writeAll(io, client, bytes("abcd"))
+          close(io, client)
+          io.perform(io.ops.timer(50)) // for the bytes and the end to have reached Node
+          val buf = allocate(4)
+          readExactly(io, io.ops.read(server, buf), buf, 4)
+          assertEquals(text(buf), "abcd")
+          val after = allocate(4)
+          io.perform(io.ops.read(server, after), scala.concurrent.duration.FiniteDuration(5, "s"))
+          assertEquals(after.position(), 0, "the end of the stream")
+        } finally close(io, server)
+      } finally close(io, listener)
+    }
+  }
 }
 
 class NodeSimpleIOSocketSuite extends SimpleIOChecks with IpStreamFixture with NodeSuite {
