@@ -191,7 +191,16 @@ private[node] final class PooledReadOp(on: ReadEnd, pool: NodePool, into: Slot[R
   override protected def handle: NodeHandle = on
 
   protected def start(run: Run): Unit =
-    on.read(run, this, pool.bufferSize, () => pool.take(), chunk => into.set(pool.received(chunk)))
+    on.read(
+      run,
+      this,
+      pool.bufferSize,
+      () => {
+        pool.checkFree()
+        if !into.isEmpty then throw new IllegalArgumentException("The read's slot was filled while it waited")
+      },
+      chunk => into.set(pool.received(chunk))
+    )
 }
 
 /** A write from the caller's buffers, one or several, drained in order. */

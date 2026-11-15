@@ -41,19 +41,32 @@ sealed abstract class DatagramHandle private[node] (name: String, socket: js.Dyn
       try {
         receive.deliver(packet)
         receive.run.succeed() // which takes it out of the queue
-      } catch case failure: Throwable => receive.run.fail(failure)
-    } else if held + packet.cost <= capacity then {
-      packets.append(packet)
-      held += packet.cost
-    } // else dropped: the socket's buffer is full
+      } catch
+        case failure: Throwable => // the receive could not take it: the packet stays for the next
+          keep(packet)
+          receive.run.fail(failure)
+    } else keep(packet)
   }
 
-  /** A failure Node reports of the socket itself: on a connected one, that its peer refused a packet. It fails the
-    * receive waiting, or else the next op, once, as the system reports it once.
+  /** Keeps a packet no receive has taken, unless the socket's buffer is full, when it is dropped. */
+  private def keep(packet: DatagramHandle.Packet): Unit =
+    if held + packet.cost <= capacity then {
+      packets.append(packet)
+      held += packet.cost
+    }
+
+  /** A failure Node reports of the socket itself. It fails the receive waiting, or else the next op, once, as the
+    * system reports it once. On a connected socket that may be its peer refusing a packet; on one that is not, no
+    * packet's fate fails anything (`IpDatagrams.send`), so what the network says of one, where a system passes it on,
+    * is dropped.
     */
   private val onError: js.Function1[js.Dynamic, Unit] = failure => {
-    val error = Errors.io(failure)
-    if receives.nonEmpty then receives.head.run.fail(error) else failed = error
+    val code: Any = if Errors.failed(failure) then failure.code else null
+    val ofAPacket = DatagramHandle.PacketFates.contains(code)
+    if !(ofAPacket && kind == SocketOption.Kind.BoundDatagram) then {
+      val error = Errors.io(failure)
+      if receives.nonEmpty then receives.head.run.fail(error) else failed = error
+    }
   }
 
   socket.on("message", onMessage)
@@ -72,9 +85,10 @@ sealed abstract class DatagramHandle private[node] (name: String, socket: js.Dyn
   /** Receives one packet for `run`, behind the receives already waiting. */
   private[node] def receive(run: Run, deliver: DatagramHandle.Packet => Unit): Unit =
     if receives.isEmpty && packets.nonEmpty then {
-      val packet = packets.removeHead()
+      val packet = packets.head
+      deliver(packet) // which may refuse it, when it stays
+      packets.removeHead()
       held -= packet.cost
-      deliver(packet)
       run.succeed()
     } else {
       takeFailure()
@@ -136,6 +150,9 @@ private[node] object DatagramHandle {
   }
 
   final class Receive(val run: Run, val deliver: Packet => Unit)
+
+  /** The failures that are the network's word on a packet sent, not the socket's own. */
+  val PacketFates: Set[Any] = Set("ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN")
 
   val ignore: js.Function1[js.Dynamic, Unit] = _ => ()
 }
@@ -226,6 +243,8 @@ private[node] final class ReceiveOp(on: DatagramHandle, buf: ByteBuffer, from: S
   protected def start(run: Run): Unit = on.receive(
     run,
     packet => {
+      if from != null && !from.isEmpty then
+        throw new IllegalArgumentException("The receive's slot was filled while it waited")
       val sender = if from == null then null else Addresses.reported(packet.sender.address, packet.sender.port)
       val bytes = Buffers.signed(packet.bytes)
       buf.clear()

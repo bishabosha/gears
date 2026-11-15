@@ -101,9 +101,10 @@ private[node] final class Run(op: NodeOp, val start: Long, limit: Long) extends 
   }
 }
 
-/** Lets the event loop turn among ops that complete without waiting: a future whose every op is ready at once, a read
-  * at the end of its stream say, would otherwise never leave the loop a turn, and no timer would fire nor any socket be
-  * heard. Every `Budget` such ops, whichever futures perform them, the one performing waits for the loop's next turn.
+/** Lets the event loop turn among ops that end without waiting: a future whose every op is ready at once, a read at the
+  * end of its stream say, or refused at once, one on a closed handle, would otherwise never leave the loop a turn, and
+  * no timer would fire nor any socket be heard. Every `Budget` such ops, whichever futures perform them, the one
+  * performing waits for the loop's next turn.
   */
 private[node] object Turn {
   private inline val Budget = 32
@@ -153,6 +154,7 @@ abstract class NodeOp {
     }
     if busy then throw new IllegalArgumentException(s"$this is already being performed")
     busy = true
+    var waited = false
     try {
       if slots.exists(!_.isEmpty) then
         throw new IllegalArgumentException(
@@ -168,11 +170,24 @@ abstract class NodeOp {
       val on = handle
       if on != null then on.enter(run)
       try {
-        start(run)
-        if run.done then Turn.spend() else run.suspend()
+        // A failure thrown as the op starts finishes the run, as one reported later does, so that what the op had
+        // already left with Node is undone (`Run.release`).
+        try start(run)
+        catch {
+          case js.JavaScriptException(error) => run.fail(Errors.io(error))
+          case failure: Exception            => run.fail(failure)
+        }
+        if !run.done then {
+          waited = true
+          run.suspend()
+        }
         run.rethrow()
       } finally if on != null then on.leave(run)
-    } finally busy = false
+    } finally {
+      busy = false
+      // An op that ended without waiting, completed or refused, has left the event loop no turn: it is counted.
+      if !waited then Turn.spend()
+    }
   }
 
   override def toString: String = getClass.getSimpleName.stripSuffix("Op")

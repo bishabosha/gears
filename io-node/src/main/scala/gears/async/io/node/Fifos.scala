@@ -54,6 +54,7 @@ private[node] object FifoReadEnd {
     private var alarm: Clock.Alarm | Null = null
     private var closing: (() => Unit) | Null = null
     private var closed = false
+    private var spare: Uint8Array | Null = null // a look's buffer that it found nothing for, for the next look
 
     def available: Int = if found == null then 0 else found.nn.length
 
@@ -87,13 +88,15 @@ private[node] object FifoReadEnd {
     private def look(): Unit = {
       alarm = null
       inFlight = true
-      val chunk = new Uint8Array(Chunk)
+      val chunk = if spare != null then spare.nn else new Uint8Array(Chunk)
+      spare = null
       val done: js.Function2[js.Dynamic, js.Dynamic, Unit] = (failure, read) => {
         inFlight = false
         val close = closing
         if close != null then close()
         else if Errors.failed(failure) then
           if failure.code.asInstanceOf[Any] == "EAGAIN" then {
+            spare = chunk
             if wanted then {
               alarm = Clock.at(System.nanoTime() + pause * 1_000_000L)(() => if wanted && !closed then look())
               pause = math.min(pause * 2, SlowestLook)
@@ -106,7 +109,10 @@ private[node] object FifoReadEnd {
           val count = read.asInstanceOf[Int]
           pause = 1
           if count > 0 then found = Buffers.signed(chunk).subarray(0, count)
-          else atEnd = wanted // an end no read waits for is not kept: the next read looks for itself
+          else {
+            spare = chunk
+            atEnd = wanted // an end no read waits for is not kept: the next read looks for itself
+          }
           wakeReader()
         }
       }

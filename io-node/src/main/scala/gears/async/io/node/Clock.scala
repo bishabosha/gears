@@ -9,7 +9,7 @@ import scala.scalajs.js
   */
 private[node] object Clock {
 
-  /** No time: what waits for it never fires. */
+  /** No time: what waits for it never fires, though it waits, and keeps the event loop alive as any wait does. */
   inline val Never = Long.MaxValue
 
   /** The longest Node's timers wait, in milliseconds: beyond 2^31 - 1 they fire at once. */
@@ -39,8 +39,9 @@ private[node] object Clock {
 
     private[Clock] def arm(first: Boolean): Unit = {
       timeout = js.undefined
-      if !over && time != Never then {
-        val left = time - System.nanoTime()
+      if !over then {
+        // A program that waits for ever is still running: without a timer of Node's, Node would end the process.
+        val left = if time == Never then Never else time - System.nanoTime()
         if left > 0 then {
           val millis = math.min((left + 999_999L) / 1_000_000L, LongestWait)
           timeout = js.timers.setTimeout(millis.toDouble)(arm(first = false))

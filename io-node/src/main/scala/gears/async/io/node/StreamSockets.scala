@@ -76,7 +76,12 @@ private[node] final class SocketStream(socket: js.Dynamic, readable: Boolean, wr
       if failure != null && !js.isUndefined(failure) && error == null then error = Errors.io(failure)
       wakeWriter()
     }
-    socket.write(new Uint8Array(chunk.buffer, chunk.byteOffset, size), sent): Unit
+    try socket.write(new Uint8Array(chunk.buffer, chunk.byteOffset, size), sent): Unit
+    catch
+      case js.JavaScriptException(failure) => // refused outright: its callback will not come
+        unsent -= size
+        if error == null then error = Errors.io(failure)
+        throw error.nn
   }
 
   def refusal: IOException | Null =
@@ -162,8 +167,10 @@ final class ListenerHandle private[node] (
   private val accepts = scala.collection.mutable.ArrayDeque.empty[ListenerHandle.Accept]
   private val noDelay = options.get(SocketOption.NoDelay) != false
 
+  private var shutDown = false
+
   private val onConnection: js.Function1[js.Dynamic, Unit] = socket =>
-    if arrived.length >= ListenerHandle.Backlog then socket.destroy(): Unit
+    if shutDown || arrived.length >= ListenerHandle.Backlog then socket.destroy(): Unit
     else
       try {
         val connection =
@@ -179,7 +186,7 @@ final class ListenerHandle private[node] (
         arrived.append(connection)
         serve()
       } catch
-        case _: IOException => // gone before it was accepted: Node no longer has its addresses
+        case _: Exception => // gone before it was accepted: Node no longer has its addresses
           socket.on("error", ListenerHandle.ignore)
           socket.destroy(): Unit
 
@@ -200,8 +207,13 @@ final class ListenerHandle private[node] (
       val accept = accepts.head
       val taken = new Array[ConnectionHandle](math.min(accept.max, arrived.length))
       for i <- taken.indices do taken(i) = arrived.removeHead()
-      accept.deliver(taken)
-      accept.run.succeed() // which takes it out of the queue
+      try {
+        accept.deliver(taken)
+        accept.run.succeed() // which takes it out of the queue
+      } catch
+        case failure: Throwable => // its slot filled while it waited: the connections stay for the next accept
+          arrived.prependAll(taken)
+          accept.run.fail(failure)
     }
 
   /** Accepts at least one connection and at most `max` for `run`, behind the accepts already waiting. */
@@ -216,6 +228,7 @@ final class ListenerHandle private[node] (
   private[node] var closing: (() => Unit) => Unit = close => close()
 
   protected def shut(done: () => Unit): Unit = {
+    shutDown = true // a connection Node hands over after this is closed as it comes
     for connection <- arrived do connection.shutNow()
     arrived.clear()
     closing(() => server.close(): Unit)

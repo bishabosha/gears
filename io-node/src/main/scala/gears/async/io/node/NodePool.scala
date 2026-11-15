@@ -17,26 +17,30 @@ private[node] final class NodePool(val bufferSize: Int, val buffers: Int) extend
 
   def available: Int = buffers - held
 
-  /** Takes one of the pool's buffers for a read that has bytes to hand over; fails if there is none, or the pool is
-    * closed.
+  /** Fails if the pool has no buffer for a read that has bytes to hand over, or is closed: asked before the bytes are
+    * taken from their stream, so that a read refused has taken none. Nothing else runs between this and `received`,
+    * there being one thread.
     */
-  private[node] def take(): Unit = {
+  private[node] def checkFree(): Unit = {
     if closed then throw new IOException("The pool is closed")
     if held == buffers then throw new IOException(s"The pool has no buffer free: all $buffers are held")
-    held += 1
   }
 
-  /** Gives back a buffer taken with `take` that no `Received` was made of. */
-  private[node] def give(): Unit = held -= 1
-
-  /** What a read received as the buffer taken for it: `chunk`, or nothing at the end of the stream. */
-  private[node] def received(chunk: Int8Array | Null): Received = new Received {
-    private var released = false
-    val buffer: ByteBuffer = if chunk == null then ByteBuffer.allocate(0) else TypedArrayBuffer.wrap(chunk)
-    def release(): Unit = {
-      if released then throw new IllegalStateException("Released already")
-      released = true
-      give()
+  /** What a read received, as one of the pool's buffers, held from here until it is released: `chunk`, or nothing at
+    * the end of the stream.
+    */
+  private[node] def received(chunk: Int8Array | Null): Received = {
+    checkFree()
+    val bytes: ByteBuffer = if chunk == null then ByteBuffer.allocate(0) else TypedArrayBuffer.wrap(chunk)
+    held += 1
+    new Received {
+      private var released = false
+      def buffer: ByteBuffer = bytes
+      def release(): Unit = {
+        if released then throw new IllegalStateException("Released already")
+        released = true
+        held -= 1
+      }
     }
   }
 

@@ -112,6 +112,7 @@ private[node] object Addresses {
     while i < 4 do {
       val part = parts(i)
       if part.isEmpty || part.length > 3 || !part.forall(c => c >= '0' && c <= '9') then return null
+      if part.length > 1 && part.charAt(0) == '0' then return null // read as octal by some, so left to the resolver
       val value = part.toInt
       if value > 255 then return null
       bytes(i) = value.toByte
