@@ -56,6 +56,12 @@ abstract class NodeHandle private[node] (kind: String) {
   /** Closes the I/O object, calling `done` once it is closed. */
   protected def shut(done: () => Unit): Unit
 
+  /** Closes a handle no program has had, with no op on it: one that arrived on a listener that closes first. */
+  private[node] def shutNow(): Unit = {
+    closing = true
+    shut(() => ())
+  }
+
   override def toString: String = s"$kind #$id"
 }
 

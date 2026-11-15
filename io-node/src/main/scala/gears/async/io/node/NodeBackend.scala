@@ -43,11 +43,15 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes {
+object NodeOps extends Pipes with IpStreams {
+  import SocketOption.Kind
+
   type Op = NodeOp
   type Handle = NodeHandle
   type Readable = ReadEnd
   type Writable = WriteEnd
+  type Connection = ConnectionHandle
+  type Listener = ListenerHandle
 
   private def fillable(buf: ByteBuffer): ByteBuffer = {
     if buf.isReadOnly() then throw new IllegalArgumentException(s"A read-only buffer cannot be read into: $buf")
@@ -91,4 +95,75 @@ object NodeOps extends Pipes {
   // ---- Pipes
 
   def pipe(read: Slot[ReadEnd], write: Slot[WriteEnd]): NodeOp = new PipeOp(read, write)
+
+  // ---- Stream sockets
+
+  def accept(handle: ListenerHandle, into: Slot[ConnectionHandle]): NodeOp & Repeatable =
+    new AcceptOp(handle, 1, into, accepted => into.set(accepted(0)))
+
+  def acceptAll(handle: ListenerHandle, into: Slot[Array[ConnectionHandle]], max: Int): NodeOp & Repeatable = {
+    if max <= 0 then throw new IllegalArgumentException(s"acceptAll takes at least one connection, not $max")
+    new AcceptOp(handle, max, into, accepted => into.set(accepted))
+  }
+
+  def shutdownOutput(handle: ConnectionHandle): NodeOp = new ShutdownOutputOp(handle)
+
+  def localAddress(handle: ListenerHandle | ConnectionHandle): IpSocketAddress | UnixAddress = {
+    handle.checkOpen()
+    handle match {
+      case listener: ListenerHandle     => listener.local
+      case connection: ConnectionHandle => connection.local
+    }
+  }
+
+  def peerAddress(handle: ConnectionHandle): IpSocketAddress | UnixAddress = {
+    handle.checkOpen()
+    handle.peer
+  }
+
+  def connect(address: IpSocketAddress, options: SocketOptions, into: Slot[ConnectionHandle]): NodeOp = {
+    Options.check(options, Kind.Connection)
+    new ConnectOp(address, options, into)
+  }
+
+  def listen(address: IpSocketAddress, options: SocketOptions, into: Slot[ListenerHandle]): NodeOp = {
+    Options.check(options, Kind.Listener)
+    new ListenOp(address, options, into)
+  }
+
+  // ---- Socket options
+
+  def supports(option: SocketOption[?], kind: Kind): Boolean = Options.supports(option, kind)
+
+  def canChange(option: SocketOption[?], kind: Kind): Boolean = Options.canChange(option, kind)
+
+  /** The kind of socket `handle` names. */
+  private def kindOf(handle: NodeHandle): Kind = handle match {
+    case connection: ConnectionHandle => connection.kind
+    case listener: ListenerHandle     => listener.kind
+    case other                        => throw new IllegalArgumentException(s"$other is not a socket")
+  }
+
+  def option[V](handle: NodeHandle, option: SocketOption[V]): V = {
+    val kind = kindOf(handle)
+    if !Options.onOpen(option, kind) then
+      throw new IllegalArgumentException(s"$option is not read on a ${kind.description} by this backend")
+    handle.checkOpen()
+    (handle match {
+      case connection: ConnectionHandle => connection.option(option)
+      case other                        => throw new IllegalArgumentException(s"$option is not read on $other")
+    }).asInstanceOf[V]
+  }
+
+  def setOption[V](handle: NodeHandle, option: SocketOption[V], value: V): Unit = {
+    val kind = kindOf(handle)
+    if !Options.canChange(option, kind) then
+      throw new IllegalArgumentException(s"$option is not changed on an open ${kind.description} by this backend")
+    option.check(value)
+    handle.checkOpen()
+    handle match {
+      case connection: ConnectionHandle => connection.setOption(option, value)
+      case other                        => throw new IllegalArgumentException(s"$option is not changed on $other")
+    }
+  }
 }
