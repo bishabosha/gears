@@ -133,3 +133,16 @@ lazy val ioNode =
       Test / parallelExecution := false
     )
     .dependsOn(root.js, ioTestkit.js % Test)
+
+// The Node.js backend's demo application: the testkit's gears demos over it, linked with `ioNodeDemos/fastLinkJS` and
+// run as `node <linked>/main.js <command>`, since Scala.js's `run` passes a program no arguments.
+lazy val ioNodeDemos =
+  (project in file("io-node/demos"))
+    .enablePlugins(ScalaJSPlugin)
+    .settings(jsWasmSettings)
+    .settings(
+      publish / skip := true,
+      scalaJSUseMainModuleInitializer := true,
+      Compile / mainClass := Some("nodedemos.NodeDemos")
+    )
+    .dependsOn(ioNode, ioTestkit.js)
