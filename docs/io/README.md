@@ -180,9 +180,10 @@ it and, if Node has not what completes it, left with Node as a listener or a cal
 A run suspends its caller, so `Io.run(using NodeBackend)` is called within Scala.js's `js.async`, as any gears program
 on Scala.js is; `NodeBackend.start(program)` does both and returns a promise, for a main method or a callback.
 
-It has timers, pipes, IP stream and datagram sockets, Unix stream sockets, regular files, name resolution and FIFOs.
-It has no blocking ops, there being no second thread to block, and no Unix datagram sockets, which Node does not
-open. Where Node's own way differs from the interface's, the backend keeps to the interface:
+It has timers, IP stream and datagram sockets, Unix stream sockets, regular files, name resolution and FIFOs. It has
+no blocking ops, there being no second thread to block, no Unix datagram sockets, which Node does not open, and no
+pipes, which Node makes only for a child process: its suites run the stream contract over a stream held in memory
+that is their own fixture, not a capability. Where Node's own way differs from the interface's, the backend keeps to the interface:
 
 - **Streams** (`net.Socket`) are read as Node's paused streams, so a sender is held back while nothing reads, and
   written a chunk of at most 64 KiB at a time, the next not taken until Node has handed the last to the system: Node
@@ -194,8 +195,6 @@ open. Where Node's own way differs from the interface's, the backend keeps to th
 - **Calls Node cannot take back**, a file's read or write, a datagram's send, are waited for: a cancel, a time limit
   or a close that comes meanwhile takes effect once the call returns, a file op's outcome then dropped, a send
   completing, since it was sent.
-- **Pipes** are 64 KiB of bytes held between the two ends within the program: Node makes no pipe of the system's
-  except for a child process.
 - **A FIFO's read end** is read with `fs.read` on a descriptor that does not block, and a read that would block looks
   again, every millisecond at first and then less often, up to 16: Node's streams do not report a FIFO's end when its
   writer closes. It is the one place the backend polls.

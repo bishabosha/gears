@@ -5,10 +5,11 @@ import java.io.IOException
 import scala.scalajs.js
 import scala.scalajs.js.typedarray.Int8Array
 
-/** A pipe of the Node.js backend. Node has no call that makes a pipe of the system's, only those it makes for a child
-  * process, so a pipe here is the bytes themselves, held between its two ends within the program, which is all a pipe
-  * opened by `Pipes.pipe` can be used for: at most `Capacity` of them, as a pipe of the system's holds 64 KiB, so that
-  * a writer waits for its reader.
+/** A stream held in memory, for the suites: bytes between a read end and a write end within the program, at most
+  * `Capacity` of them, so that a writer waits for its reader. The backend has no `Pipes`: Node makes no pipe of the
+  * system's but for a child process, and one that is only memory is nothing a program needs from a backend. As a
+  * fixture, though, it puts the backend's stream ops, the same that read and write its sockets, over a source and a
+  * sink with no system behind them, where every wait and every wake-up is the backend's own.
   */
 private[node] final class Pipe extends Source with Sink {
   private val chunks = js.Array[Int8Array]()
@@ -66,8 +67,8 @@ private[node] object Pipe {
   inline val Capacity = 65536
 }
 
-/** A pipe's read end. */
-private[node] final class PipeReadEnd(pipe: Pipe) extends NodeHandle("pipe's read end") with SourceEnd {
+/** The read end. */
+private[node] final class PipeReadEnd(pipe: Pipe) extends NodeHandle("memory stream's read end") with SourceEnd {
   private[node] def source: Source = pipe
   protected def shut(done: () => Unit): Unit = {
     pipe.closeReader()
@@ -75,8 +76,8 @@ private[node] final class PipeReadEnd(pipe: Pipe) extends NodeHandle("pipe's rea
   }
 }
 
-/** A pipe's write end. */
-private[node] final class PipeWriteEnd(pipe: Pipe) extends NodeHandle("pipe's write end") with SinkEnd {
+/** The write end. */
+private[node] final class PipeWriteEnd(pipe: Pipe) extends NodeHandle("memory stream's write end") with SinkEnd {
   private[node] def sink: Sink = pipe
   protected def shut(done: () => Unit): Unit = {
     pipe.closeWriter()
@@ -84,14 +85,14 @@ private[node] final class PipeWriteEnd(pipe: Pipe) extends NodeHandle("pipe's wr
   }
 }
 
-/** Opens a pipe. */
-private[node] final class PipeOp(read: Slot[ReadEnd], write: Slot[WriteEnd]) extends NodeOp {
-  override protected def slots: List[Slot[?]] = List(read, write)
+/** Supplies the stream fixture from memory, for a suite over the Node.js backend itself. */
+trait MemoryStreamFixture extends gears.async.io.testkit.StreamFixture {
+  val backend: NodeBackend.type
 
-  protected def start(run: Run): Unit = {
+  protected def stream(
+      io: Io[backend.Interface]
+  )(using gears.async.Async.Spawn): (io.ops.Readable, io.ops.Writable) = {
     val pipe = new Pipe
-    read.set(new PipeReadEnd(pipe))
-    write.set(new PipeWriteEnd(pipe))
-    run.succeed()
+    (new PipeReadEnd(pipe), new PipeWriteEnd(pipe))
   }
 }

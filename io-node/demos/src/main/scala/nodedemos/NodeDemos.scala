@@ -9,7 +9,7 @@ import scala.scalajs.js
 
 /** The gears demos over the Node.js backend: the testkit's demo command line (`DemoCommands`), linked with
   * `sbt ioNodeDemos/fastLinkJS` and run by Node.js with the command as its arguments, `node <linked>/main.js timer`.
-  * The demos that need blocking ops or Unix datagram sockets, which the Node.js backend lacks, fail saying so.
+  * The demos that need blocking ops, pipes or Unix datagram sockets, which the Node.js backend lacks, fail saying so.
   */
 object NodeDemos {
   private object Runner extends DemoRunner[NodeOps.type] {

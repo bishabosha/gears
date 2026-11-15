@@ -1,6 +1,7 @@
 package gears.async.io
 package node
 
+import gears.async.Future
 import gears.async.io.testkit.*
 import gears.io.testkit.SimpleIOChecks
 import gears.io.testkit.SimpleIOIpStreamChecks
@@ -10,12 +11,16 @@ import scala.scalajs.js
 
 /** The testkit's contracts over the Node.js backend. Each suite sees only the capabilities required by its contracts.
   *
-  * Three contracts are not run, none of which Node.js can meet:
+  * Four contracts are not run, none of which Node.js can meet:
   *
+  *   - `PipeContract`: the backend has no `Pipes`. Node makes no pipe of the system's but for a child process, and one
+  *     held in memory is not a capability. The stream contract it would run over a pipe runs over TCP, and over a
+  *     stream held in memory that is the suites' own (`NodeMemoryStreamSuite`); what it checks of every op, that a
+  *     one-shot op is performed once, by one future, and that an opener refuses an occupied slot, `NodeOneShotSuite`
+  *     checks on listeners.
   *   - `BlockingContract`: the backend has no `Blocking` ops. A blocking body must run off the thread that runs the
   *     program's futures, and Scala.js has that one thread alone; its checks also block on latches and `Thread.sleep`,
-  *     which Scala.js has not. What it checks of every op, that a one-shot op is performed once and that an op refuses
-  *     a slot not yet cleared, `PipeContract` and `ResolveContract` check here.
+  *     which Scala.js has not. What it checks of every op besides, `NodeOneShotSuite` checks here.
   *   - `UnixDatagramContract`: the backend has no `UnixDatagrams`. Node's `dgram` opens UDP sockets only.
   *   - `ThreadedTimerContract`: it moves deadlines from threads it starts, and Scala.js starts none.
   *     `NodeDeadlineSuite` makes the same checks with the moves coming from callbacks of the event loop's.
@@ -32,22 +37,88 @@ class NodeContractSuite extends OpsContract with NodeSuite {
 
 /** What the backend lacks is refused when compiling, not when running. */
 class NodeCapabilitySuite extends munit.FunSuite {
-  test("a program over the Node.js backend cannot ask for blocking ops or Unix datagram sockets") {
+  test("a program over the Node.js backend cannot ask for pipes, blocking ops or Unix datagram sockets") {
+    assert(compileErrors("val backend: Backend { type Interface <: Pipes } = NodeBackend").nonEmpty)
     assert(compileErrors("val backend: Backend { type Interface <: Blocking } = NodeBackend").nonEmpty)
     assert(compileErrors("val backend: Backend { type Interface <: UnixDatagrams } = NodeBackend").nonEmpty)
     assert(compileErrors("val backend: Backend { type Interface <: Fifos & RegularFiles } = NodeBackend").isEmpty)
   }
 }
 
-class NodePipeSuite extends PipeContract with NodeSuite {
-  val backend: Backend { type Interface <: Pipes } = NodeBackend
+/** The stream contracts over a stream held in memory (see `MemoryStreamFixture`), where nothing waits on the system. */
+class NodeMemoryStreamSuite extends StreamContract with MemoryStreamFixture with NodeSuite {
+  val backend: NodeBackend.type = NodeBackend
+
+  test("a second write pending on a stream fails with IllegalArgumentException") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        val writing = Future(writeAll(io, out, allocate(1 << 20))) // more than the stream holds: it waits
+        settle(io)
+        assert(writing.poll().isEmpty, "the stream took the whole payload")
+        val second = attempt(io, io.ops.write(out, bytes("z")))
+        assert(second.isInstanceOf[IllegalArgumentException], s"a second write: $second")
+        writing.cancel()
+        writing.awaitResult
+      } finally {
+        close(io, in)
+        close(io, out)
+      }
+    }
+  }
 }
 
-class NodeSimpleIOSuite extends SimpleIOChecks with PipeFixture with NodeSuite {
-  val backend: Backend { type Interface <: Pipes } = NodeBackend
+/** What `PipeContract` checks of every op, on ops this backend has: one-shot ops, and slots not yet cleared. */
+class NodeOneShotSuite extends NodeSuite {
+  val backend: Backend { type Interface <: IpStreams } = NodeBackend
+  private val loopback = IpSocketAddress(IpAddress.IPv4Loopback, 0)
+
+  test("an opener refuses an occupied slot, opening nothing") {
+    running { io ?=>
+      val held = Slot[io.ops.Listener]()
+      io.perform(io.ops.listen(loopback, held))
+      val refused = attempt(io, io.ops.listen(loopback, held)) // `held` still holds the first listener
+      assert(refused.isInstanceOf[IllegalArgumentException], String.valueOf(refused))
+      val kept = held.clear()
+      intercept[IllegalStateException](held.clear()) // nothing more was opened into it
+      close(io, kept)
+    }
+  }
+
+  test("an op that opens or closes is one-shot: performed again, it throws IllegalStateException") {
+    running { io ?=>
+      val into = Slot[io.ops.Listener]()
+      val listening = io.ops.listen(loopback, into)
+      io.perform(listening)
+      val listener = into.clear()
+      intercept[IllegalStateException](io.perform(listening))
+      val closing = io.ops.close(listener)
+      io.perform(closing)
+      intercept[IllegalStateException](io.perform(closing))
+    }
+  }
+
+  test("a one-shot op performed by two futures at once opens once, the other refused") {
+    running { io ?=>
+      for _ <- 1 to 100 do {
+        val into = Slot[io.ops.Listener]()
+        val listening = io.ops.listen(loopback, into)
+        val start = Future.Promise[Unit]()
+        val both = List.fill(2)(Future {
+          start.await
+          io.perform(listening)
+        })
+        start.complete(scala.util.Success(()))
+        val failures = both.map(failureOf)
+        assertEquals(failures.count(_ == null), 1, failures.mkString(", "))
+        assert(failures.exists(_.isInstanceOf[IllegalStateException]), failures.mkString(", "))
+        close(io, into.clear())
+      }
+    }
+  }
 }
 
-/** Runs the same stream contracts using TCP, without exposing Pipes to the suite. */
+/** Runs the same stream contracts using TCP. */
 class NodeSocketStreamSuite extends StreamContract with IpStreamFixture with NodeSuite {
   val backend: Backend { type Interface <: IpStreams } = NodeBackend
 }
