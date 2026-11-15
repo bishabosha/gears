@@ -40,6 +40,9 @@ private[node] object Errors {
       else String.valueOf(other))
   }
 
+  /** Whether a callback of Node's was given an error. */
+  def failed(error: js.Dynamic): Boolean = error != null && !js.isUndefined(error)
+
   /** Runs a call of Node's that may throw a JavaScript error as one that throws an `IOException`. */
   inline def guard[T](inline body: T): T =
     try body
@@ -60,4 +63,26 @@ private[node] object Fs extends js.Object {
   def lstatSync(path: String, options: js.Object): js.UndefOr[js.Dynamic] = js.native
   def unlinkSync(path: String): Unit = js.native
   def renameSync(from: String, to: String): Unit = js.native
+
+  val constants: js.Dynamic = js.native
+  def open(path: String, flags: Int, done: js.Function2[js.Dynamic, js.Dynamic, Unit]): Unit = js.native
+  def fstat(fd: Int, done: js.Function2[js.Dynamic, js.Dynamic, Unit]): Unit = js.native
+  def read(
+      fd: Int,
+      into: js.typedarray.Uint8Array,
+      offset: Int,
+      length: Int,
+      position: Double,
+      done: js.Function2[js.Dynamic, js.Dynamic, Unit]
+  ): Unit = js.native
+  def write(
+      fd: Int,
+      from: js.typedarray.Uint8Array,
+      offset: Int,
+      length: Int,
+      position: Double,
+      done: js.Function2[js.Dynamic, js.Dynamic, Unit]
+  ): Unit = js.native
+  def fsync(fd: Int, done: js.Function1[js.Dynamic, Unit]): Unit = js.native
+  def close(fd: Int, done: js.Function1[js.Dynamic, Unit]): Unit = js.native
 }

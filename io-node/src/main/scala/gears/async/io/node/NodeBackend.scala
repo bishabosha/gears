@@ -44,7 +44,7 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams {
+object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams with RegularFiles {
   import SocketOption.Kind
 
   type Op = NodeOp
@@ -55,10 +55,16 @@ object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams {
   type Listener = ListenerHandle
   type BoundDatagram = BoundDatagramHandle
   type ConnectedDatagram = ConnectedDatagramHandle
+  type File = FileHandle
 
   private def fillable(buf: ByteBuffer): ByteBuffer = {
     if buf.isReadOnly() then throw new IllegalArgumentException(s"A read-only buffer cannot be read into: $buf")
     buf
+  }
+
+  private def offset(at: Long): Long = {
+    if at < 0 then throw new IllegalArgumentException(s"A file offset must not be negative: $at")
+    at
   }
 
   private def several(bufs: Array[ByteBuffer]): Array[ByteBuffer] = {
@@ -98,6 +104,21 @@ object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams {
   // ---- Pipes
 
   def pipe(read: Slot[ReadEnd], write: Slot[WriteEnd]): NodeOp = new PipeOp(read, write)
+
+  // ---- Files
+
+  def open(path: String, write: Boolean, into: Slot[FileHandle]): NodeOp = {
+    Addresses.checkPath(path)
+    new OpenFileOp(path, write, into)
+  }
+
+  def read(handle: FileHandle, buf: ByteBuffer, at: Long): NodeOp & Repeatable =
+    new FileReadOp(handle, fillable(buf), offset(at))
+
+  def write(handle: FileHandle, buf: ByteBuffer, at: Long): NodeOp & Repeatable =
+    new FileWriteOp(handle, buf, offset(at))
+
+  def sync(handle: FileHandle): NodeOp & Repeatable = new SyncOp(handle)
 
   // ---- Stream sockets
 

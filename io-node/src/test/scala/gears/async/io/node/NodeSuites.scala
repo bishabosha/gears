@@ -42,3 +42,7 @@ class NodeIpDatagramSuite extends IpDatagramContract with NodeSuite {
 class NodeUnixStreamSuite extends UnixStreamContract with NodeSuite {
   val backend: Backend { type Interface <: UnixStreams } = NodeBackend
 }
+
+class NodeFileSuite extends FileContract with NodeSuite {
+  val backend: Backend { type Interface <: RegularFiles } = NodeBackend
+}

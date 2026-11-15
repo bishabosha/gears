@@ -65,4 +65,17 @@ private[node] object Buffers {
     }
     chunk
   }
+
+  /** Passes over `n` bytes of `bufs` in order, as a write that took them does. */
+  def skip(bufs: Array[ByteBuffer], n: Int): Unit = {
+    var left = n
+    var i = 0
+    while left > 0 do {
+      val buf = bufs(i)
+      val step = math.min(buf.remaining(), left)
+      buf.position(buf.position() + step)
+      left -= step
+      i += 1
+    }
+  }
 }
