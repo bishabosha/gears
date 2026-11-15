@@ -1,8 +1,8 @@
 # gears.async.io: asynchronous I/O for gears
 
 An interface for asynchronous I/O that gears programs write once and run on any backend, the contract suites every
-backend is checked against, demos written against the interface alone, and a reference backend on the JDK that exists
-to pass the contracts, not to be fast. A program performs ops, built by its backend, with the `Io` that `Io.run` gives
+backend is checked against, demos written against the interface alone, a reference backend on the JDK that exists
+to pass the contracts, not to be fast, and a backend for Scala.js on Node.js. A program performs ops, built by its backend, with the `Io` that `Io.run` gives
 it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep` on the backend's own timers.
 
 ## Where to start reading
@@ -15,7 +15,8 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
    Stream checks take a fixture that supplies connected handles. Each capability contract requires only the capability
    it checks; combinations such as FIFOs versus regular files are separate integration contracts.
 3. **The reference backend**, `io-reference/`: the semantics on the JDK's channels, over a plain selector poll.
-4. **SimpleIO**, `gears.io.testkit.SimpleIO` in `io-testkit/`: an API with result-returning openers and streams,
+4. **The Node.js backend**, `io-node/`: the same semantics on one thread, over Node's callbacks.
+5. **SimpleIO**, `gears.io.testkit.SimpleIO` in `io-testkit/`: an API with result-returning openers and streams,
    written over the public interface alone, which shows what the interface is for.
 
 ## Layout
@@ -26,9 +27,11 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 | `ioTestkit` (`io-testkit/`, JVM, Scala Native and Scala.js) | the contract suites and `BufferArena` (`gears.async.io.testkit`), `SimpleIO` with `SimpleIOChecks` (`gears.io.testkit`), and the gears demos (`gears.io.demos`) with their command line, `DemoCommands` | core, munit, mainargs |
 | `ioReference` (`io-reference/`, JVM) | the reference backend, `gears.async.io.reference.ReferenceBackend`, and its suites | core, the testkit's contracts |
 | `ioReferenceDemos` (`io-reference/demos/`) | the demos over the reference backend: `ioReferenceDemos/run <command>` | the reference backend, the testkit |
+| `ioNode` (`io-node/`, Scala.js) | the Node.js backend, `gears.async.io.node.NodeBackend`, and its suites | core, the testkit's contracts |
+| `ioNodeDemos` (`io-node/demos/`) | the demos over the Node.js backend, linked with `ioNodeDemos/fastLinkJS` and run by Node | the Node.js backend, the testkit |
 
-The interface is in `shared/`, so it compiles on every platform gears does, and so does the testkit, though only the
-JVM has a backend to run its contracts and demos on yet. A backend outside this repository is written in a package
+The interface is in `shared/`, so it compiles on every platform gears does, and so does the testkit; the
+JVM and Scala.js each have a backend to run its contracts and demos on, Scala Native none yet. A backend outside this repository is written in a package
 under `gears.async.io`, since what a backend implements and programs do not see is `private[io]`: how it performs an
 op (`Io.performWithin`) and how it runs a program (`Backend.run`, which `Io.run` calls). A handle is an object of its
 backend's own class, so a program can neither forge one nor pass one backend's handle to another, whose `Handle` is a
@@ -169,6 +172,41 @@ waited for on one selector that one thread polls, then tried again. Timers park 
 by the caller; blocking code and name lookups run on threads of their own. Nothing is tuned for speed: it is what the
 contracts are checked against, and the plainest way to read the semantics as code.
 
+## The Node.js backend
+
+`NodeBackend`, in `io-node/`, is for a Scala.js program linked to WebAssembly and run by Node.js 26 or later, where
+gears suspends with JSPI. A program runs on Node's one thread, its event loop: an op is begun by the future performing
+it and, if Node has not what completes it, left with Node as a listener or a callback while the future is suspended.
+A run suspends its caller, so `Io.run(using NodeBackend)` is called within Scala.js's `js.async`, as any gears program
+on Scala.js is; `NodeBackend.start(program)` does both and returns a promise, for a main method or a callback.
+
+It has timers, pipes, IP stream and datagram sockets, Unix stream sockets, regular files, name resolution and FIFOs.
+It has no blocking ops, there being no second thread to block, and no Unix datagram sockets, which Node does not
+open. Where Node's own way differs from the interface's, the backend keeps to the interface:
+
+- **Streams** (`net.Socket`) are read as Node's paused streams, so a sender is held back while nothing reads, and
+  written a chunk of at most 64 KiB at a time, the next not taken until Node has handed the last to the system: Node
+  takes whatever it is given and gives nothing back, so a write that waits, and is then cancelled, has written
+  nothing. A pooled read hands over Node's own chunk as the pool's buffer, with no copy; the pool only counts them.
+- **Listeners and datagram sockets** are handed connections and packets by Node as they arrive, so those not yet
+  taken wait in the handle, bounded as the system bounds them: a listener's by its backlog, a datagram socket's by
+  its receive buffer, beyond which packets are dropped.
+- **Calls Node cannot take back**, a file's read or write, a datagram's send, are waited for: a cancel, a time limit
+  or a close that comes meanwhile takes effect once the call returns, a file op's outcome then dropped, a send
+  completing, since it was sent.
+- **Pipes** are 64 KiB of bytes held between the two ends within the program: Node makes no pipe of the system's
+  except for a child process.
+- **A FIFO's read end** is read with `fs.read` on a descriptor that does not block, and a read that would block looks
+  again, every millisecond at first and then less often, up to 16: Node's streams do not report a FIFO's end when its
+  writer closes. It is the one place the backend polls.
+- **Socket options**: `NoDelay` on a connection, and the buffer sizes of a datagram socket. Node has no call for
+  keepalive's interval and count, a stream socket's buffer sizes or don't-fragment, and has reuse-port only on some
+  systems, so the backend reports none of them as supported.
+- **Unix sockets' names** are not told by Node: a connection reports the path it connected to or was accepted on, and
+  its other end as unnamed.
+- **Ops that complete without waiting** give the event loop a turn every 32 of them, so that a future whose every op
+  is ready cannot keep timers and sockets from being heard.
+
 ## SimpleIO and the demos
 
 `SimpleIO`, in `gears.io.testkit`, is written over the public interface alone. Its package and the demos' package,
@@ -178,13 +216,15 @@ repeatable pooled read consumed as a gears channel, with the pool's window and t
 `SimpleIOChecks` checks its stream helpers over a supplied stream fixture; `SimpleIOIpStreamChecks` and
 `SimpleIOResolveChecks` check their respective capabilities independently. Each demo takes the `Io` it runs with, over
 the capabilities it needs, and its `Async`, and only a backend's demo application starts a run:
-`ioReferenceDemos/run <command>`.
+`ioReferenceDemos/run <command>`, or, for the Node.js backend, `ioNodeDemos/fastLinkJS` and then
+`node --stack-size=204800 target/out/sjs1/scala-3.9.0/ionodedemos/ionodedemos-fastopt/main.js <command>`.
 
 ## Running the suites
 
 ```
 sbt --client ioReference/test        # capability contracts, futures and SimpleIO over the reference backend
 sbt --client ioTestkitJVM/test       # the testkit's own tests
+sbt --client ioNode/test             # the contracts and SimpleIO over the Node.js backend (Node.js 26+)
 sbt --client 'ioTestkitNative/compile; ioTestkitJS/compile'
 ```
 
