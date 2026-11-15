@@ -34,3 +34,7 @@ class NodeSimpleIOSocketSuite extends SimpleIOChecks with IpStreamFixture with N
 class NodeSimpleIOIpStreamSuite extends SimpleIOIpStreamChecks with NodeSuite {
   val backend: Backend { type Interface <: IpStreams } = NodeBackend
 }
+
+class NodeIpDatagramSuite extends IpDatagramContract with NodeSuite {
+  val backend: Backend { type Interface <: IpDatagrams } = NodeBackend
+}

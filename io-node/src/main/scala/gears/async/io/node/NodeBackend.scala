@@ -5,6 +5,7 @@ import gears.async.Async
 import gears.async.js.UnsafeJsAsyncFromSync
 
 import java.nio.ByteBuffer
+import scala.annotation.targetName
 import scala.concurrent.duration.FiniteDuration
 import scala.scalajs.js
 
@@ -43,7 +44,7 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes with IpStreams {
+object NodeOps extends Pipes with IpStreams with IpDatagrams {
   import SocketOption.Kind
 
   type Op = NodeOp
@@ -52,6 +53,8 @@ object NodeOps extends Pipes with IpStreams {
   type Writable = WriteEnd
   type Connection = ConnectionHandle
   type Listener = ListenerHandle
+  type BoundDatagram = BoundDatagramHandle
+  type ConnectedDatagram = ConnectedDatagramHandle
 
   private def fillable(buf: ByteBuffer): ByteBuffer = {
     if buf.isReadOnly() then throw new IllegalArgumentException(s"A read-only buffer cannot be read into: $buf")
@@ -131,6 +134,53 @@ object NodeOps extends Pipes with IpStreams {
     new ListenOp(address, options, into)
   }
 
+  // ---- IP datagram sockets
+
+  def bindDatagram(local: IpSocketAddress, options: SocketOptions, into: Slot[BoundDatagramHandle]): NodeOp = {
+    Options.check(options, Kind.BoundDatagram)
+    new OpenDatagramOp(local, null, options, into)
+  }
+
+  def connectDatagram(
+      local: IpSocketAddress | Null,
+      remote: IpSocketAddress,
+      options: SocketOptions,
+      into: Slot[ConnectedDatagramHandle]
+  ): NodeOp = {
+    val (from, to) = Addresses.pair(local, remote)
+    Options.check(options, Kind.ConnectedDatagram)
+    new OpenDatagramOp(from, to, options, into)
+  }
+
+  def receive(handle: BoundDatagramHandle, buf: ByteBuffer, from: Slot[IpSocketAddress]): NodeOp & Repeatable =
+    new ReceiveOp(handle, fillable(buf), from)
+
+  def receive(handle: ConnectedDatagramHandle, buf: ByteBuffer): NodeOp & Repeatable =
+    new ReceiveOp(handle, fillable(buf), null)
+
+  def send(handle: BoundDatagramHandle, buf: ByteBuffer, to: IpSocketAddress): NodeOp & Repeatable =
+    new SendOp(handle, Array(buf), to)
+
+  def send(handle: ConnectedDatagramHandle, buf: ByteBuffer): NodeOp & Repeatable = new SendOp(handle, Array(buf), null)
+
+  def send(handle: BoundDatagramHandle, bufs: Array[ByteBuffer], to: IpSocketAddress): NodeOp & Repeatable =
+    new SendOp(handle, several(bufs), to)
+
+  def send(handle: ConnectedDatagramHandle, bufs: Array[ByteBuffer]): NodeOp & Repeatable =
+    new SendOp(handle, several(bufs), null)
+
+  @targetName("datagramLocalAddress")
+  def localAddress(handle: BoundDatagramHandle | ConnectedDatagramHandle): IpSocketAddress = {
+    handle.checkOpen()
+    handle.local
+  }
+
+  @targetName("datagramPeerAddress")
+  def peerAddress(handle: ConnectedDatagramHandle): IpSocketAddress = {
+    handle.checkOpen()
+    handle.peer
+  }
+
   // ---- Socket options
 
   def supports(option: SocketOption[?], kind: Kind): Boolean = Options.supports(option, kind)
@@ -141,6 +191,7 @@ object NodeOps extends Pipes with IpStreams {
   private def kindOf(handle: NodeHandle): Kind = handle match {
     case connection: ConnectionHandle => connection.kind
     case listener: ListenerHandle     => listener.kind
+    case datagram: DatagramHandle     => datagram.kind
     case other                        => throw new IllegalArgumentException(s"$other is not a socket")
   }
 
@@ -151,6 +202,7 @@ object NodeOps extends Pipes with IpStreams {
     handle.checkOpen()
     (handle match {
       case connection: ConnectionHandle => connection.option(option)
+      case datagram: DatagramHandle     => datagram.option(option)
       case other                        => throw new IllegalArgumentException(s"$option is not read on $other")
     }).asInstanceOf[V]
   }
@@ -163,6 +215,7 @@ object NodeOps extends Pipes with IpStreams {
     handle.checkOpen()
     handle match {
       case connection: ConnectionHandle => connection.setOption(option, value)
+      case datagram: DatagramHandle     => datagram.setOption(option, value)
       case other                        => throw new IllegalArgumentException(s"$option is not changed on $other")
     }
   }

@@ -45,3 +45,10 @@ private[node] object Errors {
     try body
     catch case js.JavaScriptException(error) => throw io(error)
 }
+
+/** Node's `dgram` module: UDP sockets. */
+@js.native
+@js.annotation.JSImport("node:dgram", js.annotation.JSImport.Namespace)
+private[node] object Dgram extends js.Object {
+  def createSocket(options: js.Object): js.Dynamic = js.native
+}

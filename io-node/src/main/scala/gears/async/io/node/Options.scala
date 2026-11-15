@@ -6,6 +6,8 @@ package node
   *
   *   - `NoDelay` is `socket.setNoDelay`, on a connection, given as it opens or changed after; Node does not read it
   *     back, so its value is what the backend set, which it always sets.
+  *   - `ReceiveBuffer` and `SendBuffer` are a datagram socket's alone, which Node sets and reads back from the system
+  *     (`setRecvBufferSize` and the rest): it has no call for a stream socket's.
   *   - `KeepAlive` is not had: `socket.setKeepAlive` sets the idle time alone, not the interval nor the count.
   *   - `DontFragment` is not had: Node has no call for it.
   *   - `ReusePort` is not had: Node has it (`reusePort`) only on the systems that balance load over the sockets sharing
@@ -16,8 +18,9 @@ private[node] object Options {
 
   def supports(option: SocketOption[?], kind: Kind): Boolean =
     option.appliesTo(kind) && (option match {
-      case NoDelay => true
-      case _       => false
+      case NoDelay                    => true
+      case ReceiveBuffer | SendBuffer => kind == Kind.BoundDatagram || kind == Kind.ConnectedDatagram
+      case _                          => false
     })
 
   /** Whether `option` is read and changed on an open socket of kind `kind`. */
