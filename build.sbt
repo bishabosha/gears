@@ -174,3 +174,14 @@ lazy val ioKqueueDemos =
       run / fork := true
     )
     .dependsOn(ioKqueue, ioTestkit.native)
+
+// Standalone release executable: measurements exclude sbt, native linking and pool startup.
+lazy val ioKqueueBench =
+  (project in file("io-kqueue/bench"))
+    .enablePlugins(ScalaNativePlugin)
+    .settings(
+      publish / skip := true,
+      Compile / mainClass := Some("gears.async.io.kqueue.DeadlineTimerBench"),
+      nativeConfig ~= (_.withMode(scala.scalanative.build.Mode.releaseFast).withMultithreading(true))
+    )
+    .dependsOn(ioKqueue, ioTestkit.native)

@@ -5,6 +5,12 @@ backend is checked against, demos written against the interface alone, and a ref
 to pass the contracts, not to be fast. A program performs ops, built by its backend, with the `Io` that `Io.run` gives
 it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep` on the backend's own timers.
 
+`AsyncOperations.deadlineTimer(nanoTime)` builds a reusable timer on `System.nanoTime`'s clock. Call `timer.await()`
+to wait, and `timer.moveTo(newDeadline)` to change a pending wait from any thread. Its default implementation uses
+cancellable scheduler registrations; under an `Io`, the same factory uses the backend's primitive deadline timer.
+Building the timer starts no wait. It can be awaited again after completion or cancellation, with at most one waiter
+at a time.
+
 ## Where to start reading
 
 1. **The public interface**, in `shared/src/main/scala/async/io/`: `Io.scala` (running a program and performing ops),

@@ -24,6 +24,13 @@ trait AsyncOperations:
       .link()
       .await
 
+  /** Builds a reusable timer at `nanoTime`, on `System.nanoTime`'s clock, whose deadline may be moved while waiting.
+    * Building it starts no wait. By default it uses the current scheduler's cancellable registrations; an I/O backend
+    * may override this with its primitive deadline timer.
+    */
+  def deadlineTimer(nanoTime: Long)(using async: Async): DeadlineTimer =
+    new ScheduledDeadline(nanoTime, async.scheduler)
+
   /** Yields the current [[Async]] context, possibly allowing other computations to run. */
   def `yield`()(using async: Async) =
     Future
@@ -46,6 +53,10 @@ object AsyncOperations:
     */
   inline def sleep(duration: FiniteDuration)(using AsyncOperations, Async): Unit =
     sleep(duration.toMillis)
+
+  /** Builds a reusable, movable timer at `nanoTime`, on `System.nanoTime`'s clock, using the current operations. */
+  inline def deadlineTimer(nanoTime: Long)(using AsyncOperations, Async): DeadlineTimer =
+    summon[AsyncOperations].deadlineTimer(nanoTime)
 
   /** Yields the current [[Async]] context, possibly allowing other computations to run. */
   inline def `yield`()(using AsyncOperations, Async) =

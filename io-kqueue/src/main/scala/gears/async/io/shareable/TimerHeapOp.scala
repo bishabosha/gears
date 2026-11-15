@@ -103,9 +103,6 @@ sealed abstract class AbstractTimerHeapOp
   }
 
   final def cancel(): Unit =
-    println(
-      s"cancel called on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} on thread ${Thread.currentThread().getName()}"
-    )
     // A group cancels the members it had when its cancel began, so this can come after the performance it was meant
     // for has ended, even once the next has begun: it counts only if the group now linked to is cancelled.
     // Then attempts to claim the settlement as cancelled, else sets a request for workers to check before performing
@@ -277,8 +274,6 @@ sealed abstract class AbstractTimerHeapOp
     * cancelled). Always runs with `state == TimerHeapOp.TimerFired`.
     */
   final def timerWakeup(resumedAt: Long): Unit =
-    println(s"timerWakeup called on thread ${Thread.currentThread().getName}")
-    // Thread.sleep(1000)
     val timeoutDeadline0 = timeoutDeadline
     val ownDeadline0 = ownDeadline
     // The limit decides only if it has passed and came first: at a tie the op has made its own deadline.
@@ -305,9 +300,6 @@ abstract class SingleUseAbstractTimerHeapOp extends AbstractTimerHeapOp {
   final def requestEntry()(using Async): Unit = {
     if !spentState.compareAndSet(0, 1) then throw new IllegalStateException("Already consumed")
     try
-      println(
-        s"requestEntry on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} called on thread ${Thread.currentThread().getName}"
-      )
       onEntry()
     catch
       case failure: Throwable =>
@@ -322,9 +314,6 @@ abstract class SingleUseAbstractTimerHeapOp extends AbstractTimerHeapOp {
       if v == 0 then throw new IllegalStateException("Not entered")
       else throw new IllegalStateException("Already exited")
 
-    println(
-      s"requestExit on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} called on thread ${Thread.currentThread().getName}"
-    )
     val _ = removeListener()
   }
 }
@@ -334,9 +323,6 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
   final def requestEntry()(using Async): Unit = {
     if !entered.compareAndSet(false, true) then throw new IllegalStateException("Concurrent entry not allowed")
     try {
-      println(
-        s"requestEntry on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} called on thread ${Thread.currentThread().getName}"
-      )
       reset()
       onEntry()
     } catch {
@@ -349,9 +335,6 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
   final def requestExit()(using Async): Unit = {
     if !entered.get() then throw new IllegalStateException("Not entered")
     try {
-      println(
-        s"requestExit on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} called on thread ${Thread.currentThread().getName}"
-      )
       val _ = removeListener()
     } finally {
       // Last: a performer let in any sooner would have its listener and its link taken by the lines above.

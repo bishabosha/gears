@@ -2,6 +2,7 @@ package gears.async.io
 
 import _root_.gears.async.Async
 import _root_.gears.async.AsyncOperations
+import _root_.gears.async.DeadlineTimer
 
 /** What a program performs its ops with: where its backend's ops run. It has a backend (`backend`), whose ops, handles
   * and capabilities are what the program uses, and adds only where they run: `perform`. It is not a backend and has no
@@ -11,7 +12,7 @@ import _root_.gears.async.AsyncOperations
   * A program's `Io` is lexical: a future it spawns captures it, and runs where the program runs.
   *
   * It is also the program's gears `AsyncOperations`: `sleep` is a timer op performed, so gears' `sleep`, `withTimeout`
-  * and `Timer` run on the backend's timers.
+  * and `Timer` run on the backend's timers. `deadlineTimer` wraps its primitive movable timer in a `DeadlineTimer`.
   */
 trait Io[+I <: Interface] extends AsyncOperations {
 
@@ -58,6 +59,16 @@ trait Io[+I <: Interface] extends AsyncOperations {
       s"A sleep of $millis ms is out of a timer's range"
     )
     perform(ops.timer(millis))
+  }
+
+  /** Builds a movable timer whose waits perform the backend's primitive deadline timer. */
+  override def deadlineTimer(nanoTime: Long)(using Async): DeadlineTimer = {
+    val op = ops.deadlineTimer(nanoTime)
+    new DeadlineTimer {
+      def deadline: Long = op.deadline
+      def moveTo(nanoTime: Long): Unit = op.moveTo(nanoTime)
+      def await()(using Async): Unit = perform(op)
+    }
   }
 }
 

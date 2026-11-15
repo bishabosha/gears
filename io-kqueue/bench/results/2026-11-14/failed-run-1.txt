@@ -1,0 +1,19 @@
+The first full-size invocation exited with status 1 during the four-worker, paced QUIC section.
+Its partial stdout is preserved in failed-run-1.csv. Stderr was returned by the command runner rather than captured
+to a file; the start of that trace is transcribed here:
+
+Exception in thread "main" java.lang.ClassCastException: scala.util.Right cannot be cast to scala.scalanative.unsigned.USize
+    at scala.scalanative.runtime.package$.throwClassCast(Unknown Source)
+    at gears.async.Future$RunnableFuture$FutureAsync.await$$anonfun$1(Unknown Source)
+    at gears.async.Future$RunnableFuture$FutureAsync.gears$async$Future$RunnableFuture$FutureAsync$$$outer(Unknown Source)
+    at gears.async.Future$RunnableFuture$FutureAsync.await(Unknown Source)
+    at gears.async.io.shareable.AbstractTimerHeapOp.parkUntilSettled(Unknown Source)
+    at gears.async.io.kqueue.KqueueScheduler$KqueueWorker.performOp(Unknown Source)
+    at gears.async.io.shareable.WorkpoolScheduler.performWithin(Unknown Source)
+    at gears.io.demos.GearsQuicTimers$.$anonfun$3$$anonfun$1$$anonfun$1(Unknown Source)
+
+Command:
+target/out/native0.5/scala-3.9.0/iokqueuebench/iokqueuebench 200000 9 1001
+
+This failure has not been diagnosed or fixed. It must not be described as a proven timer bug or a proven unrelated
+runtime bug. Completed move-only measurements in this partial invocation are not included in the main report.

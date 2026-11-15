@@ -197,9 +197,6 @@ object WorkpoolScheduler {
 
     /** Whether the worker has taken `task`, which it refuses once it has left `loop`. */
     def submit(task: Runnable): Boolean = {
-      println(
-        s"submit called on worker $id on thread ${Thread.currentThread().getName()}"
-      )
       inbox.add(task)
       wake()
       !exited || !inbox.remove(task)
@@ -227,9 +224,6 @@ object WorkpoolScheduler {
     private val ready = new java.util.ArrayDeque[Continuation[?, ?]]
 
     private[WorkpoolScheduler] def resumeNext[T, R](suspension: Suspension[T, R], value: T): Unit =
-      println(
-        s"resumeNext called on worker $id on thread ${Thread.currentThread().getName()}"
-      )
       ready.addLast(Continuation(suspension, value))
 
     private[WorkpoolScheduler] val thread = {
