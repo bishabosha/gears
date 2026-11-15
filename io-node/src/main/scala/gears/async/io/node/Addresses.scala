@@ -57,7 +57,7 @@ private[node] object Addresses {
     val bytes = address.bytes
     if address.protocol == Protocol.IPv6 && address.scopeId == 0 &&
       (0 until 10).forall(bytes(_) == 0) && bytes(10) == -1 && bytes(11) == -1
-    then IpAddress.fromBytes(Protocol.IPv4, bytes.toArray.drop(12))
+    then IpAddress.fromBytes(Protocol.IPv4, address.toBytes.drop(12))
     else address
   }
 

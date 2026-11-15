@@ -8,9 +8,35 @@ import gears.io.testkit.SimpleIOResolveChecks
 
 import scala.scalajs.js
 
-/** Each suite sees only the capabilities required by its contracts. */
+/** The testkit's contracts over the Node.js backend. Each suite sees only the capabilities required by its contracts.
+  *
+  * Three contracts are not run, none of which Node.js can meet:
+  *
+  *   - `BlockingContract`: the backend has no `Blocking` ops. A blocking body must run off the thread that runs the
+  *     program's futures, and Scala.js has that one thread alone; its checks also block on latches and `Thread.sleep`,
+  *     which Scala.js has not. What it checks of every op, that a one-shot op is performed once and that an op refuses
+  *     a slot not yet cleared, `PipeContract` and `ResolveContract` check here.
+  *   - `UnixDatagramContract`: the backend has no `UnixDatagrams`. Node's `dgram` opens UDP sockets only.
+  *   - `ThreadedTimerContract`: it moves deadlines from threads it starts, and Scala.js starts none.
+  *     `NodeDeadlineSuite` makes the same checks with the moves coming from callbacks of the event loop's.
+  *
+  * A program that asks for a capability the backend lacks is refused when compiling, which `NodeCapabilitySuite`
+  * checks. Within the contracts that run, six checks skip themselves, by the contracts' own `assume`, each for a socket
+  * option Node does not have as the interface means it (see `Options`): keepalive's timings and reuse-port for a stream
+  * socket, don't-fragment (two checks) and reuse-port for a datagram socket, and the buffer sizes of a Unix stream
+  * socket, the rest of that last check running.
+  */
 class NodeContractSuite extends OpsContract with NodeSuite {
   val backend: Backend = NodeBackend
+}
+
+/** What the backend lacks is refused when compiling, not when running. */
+class NodeCapabilitySuite extends munit.FunSuite {
+  test("a program over the Node.js backend cannot ask for blocking ops or Unix datagram sockets") {
+    assert(compileErrors("val backend: Backend { type Interface <: Blocking } = NodeBackend").nonEmpty)
+    assert(compileErrors("val backend: Backend { type Interface <: UnixDatagrams } = NodeBackend").nonEmpty)
+    assert(compileErrors("val backend: Backend { type Interface <: Fifos & RegularFiles } = NodeBackend").isEmpty)
+  }
 }
 
 class NodePipeSuite extends PipeContract with NodeSuite {
