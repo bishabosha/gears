@@ -22,10 +22,15 @@ private[node] trait Source {
   /** What reads fail with once nothing is available, if the stream has failed. */
   def failure: IOException | Null
 
-  /** Called once, and forgotten, when bytes, the end or a failure comes. */
-  var waiter: (() => Unit) | Null = null
+  private var waiter: (() => Unit) | Null = null
 
-  /** Calls the waiter, if there is one. */
+  /** Has `wake` called once, and forgotten, when bytes, the end or a failure comes; null for no call. */
+  def onChange(wake: (() => Unit) | Null): Unit = waiter = wake
+
+  /** Called once a read has taken the end of the stream, which a source that goes on after one acts on. */
+  def endTaken(): Unit = ()
+
+  /** Calls the read waiting, if there is one. */
   protected def wakeReader(): Unit = {
     val woken = waiter
     waiter = null
@@ -104,19 +109,21 @@ private[node] trait SourceEnd extends ReadEnd {
       } else if from.ended then {
         accept()
         deliver(null)
+        from.endTaken()
         run.succeed()
         true
       } else false
 
-    def waitForMore(): Unit = from.waiter = () =>
+    def waitForMore(): Unit = from.onChange { () =>
       try if !run.done && !attempt() then waitForMore()
       catch case failure: Throwable => run.fail(failure)
+    }
 
     if !attempt() then {
       reading = true
       run.release = () => {
         reading = false
-        from.waiter = null
+        from.onChange(null)
       }
       waitForMore()
     }

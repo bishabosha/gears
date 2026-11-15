@@ -75,3 +75,35 @@ class NodeResolveSuite extends ResolveContract with NodeSuite {
 class NodeSimpleIOResolveSuite extends SimpleIOResolveChecks with NodeSuite {
   val backend: Backend { type Interface <: Resolving } = NodeBackend
 }
+
+class NodeFifoSuite extends FifoContract with NodeSuite {
+  val backend: Backend { type Interface <: Fifos } = NodeBackend
+
+  // What the interface says of a FIFO's end, which this backend reads without a stream of Node's to keep to it.
+  test("a FIFO is at its end before a writer has opened it, and after each writer, going on to the next one's bytes") {
+    withTempDir { dir =>
+      running { io ?=>
+        val fifo = dir.resolve("fifo")
+        mkfifo(fifo)
+        val reader = openFifoForReading(io, fifo.toString)
+        try {
+          val buf = allocate(16)
+          val read = io.ops.read(reader, buf)
+          io.perform(read)
+          assertEquals(buf.position(), 0, "before any writer")
+          for word <- List("first", "second") do {
+            val writer = openFifoForWriting(io, fifo.toString)
+            writeAll(io, writer, bytes(word))
+            close(io, writer)
+            buf.clear()
+            assertEquals(readToEnd(io, read, buf), word)
+          }
+        } finally close(io, reader)
+      }
+    }
+  }
+}
+
+class NodeFifoFileSuite extends FifoFileContract with NodeSuite {
+  val backend: Backend { type Interface <: Fifos & RegularFiles } = NodeBackend
+}

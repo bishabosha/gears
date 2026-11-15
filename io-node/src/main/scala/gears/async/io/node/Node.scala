@@ -18,6 +18,10 @@ private[node] object Node {
 private[node] object Net extends js.Object {
   def connect(options: js.Object): js.Dynamic = js.native
   def createServer(options: js.Object): js.Dynamic = js.native
+
+  /** A stream over what `options` names: a descriptor, `fd`. */
+  @js.native
+  class Socket(options: js.Object) extends js.Object
 }
 
 /** Node's `os` module. */
@@ -72,7 +76,7 @@ private[node] object Fs extends js.Object {
       into: js.typedarray.Uint8Array,
       offset: Int,
       length: Int,
-      position: Double,
+      position: Double | Null,
       done: js.Function2[js.Dynamic, js.Dynamic, Unit]
   ): Unit = js.native
   def write(

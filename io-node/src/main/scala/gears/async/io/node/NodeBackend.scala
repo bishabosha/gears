@@ -44,7 +44,14 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams with RegularFiles with Resolving {
+object NodeOps
+    extends Pipes
+    with IpStreams
+    with UnixStreams
+    with IpDatagrams
+    with RegularFiles
+    with Resolving
+    with Fifos {
   import SocketOption.Kind
 
   type Op = NodeOp
@@ -104,6 +111,18 @@ object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams wi
   // ---- Pipes
 
   def pipe(read: Slot[ReadEnd], write: Slot[WriteEnd]): NodeOp = new PipeOp(read, write)
+
+  // ---- FIFOs
+
+  def openFifoForReading(path: String, into: Slot[ReadEnd]): NodeOp = {
+    Addresses.checkPath(path)
+    new OpenFifoOp(path, write = false, into)
+  }
+
+  def openFifoForWriting(path: String, into: Slot[WriteEnd]): NodeOp = {
+    Addresses.checkPath(path)
+    new OpenFifoOp(path, write = true, into)
+  }
 
   // ---- Files
 
