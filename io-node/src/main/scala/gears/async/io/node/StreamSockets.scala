@@ -276,21 +276,41 @@ private[node] final class ConnectOp(
   }
 }
 
-/** Opens a stream socket listening on an IP address. */
-private[node] final class ListenOp(address: IpSocketAddress, options: SocketOptions, into: Slot[ListenerHandle])
-    extends NodeOp {
+/** Opens a stream socket listening on an address: an IP one, or a Unix path, whose socket file it replaces if one is
+  * there, and which it removes as it closes if the file there is still its own.
+  */
+private[node] final class ListenOp(
+    address: IpSocketAddress | UnixAddress,
+    options: SocketOptions,
+    into: Slot[ListenerHandle]
+) extends NodeOp {
   override protected def slots: List[Slot[?]] = List(into)
 
   protected def start(run: Run): Unit = {
+    val on = address match {
+      case IpSocketAddress(ip, port) =>
+        js.Dynamic.literal(host = Addresses.host(ip), port = port, backlog = ListenerHandle.Backlog)
+      case UnixAddress(path) =>
+        UnixPaths.clear(path)
+        js.Dynamic.literal(path = path, backlog = ListenerHandle.Backlog)
+    }
     val server = Errors.guard(Net.createServer(js.Dynamic.literal(allowHalfOpen = true)))
     var listening = false
     val onError: js.Function1[js.Dynamic, Unit] = failure => run.fail(Errors.io(failure))
     lazy val onListening: js.Function0[Unit] = () =>
       try {
-        val bound = server.address()
-        val local = Addresses.reported(bound.address, bound.port)
+        val listener = address match {
+          case unix: UnixAddress =>
+            val listener = new ListenerHandle(server, true, unix, options)
+            val own = UnixPaths.identity(unix.path)
+            listener.closing = close => UnixPaths.closing(unix.path, own)(close)
+            listener
+          case _: IpSocketAddress =>
+            val bound = server.address()
+            new ListenerHandle(server, false, Addresses.reported(bound.address, bound.port), options)
+        }
         server.removeListener("error", onError)
-        into.set(new ListenerHandle(server, false, local, options))
+        into.set(listener)
         listening = true
         run.succeed()
       } catch case failure: Throwable => run.fail(failure)
@@ -302,12 +322,58 @@ private[node] final class ListenOp(address: IpSocketAddress, options: SocketOpti
         server.on("error", ListenerHandle.ignore)
         server.close(): Unit
       }
-    Errors.guard(
-      server.listen(
-        js.Dynamic
-          .literal(host = Addresses.host(address.address), port = address.port, backlog = ListenerHandle.Backlog)
-      )
-    ): Unit
+    Errors.guard(server.listen(on)): Unit
+  }
+}
+
+/** The socket files of Unix listeners. */
+private[node] object UnixPaths {
+  private val asBigInts = js.Dynamic.literal(throwIfNoEntry = false, bigint = true)
+  private var renames = 0L
+
+  /** What tells the file at `path` from any other, its device and inode, or null if there is none. */
+  def identity(path: String): String | Null =
+    try
+      Fs.lstatSync(path, asBigInts).toOption match {
+        case Some(stat) => s"${stat.dev}:${stat.ino}"
+        case None       => null
+      }
+    catch case _: js.JavaScriptException => null
+
+  /** Makes way for a listener at `path`: removes a socket file there, a server's that ran before or runs still, and
+    * fails for any other kind of file, which is left.
+    */
+  def clear(path: String): Unit = Errors.guard {
+    Fs.lstatSync(path, asBigInts).toOption match {
+      case Some(stat) =>
+        if !stat.isSocket().asInstanceOf[Boolean] then throw new IOException(s"$path exists and is not a socket")
+        Fs.unlinkSync(path)
+      case None => ()
+    }
+  }
+
+  /** Closes a listener that bound `path` as the file `own`, with `close`. Node removes the path as it closes the
+    * listener, whatever is there, and at once, within the call; so if the file there is no longer the listener's own,
+    * but one a later listener bound in its place, it is moved aside for the close and moved back after, within this
+    * turn of the event loop.
+    */
+  def closing(path: String, own: String | Null)(close: () => Unit): Unit = {
+    val there = identity(path)
+    if there == null || there == own then close()
+    else {
+      renames += 1
+      val aside = s"$path.$renames.kept"
+      val moved =
+        try {
+          Fs.renameSync(path, aside)
+          true
+        } catch case _: js.JavaScriptException => false
+      try close()
+      finally
+        if moved then
+          try Fs.renameSync(aside, path)
+          catch case _: js.JavaScriptException => ()
+    }
   }
 }
 

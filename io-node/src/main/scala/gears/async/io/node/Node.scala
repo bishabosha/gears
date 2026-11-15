@@ -52,3 +52,12 @@ private[node] object Errors {
 private[node] object Dgram extends js.Object {
   def createSocket(options: js.Object): js.Dynamic = js.native
 }
+
+/** Node's `fs` module: files, by its calls that take a callback, and a few that return at once. */
+@js.native
+@js.annotation.JSImport("node:fs", js.annotation.JSImport.Namespace)
+private[node] object Fs extends js.Object {
+  def lstatSync(path: String, options: js.Object): js.UndefOr[js.Dynamic] = js.native
+  def unlinkSync(path: String): Unit = js.native
+  def renameSync(from: String, to: String): Unit = js.native
+}

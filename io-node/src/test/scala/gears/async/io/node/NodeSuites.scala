@@ -38,3 +38,7 @@ class NodeSimpleIOIpStreamSuite extends SimpleIOIpStreamChecks with NodeSuite {
 class NodeIpDatagramSuite extends IpDatagramContract with NodeSuite {
   val backend: Backend { type Interface <: IpDatagrams } = NodeBackend
 }
+
+class NodeUnixStreamSuite extends UnixStreamContract with NodeSuite {
+  val backend: Backend { type Interface <: UnixStreams } = NodeBackend
+}

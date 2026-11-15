@@ -44,7 +44,7 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes with IpStreams with IpDatagrams {
+object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams {
   import SocketOption.Kind
 
   type Op = NodeOp
@@ -132,6 +132,18 @@ object NodeOps extends Pipes with IpStreams with IpDatagrams {
   def listen(address: IpSocketAddress, options: SocketOptions, into: Slot[ListenerHandle]): NodeOp = {
     Options.check(options, Kind.Listener)
     new ListenOp(address, options, into)
+  }
+
+  def connect(address: UnixAddress, options: SocketOptions, into: Slot[ConnectionHandle]): NodeOp = {
+    val to = Addresses.checked(address)
+    Options.check(options, Kind.UnixConnection)
+    new ConnectOp(to, options, into)
+  }
+
+  def listen(address: UnixAddress, options: SocketOptions, into: Slot[ListenerHandle]): NodeOp = {
+    val on = Addresses.checked(address)
+    Options.check(options, Kind.UnixListener)
+    new ListenOp(on, options, into)
   }
 
   // ---- IP datagram sockets
