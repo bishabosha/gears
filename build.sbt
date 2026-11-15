@@ -118,3 +118,18 @@ lazy val ioReferenceDemos =
       run / fork := true
     )
     .dependsOn(ioReference, ioTestkit.jvm)
+
+// The Node.js backend: the interface on Node's own I/O, `net`, `dgram`, `fs` and `dns`, for Scala.js programs linked
+// to WebAssembly, which suspend with JSPI. Scala.js only.
+lazy val ioNode =
+  (project in file("io-node"))
+    .enablePlugins(ScalaJSPlugin)
+    .settings(jsWasmSettings)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += munit % Test,
+      testFrameworks += MUnitFramework,
+      // One event loop runs every suite: run together, their timers would be measured against each other's work.
+      Test / parallelExecution := false
+    )
+    .dependsOn(root.js, ioTestkit.js % Test)
