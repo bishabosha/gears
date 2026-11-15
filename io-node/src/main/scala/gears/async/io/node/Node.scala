@@ -86,3 +86,10 @@ private[node] object Fs extends js.Object {
   def fsync(fd: Int, done: js.Function1[js.Dynamic, Unit]): Unit = js.native
   def close(fd: Int, done: js.Function1[js.Dynamic, Unit]): Unit = js.native
 }
+
+/** Node's `dns` module: name lookups by the system's resolver, on Node's own threads. */
+@js.native
+@js.annotation.JSImport("node:dns", js.annotation.JSImport.Namespace)
+private[node] object Dns extends js.Object {
+  def lookup(host: String, options: js.Object, done: js.Function2[js.Dynamic, js.Dynamic, Unit]): Unit = js.native
+}

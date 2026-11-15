@@ -44,7 +44,7 @@ object NodeBackend extends Backend {
 }
 
 /** The Node.js backend's ops, each checked as it is built. */
-object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams with RegularFiles {
+object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams with RegularFiles with Resolving {
   import SocketOption.Kind
 
   type Op = NodeOp
@@ -119,6 +119,14 @@ object NodeOps extends Pipes with IpStreams with UnixStreams with IpDatagrams wi
     new FileWriteOp(handle, buf, offset(at))
 
   def sync(handle: FileHandle): NodeOp & Repeatable = new SyncOp(handle)
+
+  // ---- Names
+
+  def resolve(host: String, into: Slot[List[IpAddress]]): NodeOp = {
+    if host.isEmpty then throw new IllegalArgumentException("An empty host name names no host")
+    Addresses.checkPath(host)
+    new ResolveOp(host, into)
+  }
 
   // ---- Stream sockets
 
