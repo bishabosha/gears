@@ -425,29 +425,27 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
 
   final def actImmediate(): Boolean = attemptClaimed() != AbstractReadinessOp.Blocked
 
-  final def readyWakeup(available: Long, source: EventSource): Boolean =
+  final def readyWakeup(): Int =
+    var moved = ReadinessOp.SettledOtherwise
     val result: Outcome | Null =
       try
         if cancelledDuringWork then TimerHeapOp.CancelledSentinel
         else
-          val moved = attemptClaimed()
-          if moved == AbstractReadinessOp.Blocked then null
-          else
-            // All that was there as the source took its report: whatever comes after it is reported anew, so until
-            // then there is nothing, and the next op need not look. Not at the end of a stream, where nothing was
-            // moved, since no report follows it.
-            handle.waiterDone(isRead, this, source, drained = moved > 0 && moved >= available)
-            WorkpoolScheduler.SuccessUnit
+          // Without claiming the handle's work: its lock for this direction is held, which a close waits for.
+          moved = attempt()
+          if moved == AbstractReadinessOp.Blocked then null else WorkpoolScheduler.SuccessUnit
       catch
-        case NonFatal(ex)     => Failure(ex)
+        case NonFatal(ex) =>
+          moved = ReadinessOp.SettledOtherwise
+          Failure(ex)
         case fatal: Throwable =>
           // As in `timerWakeup`: an op left claimed would keep its performer waiting for ever.
           completeFromReady(Failure(fatal))
           throw fatal
-    if result == null then false
+    if result == null then ReadinessOp.Blocked
     else
       completeFromReady(result)
-      true
+      moved
 
   /** Does the work at once, which most often does it, or else waits for the handle's listener to find the handle ready
     * and do it, for the handle to close, or for the op's time limit or cancel. The listener is `self`, the performer's

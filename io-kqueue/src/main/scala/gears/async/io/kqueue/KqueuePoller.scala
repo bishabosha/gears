@@ -80,10 +80,7 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
   private def dispatch(fd: Int, read: Boolean, available: Long): Unit = {
     val current = handles
     val handle = if fd < current.length then current(fd) else null
-    if handle != null then
-      val op = handle.readyWaiter(read, this)
-      // If a cancel settles the op as its claim is given back, its performer clears it.
-      if op != null && !op.readyWakeup(available, this) then op.releaseReady(): Unit
+    if handle != null then handle.reportReady(read, this, available)
   }
 
   /** How much `event` reports its descriptor ready for, bytes to read or room to write, unless it also reports the

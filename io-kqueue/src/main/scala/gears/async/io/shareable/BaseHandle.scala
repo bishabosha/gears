@@ -99,7 +99,9 @@ trait BaseHandle extends HandleState.Holder:
   def open(): Unit
   def requestClose(): Boolean
 
-  /** Counts the times the handle was reported readable, or writable: read before an attempt, for `awaitReadiness`. */
+  /** Counts the times the handle's listener reported it readable, or writable: read before an attempt, for
+    * `awaitReadiness`.
+    */
   def readinessTick(read: Boolean): Int
 
   /** Makes `op` the handle's waiter for reads, or for writes, if the handle accepts it: what a handle accepts is its
@@ -116,20 +118,17 @@ trait BaseHandle extends HandleState.Holder:
     */
   def drainedAt(read: Boolean, tick: Int): Boolean
 
-  /** `op`, which `source` claimed with `readyWaiter`, has done its work, and is no longer the handle's waiter. If
-    * `drained`, it took all that `source` reported the handle ready for, and the handle is drained until its next
-    * report.
-    */
-  def waiterDone(read: Boolean, op: ReadinessOp, source: EventSource, drained: Boolean): Unit
-
   /** Whether `op` was the handle's waiter, and no longer is. Costs nothing for an op that is not. */
   def clearWaiter(read: Boolean, op: ReadinessOp): Boolean
 
-  /** `source` reports the handle ready: its waiter, claimed with `claimAtReady` while still its waiter, or null if
-    * there is none to claim. A handle reported ready time after time with no op waiting gives up its listener, which
-    * it tells to `stopListening`: the next op that waits makes its own worker the listener.
+  /** `source` reports the handle ready, for `available` bytes to read or room to write, or `ReadinessOp.Unknown`. The
+    * handle's waiter, if it can be claimed, does its work here and now, on `source`'s thread, and is the waiter no
+    * longer once that settles it; one that finds the handle not ready after all waits on. An op that takes all that
+    * was reported leaves the handle known to be drained until its next report. A handle reported ready time after
+    * time with no op waiting gives up its listener, which it tells to `stopListening`: the next op that waits makes
+    * its own worker the listener. A report from a source that is not the listener is ignored.
     */
-  def readyWaiter(read: Boolean, source: EventSource): ReadinessOp | Null
+  def reportReady(read: Boolean, source: EventSource, available: Long): Unit
 
   /** Whether `source` is the handle's listener for reads, or for writes. */
   def listenedBy(read: Boolean, source: EventSource): Boolean
@@ -189,24 +188,40 @@ abstract class AbstractBaseHandle extends BaseHandle:
         case AbstractBaseHandle.Closed => owner.handleClosed()
         case _ => throw new IllegalStateException("A close already has its owner waiting")
 
-  /** The ops waiting for the handle to be readable, and to be writable. Guarded by this handle's monitor, which is
-    * what makes a claim and a clear exclude each other (see `ReadinessOp.claimAtReady`).
+  /** What the handle keeps for the ops that wait for it to be readable, and the same again for writable. Its own
+    * monitor guards it, one for each direction, so that a reader and a writer of one handle never wait on each other.
     */
-  private val readWaiter = AtomicReference[ReadinessOp | Null](null)
-  private val writeWaiter = AtomicReference[ReadinessOp | Null](null)
+  private final class Waiting {
 
-  /** The event source listening for the handle to be readable, and to be writable: the first an op waited on, and
-    * the same one for as long as ops go on waiting (see `idleReportsLimit`), so that only it is woken for the handle.
-    * Guarded by this handle's monitor.
-    */
-  private var readListener: EventSource | Null = null
-  private var writeListener: EventSource | Null = null
+    /** The op that waits. Read without the lock by `clearWaiter`, to find that it has nothing to do. */
+    @volatile var waiter: ReadinessOp | Null = null
 
-  /** Written under this handle's monitor. */
-  @volatile private var readTick = 0
-  @volatile private var writeTick = 0
+    /** The event source listening for the handle: the first an op waited on, and the same one for as long as ops go
+      * on waiting (see `idleReportsLimit`), so that only it is woken for the handle.
+      */
+    var listener: EventSource | Null = null
 
-  final def readinessTick(read: Boolean): Int = if read then readTick else writeTick
+    /** Counts the listener's reports. */
+    @volatile var tick = 0
+
+    /** The tick at which the handle was last known drained, which is so now if it is still the tick: any other
+      * value, as it is to begin with and when a listener goes, means it is not known.
+      */
+    @volatile var drainedTick = -1
+
+    /** Reports with no op waiting since one last was. */
+    var idleReports = 0
+
+    /** No listener, so nothing would report the handle ready: whether it is drained is not known. */
+    def forgetDrained(): Unit = drainedTick = tick - 1
+  }
+
+  private val reads = new Waiting
+  private val writes = new Waiting
+
+  private inline def side(read: Boolean): Waiting = if read then reads else writes
+
+  final def readinessTick(read: Boolean): Int = side(read).tick
 
   /** Whether the handle accepts `op` as its waiter while `pending` is. By default one op waits in each direction, and
     * a second is refused; one that has settled, whose performer has yet to clear it, is not waiting, and gives way.
@@ -214,51 +229,25 @@ abstract class AbstractBaseHandle extends BaseHandle:
   protected def acceptsWaiter(read: Boolean, op: ReadinessOp, pending: ReadinessOp | Null): Boolean =
     pending == null || pending.settled
 
-  /** The tick at which the handle was last known drained, which is so now if it is still the tick: any other value,
-    * as it is to begin with and when a listener goes, means it is not known. Written under this handle's monitor.
-    */
-  @volatile private var readDrainedTick = -1
-  @volatile private var writeDrainedTick = -1
-
-  final def drainedAt(read: Boolean, tick: Int): Boolean =
-    (if read then readDrainedTick else writeDrainedTick) == tick
-
-  /** No listener, so nothing would report the handle ready: whether it is drained is not known. */
-  private def forgetDrained(read: Boolean): Unit =
-    if read then readDrainedTick = readTick - 1 else writeDrainedTick = writeTick - 1
-
-  /** The tick of the listener's last report, which `waiterDone` marks the handle drained as of. Guarded by this
-    * handle's monitor.
-    */
-  private var readReportTick = 0
-  private var writeReportTick = 0
-
-  /** Without the lock. Only `source`, on its own thread, calls this, for the op it has just claimed in
-    * `readyWaiter`: it is still the listener, as only it can stop being one, and the tick of its report is its own
-    * to read. The waiter goes only if it is still `op`: an op that has settled may already have given way to the next.
-    */
-  final def waiterDone(read: Boolean, op: ReadinessOp, source: EventSource, drained: Boolean): Unit = {
-    (if read then readWaiter else writeWaiter).compareAndSet(op, null): Unit
-    if drained then
-      if read then readDrainedTick = readReportTick else writeDrainedTick = writeReportTick
-  }
+  final def drainedAt(read: Boolean, tick: Int): Boolean = side(read).drainedTick == tick
 
   final def awaitReadiness(read: Boolean, op: ReadinessOp, sinceTick: Int, self: EventSource): EventSource | Null = {
+    val waiting = side(read)
     var start = false
-    val listener = synchronized {
-      if !acceptsWaiter(read, op, (if read then readWaiter else writeWaiter).get()) then
+    val listener = waiting.synchronized {
+      if !acceptsWaiter(read, op, waiting.waiter) then
         throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
       // The listener may be another thread's, and have reported the handle ready, to no waiter, after the attempt.
-      if readinessTick(read) != sinceTick then null
+      if waiting.tick != sinceTick then null
       else
-        (if read then readWaiter else writeWaiter).set(op)
-        var listener = if read then readListener else writeListener
+        waiting.waiter = op
+        var listener = waiting.listener
         if listener == null then
           listener = self
           start = true
-          if read then readListener = self else writeListener = self
+          waiting.listener = self
         // The op waits because the handle was not ready at this tick: so the next need not try before the next.
-        if read then readDrainedTick = sinceTick else writeDrainedTick = sinceTick
+        waiting.drainedTick = sinceTick
         listener
     }
     // Only as `self` becomes the listener: it then reports the handle until it stops being one. No report can come
@@ -267,25 +256,28 @@ abstract class AbstractBaseHandle extends BaseHandle:
       try self.startListening(this, read)
       catch
         case failure: Throwable =>
-          synchronized {
-            if read then { if readListener eq self then readListener = null }
-            else if writeListener eq self then writeListener = null
-            forgetDrained(read)
-            clearWaiter(read, op): Unit
+          waiting.synchronized {
+            if waiting.listener eq self then waiting.listener = null
+            waiting.forgetDrained()
+            if waiting.waiter eq op then waiting.waiter = null
           }
           throw failure
     listener
   }
 
-  final def clearWaiter(read: Boolean, op: ReadinessOp): Boolean =
-    // Looked at first without the lock: an op done by its handle's listener was taken out by `waiterDone`, and only
+  final def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = {
+    val waiting = side(read)
+    // Looked at first without the lock: an op done by its handle's listener was taken out by `reportReady`, and only
     // its own performer, here, puts it in.
-    if (if read then readWaiter else writeWaiter).get() ne op then false
+    if waiting.waiter ne op then false
     else
-      synchronized {
-        // Under the lock, which `readyWaiter` claims under: see `ReadinessOp.claimAtReady`.
-        (if read then readWaiter else writeWaiter).compareAndSet(op, null)
+      // Under the lock, which `reportReady` claims under: see `ReadinessOp.claimAtReady`.
+      waiting.synchronized {
+        val held = waiting.waiter eq op
+        if held then waiting.waiter = null
+        held
       }
+  }
 
   /** How many times in a row the handle is reported ready with no op waiting before it gives up its listener. Until
     * then an op that waits costs no system call; past it, the handle is taken to be one whose ops find it ready, for
@@ -294,51 +286,62 @@ abstract class AbstractBaseHandle extends BaseHandle:
     */
   protected def idleReportsLimit: Int = 16
 
-  /** Reports with no op waiting since one last was. Guarded by this handle's monitor. */
-  private var readIdleReports = 0
-  private var writeIdleReports = 0
-
-  final def readyWaiter(read: Boolean, source: EventSource): ReadinessOp | Null = {
+  /** The whole of a report under the one lock: the op is claimed while it is the waiter, does its work, and is the
+    * waiter no longer, with nothing else to take or to swap. The work is done with the lock held and no claim on the
+    * handle's work: a close, which begins by failing the waiters under this lock, waits for it, and a report that
+    * comes once the handle is closing does nothing.
+    */
+  final def reportReady(read: Boolean, source: EventSource, available: Long): Unit = {
+    val waiting = side(read)
     var stop = false
-    val claimed = synchronized {
-      if read then readTick += 1 else writeTick += 1
-      // A report from a source that has stopped listening, already on its way: counted above, for an op about to
-      // wait, but the waiter is its new listener's to claim.
-      if (if read then readListener else writeListener) ne source then null
-      else
-        val op = (if read then readWaiter else writeWaiter).get()
+    waiting.synchronized {
+      // A report from a source that has stopped listening, already on its way, is not this listener's: ignored.
+      if waiting.listener eq source then
+        waiting.tick += 1
+        val op = waiting.waiter
         if op == null then
-          val idle = (if read then readIdleReports else writeIdleReports) + 1
+          val idle = waiting.idleReports + 1
           stop = idle >= idleReportsLimit
-          if read then readIdleReports = if stop then 0 else idle
-          else writeIdleReports = if stop then 0 else idle
+          waiting.idleReports = if stop then 0 else idle
           if stop then
-            if read then readListener = null else writeListener = null
-            forgetDrained(read)
-          null
+            waiting.listener = null
+            waiting.forgetDrained()
         else
-          if read then readIdleReports = 0 else writeIdleReports = 0
-          if read then readReportTick = readTick else writeReportTick = writeTick
-          if op.claimAtReady() then op else null
+          waiting.idleReports = 0
+          if getState == OpenState && op.claimAtReady() then
+            val moved = op.readyWakeup()
+            if moved == ReadinessOp.Blocked then
+              // If a cancel settles the op as its claim is given back, its performer clears it.
+              op.releaseReady(): Unit
+            else
+              waiting.waiter = null
+              // All that was there as the source took its report: whatever comes after it is reported anew, so until
+              // then there is nothing, and the next op need not look. Not at the end of a stream, where nothing was
+              // moved, since no report follows it.
+              if moved > 0 && moved >= available then waiting.drainedTick = waiting.tick
     }
     if stop then source.stopListening(this, read)
-    claimed
   }
 
-  final def listenedBy(read: Boolean, source: EventSource): Boolean = synchronized {
-    (if read then readListener else writeListener) eq source
+  final def listenedBy(read: Boolean, source: EventSource): Boolean = {
+    val waiting = side(read)
+    waiting.synchronized(waiting.listener eq source)
   }
 
-  /** First in a close, before anything is released: whoever waits fails. */
+  /** First in a close, before anything is released: whoever waits fails. Under the lock, which waits for a report's
+    * work that is under way, and after which no report does any.
+    */
   private def failWaiter(read: Boolean): Unit =
-    val op = (if read then readWaiter else writeWaiter).get()
+    val waiting = side(read)
+    val op = waiting.synchronized(waiting.waiter)
     if op != null then op.handleClosing()
 
   /** Then the listeners drop the handle, while its descriptor is still its own. What they registered with the kernel
     * goes as the descriptor is closed.
     */
   private def forgetListener(read: Boolean): Unit =
-    val listener = synchronized(if read then readListener else writeListener)
+    val waiting = side(read)
+    val listener = waiting.synchronized(waiting.listener)
     if listener != null then listener.forgetHandle(this)
 
   final def open(): Unit =

@@ -59,8 +59,8 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
   private val workerGroup: Array[Worker[Op1]] = Array.tabulate(workers)(makeWorker)
 
-  /** The worker of this pool that `thread` runs, or null: a worker's thread carries its worker, so this is no lookup
-    * by thread.
+  /** The worker of this pool that `thread` runs, or null: a worker's thread carries its worker, so this is no lookup by
+    * thread.
     */
   private def workerOf(thread: Thread): Worker[Op1] | Null = thread match
     case thread: WorkpoolScheduler.WorkerThread =>
@@ -151,9 +151,9 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
     workerGroup.foreach(_.thread.join())
   }
 
-  /** A task from one of this pool's workers stays with that worker, behind what it already has: what a future spawns
-    * is most often to do with what it is doing, its handles among it, and a handle is cheapest used from one thread.
-    * It is not tied there: a worker with nothing to do takes it (`stealFor`). A task from any other thread goes to the
+  /** A task from one of this pool's workers stays with that worker, behind what it already has: what a future spawns is
+    * most often to do with what it is doing, its handles among it, and a handle is cheapest used from one thread. It is
+    * not tied there: a worker with nothing to do takes it (`stealFor`). A task from any other thread goes to the
     * workers in turn.
     */
   override def execute(body: Runnable): Unit =
@@ -185,11 +185,11 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
     found
   }
 
-  /** `Io.pinned` on a pool: the future stays on the worker it is on while `body` runs. Whatever resumes it, it goes
-    * on there and nowhere else: an op of this pool's resumes it there itself, and anything else it waits for is
-    * followed by a move back. Outside any such scope a future is resumed where its op was done, and from there may be
-    * taken by a worker with nothing to do (`Worker.shareUnpinned`); as `body` ends the future offers itself to one,
-    * if there is one. A scope inside another is already pinned, and does neither.
+  /** `Io.pinned` on a pool: the future stays on the worker it is on while `body` runs. Whatever resumes it, it goes on
+    * there and nowhere else: an op of this pool's resumes it there itself, and anything else it waits for is followed
+    * by a move back. Outside any such scope a future is resumed where its op was done, and from there may be taken by a
+    * worker with nothing to do (`Worker.shareUnpinned`); as `body` ends the future offers itself to one, if there is
+    * one. A scope inside another is already pinned, and does neither.
     */
   override def pinned[T](body: Async ?=> T)(using async: Async): T =
     async match
@@ -200,8 +200,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
 
   /** Moves the future to `home`, if it is not there. Under no group: a cancel must not leave it somewhere else. */
   private def goTo(base: Async, home: Worker[Op1]): Unit =
-    if workerOf(Thread.currentThread()) ne home then
-      base.withGroup(CompletionGroup.Unlinked).await(Hop(home))
+    if workerOf(Thread.currentThread()) ne home then base.withGroup(CompletionGroup.Unlinked).await(Hop(home))
 
   /** Has a worker with nothing to do take the future, if there is one; otherwise it goes on where it is. */
   private def offer(base: Async): Unit = {
@@ -283,15 +282,15 @@ object WorkpoolScheduler {
   /** A worker's thread, which carries its worker for whoever asks which worker the current thread is. */
   final class WorkerThread(val worker: Worker[?], body: Runnable) extends Thread(body) {
 
-    /** While this thread completes the listener of a pinned future: the worker the future is pinned to, which is
-      * where the scheduler then resumes it. Null otherwise. This thread's alone.
+    /** While this thread completes the listener of a pinned future: the worker the future is pinned to, which is where
+      * the scheduler then resumes it. Null otherwise. This thread's alone.
       */
     var resumeHome: AnyRef | Null = null
   }
 
   /** Runs `complete`, which completes a listener of a future pinned to `home`: a worker's thread notes `home` for the
-    * scheduler's `resumeAsync`, which comes within. On any other thread the future is resumed on some worker, and
-    * finds its own way home (`PinnedAsync.await`).
+    * scheduler's `resumeAsync`, which comes within. On any other thread the future is resumed on some worker, and finds
+    * its own way home (`PinnedAsync.await`).
     */
   inline def resumingAt(home: AnyRef)(inline complete: Unit): Unit =
     Thread.currentThread() match
@@ -332,9 +331,7 @@ object WorkpoolScheduler {
     def claimAtDeadline(): Boolean = !cancelled
   }
 
-  abstract class Worker[Op1 <: TimerOp](val id: Int)
-      extends TimerHeapImpl[Op1 | DoAfter],
-        EventSource {
+  abstract class Worker[Op1 <: TimerOp](val id: Int) extends TimerHeapImpl[Op1 | DoAfter], EventSource {
 
     type ThisWorkerSource <: EventSource
     def asThisWorkerSource: this.type & ThisWorkerSource
@@ -381,12 +378,12 @@ object WorkpoolScheduler {
       removed
     }
 
-    /** For `thief`, a worker with nothing to do, on its own thread: half of this worker's tasks that it has not come
-      * to yet, the oldest, if it has more than it will come to soon (`surplus`). One is returned for the thief to run
-      * now, and the rest are put in the thief's inbox; null if there is nothing to take. Half at once, not one at a
-      * time: a thief that came back for each would get few of them before this worker had run the rest, and how many
-      * would be down to how the two happened to interleave. A worker that is merely awake does not take what another
-      * is about to run.
+    /** For `thief`, a worker with nothing to do, on its own thread: half of this worker's tasks that it has not come to
+      * yet, the oldest, if it has more than it will come to soon (`surplus`). One is returned for the thief to run now,
+      * and the rest are put in the thief's inbox; null if there is nothing to take. Half at once, not one at a time: a
+      * thief that came back for each would get few of them before this worker had run the rest, and how many would be
+      * down to how the two happened to interleave. A worker that is merely awake does not take what another is about to
+      * run.
       */
     private[WorkpoolScheduler] def takeHalfFor(thief: Worker[?]): Runnable | Null =
       if !surplus then null
@@ -417,10 +414,10 @@ object WorkpoolScheduler {
     /** Set by the scheduler before the worker's thread starts: wakes a worker that waits with nothing to do. */
     private[WorkpoolScheduler] var callThief: () => Unit = () => ()
 
-    /** Whether this worker has called for a thief this turn. Worker thread only. One is called for at most once a
-      * turn, when the worker is given a task it will not come to at once or ends a turn with tasks left over: so that
-      * what one worker can keep up with stays on it, and what it can't, or what waits behind a task that keeps it, is
-      * shared out a worker at a time.
+    /** Whether this worker has called for a thief this turn. Worker thread only. One is called for at most once a turn,
+      * when the worker is given a task it will not come to at once or ends a turn with tasks left over: so that what
+      * one worker can keep up with stays on it, and what it can't, or what waits behind a task that keeps it, is shared
+      * out a worker at a time.
       */
     private var thiefAsked = false
 
@@ -548,9 +545,9 @@ object WorkpoolScheduler {
     /** Worker thread only: the pinned futures `shareUnpinned` passes over, on their way back to `ready`. */
     private val passedOver = new java.util.ArrayDeque[Continuation[?, ?]]
 
-    /** As a turn begins, with the futures the last poll found ready to resume: if there are more than a couple and
-      * some worker has nothing to do, half of them, the latest, go to the inbox for it to take, and it is called.
-      * Those pinned to this worker stay. What is not taken this worker runs itself, after the rest.
+    /** As a turn begins, with the futures the last poll found ready to resume: if there are more than a couple and some
+      * worker has nothing to do, half of them, the latest, go to the inbox for it to take, and it is called. Those
+      * pinned to this worker stay. What is not taken this worker runs itself, after the rest.
       */
     private def shareUnpinned(): Unit = {
       val waiting = ready.size()

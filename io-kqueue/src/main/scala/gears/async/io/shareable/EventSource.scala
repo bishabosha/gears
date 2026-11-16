@@ -17,7 +17,7 @@ trait EventSource {
   def startListening(handle: BaseHandle, read: Boolean): Unit
 
   /** This source is no longer `handle`'s listener for reads, or for writes: it stops reporting them. Called on this
-    * source's own thread, by the handle, from `readyWaiter`.
+    * source's own thread, by the handle, from `reportReady`.
     */
   def stopListening(handle: BaseHandle, read: Boolean): Unit = ()
 
