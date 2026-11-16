@@ -7,7 +7,7 @@ import gears.async.io.node.host.ByteSource
 import gears.async.io.node.host.NodeBuffer
 
 import java.nio.ByteBuffer
-import scala.scalajs.js.typedarray.Int8Array
+import scala.scalajs.js.typedarray.Uint8Array
 
 private[node] object Slots {
 
@@ -37,7 +37,7 @@ private[node] sealed trait ReadInto {
   def ready(): Unit = ()
 
   /** Takes what was read, at most `room` bytes; null at the end, when nothing was. */
-  def take(chunk: Int8Array | Null): Unit
+  def take(chunk: Uint8Array | Null): Unit
 }
 
 /** Into the caller's buffers, one or several, each filled before the next is begun. */
@@ -50,7 +50,7 @@ private[node] final class IntoBuffers(bufs: Array[ByteBuffer]) extends ReadInto 
 
   def room: Int = NodeBuffer.room(bufs)
 
-  def take(chunk: Int8Array | Null): Unit = if chunk != null then NodeBuffer.fill(bufs, chunk)
+  def take(chunk: Uint8Array | Null): Unit = if chunk != null then NodeBuffer.fill(bufs, chunk)
 }
 
 /** Into a slot, as a buffer of `pool`'s: the chunk Node handed over, with no copy. */
@@ -64,7 +64,7 @@ private[node] final class IntoPool(pool: NodePool, slot: Slot[Received]) extends
     if !slot.isEmpty then throw new IllegalArgumentException("The read's slot was filled while it waited")
   }
 
-  def take(chunk: Int8Array | Null): Unit = slot.set(pool.received(chunk))
+  def take(chunk: Uint8Array | Null): Unit = slot.set(pool.received(chunk))
 }
 
 /** A read of a stream: at once if bytes, or the end, have come, else as the handle's waiter until they do. */

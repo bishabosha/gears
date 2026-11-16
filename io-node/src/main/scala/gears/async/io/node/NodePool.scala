@@ -1,10 +1,11 @@
 package gears.async.io
 package node
 
+import gears.async.io.node.host.NodeBuffer
+
 import java.io.IOException
 import java.nio.ByteBuffer
-import scala.scalajs.js.typedarray.Int8Array
-import scala.scalajs.js.typedarray.TypedArrayBuffer
+import scala.scalajs.js.typedarray.Uint8Array
 
 /** The Node.js backend's pool. Node's streams hand the backend chunks of their own, so a pooled read hands over such a
   * chunk, of at most `bufferSize` bytes, rather than copy it into a buffer allocated here: the pool allocates nothing,
@@ -29,9 +30,9 @@ private[node] final class NodePool(val bufferSize: Int, val buffers: Int) extend
   /** What a read received, as one of the pool's buffers, held from here until it is released: `chunk`, or nothing at
     * the end of the stream.
     */
-  private[node] def received(chunk: Int8Array | Null): Received = {
+  private[node] def received(chunk: Uint8Array | Null): Received = {
     checkFree()
-    val bytes: ByteBuffer = if chunk == null then ByteBuffer.allocate(0) else TypedArrayBuffer.wrap(chunk)
+    val bytes: ByteBuffer = if chunk == null then ByteBuffer.allocate(0) else NodeBuffer.wrap(chunk)
     held += 1
     new Received {
       private var released = false

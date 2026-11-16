@@ -94,7 +94,7 @@ private[node] abstract class AbstractFileReadOp(protected val handle: FileHandle
         try {
           val size = count.asInstanceOf[Int]
           into.ready() // refused, the bytes stay the file's: the position is where it was
-          into.take(if size == 0 then null else NodeBuffer.signed(chunk.nn).subarray(0, size))
+          into.take(if size == 0 then null else chunk.nn.subarray(0, size))
           if streaming then handle.position += size else at += size
           null
         } catch case refused: Exception => refused
@@ -153,9 +153,8 @@ private[node] abstract class AbstractFileWriteOp(
         if !handle.writable then throw new IOException(s"$handle was opened for reading, not writing")
         // Copied without consuming: the buffers are passed over by what the call wrote, if it completes.
         val chunk = NodeBuffer.drain(bufs.map(_.duplicate()), math.min(NodeBuffer.room(bufs), FileOps.LargestCall))
-        val bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.length)
         if streaming then handle.beginStream(read = false, this)
-        try Fs.write(handle.fd, bytes, 0, bytes.length, (if streaming then handle.position else at).toDouble, wrote)
+        try Fs.write(handle.fd, chunk, 0, chunk.length, (if streaming then handle.position else at).toDouble, wrote)
         catch {
           case js.JavaScriptException(failure) =>
             if streaming then handle.endStream(read = false)

@@ -3,7 +3,6 @@ package gears.async.io.node.host
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.scalajs.js
-import scala.scalajs.js.typedarray.Int8Array
 import scala.scalajs.js.typedarray.Uint8Array
 
 /** A stream of Node's, a `net.Socket`, read and written without waiting.
@@ -71,7 +70,7 @@ private[node] final class NodeStream(socket: js.Dynamic, readable: Boolean, writ
     socket.on("readable", readableSeen)
   }
 
-  def read(max: Int): Int8Array | Null = {
+  def read(max: Int): Uint8Array | Null = {
     val available = if readable && !closed then socket.readableLength.asInstanceOf[Int] else 0
     if available > 0 then {
       val chunk = socket.read(math.min(max, available))
@@ -79,7 +78,7 @@ private[node] final class NodeStream(socket: js.Dynamic, readable: Boolean, writ
       // A read of exactly what was left does not have Node say that the end, if it has come already, is next: only a
       // read that finds nothing does, so one is made, which takes nothing.
       if socket.readableLength.asInstanceOf[Int] == 0 then socket.read(0): Unit
-      NodeBuffer.signed(chunk.asInstanceOf[Uint8Array])
+      chunk.asInstanceOf[Uint8Array]
     } else if error != null then throw error.nn
     else if endSeen || closed then ByteSource.Ended
     else null
@@ -95,7 +94,7 @@ private[node] final class NodeStream(socket: js.Dynamic, readable: Boolean, writ
       val size = chunk.length
       unsent += size
       sizes.push(size)
-      try socket.write(new Uint8Array(chunk.buffer, chunk.byteOffset, size), sent): Unit
+      try socket.write(chunk, sent): Unit
       catch {
         case js.JavaScriptException(failure) => // refused outright: its callback will not come
           unsent -= size

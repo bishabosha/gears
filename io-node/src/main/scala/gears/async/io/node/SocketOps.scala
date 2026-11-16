@@ -16,7 +16,6 @@ import gears.async.io.node.internal.Net
 
 import java.nio.ByteBuffer
 import scala.scalajs.js
-import scala.scalajs.js.typedarray.Uint8Array
 
 /** An op that opens something of Node's and waits for Node to say it is open. Until then it only waits: a cancel or its
   * time limit ends it at once, and what was being opened is abandoned as the performance ends (`finish`), so that
@@ -243,7 +242,7 @@ private[node] abstract class AbstractReceiveOp(
         if !from.isEmpty then throw new IllegalArgumentException("The receive's slot was filled while it waited")
         from.set(Addresses.reported(packet.sender.address, packet.sender.port))
       }
-      val bytes = NodeBuffer.signed(packet.bytes)
+      val bytes = packet.bytes
       buf.clear()
       NodeBuffer.fill(Array(buf), bytes.subarray(0, math.min(bytes.length, buf.capacity()))) // the rest dropped
       buf.flip()
@@ -281,6 +280,6 @@ private[node] abstract class AbstractSendOp(
     handle.takeFailure()
     // Copied without consuming: the buffers are consumed once the packet has been sent, not if the send fails.
     val packet = NodeBuffer.drain(bufs.map(_.duplicate()), NodeBuffer.room(bufs))
-    handle.send(new Uint8Array(packet.buffer, packet.byteOffset, packet.length), to, sent)
+    handle.send(packet, to, sent)
   }
 }

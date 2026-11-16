@@ -6,7 +6,6 @@ import gears.async.io.node.internal.Fs
 
 import java.io.IOException
 import scala.scalajs.js
-import scala.scalajs.js.typedarray.Int8Array
 import scala.scalajs.js.typedarray.Uint8Array
 
 /** A FIFO's read end as a source, read by its descriptor with `fs.read`, which on a descriptor that does not block
@@ -23,7 +22,7 @@ import scala.scalajs.js.typedarray.Uint8Array
 private[node] final class FifoSource(fd: Int, timers: TimerSource) extends ByteSource {
   import FifoSource.*
 
-  private var found: Int8Array | Null = null
+  private var found: Uint8Array | Null = null
   private var atEnd = false
   private var failed: IOException | Null = null
   private var inFlight = false
@@ -33,7 +32,7 @@ private[node] final class FifoSource(fd: Int, timers: TimerSource) extends ByteS
   private var closing: (() => Unit) | Null = null
   private var spare: Uint8Array | Null = null // a look's buffer that it found nothing for, for the next look
 
-  def read(max: Int): Int8Array | Null = {
+  def read(max: Int): Uint8Array | Null = {
     val all = found
     if all != null then
       if all.length <= max then {
@@ -94,7 +93,7 @@ private[node] final class FifoSource(fd: Int, timers: TimerSource) extends ByteS
       val count = read.asInstanceOf[Int]
       pause = 1
       if count > 0 then {
-        found = NodeBuffer.signed(chunk).subarray(0, count)
+        found = chunk.subarray(0, count)
         spare = null
       } else atEnd = wanted // an end no read waits for is not kept: the next read looks for itself
       tell()

@@ -8,7 +8,7 @@ import gears.async.io.node.host.NodeBuffer
 import java.io.IOException
 import java.nio.ByteBuffer
 import scala.scalajs.js
-import scala.scalajs.js.typedarray.Int8Array
+import scala.scalajs.js.typedarray.Uint8Array
 
 /** A stream held in memory, for the suites: bytes between a read end and a write end within the program, at most
   * `Capacity` of them, so that a writer waits for its reader. The backend has no `Pipes`: Node makes no pipe of the
@@ -17,14 +17,14 @@ import scala.scalajs.js.typedarray.Int8Array
   * sink with no system behind them, where every wait and every wake-up is the backend's own.
   */
 private[node] final class MemoryStream extends ByteSource with ByteSink {
-  private val chunks = js.Array[Int8Array]()
+  private val chunks = js.Array[Uint8Array]()
   private var held = 0
   private var writerGone = false
   private var readerGone = false
 
   private def tell(listener: (() => Unit) | Null): Unit = if listener != null then listener()
 
-  def read(max: Int): Int8Array | Null =
+  def read(max: Int): Uint8Array | Null =
     if held == 0 then if writerGone then ByteSource.Ended else null
     else {
       val first = chunks(0)
@@ -75,7 +75,7 @@ private[node] object MemoryStream {
 
 /** One side of a memory stream, as the source or the sink its handle closes. */
 private final class MemorySide(stream: MemoryStream, reads: Boolean) extends ByteSource with ByteSink {
-  def read(max: Int): Int8Array | Null = stream.read(max)
+  def read(max: Int): Uint8Array | Null = stream.read(max)
   def write(bufs: Array[ByteBuffer]): Int = stream.write(bufs)
 
   def close(done: () => Unit): Boolean = {

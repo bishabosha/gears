@@ -1,7 +1,7 @@
 package gears.async.io.node.host
 
 import java.nio.ByteBuffer
-import scala.scalajs.js.typedarray.Int8Array
+import scala.scalajs.js.typedarray.Uint8Array
 
 /** Where a stream's bytes come from, as Node has them, read without waiting: a read says at once what there is, and
   * would-block and the end of the stream are values, not failures. Whoever owns the source, its handle, is told when a
@@ -12,7 +12,7 @@ trait ByteSource {
   /** At most `max` bytes that have arrived, as a chunk of Node's own; `ByteSource.Ended` at the end of the stream; or
     * null if a read would block. Fails with an `IOException` if the stream has failed.
     */
-  def read(max: Int): Int8Array | Null
+  def read(max: Int): Uint8Array | Null
 
   /** Called when bytes, the end or a failure may have come: set by the source's handle. */
   var onReadable: (() => Unit) | Null = null
@@ -27,7 +27,7 @@ trait ByteSource {
 object ByteSource {
 
   /** What `read` gives at the end of the stream. */
-  val Ended: Int8Array = new Int8Array(0)
+  val Ended: Uint8Array = new Uint8Array(0)
 }
 
 /** Where a stream's bytes go, as Node takes them, written without waiting. */
