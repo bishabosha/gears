@@ -1,5 +1,8 @@
 package gears.async.io
 package node
+package host
+
+import gears.async.io.node.internal.Os
 
 import java.io.IOException
 import scala.scalajs.js

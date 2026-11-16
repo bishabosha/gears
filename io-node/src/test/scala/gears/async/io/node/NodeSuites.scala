@@ -2,6 +2,8 @@ package gears.async.io
 package node
 
 import gears.async.Future
+import gears.async.io.node.host.Addresses
+import gears.async.io.node.internal.Os
 import gears.async.io.testkit.*
 import gears.io.testkit.SimpleIOChecks
 import gears.io.testkit.SimpleIOIpStreamChecks

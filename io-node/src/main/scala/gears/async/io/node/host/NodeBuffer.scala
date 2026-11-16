@@ -1,5 +1,4 @@
-package gears.async.io
-package node
+package gears.async.io.node.host
 
 import java.nio.ByteBuffer
 import scala.scalajs.js.typedarray.Int8Array
@@ -10,7 +9,7 @@ import scala.scalajs.js.typedarray.Uint8Array
   * over chunks of its own, so bytes are copied between a chunk and a buffer, of any kind: on the heap, direct or
   * read-only.
   */
-private[node] object Buffers {
+private[node] object NodeBuffer {
 
   /** The bytes remaining in `bufs`, together. */
   def remaining(bufs: Array[ByteBuffer]): Long = {

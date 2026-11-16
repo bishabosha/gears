@@ -1,5 +1,6 @@
 package gears.async.io
 package node
+package host
 
 /** The interface's socket options as Node has them, which are few: Node sets what its own programs commonly set, and
   * reads almost none back from the system.

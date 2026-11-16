@@ -2,6 +2,7 @@ package gears.async.io
 package node
 
 import gears.async.Future
+import gears.async.io.node.host.Addresses
 import gears.async.io.testkit.IpStreamFixture
 
 import java.io.IOException

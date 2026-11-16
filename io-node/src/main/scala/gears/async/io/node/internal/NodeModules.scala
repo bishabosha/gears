@@ -1,10 +1,9 @@
-package gears.async.io
-package node
+package gears.async.io.node.internal
 
 import scala.scalajs.js
 
 /** Node's globals that Scala.js has no facade for. */
-private[node] object Node {
+private[node] object NodeGlobals {
 
   /** Calls `body` on the event loop's next turn, after the I/O events of this one, and returns what cancels it. */
   def setImmediate(body: js.Function0[Unit]): js.Dynamic = js.Dynamic.global.setImmediate(body)
@@ -29,30 +28,6 @@ private[node] object Net extends js.Object {
 @js.annotation.JSImport("node:os", js.annotation.JSImport.Namespace)
 private[node] object Os extends js.Object {
   def networkInterfaces(): js.Dictionary[js.Array[js.Dynamic]] = js.native
-}
-
-/** Node's failures, JavaScript errors, as the interface's: `IOException`s. */
-private[node] object Errors {
-
-  /** The failure an error of Node's is, with its message, which names the system's error and the call. */
-  def io(error: Any): java.io.IOException = error match {
-    case failure: java.io.IOException                    => failure
-    case js.JavaScriptException(inner)                   => io(inner)
-    case other if other == null || js.isUndefined(other) =>
-      new java.io.IOException("Node reported a failure, and not what it was")
-    case other =>
-      val message = other.asInstanceOf[js.Dynamic].message
-      new java.io.IOException(if js.typeOf(message) == "string" then message.asInstanceOf[String]
-      else String.valueOf(other))
-  }
-
-  /** Whether a callback of Node's was given an error. */
-  def failed(error: js.Dynamic): Boolean = error != null && !js.isUndefined(error)
-
-  /** Runs a call of Node's that may throw a JavaScript error as one that throws an `IOException`. */
-  inline def guard[T](inline body: T): T =
-    try body
-    catch case js.JavaScriptException(error) => throw io(error)
 }
 
 /** Node's `dgram` module: UDP sockets. */
