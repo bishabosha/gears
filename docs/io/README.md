@@ -183,12 +183,23 @@ on Scala.js is; `NodeBackend.start(program)` does both and returns a promise, fo
 It has timers, IP stream and datagram sockets, Unix stream sockets, regular files, name resolution and FIFOs. It has
 no blocking ops, there being no second thread to block, no Unix datagram sockets, which Node does not open, and no
 pipes, which Node makes only for a child process: its suites run the stream contract over a stream held in memory
-that is their own fixture, not a capability. Where Node's own way differs from the interface's, the backend keeps to the interface:
+that is their own fixture, not a capability. It is built in three layers, as the backends over system calls are. `base` knows nothing of Node: a handle's state
+and the work claimed on it, closed by one owner once that work is released; an op as its own state machine, which a
+performance allocates nothing for but the promise it waits on; ops that try their work at once and otherwise wait as
+their handle's waiter; and one heap for every deadline, so that Node is asked for one timer, the earliest, a time
+limit that comes and goes with its op never reaches Node, and a deadline moved later costs nothing. `host` is Node
+as values: a stream read and written without waiting, would-block and the end as results, not events. On top, each
+op and each handle is a few lines (`NodeOp.scala`, `NodeHandles.scala`), the ops interface is a trait for each
+capability (`NodeOps.scala`), and `NodeLoop` performs each kind of op.
+
+Where Node's own way differs from the interface's, the backend keeps to the interface:
 
 - **Streams** (`net.Socket`) are read as Node's paused streams, so a sender is held back while nothing reads, and
   written a chunk of at most 64 KiB at a time, the next not taken until Node has handed the last to the system: Node
   takes whatever it is given and gives nothing back, so a write that waits, and is then cancelled, has written
   nothing. A pooled read hands over Node's own chunk as the pool's buffer, with no copy; the pool only counts them.
+  Any other read or write copies once, as a block, to or from a direct buffer, and twice for one on the heap, which
+  JavaScript cannot reach.
 - **Listeners and datagram sockets** are handed connections and packets by Node as they arrive, so those not yet
   taken wait in the handle, bounded as the system bounds them: a listener's by its backlog, a datagram socket's by
   its receive buffer, beyond which packets are dropped.
