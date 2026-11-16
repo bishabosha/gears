@@ -192,8 +192,8 @@ abstract class AbstractBaseHandle extends BaseHandle:
   /** The ops waiting for the handle to be readable, and to be writable. Guarded by this handle's monitor, which is
     * what makes a claim and a clear exclude each other (see `ReadinessOp.claimAtReady`).
     */
-  @volatile private var readWaiter: ReadinessOp | Null = null
-  @volatile private var writeWaiter: ReadinessOp | Null = null
+  private val readWaiter = AtomicReference[ReadinessOp | Null](null)
+  private val writeWaiter = AtomicReference[ReadinessOp | Null](null)
 
   /** The event source listening for the handle to be readable, and to be writable: the first an op waited on, and
     * the same one for as long as ops go on waiting (see `idleReportsLimit`), so that only it is woken for the handle.
@@ -233,22 +233,25 @@ abstract class AbstractBaseHandle extends BaseHandle:
   private var readReportTick = 0
   private var writeReportTick = 0
 
-  final def waiterDone(read: Boolean, op: ReadinessOp, source: EventSource, drained: Boolean): Unit = synchronized {
-    if read then { if readWaiter eq op then readWaiter = null }
-    else if writeWaiter eq op then writeWaiter = null
-    if drained && ((if read then readListener else writeListener) eq source) then
+  /** Without the lock. Only `source`, on its own thread, calls this, for the op it has just claimed in
+    * `readyWaiter`: it is still the listener, as only it can stop being one, and the tick of its report is its own
+    * to read. The waiter goes only if it is still `op`: an op that has settled may already have given way to the next.
+    */
+  final def waiterDone(read: Boolean, op: ReadinessOp, source: EventSource, drained: Boolean): Unit = {
+    (if read then readWaiter else writeWaiter).compareAndSet(op, null): Unit
+    if drained then
       if read then readDrainedTick = readReportTick else writeDrainedTick = writeReportTick
   }
 
   final def awaitReadiness(read: Boolean, op: ReadinessOp, sinceTick: Int, self: EventSource): EventSource | Null = {
     var start = false
     val listener = synchronized {
-      if !acceptsWaiter(read, op, if read then readWaiter else writeWaiter) then
+      if !acceptsWaiter(read, op, (if read then readWaiter else writeWaiter).get()) then
         throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
       // The listener may be another thread's, and have reported the handle ready, to no waiter, after the attempt.
       if readinessTick(read) != sinceTick then null
       else
-        if read then readWaiter = op else writeWaiter = op
+        (if read then readWaiter else writeWaiter).set(op)
         var listener = if read then readListener else writeListener
         if listener == null then
           listener = self
@@ -277,12 +280,11 @@ abstract class AbstractBaseHandle extends BaseHandle:
   final def clearWaiter(read: Boolean, op: ReadinessOp): Boolean =
     // Looked at first without the lock: an op done by its handle's listener was taken out by `waiterDone`, and only
     // its own performer, here, puts it in.
-    if (if read then readWaiter else writeWaiter) ne op then false
+    if (if read then readWaiter else writeWaiter).get() ne op then false
     else
       synchronized {
-        val held = (if read then readWaiter else writeWaiter) eq op
-        if held then if read then readWaiter = null else writeWaiter = null
-        held
+        // Under the lock, which `readyWaiter` claims under: see `ReadinessOp.claimAtReady`.
+        (if read then readWaiter else writeWaiter).compareAndSet(op, null)
       }
 
   /** How many times in a row the handle is reported ready with no op waiting before it gives up its listener. Until
@@ -304,7 +306,7 @@ abstract class AbstractBaseHandle extends BaseHandle:
       // wait, but the waiter is its new listener's to claim.
       if (if read then readListener else writeListener) ne source then null
       else
-        val op = if read then readWaiter else writeWaiter
+        val op = (if read then readWaiter else writeWaiter).get()
         if op == null then
           val idle = (if read then readIdleReports else writeIdleReports) + 1
           stop = idle >= idleReportsLimit
@@ -329,7 +331,7 @@ abstract class AbstractBaseHandle extends BaseHandle:
 
   /** First in a close, before anything is released: whoever waits fails. */
   private def failWaiter(read: Boolean): Unit =
-    val op = synchronized(if read then readWaiter else writeWaiter)
+    val op = (if read then readWaiter else writeWaiter).get()
     if op != null then op.handleClosing()
 
   /** Then the listeners drop the handle, while its descriptor is still its own. What they registered with the kernel

@@ -40,36 +40,30 @@ object TimerHeapOp {
 
 trait TimerHeapOp extends WorkpoolScheduler.AsyncOp, WorkpoolScheduler.ReentrantOp
 
-sealed abstract class AbstractTimerHeapOp
-    extends Async.OriginalSource[Outcome]
-    with TimerHeapOp
-    with TimerHeapOp.Hooks {
+sealed abstract class AbstractTimerHeapOp extends Async.Source[Outcome] with TimerHeapOp with TimerHeapOp.Hooks {
 
   /** Perform work after a timer has woken and there was no timeout. Result will be used to complete the operation.
     */
   def wakeup(resumedAt: Long): Outcome
 
-  /** Waits for the op's outcome, and returns or throws it. The wait is under no group, so that only the op can end it:
-    * a cancel reaches the performer through the op, which `performWith` links to the performer's group, and which
-    * settles as cancelled if no worker has claimed it, and otherwise leaves the performer waiting for that worker's
-    * outcome, as the work was done. That cancel is not lost: the group stays cancelled.
-    *
-    * Nothing here recovers from a wait that throws, as there is nothing to recover to: what a fibre's `await` throws
-    * while registering its listener leaves through the fibre's boundary, not through this call.
+  /** Waits for the op's outcome, and returns or throws it. The wait is under the performer's own group, so a cancel
+    * ends it; what the cancel does to the op is then decided here, on the performer's own thread: if nothing has
+    * claimed the op it is settled as cancelled, and otherwise the performer waits on, under no group, for whoever
+    * claimed it, since the work was done, and returns that outcome. That cancel is not lost: the group stays cancelled.
+    * Nothing links the op itself to the group, so no other thread ever cancels it.
     */
-  def parkUntilSettled()(using Async): Unit = {
+  def parkUntilSettled()(using async: Async): Unit = {
     exposed = true
-    val out = state.get() match
-      case out: Outcome => out
-      case _            =>
-        // Linked to the performer's group only now that it waits, and for as long: an op that is done as it is
-        // tried has nothing a cancel could stop. A group already cancelled cancels the op as it is linked.
-        link()
-        try
-          state.get() match
-            case out: Outcome => out
-            case _            => summon[Async].withGroup(CompletionGroup.Unlinked).await(this)
-        finally unlink()
+    val out =
+      outcomeOf(result.get()) match
+        case null =>
+          try async.await(this)
+          catch
+            case _: CancellationException =>
+              _cancelLater = true // for a worker that has claimed it, to see before it does the work
+              if settleCancelled() then TimerHeapOp.CancelledSentinel
+              else async.withGroup(CompletionGroup.Unlinked).await(this) // claimed: its outcome is the op's
+        case outcome => outcome
     out match
       case result: Try[Unit]             => result.get
       case TimerHeapOp.CancelledSentinel => throw new CancellationException()
@@ -77,34 +71,46 @@ sealed abstract class AbstractTimerHeapOp
 
   // async state management
 
+  /** A cancel that came while the op was claimed, which whoever claimed it looks for before working. */
   @volatile private var _cancelLater: Boolean = false
-  private val state = AtomicReference[TimerHeapOp.State](null)
 
-  def settled: Boolean = state.get() match
-    case null                          => false
-    case _: Try[Unit]                  => true
-    case TimerHeapOp.CancelledSentinel => true
-    case TimerHeapOp.TimerFired        => false
-    case TimerHeapOp.CloseFired        => false
-    case TimerHeapOp.ReadyFired        => false
+  /** Who may settle this performance: null while anyone may claim it, then the marker of whoever did, a firing timer, a
+    * ready handle, a close or a cancel. Only its holder settles the op.
+    */
+  private val claim = AtomicReference[AnyRef | Null](null)
 
-  /** Forgets the last performance's outcome, for the next performance of a repeatable op. Without the op's lock:
-    * whatever could settle the last performance was done with it before its performer left (see `leave`), and a
-    * cancel only counts while the op is linked, which between performances it is not.
+  /** Null, then the waiting performer's listener if it waits, then the outcome. Settling swaps the outcome in and takes
+    * the listener out as one step, so nothing of a performance is left to do once its outcome shows: a performer that
+    * sees it may leave, and perform the op again, with no lock to wait on.
+    */
+  private val result = AtomicReference[AnyRef | Null](null)
+
+  private def outcomeOf(value: AnyRef | Null): Outcome | Null = value match
+    case outcome: Try[?]               => outcome.asInstanceOf[Try[Unit]]
+    case TimerHeapOp.CancelledSentinel => TimerHeapOp.CancelledSentinel
+    case _                             => null
+
+  def settled: Boolean = outcomeOf(result.get()) != null
+
+  /** Forgets the last performance, for the next of a repeatable op. Each word is written only if it has to be: an op
+    * that was done as it was tried left them as they were.
     */
   protected def reset(): Unit = {
     exposed = false
-    _cancelLater = false
-    state.set(null)
+    if _cancelLater then _cancelLater = false
+    if claim.get() != null then claim.set(null)
+    if result.get() != null then result.set(null)
   }
 
-  /** The worker this performance's future is pinned to, or null (see `WorkpoolScheduler.pinned`). */
-  @volatile private var pinHome: AnyRef | Null = null
+  /** The worker this performance's future is pinned to, or null (see `WorkpoolScheduler.pinned`). Written by the
+    * performer before the op is given to anything that could settle it.
+    */
+  private var pinHome: AnyRef | Null = null
 
-  final def pinnedTo(home: AnyRef | Null): Unit = pinHome = home
+  final def pinnedTo(home: AnyRef | Null): Unit = if pinHome ne home then pinHome = home
 
-  /** Gives the waiting performer its outcome, which resumes it. For a pinned future, the thread doing so is told
-    * where it belongs, for the scheduler to resume it there and nowhere else.
+  /** Gives the waiting performer its outcome, which resumes it. For a pinned future, the thread doing so is told where
+    * it belongs, for the scheduler to resume it there and nowhere else.
     */
   private def tell(waiting: Listener[Outcome], result: Outcome): Unit =
     val home = pinHome
@@ -119,21 +125,13 @@ sealed abstract class AbstractTimerHeapOp
   /** Before the op is given to something that can settle it other than a heap, which `hasDeadline` tells of. */
   protected final def expose(): Unit = exposed = true
 
-  /** As the performer leaves. Whatever settles an op settles it and takes its listener as one step, under the op's
-    * lock, which this waits for: a performer that sees the outcome and leaves can't have its next performance's
-    * listener taken for this one. An op done as it was tried, given to nothing, has no such step under way, and takes
-    * no lock.
+  /** As the performer leaves. One that leaves with the op's outcome leaves nothing behind. One that leaves without,
+    * because something threw after the op was given to what could settle it, must not have it settled later, into the
+    * next performance: it claims the op itself, or waits for whoever already has.
     */
-  protected final def leave(): Unit =
-    if exposed || hasDeadline then removeListener(): Unit
-
-  /** The group this performance is linked to, or `Unlinked` between performances. Guarded by this op's monitor. */
-  private var linkedTo: CompletionGroup = CompletionGroup.Unlinked
-
-  override def link(group: CompletionGroup): this.type = synchronized {
-    linkedTo = group
-    super.link(group)
-  }
+  protected final def leave()(using async: Async): Unit =
+    if (exposed || hasDeadline) && outcomeOf(result.get()) == null then
+      if !settleCancelled() then async.withGroup(CompletionGroup.Unlinked).await(this): Unit
 
   protected def cancelledDuringWork: Boolean = {
     _cancelLater
@@ -144,77 +142,59 @@ sealed abstract class AbstractTimerHeapOp
     else body
   }
 
+  /** Whether a performer is in the op now. */
+  protected def performing: Boolean
+
+  /** Settles the performance under way as cancelled if nothing has claimed it; otherwise leaves word for whoever has.
+    * Outside a performance it does nothing. A performer that is cancelled does the same itself, in `parkUntilSettled`,
+    * which is the only way an op is cancelled by the scheduler: it links no op to a group. Whoever links one takes on
+    * that a group cancels the members it had as its cancel began, so that this may come after the performance it was
+    * meant for, into the next.
+    */
   final def cancel(): Unit =
-    println(
-      s"cancel called on ${this.getClass.getSimpleName}@${System.identityHashCode(this)} on thread ${Thread.currentThread().getName()}"
-    )
-    // A group cancels the members it had when its cancel began, so this can come after the performance it was meant
-    // for has ended, even once the next has begun: it counts only if the group now linked to is cancelled.
-    // Then attempts to claim the settlement as cancelled, else sets a request for workers to check before performing
-    // work.
-    val waiting = synchronized {
-      if !linkedTo.isCancelled then null
-      else if tryCancel() then takeListener()
-      else
-        _cancelLater = true
-        null
-    }
-    if waiting != null then tell(waiting, TimerHeapOp.CancelledSentinel)
+    if performing then
+      _cancelLater = true
+      settleCancelled(): Unit
 
-  def isCancelled: Boolean = state.get() == TimerHeapOp.CancelledSentinel
+  private def settleCancelled(): Boolean =
+    if claim.compareAndSet(null, TimerHeapOp.CancelledSentinel) then
+      settle(TimerHeapOp.CancelledSentinel)
+      true
+    else false
 
-  private def completeFromTimer(result: Outcome): Unit = {
-    // Settled and its listener taken as one step, which `requestExit` waits for: a performer that sees the outcome and
-    // leaves can't have its next performance's listener taken for this one.
-    val waiting = synchronized {
-      if !state.compareAndSet(TimerHeapOp.TimerFired, result) then throw new IllegalStateException("Did not claim work")
-      takeListener()
-    }
-    if waiting != null then tell(waiting, result)
-  }
+  def isCancelled: Boolean = result.get() eq TimerHeapOp.CancelledSentinel
 
-  private final def tryCancel(): Boolean = {
-    state.compareAndSet(null, TimerHeapOp.CancelledSentinel)
-  }
+  /** For the holder of the claim: the outcome in, and the performer told if it waits. */
+  private def settle(outcome: Outcome): Unit =
+    result.getAndSet(outcome) match
+      case waiting: Listener[?] => tell(waiting.asInstanceOf[Listener[Outcome]], outcome)
+      case _                    => ()
+
+  private def settleHolding(marker: AnyRef, outcome: Outcome): Unit =
+    if claim.get() ne marker then throw new IllegalStateException("Did not claim work")
+    settle(outcome)
+
+  private def completeFromTimer(result: Outcome): Unit = settleHolding(TimerHeapOp.TimerFired, result)
 
   // gears.async.Source implementation
 
-  @volatile private var listener: Listener[Outcome] | Null = null
-
-  final protected def removeListener(): Listener[Outcome] | Null = synchronized(takeListener())
-
-  /** With the op's lock held. */
-  private def takeListener(): Listener[Outcome] | Null = {
-    val l = listener
-    listener = null
-    l
-  }
-
   final override def poll(k: Listener[Outcome]): Boolean =
-    pollListener(state.get(), k)
+    val outcome = outcomeOf(result.get())
+    outcome != null && k.completeNow(outcome, this)
 
   final override def poll(): Option[Outcome] =
-    state.get() match
-      case null                                                                     => None
-      case data: Try[Unit]                                                          => Some(data)
-      case CancelledSentinel                                                        => Some(CancelledSentinel)
-      case TimerHeapOp.TimerFired | TimerHeapOp.CloseFired | TimerHeapOp.ReadyFired => None
+    val outcome = outcomeOf(result.get())
+    if outcome == null then None else Some(outcome)
 
-  private final def pollListener(state: TimerHeapOp.State, k: Listener[Outcome]): Boolean =
-    state match
-      case null              => false
-      case data: Try[Unit]   => k.completeNow(data, this)
-      case CancelledSentinel => k.completeNow(CancelledSentinel, this)
-      case TimerHeapOp.TimerFired | TimerHeapOp.CloseFired | TimerHeapOp.ReadyFired => false
+  /** One listener at a time, the performer's: registered if there is no outcome yet, and otherwise given it. */
+  final override def onComplete(k: Listener[Outcome]): Unit =
+    if !result.compareAndSet(null, k) then
+      val outcome = outcomeOf(result.get())
+      if outcome == null then throw new IllegalStateException("Listener already registered")
+      tell(k, outcome)
 
-  /** Called by `onComplete` alone, with the op's lock held. */
-  final override protected def addListener(k: Listener[Outcome]): Unit =
-    if listener != null then throw new IllegalStateException("Listener already registered")
-    listener = k
-
-  /** Best effort, as `Source` has it: `settle` may already have taken the listener. */
-  final override def dropListener(k: Listener[Outcome]): Unit = synchronized:
-    if listener eq k then listener = null
+  /** Best effort, as `Source` has it: whoever settles the op may already have taken the listener. */
+  final override def dropListener(k: Listener[Outcome]): Unit = result.compareAndSet(k, null): Unit
 
   // end gears.async.Source implementation
 
@@ -238,55 +218,32 @@ sealed abstract class AbstractTimerHeapOp
   final override def hasDeadline: Boolean = hasOwnDeadline || timeoutDeadline >= 0
 
   final def claimAtDeadline(): Boolean = {
-    state.compareAndSet(null, TimerHeapOp.TimerFired)
+    claim.compareAndSet(null, TimerHeapOp.TimerFired)
   }
 
   final def claimAtCloseFire(): Boolean = {
-    state.compareAndSet(null, TimerHeapOp.CloseFired)
+    claim.compareAndSet(null, TimerHeapOp.CloseFired)
   }
 
-  protected def completeFromCloseFire(result: Outcome): Unit = {
-    // Settled and its listener taken as one step, which `requestExit` waits for: a performer that sees the outcome and
-    // leaves can't have its next performance's listener taken for this one.
-    val waiting = synchronized {
-      if !state.compareAndSet(TimerHeapOp.CloseFired, result) then throw new IllegalStateException("Did not claim work")
-      takeListener()
-    }
-    if waiting != null then tell(waiting, result)
-  }
+  protected def completeFromCloseFire(result: Outcome): Unit = settleHolding(TimerHeapOp.CloseFired, result)
 
   /** Claims the op for a worker that found its handle ready, or for its handle closing: as `claimAtDeadline`. */
   final def claimAtReady(): Boolean = {
-    state.compareAndSet(null, TimerHeapOp.ReadyFired)
+    claim.compareAndSet(null, TimerHeapOp.ReadyFired)
   }
 
-  protected def completeFromReady(result: Outcome): Unit = {
-    // Settled and its listener taken as one step, as in `completeFromTimer`.
-    val waiting = synchronized {
-      if !state.compareAndSet(TimerHeapOp.ReadyFired, result) then throw new IllegalStateException("Did not claim work")
-      takeListener()
-    }
-    if waiting != null then tell(waiting, result)
-  }
+  protected def completeFromReady(result: Outcome): Unit = settleHolding(TimerHeapOp.ReadyFired, result)
 
   /** Gives back a claim made with `claimAtReady`, the handle not having been ready after all: the op waits on, and can
-    * be claimed again. A cancel asked for while it was claimed could not settle it, so it is settled as cancelled here
-    * instead. Returns whether the op still waits.
+    * be claimed again. A cancel that came while it was claimed could not settle it, so it is settled as cancelled here
+    * instead: the performer, having left word in `_cancelLater`, tries the claim again itself, and whichever of the two
+    * sees the other's write gets it. Returns whether the op still waits.
     */
   final def releaseReady(): Boolean = {
-    var stillWaiting = true
-    val waiting = synchronized {
-      if _cancelLater then
-        if !state.compareAndSet(TimerHeapOp.ReadyFired, TimerHeapOp.CancelledSentinel) then
-          throw new IllegalStateException("Did not claim work")
-        stillWaiting = false
-        takeListener()
-      else
-        if !state.compareAndSet(TimerHeapOp.ReadyFired, null) then throw new IllegalStateException("Did not claim work")
-        null
-    }
-    if waiting != null then tell(waiting, TimerHeapOp.CancelledSentinel)
-    stillWaiting
+    if claim.get() ne TimerHeapOp.ReadyFired then throw new IllegalStateException("Did not claim work")
+    claim.set(null)
+    if _cancelLater then settleCancelled(): Unit
+    outcomeOf(result.get()) == null
   }
 
   final def setTimeout(t: Long, source: TimerHeap.TimerSource[?]): Unit =
@@ -325,7 +282,7 @@ sealed abstract class AbstractTimerHeapOp
   }
 
   /** Woken from the timer heap after provably entering on its deadline firing. (i.e. will not enter if already
-    * cancelled). Always runs with `state == TimerHeapOp.TimerFired`.
+    * cancelled). Always runs holding the claim, as `TimerHeapOp.TimerFired`.
     */
   final def timerWakeup(resumedAt: Long): Unit =
     println(s"timerWakeup called on thread ${Thread.currentThread().getName}")
@@ -353,6 +310,7 @@ sealed abstract class AbstractTimerHeapOp
 
 abstract class SingleUseAbstractTimerHeapOp extends AbstractTimerHeapOp {
   private val spentState = AtomicInteger(0)
+  final protected def performing: Boolean = spentState.get() == 1
   final def requestEntry()(using Async): Unit = {
     if !spentState.compareAndSet(0, 1) then throw new IllegalStateException("Already consumed")
     try
@@ -382,6 +340,7 @@ abstract class SingleUseAbstractTimerHeapOp extends AbstractTimerHeapOp {
 
 abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Repeatable {
   private val entered = AtomicBoolean(false)
+  final protected def performing: Boolean = entered.get()
   final def requestEntry()(using Async): Unit = {
     if !entered.compareAndSet(false, true) then throw new IllegalStateException("Concurrent entry not allowed")
     try {
@@ -405,8 +364,8 @@ abstract class RepeatableAbstractTimerHeapOp extends AbstractTimerHeapOp with Re
       )
       leave()
     } finally {
-      // Last: a performer let in any sooner would have its listener and its link taken by the lines above.
-      entered.set(false)
+      // Last: a performer let in any sooner would find this one still leaving.
+      entered.lazySet(false)
     }
   }
 }
@@ -433,8 +392,8 @@ abstract class AbstractCloseOp(val handle: BaseHandle)
       handle.onClosed(this)
       false
 
-  /** The op is performed once, so this can only be for the performance that waits; it may by then have been
-    * cancelled or timed out, and the handle closes all the same.
+  /** The op is performed once, so this can only be for the performance that waits; it may by then have been cancelled
+    * or timed out, and the handle closes all the same.
     */
   final def handleClosed(): Unit =
     if claimAtCloseFire() then completeFromCloseFire(WorkpoolScheduler.SuccessUnit)
@@ -448,8 +407,8 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       TimeoutOnWake,
       ReadinessOp { op =>
 
-  /** One attempt at the work, which must not block, with the handle's work claimed: how many bytes it moved, which
-    * may be none, as at the end of a stream, or `Blocked` if the handle was not ready, and nothing was done.
+  /** One attempt at the work, which must not block, with the handle's work claimed: how many bytes it moved, which may
+    * be none, as at the end of a stream, or `Blocked` if the handle was not ready, and nothing was done.
     */
   protected def attempt(): Int
 
@@ -490,10 +449,10 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
       completeFromReady(result)
       true
 
-  /** Does the work at once, which most often does it, or else waits for the handle's listener to find the handle
-    * ready and do it, for the handle to close, or for the op's time limit or cancel. The listener is `self`, the
-    * performer's worker, if the handle had none, and from then on whichever worker that was: it does the work and
-    * resumes the performer, which goes on from there on that worker.
+  /** Does the work at once, which most often does it, or else waits for the handle's listener to find the handle ready
+    * and do it, for the handle to close, or for the op's time limit or cancel. The listener is `self`, the performer's
+    * worker, if the handle had none, and from then on whichever worker that was: it does the work and resumes the
+    * performer, which goes on from there on that worker.
     */
   final def performWhenReady(self: W)(using Async): Unit =
     var waiting = false
@@ -665,8 +624,7 @@ abstract class AbstractMakePipeOp[PR <: BaseReadableHandle, PW <: BaseWritableHa
   /** Before anything is opened: an occupied slot could not take its end. */
   override def onEntry(): Unit =
     super.onEntry()
-    if !readSlot.isEmpty || !writeSlot.isEmpty then
-      throw new IllegalArgumentException("A pipe needs two empty slots")
+    if !readSlot.isEmpty || !writeSlot.isEmpty then throw new IllegalArgumentException("A pipe needs two empty slots")
 
   final def perform(): Unit =
     val pair = pipe()

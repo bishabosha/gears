@@ -128,8 +128,6 @@ class HandleStateSuite extends munit.FunSuite {
     val op = FakeOp()
     def tick = handle.readinessTick(read = true)
     assert(!handle.drainedAt(read = true, tick))
-    handle.waiterDone(read = true, op, source, drained = true) // not its listener: nothing is known
-    assert(!handle.drainedAt(read = true, tick))
 
     val waitedAt = tick
     assert(handle.awaitReadiness(read = true, op, waitedAt, source) eq source)

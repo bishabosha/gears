@@ -208,32 +208,6 @@ class TimerHeapOpSuite extends munit.FunSuite {
     Async.blocking(intercept[IllegalStateException](timer.requestExit()))
   }
 
-  test(
-    "a cancel that doesn't come from the group the op is linked to does nothing: it was meant for an earlier performance"
-  ) {
-    val earlier = CompletionGroup()
-    val timer = CountingTimer()
-    Async.blocking {
-      val earlierAsync = summon[Async].withGroup(earlier)
-      timer.requestEntry()(using earlierAsync)
-      timer.link()(using earlierAsync)
-      timer.unlink()
-      timer.requestExit()
-    }
-    entered(timer) { timer =>
-      var outcome: Option[Outcome] = None
-      timer.onComplete(receiver(result => outcome = Some(result)))
-      earlier.cancel() // no longer holds the op
-      timer.cancel() // as that group would, had it begun its cancel while it still held it
-      assertEquals(outcome, None)
-      assert(!timer.settled)
-      assert(timer.claimAtDeadline())
-      timer.cancel()
-      timer.timerWakeup(System.nanoTime())
-      assertEquals(outcome, Some(Success(())))
-    }
-  }
-
   test("a cancel of an op that is not being performed does nothing") {
     val timer = CountingTimer()
     timer.cancel()
