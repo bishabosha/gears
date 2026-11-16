@@ -63,7 +63,7 @@ class ContractHelperSuite extends ContractSuite {
           })
         }
       }
-      assertEquals(readPooledExactly(io, read, into, input.length), expected)
+      assertEquals(readReceivedExactly(io, read, into, input.length), expected)
       assertEquals(released, input.length)
       assert(into.isEmpty)
     }

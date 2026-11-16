@@ -109,6 +109,9 @@ sealed trait ReadEnd extends RefHandle {
 
   /** What the poller waits on for it to be readable, or null if it always is. */
   private[reference] def inReady: SelectableChannel | Null
+
+  /** The buffers its reads into the backend's own fill, and how many may be held at once. */
+  private[reference] final val window: RefWindow = new RefWindow()
 }
 
 /** A handle written as a stream. */

@@ -39,8 +39,8 @@ trait SimpleIOChecks extends StreamFixture {
   test("SimpleIO over perform: a stream of chunks consumed as a gears channel, with back-pressure") {
     val total = 1 << 20
     val received = running { io ?=>
-      val pool = io.backend.pool(bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
       val (in, out) = stream(io)
+      io.ops.setReadWindow(in, bufferSize = 4096, buffers = 4) // a backlog of two, one being sent, one being read
       try {
         val writer = Future {
           val buf = arena.allocate(8192)
@@ -52,12 +52,11 @@ trait SimpleIOChecks extends StreamFixture {
           }
           io.perform(io.ops.close(out))
         }
-        val received = SimpleIO.drain(SimpleIO.chunks(in, pool, backlog = 2))
+        val received = SimpleIO.drain(SimpleIO.chunks(in, backlog = 2))
         writer.await
         received
       } finally {
         io.perform(io.ops.close(in))
-        pool.close()
       }
     }
     assertEquals(received, total.toLong)
@@ -65,11 +64,12 @@ trait SimpleIOChecks extends StreamFixture {
 
   test("SimpleIO over perform: a stream closed early releases its chunks, and one that fails rethrows") {
     val outcome = running { io ?=>
-      val pool = io.backend.pool(bufferSize = 1024, buffers = 4)
       val (in, out) = stream(io)
+      io.ops.setReadWindow(in, bufferSize = 1024, buffers = 4)
+      val window = io.ops.readWindow(in)
       try {
         val writer = Future(SimpleIO.writeAll(out, arena.of(("x" * 3000).getBytes(StandardCharsets.UTF_8))))
-        val stream = SimpleIO.chunks(in, pool, backlog = 2)
+        val stream = SimpleIO.chunks(in, backlog = 2)
         val first = stream.read().map { chunk =>
           val n = chunk.buffer.remaining()
           chunk.release()
@@ -79,17 +79,16 @@ trait SimpleIOChecks extends StreamFixture {
         stream.close() // releases what was read ahead
         writer.cancel()
         writer.awaitResult
-        val freed = pool.available == pool.buffers
+        val freed = window.available == window.buffers
         io.perform(io.ops.close(in)) // the next stream's read fails on the closed handle
         val failed =
           try {
-            SimpleIO.drain(SimpleIO.chunks(in, pool, backlog = 2))
+            SimpleIO.drain(SimpleIO.chunks(in, backlog = 2))
             false
           } catch case _: IOException => true
-        s"${first.exists(_ > 0)} $freed $failed ${pool.available == pool.buffers}"
+        s"${first.exists(_ > 0)} $freed $failed ${window.available == window.buffers}"
       } finally {
         io.perform(io.ops.close(out))
-        pool.close()
       }
     }
     assertEquals(outcome, "true true true true")

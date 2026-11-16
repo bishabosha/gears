@@ -109,7 +109,7 @@ trait Handles extends Interface {
   * position and limit, and belong to the backend while the op is being performed, until `perform` returns. Any buffer
   * is taken, on every backend: on the heap or not, and a read-only one to write from, though never to read into, which
   * fails with an `IllegalArgumentException` as the op is built; a backend whose system calls need memory of their own
-  * copies through it, so that buffers with native memory behind them (`Backend.pool`'s, or on Scala Native a
+  * copies through it, so that buffers with native memory behind them (a `Received`'s, or on Scala Native a
   * `PointerBuffer`'s) are the ones that cost no copy.
   *
   * A handle's kind is in its type, a subtype of `Handle`, so that an op on the wrong kind of handle does not compile: a
@@ -168,15 +168,29 @@ trait ByteStreams extends Handles {
     */
   def write(handle: Writable, bufs: Array[ByteBuffer]): Op & Repeatable
 
-  /** Fills a buffer of `pool`'s, from `Backend.pool`, as the other `read` fills the caller's: completes once at least
-    * one byte has been read, or at the end of the stream, writing what it read into `into`, which must be empty, as a
-    * `Received` to release. Fails if `pool` has no buffer free when the read needs one; a backend that controls its
-    * source's flow may instead stop taking bytes while none is free, so that the read waits (see `BufferPool`). A
-    * completion-based backend, such as Network.framework's or io_uring's, receives straight into the pool's buffer and
-    * hands it over, where a read into the caller's buffer costs it a copy; one whose facility hands it chunks of its
-    * own, as Node's streams do, hands such a chunk over.
+  /** Fills a buffer of the backend's, one of `handle`'s window (see `ReadWindow`), as the other `read` fills the
+    * caller's: completes once at least one byte has been read, or at the end of the stream, writing what it read into
+    * `into`, which must be empty, as a `Received` to release. With every buffer of the window held, it waits until one
+    * is released, on every backend, its time limit running meanwhile: stopped then, by a cancel or its time limit, it
+    * has taken no bytes. A read waiting for bytes holds no buffer. A completion-based backend, such as
+    * Network.framework's or io_uring's, receives straight into the window's buffer and hands it over, where a read into
+    * the caller's buffer costs it a copy; one whose facility hands it chunks of its own, as Node's streams do, hands
+    * such a chunk over.
     */
-  def read(handle: Readable, pool: BufferPool, into: Slot[Received]): Op & Repeatable
+  def read(handle: Readable, into: Slot[Received]): Op & Repeatable
+
+  /** `handle`'s window: its size, and how many of its buffers are not held, as they stand whenever it is asked, also
+    * once the handle is closed, for the buffers that outlive it. Not an op: every backend answers at once. Fails with
+    * an `IOException` on a closed handle.
+    */
+  def readWindow(handle: Readable): ReadWindow
+
+  /** Gives `handle` a window of `buffers` buffers of up to `bufferSize` bytes, both positive, else an
+    * `IllegalArgumentException`. A window is changed while none of its buffers is held: with one held it fails with an
+    * `IllegalStateException`, changing nothing, since that buffer would be of no window. Not an op. Fails with an
+    * `IOException` on a closed handle.
+    */
+  def setReadWindow(handle: Readable, bufferSize: Int, buffers: Int): Unit
 }
 
 /** The ops of stream sockets, IP or Unix, once opened (see `IpStreams` and `UnixStreams`, which open them). */

@@ -95,31 +95,28 @@ trait IpStreamContract extends IpStreamFixture {
     }
   }
 
-  test("a pooled read and a read into the caller's buffer take turns on one socket") {
-    val pool = backend.pool(bufferSize = 64, buffers = 2)
-    try
-      running { io ?=>
-        val listener = tcpListen(io, IpSocketAddress(IpAddress.IPv4Loopback, 0))
-        val port = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress].port
+  test("a read into the backend's buffer and a read into the caller's take turns on one socket") {
+    running { io ?=>
+      val listener = tcpListen(io, IpSocketAddress(IpAddress.IPv4Loopback, 0))
+      val port = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress].port
+      try {
+        val (client, server) = tcpPair(io, listener, port)
         try {
-          val (client, server) = tcpPair(io, listener, port)
-          try {
-            writeAll(io, client, bytes("first"))
-            val into = Slot[Received]()
-            io.perform(io.ops.read(server, pool, into))
-            assertEquals(readPooledExactly(io, io.ops.read(server, pool, into), into, 5), "first")
-            writeAll(io, client, bytes("second"))
-            val buf = allocate(64)
-            io.perform(io.ops.read(server, buf))
-            readExactly(io, io.ops.read(server, buf), buf, 6)
-            assertEquals(text(buf), "second")
-          } finally {
-            close(io, server)
-            close(io, client)
-          }
-        } finally close(io, listener)
-      }
-    finally pool.close()
+          writeAll(io, client, bytes("first"))
+          val into = Slot[Received]()
+          io.perform(io.ops.read(server, into))
+          assertEquals(readReceivedExactly(io, io.ops.read(server, into), into, 5), "first")
+          writeAll(io, client, bytes("second"))
+          val buf = allocate(64)
+          io.perform(io.ops.read(server, buf))
+          readExactly(io, io.ops.read(server, buf), buf, 6)
+          assertEquals(text(buf), "second")
+        } finally {
+          close(io, server)
+          close(io, client)
+        }
+      } finally close(io, listener)
+    }
   }
 
   /** Runs `body` with `count` connections over loopback, each as its client and server ends, closed afterwards. */
@@ -141,66 +138,59 @@ trait IpStreamContract extends IpStreamFixture {
     }
   }
 
-  /** A pooled read of `handle` performed to its end: what it received, which the caller releases, or its failure. */
-  private def readPooled(io: Io[backend.Interface], handle: io.ops.Readable, pool: BufferPool)(using
+  /** A read of `handle` into a buffer of its window, performed to its end: what it received, which the caller releases,
+    * or its failure.
+    */
+  private def readReceived(io: Io[backend.Interface], handle: io.ops.Readable, limit: FiniteDuration)(using
       Async
   ): Received | Throwable = {
     val into = Slot[Received]()
-    val failure = attempt(io, io.ops.read(handle, pool, into))
+    val failure = tcpAttemptWithin(io, io.ops.read(handle, into), limit)
     if failure != null then failure else into.clear()
   }
 
-  test("a pool's buffers go to the reads that take them: with a pool of two, two connections' reads hold both") {
-    val pool = backend.pool(bufferSize = 16, buffers = 2)
-    try
-      running { io ?=>
-        withConnections(io, 2) { case Seq((client1, server1), (client2, server2)) =>
-          writeAll(io, client1, bytes("a"))
-          writeAll(io, client2, bytes("b"))
-          val held = readPooled(io, server1, pool) match {
-            case received: Received => received
-            case failure: Throwable => fail("the first connection's pooled read failed", failure)
-          }
-          readPooled(io, server2, pool) match {
-            case received: Received =>
-              assertEquals(textOf(received), "b")
-              received.release()
-            case failure: Throwable => fail("the second connection's read found no buffer free", failure)
-          }
-          assertEquals(textOf(held), "a")
-          held.release()
-          assertEquals(pool.available, 2, "no buffer is kept for reads not yet made")
+  test("a window is its handle's own: buffers one connection's reader holds keep nothing from another's") {
+    running { io ?=>
+      withConnections(io, 2) { case Seq((client1, server1), (client2, server2)) =>
+        io.ops.setReadWindow(server1, bufferSize = 16, buffers = 1)
+        io.ops.setReadWindow(server2, bufferSize = 16, buffers = 1)
+        writeAll(io, client1, bytes("a"))
+        writeAll(io, client2, bytes("b"))
+        val held = readReceived(io, server1, 5.seconds) match {
+          case received: Received => received
+          case failure: Throwable => fail("the first connection's read failed", failure)
         }
+        assertEquals(io.ops.readWindow(server1).available, 0)
+        assertEquals(io.ops.readWindow(server2).available, 1, "the other connection's window is whole")
+        readReceived(io, server2, 5.seconds) match {
+          case received: Received =>
+            assertEquals(textOf(received), "b")
+            received.release()
+          case failure: Throwable => fail("the second connection's read was held back by the first's", failure)
+        }
+        assertEquals(textOf(held), "a")
+        held.release()
       }
-    finally pool.close()
+    }
   }
 
-  test("a pooled read that timed out holds no buffer: another connection's read takes the pool's one") {
-    val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try
-      running { io ?=>
-        withConnections(io, 2) { case Seq((client1, server1), (client2, server2)) =>
-          val idle = tcpAttemptWithin(io, io.ops.read(server1, pool, Slot[Received]()), 20.millis)
-          assert(idle.isInstanceOf[TimeoutException], String.valueOf(idle))
-          assertEquals(pool.available, 1, "the read that timed out holds no buffer")
-          writeAll(io, client2, bytes("c"))
-          readPooled(io, server2, pool) match {
-            case received: Received =>
-              assertEquals(textOf(received), "c")
-              received.release()
-            case failure: Throwable => fail("the other connection's read found no buffer free", failure)
-          }
-          writeAll(io, client1, bytes("d"))
-          readPooled(io, server1, pool) match {
-            case received: Received =>
-              assertEquals(textOf(received), "d", "what came for the read that timed out is the next read's")
-              received.release()
-            case failure: Throwable => fail("the read after the timeout failed", failure)
-          }
-          assertEquals(pool.available, 1)
+  test("a read into the backend's buffer that timed out holds none, and what comes after is the next read's") {
+    running { io ?=>
+      withConnections(io, 1) { case Seq((client, server)) =>
+        io.ops.setReadWindow(server, bufferSize = 16, buffers = 1)
+        val idle = readReceived(io, server, 20.millis)
+        assert(idle.isInstanceOf[TimeoutException], String.valueOf(idle))
+        assertEquals(io.ops.readWindow(server).available, 1, "the read that timed out holds no buffer")
+        writeAll(io, client, bytes("d"))
+        readReceived(io, server, 5.seconds) match {
+          case received: Received =>
+            assertEquals(textOf(received), "d", "what came for the read that timed out is the next read's")
+            received.release()
+          case failure: Throwable => fail("the read after the timeout failed", failure)
         }
+        assertEquals(io.ops.readWindow(server).available, 1)
       }
-    finally pool.close()
+    }
   }
 
   test("a write that timed out, its peer not reading, wrote nothing: the buffer is as it was") {

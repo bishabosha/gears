@@ -114,8 +114,8 @@ trait ContractSuite extends FunSuite {
     finally buf.limit(limit)
   }
 
-  /** Reads a known byte count across pooled chunks, including a result already waiting in `into`. */
-  protected def readPooledExactly(io: Io[backend.Interface], read: io.Op, into: Slot[Received], size: Int)(using
+  /** Reads a known byte count across received chunks, including a result already waiting in `into`. */
+  protected def readReceivedExactly(io: Io[backend.Interface], read: io.Op, into: Slot[Received], size: Int)(using
       Async
   ): String = {
     val bytes = new ByteArrayOutputStream()
@@ -128,7 +128,7 @@ trait ContractSuite extends FunSuite {
         val copy = new Array[Byte](chunk.remaining())
         chunk.get(copy)
         bytes.write(copy)
-        assert(bytes.size() <= size, "the pooled read returned unexpected extra bytes")
+        assert(bytes.size() <= size, "the read returned unexpected extra bytes")
       } finally received.release()
     }
     new String(bytes.toByteArray(), StandardCharsets.UTF_8)

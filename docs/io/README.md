@@ -9,7 +9,7 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 
 1. **The public interface**, in `shared/src/main/scala/async/io/`: `Io.scala` (running a program and performing ops),
    `Backend.scala` (backends and their capabilities), `Interface.scala` (every op and the rules they share),
-   `SocketOptions.scala`, `Addresses.scala`, `Deadline.scala` and `BufferPool.scala`. All a program sees.
+   `SocketOptions.scala`, `Addresses.scala`, `Deadline.scala` and `ReadWindow.scala`. All a program sees.
 2. **The contract suites**, in `io-testkit/`: what every backend must do, each check a program over the backend
    through `perform`. `OpsContract` checks core timers and program execution using only `Backend`.
    Stream checks take a fixture that supplies connected handles. Each capability contract requires only the capability
@@ -22,7 +22,7 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 
 | where | holds | depends on |
 | --- | --- | --- |
-| `gears.async.io` (core, `shared/`) | the interface: `Io` and `Io.run`, `Backend` and its capabilities, `Interface`, `Slot`, addresses, socket options, `Deadline`, `BufferPool` | the rest of gears |
+| `gears.async.io` (core, `shared/`) | the interface: `Io` and `Io.run`, `Backend` and its capabilities, `Interface`, `Slot`, addresses, socket options, `Deadline`, `ReadWindow` | the rest of gears |
 | `ioTestkit` (`io-testkit/`, JVM, Scala Native and Scala.js) | the contract suites and `BufferArena` (`gears.async.io.testkit`), `SimpleIO` with `SimpleIOChecks` (`gears.io.testkit`), and the gears demos (`gears.io.demos`) with their command line, `DemoCommands` | core, munit, mainargs |
 | `ioReference` (`io-reference/`, JVM) | the reference backend, `gears.async.io.reference.ReferenceBackend`, and its suites | core, the testkit's contracts |
 | `ioReferenceDemos` (`io-reference/demos/`) | the demos over the reference backend: `ioReferenceDemos/run <command>` | the reference backend, the testkit |
@@ -62,8 +62,8 @@ port. Socket programs do not implicitly switch to Unix sockets, and datagram pro
 Filesystem setup lives in `FileSystemFixture`, outside `ContractSuite`. The common `opening` helper allocates its own
 output slot: `opening(io)(slot => io.ops.connect(address, slot))`. Checks that inspect slot
 occupancy or one-shot behaviour still construct their ops and slots explicitly. Shared transfer helpers repeat partial
-reads and writes, and pooled checks compare byte sequences without imposing chunk boundaries. Pool exhaustion may
-fail immediately or wait for a released buffer, as allowed by the interface. `FifoFileContract` registers only the
+reads and writes, and the checks of reads into the backend's buffers compare byte sequences without imposing chunk
+boundaries; each sets the window of the handle it reads, and a read with its window full waits, on every backend. `FifoFileContract` registers only the
 cross-capability check; it does not inherit the individual FIFO and file suites.
 
 Each reference suite exposes its backend through the narrow capability type it tests. Missing capabilities therefore
@@ -124,6 +124,9 @@ Each is stated on the interface where it applies, and checked by the contract su
   interleave the stream's bytes. A datagram socket's sends and receives and a listener's accepts, each whole, take
   turns instead, in the order they came (`Interface`).
 - **Any buffer** is taken, on the heap or not (`Interface`).
+- **The backend's own buffers** are the backend's to make and free: a read into one hands it over as a `Received`
+  to release, and what a program sets is how many it may hold at once, the window of each handle, so that a reader
+  who releases nothing holds back its own stream and no other. With the window full a read waits (`ReadWindow`).
 - **Options** are given as a socket opens, `NoDelay` on unless set off; what a backend supports, for each kind of
   socket, is asked of it when the program runs (`SocketOptionOps`).
 - **Closing** fails the ops waiting on the handle and frees the port or path (`Handles.close`). The ops it ends, and any op
@@ -174,7 +177,8 @@ contracts are checked against, and the plainest way to read the semantics as cod
 `SimpleIO`, in `gears.io.testkit`, is written over the public interface alone. Its package and the demos' package,
 `gears.io.demos`, are outside `gears.async`, so they see only what a program sees. `SimpleIO` has
 result-returning openers, `read`, `writeAll`, `accept`, `resolve`, `closeGracefully`, and `chunks`, a stream over one
-repeatable pooled read consumed as a gears channel, with the pool's window and the channel's backlog as back-pressure.
+repeatable read into the backend's buffers consumed as a gears channel, with the handle's window and the channel's
+backlog as back-pressure.
 `SimpleIOChecks` checks its stream helpers over a supplied stream fixture; `SimpleIOIpStreamChecks` and
 `SimpleIOResolveChecks` check their respective capabilities independently. Each demo takes the `Io` it runs with, over
 the capabilities it needs, and its `Async`, and only a backend's demo application starts a run:

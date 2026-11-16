@@ -26,8 +26,6 @@ import scala.concurrent.duration.FiniteDuration
 object ReferenceBackend extends Backend {
   type Interface = ReferenceOps.type
 
-  def pool(bufferSize: Int, buffers: Int): BufferPool = new RefPool(bufferSize, buffers)
-
   /** Runs `program` on gears' virtual threads, each op performed by the future performing it. */
   private[io] def run[T](program: Io[Interface] ?=> Async.Spawn ?=> T): T = {
     given VThreadSupport.type = VThreadSupport
@@ -98,9 +96,18 @@ object ReferenceOps
 
   def deadlineTimer(nanoTime: Long): RefOp & Repeatable & Deadline = DeadlineOp(nanoTime)
 
-  def read(handle: ReadEnd, pool: BufferPool, into: Slot[Received]): RefOp & Repeatable = pool match {
-    case ours: RefPool => PooledReadOp(handle, ours, into)
-    case other         => throw new IllegalArgumentException(s"Not a pool of this backend's: $other")
+  def read(handle: ReadEnd, into: Slot[Received]): RefOp & Repeatable = WindowReadOp(handle, into)
+
+  def readWindow(handle: ReadEnd): ReadWindow = {
+    handle.checkOpen()
+    handle.window
+  }
+
+  def setReadWindow(handle: ReadEnd, bufferSize: Int, buffers: Int): Unit = {
+    if bufferSize <= 0 || buffers <= 0 then
+      throw new IllegalArgumentException(s"A window has buffers of some size: $buffers of $bufferSize bytes")
+    handle.checkOpen()
+    handle.window.resize(bufferSize, buffers)
   }
 
   def close(handle: RefHandle): RefOp = CloseOp(handle)

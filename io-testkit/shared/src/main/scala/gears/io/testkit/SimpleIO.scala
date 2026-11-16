@@ -4,7 +4,6 @@ import gears.async.Async
 import gears.async.BufferedChannel
 import gears.async.Channel
 import gears.async.Future
-import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
 import gears.async.io.Fifos
 import gears.async.io.Interface
@@ -28,10 +27,10 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 
 /** A simple API written over `Io` alone: result-returning methods that own the op and the slot the caller would
-  * otherwise reuse, and a stream of chunks over a repeatable pooled read, consumed as a gears channel. Its package is
-  * outside `gears.async`, so it sees only the interface's public contract. It runs on every backend (`SimpleIOChecks`
-  * runs on each, in the demos' tests); the demos use it where a result or a stream reads better than the op. Every
-  * method takes the `Io` as a context parameter, `io`.
+  * otherwise reuse, and a stream of chunks over a repeatable read into the backend's buffers, consumed as a gears
+  * channel. Its package is outside `gears.async`, so it sees only the interface's public contract. It runs on every
+  * backend (`SimpleIOChecks` runs on each, in the demos' tests); the demos use it where a result or a stream reads
+  * better than the op. Every method takes the `Io` as a context parameter, `io`.
   */
 object SimpleIO {
 
@@ -164,8 +163,8 @@ object SimpleIO {
 
   /** A stream of chunks, each a `Received` the consumer releases: `read` gives the next, or `None` at the end of the
     * stream, and throws the read's failure if it ended with one; `close` stops the stream early and releases the chunks
-    * read ahead and not yet taken, so the pool may be closed afterwards. The channel is never closed, since a closed
-    * gears channel drops what it still holds: the end of the stream is a `None` sent after the last chunk.
+    * read ahead and not yet taken, so that the handle's window is whole again. The channel is never closed, since a
+    * closed gears channel drops what it still holds: the end of the stream is a `None` sent after the last chunk.
     */
   final class Chunks private[SimpleIO] (channel: Channel[Option[Received]], reader: Future[Unit]) {
 
@@ -189,21 +188,22 @@ object SimpleIO {
     }
   }
 
-  /** The bytes of `handle` as `Chunks`: a future reads into the pool's buffers with one repeatable op and sends each
-    * chunk on a channel of `backlog` chunks, which is the back-pressure: the reader holds at most `backlog` chunks in
-    * the channel, one it is sending and one its read is filling, so the pool needs `backlog + 2` buffers, and the
-    * consumer's unreleased chunks come out of the rest. Cancelling the group cancels the read, as it would any future's
+  /** The bytes of `handle` as `Chunks`: a future reads into the buffers of the handle's window with one repeatable op
+    * and sends each chunk on a channel of `backlog` chunks. The back-pressure is the window's: the reader reads ahead
+    * until the channel is full or the window is, whichever is first, and then waits, for the consumer to take a chunk
+    * or to release one. So the reader holds at most `backlog` chunks in the channel and one it is sending, and a window
+    * of `backlog + 2` buffers leaves the consumer one to hold while the reader reads on; with a smaller window the
+    * reader waits for the consumer's releases instead. Cancelling the group cancels the read, as it would any future's
     * op; a chunk in the reader's hands when it is cancelled, one a `send` did not deliver, is released by the reader
     * itself.
     */
   def chunks(using
       io: Io[ByteStreams]
-  )(handle: io.ops.Readable, pool: BufferPool, backlog: Int)(using Async.Spawn): Chunks = {
-    require(pool.buffers >= backlog + 2, s"a backlog of $backlog needs a pool of ${backlog + 2} buffers")
+  )(handle: io.ops.Readable, backlog: Int)(using Async.Spawn): Chunks = {
     val channel = BufferedChannel[Option[Received]](backlog)
     val reader = Future {
       val into = Slot[Received]()
-      val read = io.ops.read(handle, pool, into)
+      val read = io.ops.read(handle, into)
       var inHand: Received | Null = null
       try {
         var atEnd = false

@@ -12,7 +12,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import scala.concurrent.duration.*
 
-/** Read, write, buffer-pool and close semantics over a supplied connected byte-stream fixture. */
+/** Read, write, read-window and close semantics over a supplied connected byte-stream fixture. */
 trait StreamContract extends StreamFixture {
 
   /** The bytes of `bufs` read so far, in order, as text. */
@@ -23,19 +23,19 @@ trait StreamContract extends StreamFixture {
       StandardCharsets.UTF_8.decode(copy).toString
     }.mkString
 
-  /** A pooled read of what `out` is sent, `text`, from `in`: what it received, which the caller releases. */
+  /** A read into a buffer of `in`'s window of what `out` is sent, `text`: what it received, which the caller releases.
+    */
   private def receivedOf(
       io: Io[backend.Interface],
       in: io.ops.Readable,
       out: io.ops.Writable,
-      pool: BufferPool,
       text: String
   )(using
       Async
   ): Received = {
     writeAll(io, out, bytes(text))
     val into = Slot[Received]()
-    io.perform(io.ops.read(in, pool, into))
+    io.perform(io.ops.read(in, into))
     into.clear()
   }
 
@@ -244,153 +244,170 @@ trait StreamContract extends StreamFixture {
     }
   }
 
-  test("a pooled read fills a buffer of the pool's, which release gives back") {
-    val pool = backend.pool(bufferSize = 64, buffers = 2)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
-        try {
-          val into = Slot[Received]()
-          val reading = Future(io.perform(io.ops.read(in, pool, into)))
-          settle(io)
-          assert(reading.poll().isEmpty, "the read completed with nothing written")
-          writeAll(io, out, bytes("pooled"))
-          reading.await
-          val received = into.clear()
-          assertEquals(received.buffer.position(), 0)
-          assert(received.buffer.hasRemaining())
-          assertEquals(pool.available, 1)
-          val firstPart = textOf(received)
-          received.release()
-          val rest = readPooledExactly(io, io.ops.read(in, pool, into), into, 6 - firstPart.length)
-          assertEquals(firstPart + rest, "pooled")
-          assertEquals(pool.available, 2)
-        } finally {
-          close(io, in)
-          close(io, out)
-        }
+  test("every readable handle has a window, which is its own to set while none of its buffers is held") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        val window = io.ops.readWindow(in)
+        assertEquals(window.bufferSize, ReadWindow.DefaultBufferSize)
+        assertEquals(window.buffers, ReadWindow.DefaultBuffers)
+        assertEquals(window.available, ReadWindow.DefaultBuffers)
+        io.ops.setReadWindow(in, bufferSize = 16, buffers = 2)
+        assertEquals((io.ops.readWindow(in).bufferSize, io.ops.readWindow(in).buffers), (16, 2))
+        intercept[IllegalArgumentException](io.ops.setReadWindow(in, bufferSize = 0, buffers = 2))
+        intercept[IllegalArgumentException](io.ops.setReadWindow(in, bufferSize = 16, buffers = 0))
+        val held = receivedOf(io, in, out, "a")
+        assertEquals(io.ops.readWindow(in).available, 1)
+        intercept[IllegalStateException](io.ops.setReadWindow(in, bufferSize = 32, buffers = 4))
+        assertEquals(io.ops.readWindow(in).buffers, 2, "refused, the window is as it was")
+        held.release()
+        io.ops.setReadWindow(in, bufferSize = 32, buffers = 4)
+        assertEquals(io.ops.readWindow(in).available, 4)
+      } finally {
+        close(io, in)
+        close(io, out)
       }
-    finally pool.close()
+      intercept[IOException](io.ops.readWindow(in))
+      intercept[IOException](io.ops.setReadWindow(in, bufferSize = 16, buffers = 2))
+    }
   }
 
-  test("pooled reads preserve bytes across any chunk boundaries and buffer reuse") {
-    val pool = backend.pool(bufferSize = 8, buffers = 1)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
+  test("a read into a buffer of the backend's fills one of its handle's window, which release gives back") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        io.ops.setReadWindow(in, bufferSize = 64, buffers = 2)
         val into = Slot[Received]()
-        val read = io.ops.read(in, pool, into)
-        try {
-          writeAll(io, out, bytes("abcdefghijklmnopqrs"))
-          assertEquals(readPooledExactly(io, read, into, 19), "abcdefghijklmnopqrs")
-          assertEquals(pool.available, 1)
-        } finally {
-          close(io, in)
-          close(io, out)
-        }
+        val reading = Future(io.perform(io.ops.read(in, into)))
+        settle(io)
+        assert(reading.poll().isEmpty, "the read completed with nothing written")
+        assertEquals(io.ops.readWindow(in).available, 2, "a read waiting for bytes holds no buffer")
+        writeAll(io, out, bytes("pooled"))
+        reading.await
+        val received = into.clear()
+        assertEquals(received.buffer.position(), 0)
+        assert(received.buffer.hasRemaining())
+        assertEquals(io.ops.readWindow(in).available, 1)
+        val firstPart = textOf(received)
+        received.release()
+        val rest = readReceivedExactly(io, io.ops.read(in, into), into, 6 - firstPart.length)
+        assertEquals(firstPart + rest, "pooled")
+        assertEquals(io.ops.readWindow(in).available, 2)
+      } finally {
+        close(io, in)
+        close(io, out)
       }
-    finally pool.close()
+    }
   }
 
-  test("a pooled read at the end of the stream completes with an empty buffer") {
-    val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
-        try {
-          close(io, out)
-          val into = Slot[Received]()
-          io.perform(io.ops.read(in, pool, into))
-          val received = into.clear()
-          assertEquals(received.buffer.remaining(), 0)
-          received.release()
-        } finally close(io, in)
+  test("reads into the backend's buffers preserve bytes across any chunk boundaries and buffer reuse") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      io.ops.setReadWindow(in, bufferSize = 8, buffers = 1)
+      val into = Slot[Received]()
+      val read = io.ops.read(in, into)
+      try {
+        writeAll(io, out, bytes("abcdefghijklmnopqrs"))
+        assertEquals(readReceivedExactly(io, read, into, 19), "abcdefghijklmnopqrs")
+        assertEquals(io.ops.readWindow(in).available, 1)
+      } finally {
+        close(io, in)
+        close(io, out)
       }
-    finally pool.close()
+    }
   }
 
-  test("an exhausted pool either refuses a read or waits, and recovers when a buffer is released") {
-    val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
-        var held: Received | Null = null
-        try {
-          writeAll(io, out, bytes("a"))
-          val first = Slot[Received]()
-          io.perform(io.ops.read(in, pool, first))
-          held = first.clear()
-          assertEquals(textOf(held.nn), "a")
-          assertEquals(pool.available, 0)
-          writeAll(io, out, bytes("b"))
-          val into = Slot[Received]()
-          val read = io.ops.read(in, pool, into)
-          val pending = Future(attempt(io, read))
-          settle(io)
-          val beforeRelease = pending.poll()
-          beforeRelease.foreach(result =>
-            assert(result.get.isInstanceOf[IOException], "an exhausted pool must not supply a buffer")
-          )
-          held.nn.release()
-          held = null
-          val failure = pending.await
-          if failure != null then {
-            assert(failure.isInstanceOf[IOException], String.valueOf(failure))
-            io.perform(read)
-          }
-          assertEquals(readPooledExactly(io, read, into, 1), "b")
-          assertEquals(pool.available, 1)
-        } finally {
-          if held != null then held.nn.release()
-          close(io, in)
-          close(io, out)
-        }
-      }
-    finally pool.close()
+  test("a read into a buffer of the backend's at the end of the stream completes with an empty buffer") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        close(io, out)
+        val into = Slot[Received]()
+        io.perform(io.ops.read(in, into))
+        val received = into.clear()
+        assertEquals(received.buffer.remaining(), 0)
+        received.release()
+        assertEquals(io.ops.readWindow(in).available, ReadWindow.DefaultBuffers)
+      } finally close(io, in)
+    }
   }
 
-  test("releasing a Received twice throws IllegalStateException, leaving the pool as it was") {
-    val pool = backend.pool(bufferSize = 16, buffers = 2)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
-        try {
-          val received = receivedOf(io, in, out, pool, "a")
-          received.release()
-          intercept[IllegalStateException](received.release())
-          assertEquals(pool.available, 2)
-          val next = receivedOf(io, in, out, pool, "b") // the free list is whole
-          val other = receivedOf(io, in, out, pool, "c")
-          assertEquals(pool.available, 0)
-          next.release()
-          other.release()
-        } finally {
-          close(io, in)
-          close(io, out)
-        }
+  test("with every buffer of its window held a read waits, taking nothing, and goes on when one is released") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      var held: Received | Null = null
+      try {
+        io.ops.setReadWindow(in, bufferSize = 16, buffers = 1)
+        held = receivedOf(io, in, out, "a")
+        assertEquals(textOf(held.nn), "a")
+        assertEquals(io.ops.readWindow(in).available, 0)
+        writeAll(io, out, bytes("b"))
+        val into = Slot[Received]()
+        val read = io.ops.read(in, into)
+        // A time limit runs while it waits for the window, and leaves the bytes where they were.
+        intercept[TimeoutException](io.perform(read, 20.millis))
+        intercept[IllegalStateException](into.clear())
+        // So does a cancel.
+        val cancelled = Future(io.perform(read))
+        settle(io)
+        assert(cancelled.poll().isEmpty, "a read took a buffer of a window with none")
+        cancelled.cancel()
+        assert(failureOf(cancelled).isInstanceOf[CancellationException])
+        // And a release lets the read that waits go on.
+        val pending = Future(io.perform(read))
+        settle(io)
+        assert(pending.poll().isEmpty)
+        held.nn.release()
+        held = null
+        pending.await
+        assertEquals(readReceivedExactly(io, read, into, 1), "b", "what came while the window was full was kept")
+        assertEquals(io.ops.readWindow(in).available, 1)
+      } finally {
+        if held != null then held.nn.release()
+        close(io, in)
+        close(io, out)
       }
-    finally pool.close()
+    }
   }
 
-  test("closing a pool with a buffer held fails, leaving it open, for the buffer to be released and the close done") {
-    val pool = backend.pool(bufferSize = 16, buffers = 1)
-    try
-      running { io ?=>
-        val (in, out) = stream(io)
-        try {
-          val held = receivedOf(io, in, out, pool, "a")
-          intercept[IllegalArgumentException](pool.close())
-          assertEquals(textOf(held), "a")
-          held.release()
-          assertEquals(pool.available, 1, "the release reached the pool")
-          receivedOf(io, in, out, pool, "b").release() // and the pool still lends it
-          pool.close()
-        } finally {
-          close(io, in)
-          close(io, out)
-        }
+  test("a read waiting for its window fails when its handle is closed, and a buffer held outlives the handle") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        io.ops.setReadWindow(in, bufferSize = 16, buffers = 1)
+        val held = receivedOf(io, in, out, "kept")
+        val waiting = Future(io.perform(io.ops.read(in, Slot[Received]())))
+        settle(io)
+        assert(waiting.poll().isEmpty)
+        close(io, in)
+        val failure = failureOf(waiting)
+        assert(failure.isInstanceOf[ClosedChannelException], String.valueOf(failure))
+        assertEquals(textOf(held), "kept", "the buffer is the caller's until it is released")
+        held.release()
+        intercept[IllegalStateException](held.release())
+      } finally close(io, out)
+    }
+  }
+
+  test("releasing a Received twice throws IllegalStateException, leaving the window as it was") {
+    running { io ?=>
+      val (in, out) = stream(io)
+      try {
+        io.ops.setReadWindow(in, bufferSize = 16, buffers = 2)
+        val received = receivedOf(io, in, out, "a")
+        received.release()
+        intercept[IllegalStateException](received.release())
+        assertEquals(io.ops.readWindow(in).available, 2)
+        val next = receivedOf(io, in, out, "b") // the window is whole
+        val other = receivedOf(io, in, out, "c")
+        assertEquals(io.ops.readWindow(in).available, 0)
+        next.release()
+        other.release()
+      } finally {
+        close(io, in)
+        close(io, out)
       }
-    finally pool.close()
+    }
   }
 
   test("a scattering read fills its buffers in order, each before the next, completing once bytes have come") {

@@ -110,28 +110,30 @@ final class GatherOp(h: WriteEnd, bufs: Array[ByteBuffer]) extends RefOp with Re
   }
 }
 
-/** A read into a buffer of `pool`'s, taken only once there are bytes to read, so that one waiting holds none. */
-final class PooledReadOp(h: ReadEnd, pool: RefPool, into: Slot[Received]) extends RefOp with Repeatable {
+/** A read into a buffer of its handle's window, taken for each try and given back by one that would block, so that a
+  * read waiting for bytes holds none; with every buffer held, it waits for one to be released before it tries.
+  */
+final class WindowReadOp(h: ReadEnd, into: Slot[Received]) extends RefOp with Repeatable {
   override protected def handle = h
   override protected def slots = List(into)
   protected def body(ctx: Ctx)(using Async): Unit = h.exclusively(write = false, this) {
+    val window = h.window
     var done = false
     while !done do {
-      val buf = pool.take()
-      buf.clear()
+      val buf = window.take(ctx, h, this)
       val n =
         try asIo(h.in.read(buf))
         catch {
           case e: Throwable =>
-            pool.give(buf)
+            window.give(buf)
             throw e
         }
       if n == 0 then {
-        pool.give(buf)
+        window.give(buf)
         ctx.ready(this, h, h.inReady.nn, OP_READ)
       } else {
         if n < 0 then buf.limit(0) else buf.flip()
-        into.set(pool.received(buf))
+        into.set(window.received(buf))
         done = true
       }
     }
