@@ -20,7 +20,9 @@ import scala.util.Success
 import scala.util.Try
 
 /** A timer whose work, once it is due, keeps its worker for `work` milliseconds, as real work would. */
-private[kqueue] final class SlowOp(time: FiniteDuration, work: Long) extends AbstractMakeTimerOp(time) {
+private[kqueue] final class SlowOp(time: FiniteDuration, work: Long)
+    extends AbstractMakeTimerOp(time),
+      HeldOnOwnKind[SlowOp] {
   val started = AtomicInteger(0)
   val finished = AtomicInteger(0)
   override def wakeup(resumedAt: Long): Try[Unit] = {
@@ -44,13 +46,14 @@ private[kqueue] object SlowBackend extends Backend {
 }
 
 private[kqueue] final class SlowScheduler
-    extends WorkpoolScheduler[SlowOp, SlowOps.type](SlowBackend, SlowOps, 2)
+    extends WorkpoolScheduler[SlowOps.type](SlowBackend, SlowOps, 2)
     with NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
   def heapOfCurrentWorker(): String = workerOfCurrentThread().debugTimerState()
-  override def makeWorker(id: Int) = new Worker[SlowOp](id) with MonitorPoller {
+  override def makeWorker(id: Int) = new Worker(id) with MonitorPoller {
+    type Op = SlowOp
     override def performOp(op: SlowOp)(using Async): Unit = {
-      addTimer(op)
+      op.holdTimerOn(this)
       op.parkUntilSettled()
     }
   }

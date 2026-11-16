@@ -17,7 +17,8 @@ class TimerHeapSuite extends munit.FunSuite {
     def timerWakeup(actAfter: Long): Unit = ()
   }
 
-  private class Heap extends TimerHeapImpl[FakeTimer] with MonitorPoller {
+  private class Heap extends TimerHeapImpl with MonitorPoller {
+    type Timer = FakeTimer
     protected def id: Int = 0
     override protected def isEmpty(): Boolean = true
   }

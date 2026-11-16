@@ -14,7 +14,7 @@ import scala.util.control.NonFatal
 /** An op that does its work when its handle is ready for it: tried at once by its performer and, if the handle was not
   * ready, again by the worker whose event source reports that it is. `W` is that event source.
   */
-abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
+abstract class AbstractReadinessOp[H <: BaseHandle { type Source = W }, W <: EventSource](handle: H)
     extends RepeatableAbstractTimerHeapOp,
       TimeoutOnWake,
       ReadinessOp { op =>
@@ -26,6 +26,9 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
 
   /** Whether the op waits for the handle to be readable, rather than writable. */
   protected def isRead: Boolean
+
+  /** Its time limit is kept where its handle is listened for, which is one of its workers. */
+  type Source = W
 
   final def handleClosing(): Unit =
     if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
@@ -76,13 +79,14 @@ abstract class AbstractReadinessOp[H <: BaseHandle, W <: EventSource](handle: H)
         if !readiness.drainedAt(tick) && attempt() != AbstractReadinessOp.Blocked then done = true
         else
           expose()
-          val listener = readiness.registerWaiter(this, tick, self)
-          if listener != null then // else reported ready since the tick was read: again
+          val listening = readiness.registerWaiter(this, tick, self)
+          if listening != null then // else reported ready since the tick was read: again
+            val listener = listening.nn
             waiting = true
             try
               // On the listener's heap, not the performer's: a claim the listener gives back can't then have kept
               // the time limit from firing meanwhile, as one thread does both.
-              if hasDeadline then holdTimeoutOn(listener)
+              if hasDeadline then holdTimerOn(listener)
             catch
               case failure: Throwable =>
                 readiness.clearWaiter(this): Unit
@@ -117,7 +121,7 @@ object AbstractStreamReadOp:
     if read == 0 then AbstractReadinessOp.Blocked else if read < 0 then 0 else read
 
 /** A read of a stream, whatever it reads into. */
-abstract class AbstractStreamReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H)
+abstract class AbstractStreamReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](handle: H)
     extends AbstractReadinessOp[H, W](handle),
       NonBlockingReadOps {
 
@@ -127,7 +131,7 @@ abstract class AbstractStreamReadOp[H <: BaseReadableHandle, W <: EventSource](h
   protected final def isRead: Boolean = true
 }
 
-abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+abstract class AbstractReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](handle: H, buf: ByteBuffer)
     extends AbstractStreamReadOp[H, W](handle) {
   if buf.isReadOnly() then throw new IllegalArgumentException("A read needs a buffer it can write to")
 
@@ -139,7 +143,7 @@ abstract class AbstractReadOp[H <: BaseReadableHandle, W <: EventSource](handle:
 }
 
 /** A scattering read: into `bufs` in order, each filled before the next is begun. */
-abstract class AbstractScatterReadOp[H <: BaseReadableHandle, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
+abstract class AbstractScatterReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
     extends AbstractStreamReadOp[H, W](handle) {
   if bufs.isEmpty then throw new IllegalArgumentException("A scattering read needs a buffer")
   if bufs.exists(_.isReadOnly()) then
@@ -157,7 +161,7 @@ abstract class AbstractScatterReadOp[H <: BaseReadableHandle, W <: EventSource](
   * and given back by one that would block, so that a read which waits holds none: a pool with no buffer free refuses
   * the read as it is attempted.
   */
-abstract class AbstractPooledReadOp[H <: BaseReadableHandle, W <: EventSource](
+abstract class AbstractPooledReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](
     handle: H,
     pool: LendingPool,
     into: Slot[Received]
@@ -195,7 +199,7 @@ trait NonBlockingWriteOps:
   def _writevHandle(handle: WriteableHandle, bufs: Array[ByteBuffer]): Int
 
 /** A write to a stream, whatever it writes from. */
-abstract class AbstractStreamWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H)
+abstract class AbstractStreamWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](handle: H)
     extends AbstractReadinessOp[H, W](handle),
       NonBlockingWriteOps {
 
@@ -205,7 +209,7 @@ abstract class AbstractStreamWriteOp[H <: BaseWritableHandle, W <: EventSource](
   protected final def isRead: Boolean = false
 }
 
-abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, buf: ByteBuffer)
+abstract class AbstractWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](handle: H, buf: ByteBuffer)
     extends AbstractStreamWriteOp[H, W](handle) {
 
   /** A write that would block is -1, which is `Blocked`; with nothing to write, the op is done, moving nothing. */
@@ -213,7 +217,7 @@ abstract class AbstractWriteOp[H <: BaseWritableHandle, W <: EventSource](handle
 }
 
 /** A gathering write: from `bufs` in order, each drained before the next is begun. */
-abstract class AbstractGatherWriteOp[H <: BaseWritableHandle, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
+abstract class AbstractGatherWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
     extends AbstractStreamWriteOp[H, W](handle) {
 
   protected final def attempt(): Int = if bufs.exists(_.hasRemaining()) then _writevHandle(handle, bufs) else 0

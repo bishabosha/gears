@@ -27,7 +27,7 @@ import scala.util.control.NonFatal
 
 import WorkpoolScheduler.{AsyncOp, ReentrantOp}
 
-abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { type Op = Op1 }](
+abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & ReentrantOp }](
     val backend: Backend { type Interface <: I },
     val ops: I,
     workers: Int
@@ -46,7 +46,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
       val home = thread.asInstanceOf[WorkpoolScheduler.WorkerThread].resumeHome
       if home == null then worker.resumeNext(suspension, arg, pinned = false)
       else if home eq worker then worker.resumeNext(suspension, arg, pinned = true)
-      else home.asInstanceOf[Worker[Op1]].submit(() => suspension.resume(arg)): Unit
+      else home.asInstanceOf[PoolWorker].submit(() => suspension.resume(arg)): Unit
     // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
     else nextWorker().submit(() => suspension.resume(arg)): Unit
 
@@ -54,18 +54,21 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
   //   s.execute(() => boundary(body))
 
-  def makeWorker(id: Int): Worker[Op1]
+  /** A worker of this pool: one that performs its interface's ops. */
+  type PoolWorker = Worker { type Op = WorkpoolScheduler.this.Op }
+
+  def makeWorker(id: Int): PoolWorker
 
   private val workerTicker = new java.util.concurrent.atomic.AtomicInteger(0)
-  private val workerGroup: Array[Worker[Op1]] = Array.tabulate(workers)(makeWorker)
+  private val workerGroup: Array[PoolWorker] = Array.tabulate(workers)(makeWorker)
 
   /** The worker of this pool that `thread` runs, or null: a worker's thread carries its worker, so this is no lookup by
     * thread.
     */
-  private def workerOf(thread: Thread): Worker[Op1] | Null = thread match
+  private def workerOf(thread: Thread): PoolWorker | Null = thread match
     case thread: WorkpoolScheduler.WorkerThread =>
       val worker = thread.worker
-      if worker.id < workerGroup.length && (workerGroup(worker.id) eq worker) then worker.asInstanceOf[Worker[Op1]]
+      if worker.id < workerGroup.length && (workerGroup(worker.id) eq worker) then worker.asInstanceOf[PoolWorker]
       else null // another pool's
     case _ => null
 
@@ -92,11 +95,11 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   }
   // Only now: a worker's thread started as the worker was made would run it before its subclass had its fields.
   workerGroup.foreach(_.thread.start())
-  private def nextWorker(): Worker[Op1] = {
+  private def nextWorker(): PoolWorker = {
     val index = Math.floorMod(workerTicker.getAndIncrement(), workerGroup.length)
     workerGroup(index)
   }
-  protected final def workerOfCurrentThread(): Worker[Op1] =
+  protected final def workerOfCurrentThread(): PoolWorker =
     val worker = workerOf(Thread.currentThread())
     if worker == null then throw new IllegalStateException("Current thread is not a worker")
     worker
@@ -104,7 +107,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   /** The worker for an op, whose heap holds its deadline, and which fires it. An op that `tryPerform` completes must
     * not be firing when it returns, which holds for the performer's own worker: only its thread fires its timers.
     */
-  protected def selectWorker(): Worker[Op1]
+  protected def selectWorker(): PoolWorker
 
   type Scheduler = this.type
 
@@ -121,7 +124,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
       if worker.opBudgetSpent() then
         `yield`()
         worker = selectWorker() // the future may go on elsewhere
-      op.setTimeout(timeoutMillis, worker)
+      op.setTimeout(timeoutMillis)
       op.pinnedTo(summon[Async] match
         case pinned: PinnedAsync => pinned.home
         case _                   => null)
@@ -166,7 +169,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   /** A task for `thief`, which has nothing to do, to run now, with half of what the worker it came from had to spare
     * moved to the thief's inbox: from the next worker with tasks to spare, or null.
     */
-  private def stealFor(thief: Worker[Op1]): Runnable | Null = {
+  private def stealFor(thief: PoolWorker): Runnable | Null = {
     val count = workerGroup.length
     var task: Runnable | Null = null
     var i = 1
@@ -199,7 +202,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
         finally offer(async)
 
   /** Moves the future to `home`, if it is not there. Under no group: a cancel must not leave it somewhere else. */
-  private def goTo(base: Async, home: Worker[Op1]): Unit =
+  private def goTo(base: Async, home: PoolWorker): Unit =
     if workerOf(Thread.currentThread()) ne home then base.withGroup(CompletionGroup.Unlinked).await(Hop(home))
 
   /** Has a worker with nothing to do take the future, if there is one; otherwise it goes on where it is. */
@@ -209,7 +212,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   }
 
   /** The context of a future inside `pinned`: whatever it waits for, it goes on at `home`. */
-  private final class PinnedAsync(val outer: Async, val home: Worker[Op1])
+  private final class PinnedAsync(val outer: Async, val home: PoolWorker)
       extends Async(using outer.support, outer.scheduler) {
     def group: CompletionGroup = outer.group
     def withGroup(group: CompletionGroup): Async = PinnedAsync(outer.withGroup(group), home)
@@ -220,7 +223,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   }
 
   /** Completes its one listener on `home`'s thread, which resumes the future awaiting it there. */
-  private final class Hop(home: Worker[Op1]) extends Async.Source[Unit] {
+  private final class Hop(home: PoolWorker) extends Async.Source[Unit] {
     def poll(k: Listener[Unit]): Boolean = false
     def onComplete(k: Listener[Unit]): Unit =
       home.submit(() => WorkpoolScheduler.resumingAt(home)(k.completeNow((), this): Unit)): Unit
@@ -230,14 +233,14 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
   /** Completes its one listener from a task of `worker`'s that any worker with nothing to do may take, and that
     * `worker` runs itself if none does: the future awaiting it goes on wherever that is.
     */
-  private final class Offer(worker: Worker[Op1]) extends Async.Source[Unit] {
+  private final class Offer(worker: PoolWorker) extends Async.Source[Unit] {
     def poll(k: Listener[Unit]): Boolean = false
     def onComplete(k: Listener[Unit]): Unit = worker.offer(() => k.completeNow((), this): Unit)
     def dropListener(k: Listener[Unit]): Unit = ()
   }
 
   /** Wakes one worker that is waiting with nothing to do, if there is one, for it to take from `busy`. */
-  private def wakeThief(busy: Worker[Op1]): Unit = {
+  private def wakeThief(busy: PoolWorker): Unit = {
     val count = workerGroup.length
     var i = 1
     while i < count do
@@ -259,7 +262,7 @@ abstract class WorkpoolScheduler[Op1 <: AsyncOp & ReentrantOp, I <: Interface { 
 object WorkpoolScheduler {
 
   trait AsyncOp extends TimerOp {
-    def setTimeout(timeoutMillis: Long, source: TimerSource[?]): Unit
+    def setTimeout(timeoutMillis: Long): Unit
 
     /** Suspends until the op is settled, and returns or throws its outcome. Only the op ends the wait: cancelled
       * through the group it is linked to, it settles at once as cancelled if no worker has claimed it, and otherwise
@@ -280,7 +283,7 @@ object WorkpoolScheduler {
   inline val OpBudget = 64
 
   /** A worker's thread, which carries its worker for whoever asks which worker the current thread is. */
-  final class WorkerThread(val worker: Worker[?], body: Runnable) extends Thread(body) {
+  final class WorkerThread(val worker: Worker, body: Runnable) extends Thread(body) {
 
     /** While this thread completes the listener of a pinned future: the worker the future is pinned to, which is where
       * the scheduler then resumes it. Null otherwise. This thread's alone.
@@ -317,7 +320,7 @@ object WorkpoolScheduler {
     def requestExit()(using Async): Unit
   }
 
-  final class DoAfter(val owner: Worker[?], val deadlineNow: Long, body: Runnable) extends TimerOp {
+  final class DoAfter(val owner: Worker, val deadlineNow: Long, body: Runnable) extends TimerOp {
     @volatile private var cancelled = false
     def timerWakeup(actAfter: Long): Unit = {
       if !cancelled then body.run()

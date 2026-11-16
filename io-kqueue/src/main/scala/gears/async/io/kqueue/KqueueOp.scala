@@ -35,7 +35,11 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Try
 
-sealed trait KqueueOp extends TimerHeapOp
+sealed trait KqueueOp extends TimerHeapOp:
+
+  /** A kqueue worker takes any kqueue op among its timers (see `KqueuePoller.Timer`). */
+  type Source = KqueuePoller
+  final def _holdTimer(worker: KqueuePoller): Unit = worker.addTimer(this)
 
 sealed trait KqueueReadableOp extends KqueueOp
 

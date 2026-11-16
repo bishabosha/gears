@@ -26,7 +26,7 @@ import scala.util.Try
 
 /** A firing and a cancel race for an op: whichever claims it decides its outcome, and a listener gets that outcome. */
 class TimerHeapOpSuite extends munit.FunSuite {
-  private class CountingTimer extends AbstractMakeTimerOp(Duration.Zero) {
+  private class CountingTimer extends AbstractMakeTimerOp(Duration.Zero), HeldOnOwnKind[CountingTimer] {
     var worked = 0
     override def wakeup(resumedAt: Long): Try[Unit] | CancelledSentinel.type = {
       worked += 1
@@ -215,7 +215,7 @@ class TimerHeapOpSuite extends munit.FunSuite {
   }
 
   /** An op like a read: only a time limit puts it on the heap. */
-  private class LimitedOnly extends RepeatableAbstractTimerHeapOp {
+  private class LimitedOnly extends RepeatableAbstractTimerHeapOp, HeldOnOwnKind[LimitedOnly] {
     var worked = 0
     def wakeup(resumedAt: Long): Try[Unit] = {
       worked += 1
@@ -224,15 +224,16 @@ class TimerHeapOpSuite extends munit.FunSuite {
   }
 
   test("a firing for a time limit is a timeout, though the performer has taken the op off the heap meanwhile") {
-    val heap = new TimerHeapImpl[TimerOp] with MonitorPoller {
+    val heap = new TimerHeapImpl with MonitorPoller {
+      type Timer = TimerOp
       protected def id: Int = 0
       override protected def isEmpty(): Boolean = true
     }
     val op = LimitedOnly()
     Async.blocking {
       op.performWith {
-        op.setTimeout(0, heap)
-        heap.addTimer(op)
+        op.setTimeout(0)
+        op.holdTimerOn(heap)
         val due = System.nanoTime() + 1_000_000L
         assert(heap.nextReadyTimer(due) eq op) // a worker claims it
         op.clearTimeout() // the performer, cancelled, is on its way out
@@ -247,19 +248,20 @@ class TimerHeapOpSuite extends munit.FunSuite {
   }
 
   test("an op performed again with no time limit forgets the last one") {
-    val heap = new TimerHeapImpl[TimerOp] with MonitorPoller {
+    val heap = new TimerHeapImpl with MonitorPoller {
+      type Timer = TimerOp
       protected def id: Int = 0
       override protected def isEmpty(): Boolean = true
     }
     val op = LimitedOnly()
     Async.blocking {
       op.performWith {
-        op.setTimeout(0, heap)
+        op.setTimeout(0)
         assert(op.hasDeadline)
         op.clearTimeout()
       }
       op.performWith {
-        op.setTimeout(Backend.NoTimeout, heap)
+        op.setTimeout(Backend.NoTimeout)
         assert(!op.hasDeadline)
       }
     }

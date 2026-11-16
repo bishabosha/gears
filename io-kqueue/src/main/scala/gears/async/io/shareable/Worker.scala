@@ -12,7 +12,13 @@ import scala.util.control.NonFatal
   * ready, running its tasks, and then waiting on its poller for whichever comes first of an event, a deadline and a
   * wake-up. When it has nothing to do it takes tasks from workers that have too many (`Inbox`).
   */
-abstract class Worker[Op1 <: TimerOp](val id: Int) extends TimerHeapImpl[Op1 | DoAfter], EventSource {
+abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
+
+  /** The ops this worker performs: its pool's. */
+  type Op <: TimerOp
+
+  /** Its pool's ops, and what its scheduler is asked to run later. */
+  type Timer = Op | DoAfter
 
   type ThisWorkerSource <: EventSource
   def asThisWorkerSource: this.type & ThisWorkerSource
@@ -42,7 +48,7 @@ abstract class Worker[Op1 <: TimerOp](val id: Int) extends TimerHeapImpl[Op1 | D
   /** For `thief`, a worker with nothing to do, on its own thread: a task of this worker's for it to run now, with half
     * of what this one has to spare moved to its inbox, or null (see `Inbox.takeHalfInto`).
     */
-  private[shareable] def takeHalfFor(thief: Worker[?]): Runnable | Null = inbox.takeHalfInto(thief.inbox)
+  private[shareable] def takeHalfFor(thief: Worker): Runnable | Null = inbox.takeHalfInto(thief.inbox)
 
   /** Set by the scheduler before the worker's thread starts: a task from another worker's inbox, or null. */
   private[shareable] var steal: () => Runnable | Null = () => null
@@ -138,18 +144,18 @@ abstract class Worker[Op1 <: TimerOp](val id: Int) extends TimerHeapImpl[Op1 | D
 
   /** Does the core work of performing an operation, when it returns the operation is guaranteed to have been processed.
     */
-  def performOp(op: Op1)(using Async): Unit
+  def performOp(op: Op)(using Async): Unit
 
-  def performClose(op: Op1 & AbstractCloseOp)(using Async): Unit =
+  def performClose(op: Op & AbstractCloseOp { type Source >: ThisWorkerSource })(using Async): Unit =
     var shouldWait = false
     if op.hasDeadline then
-      addTimer(op)
+      op.holdTimerOn(asThisWorkerSource)
       shouldWait = true
     if !op.pollClose() then shouldWait = true
     if shouldWait then op.parkUntilSettled()
 
   /** Does a read or a write at once, or has it wait for its handle to be ready (see `performWhenReady`). */
-  def performWhenReady(op: Op1 & AbstractReadinessOp[?, ThisWorkerSource])(using Async): Unit =
+  def performWhenReady(op: Op & AbstractReadinessOp[?, ThisWorkerSource])(using Async): Unit =
     op.performWhenReady(asThisWorkerSource)
 
   def isEmpty(): Boolean = inbox.isEmpty && ready.isEmpty() && !pollOnly

@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class HandleStateSuite extends munit.FunSuite {
 
   private final class TestHandle extends AbstractBaseHandle {
+    type Source = EventSource
     val cleanups = AtomicInteger(0)
     open()
     def cleanup()(using ClosePermit): Boolean = {
@@ -92,7 +93,10 @@ class HandleStateSuite extends munit.FunSuite {
   private final class FakeSource extends EventSource {
     val started = AtomicInteger(0)
     val stopped = AtomicInteger(0)
-    def holdTimer(op: TimerOp): TimerSource[?] = throw new UnsupportedOperationException
+    type Timer = TimerOp
+    def addTimer(op: TimerOp): Unit = throw new UnsupportedOperationException
+    def removeTimer(op: TimerOp): Boolean = false
+    def notifyDeadlineChange(op: TimerOp): Unit = ()
     def startListening(handle: BaseHandle, read: Boolean): Unit = started.incrementAndGet(): Unit
     override def stopListening(handle: BaseHandle, read: Boolean): Unit = stopped.incrementAndGet(): Unit
   }

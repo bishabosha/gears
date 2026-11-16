@@ -5,11 +5,15 @@ import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.Poller
 import gears.async.io.shareable.ReadinessOp
+import gears.async.io.shareable.TimerHeap.TimerOp
 
 import scala.scalanative.unsafe.*
 import scala.scalanative.unsigned.*
 
 trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
+
+  /** Its timers include every kqueue op: the worker it is part of takes its pool's ops. */
+  type Timer >: KqueueOp <: TimerOp
   private val kq = KqueueLoop.open()
 
   private val zone = Zone.open()

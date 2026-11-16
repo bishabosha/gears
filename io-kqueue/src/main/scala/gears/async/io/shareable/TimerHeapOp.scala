@@ -29,7 +29,21 @@ object TimerHeapOp {
   type Outcome = Try[Unit] | CancelledSentinel.type
 }
 
-trait TimerHeapOp extends WorkpoolScheduler.AsyncOp, WorkpoolScheduler.ReentrantOp
+trait TimerHeapOp extends WorkpoolScheduler.AsyncOp, WorkpoolScheduler.ReentrantOp {
+
+  /** Where this op's deadline or time limit can be kept: its backend's workers, whose timers its ops are. */
+  type Source <: TimerHeap.TimerSource
+
+  /** Puts this op among `source`'s timers, and nothing more. For the op's own backend to define, which knows that its
+    * workers take its ops; everything else goes through `holdTimerOn`.
+    */
+  def _holdTimer(source: Source): Unit
+
+  /** Puts the op, which has a deadline or a time limit, among `source`'s timers, where `clearTimeout` then takes it
+    * from: the only way an op goes on a heap.
+    */
+  def holdTimerOn(source: Source): Unit
+}
 
 sealed abstract class AbstractTimerHeapOp extends Async.Source[Outcome] with TimerHeapOp with TimerHeapOp.Hooks {
 
@@ -193,7 +207,7 @@ sealed abstract class AbstractTimerHeapOp extends Async.Source[Outcome] with Tim
 
   private val timersLock = new Object
 
-  @volatile private var worker: TimerHeap.TimerSource[?] | Null = null
+  @volatile private var worker: TimerHeap.TimerSource | Null = null
 
   @volatile private var timeoutDeadline = -1L
 
@@ -237,28 +251,28 @@ sealed abstract class AbstractTimerHeapOp extends Async.Source[Outcome] with Tim
     outcomeOf(result.get()) == null
   }
 
-  final def setTimeout(t: Long, source: TimerHeap.TimerSource[?]): Unit =
-    // An op with no time limit and no deadline of its own never goes on a heap: there is nothing to record, nor for
-    // `clearTimeout` to take back. Read without the lock, as only the performer, one at a time, writes these.
-    if t >= 0 || hasOwnDeadline || worker != null || timeoutDeadline >= 0 then
+  /** Sets this performance's time limit, or none if `t` is negative. It says nothing of where the op waits: an op goes
+    * on a heap, if it has to, with `holdTimerOn`. With no limit now and none before there is nothing to write: read
+    * without the lock, as only the performer, one at a time, writes it.
+    */
+  final def setTimeout(t: Long): Unit =
+    if t >= 0 || timeoutDeadline >= 0 then
       timersLock.synchronized {
-        // Whatever the op's state: it goes on this heap even if it was cancelled as it was entered, and
-        // `clearTimeout` must know where to take it from.
-        worker = source
         if t < 0 then timeoutDeadline = -1L
         else timeoutDeadline = TimerHeap.deadlineAfter(t * 1000000L)
       }
 
-  /** Puts the op, which has a time limit, on `source`'s heap, and has `clearTimeout` take it from there. */
-  final def holdTimeoutOn(source: EventSource): Unit =
-    val heap = source.holdTimer(this)
-    timersLock.synchronized { worker = heap }
+  final def holdTimerOn(source: Source): Unit = {
+    // Before it is there: `clearTimeout` must know where to take it from, whatever comes of putting it.
+    timersLock.synchronized { worker = source }
+    _holdTimer(source)
+  }
 
   /** Takes the op off its heap. The time limit stays until the next `setTimeout`: a firing still under way, which
     * `parkUntilSettled` waits for, reads it to tell whether it is the limit that has passed.
     */
   final def clearTimeout(): Unit =
-    if worker != null then // else it was on no heap: see `setTimeout`
+    if worker != null then // else it was on no heap: see `holdTimerOn`
       val w = timersLock.synchronized {
         val w = worker
         worker = null

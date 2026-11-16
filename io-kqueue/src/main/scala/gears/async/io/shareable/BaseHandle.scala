@@ -11,7 +11,12 @@ trait BaseHandle extends HandleState.Holder:
   /** What the handle keeps for the ops that wait for it to be readable, or to be writable, and for the event source
     * that tells them when it is.
     */
-  def readiness(read: Boolean): HandleReadiness
+  def readiness(read: Boolean): HandleReadiness[Source]
+
+  /** The event sources that can listen for this handle: its backend's workers. An op that waits on the handle gets its
+    * listener back as one, and so can keep its time limit there.
+    */
+  type Source <: EventSource
 
   /** Has `owner` told once the handle is closed, at once if it already is. For whoever's `requestClose` began the close
     * and returned false: a close has one owner, so one listener at most.
@@ -69,10 +74,10 @@ abstract class AbstractBaseHandle extends BaseHandle:
         case AbstractBaseHandle.Closed => owner.handleClosed()
         case _                         => throw new IllegalStateException("A close already has its owner waiting")
 
-  private val reads = HandleReadiness(this, read = true)
-  private val writes = HandleReadiness(this, read = false)
+  private val reads = HandleReadiness[Source](this, read = true)
+  private val writes = HandleReadiness[Source](this, read = false)
 
-  final def readiness(read: Boolean): HandleReadiness = if read then reads else writes
+  final def readiness(read: Boolean): HandleReadiness[Source] = if read then reads else writes
 
   /** Whether the handle accepts `op` as its waiter while `pending` is. By default one op waits in each direction, and a
     * second is refused; one that has settled, whose performer has yet to clear it, is not waiting, and gives way.

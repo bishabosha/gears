@@ -2,13 +2,11 @@ package gears.async.io.shareable
 
 import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
 
-/** What reports that handles are ready, a worker's kqueue for one, as the handles and their ops know it. */
-trait EventSource {
-
-  /** Puts `op`, which has a time limit, on this source's own heap, and returns that heap: an op waits where its handle
-    * is listened for, so that one thread both fires its time limit and finds its handle ready.
-    */
-  def holdTimer(op: TimerOp): TimerSource[?]
+/** What reports that handles are ready, a worker's kqueue for one, as the handles and their ops know it. It is a source
+  * of timers too: an op that waits for a handle keeps its time limit where the handle is listened for, so that one
+  * thread both fires the limit and finds the handle ready.
+  */
+trait EventSource extends TimerSource {
 
   /** This source has become `handle`'s listener for reads, or for writes: from now on it reports each time the handle
     * becomes ready, not for as long as it is, and at once if it is ready now. Called once for as long as it stays the
@@ -69,7 +67,7 @@ object ReadinessOp:
   * that says when it is. Its own monitor guards it, and a handle has one for each direction, so that a reader and a
   * writer of one handle never wait on each other.
   */
-final class HandleReadiness private[shareable] (handle: AbstractBaseHandle, read: Boolean) {
+final class HandleReadiness[S <: EventSource] private[shareable] (handle: AbstractBaseHandle, read: Boolean) {
 
   /** The op that waits. Read without the lock by `clearWaiter`, to find that it has nothing to do. */
   @volatile private var waiter: ReadinessOp | Null = null
@@ -77,7 +75,7 @@ final class HandleReadiness private[shareable] (handle: AbstractBaseHandle, read
   /** The event source listening for the handle: the first an op waited on, and the same one for as long as ops go on
     * waiting (see `AbstractBaseHandle.idleReportsLimit`), so that only it is woken for the handle.
     */
-  private var listener: EventSource | Null = null
+  private var listener: S | Null = null
 
   /** Counts the listener's reports. */
   @volatile private var reports = 0
@@ -108,9 +106,9 @@ final class HandleReadiness private[shareable] (handle: AbstractBaseHandle, read
     * if none did, and which this has then told to start listening; or null, with `op` not waiting, if the handle was
     * reported ready since `sinceTick`, for the performer to try again.
     */
-  def registerWaiter(op: ReadinessOp, sinceTick: Int, self: EventSource): EventSource | Null = {
+  def registerWaiter(op: ReadinessOp, sinceTick: Int, self: S): S | Null = {
     var start = false
-    val listening = synchronized {
+    val listening: S | Null = synchronized {
       if !handle.acceptsWaiter(read, op, waiter) then
         throw new IllegalArgumentException(s"A ${if read then "read" else "write"} is already pending on this handle")
       // The listener may be another thread's, and have reported the handle ready, to no waiter, after the attempt.
