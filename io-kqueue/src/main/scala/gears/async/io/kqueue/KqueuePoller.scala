@@ -36,8 +36,8 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
   @volatile private var handles = new Array[KqueueHandle | Null](64)
 
   /** Has the kqueue report `handle` each time it becomes readable, or writable, and at once if it is now: an
-    * edge-triggered filter, added once and left until the handle closes, when the kernel takes it with the
-    * descriptor, or gives this listener up (`stopListening`). An op that waits meanwhile costs no system call.
+    * edge-triggered filter, added once and left until the handle closes, when the kernel takes it with the descriptor,
+    * or gives this listener up (`stopListening`). An op that waits meanwhile costs no system call.
     */
   override def startListening(handle: BaseHandle, read: Boolean): Unit = handle match
     case handle: KqueueHandle =>
@@ -51,14 +51,13 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
       }
     case _ => throw new IllegalArgumentException(s"Not a handle of this backend's: $handle")
 
-  /** Takes the filter off the kqueue, and the handle from `handles` unless this still listens for its other
-    * direction.
+  /** Takes the filter off the kqueue, and the handle from `handles` unless this still listens for its other direction.
     */
   override def stopListening(handle: BaseHandle, read: Boolean): Unit = handle match
     case handle: KqueueHandle =>
       val fd = handle.fd
       if !closed then KqueueLoop.deleteFileIfOpen(kq, fd, read): Unit
-      if !handle.listenedBy(!read, this) then
+      if !handle.readiness(!read).listenedBy(this) then
         handlesLock.synchronized {
           if fd < handles.length && (handles(fd) eq handle) then handles(fd) = null
         }
@@ -74,17 +73,17 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
     case _ => ()
 
   /** `fd` became ready: its handle's waiter does its work, or, finding it not ready after all, waits on for the next
-    * time. With no waiter the handle only counts it, for an op that is about to wait (see `awaitReadiness`), and to
+    * time. With no waiter the handle only counts it, for an op that is about to wait (see `HandleReadiness.registerWaiter`), and to
     * give this listener up once that has happened too often.
     */
   private def dispatch(fd: Int, read: Boolean, available: Long): Unit = {
     val current = handles
     val handle = if fd < current.length then current(fd) else null
-    if handle != null then handle.reportReady(read, this, available)
+    if handle != null then handle.readiness(read).report(this, available)
   }
 
-  /** How much `event` reports its descriptor ready for, bytes to read or room to write, unless it also reports the
-    * end of the stream or an error, which no later event follows.
+  /** How much `event` reports its descriptor ready for, bytes to read or room to write, unless it also reports the end
+    * of the stream or an error, which no later event follows.
     */
   private def available(event: KqueueLoop.Event): Long =
     if KqueueLoop.isEOF(event) || KqueueLoop.isError(event) then ReadinessOp.Unknown
@@ -137,10 +136,10 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
       )
     else KqueueLoop.pollEventsForever(kq, events, maxEvents)
 
-  /** A poll failed, other than by being interrupted. A kqueue that fails is not something to recover from by trying
-    * for ever, which would keep the worker turning at full speed and its ops waiting: after a few attempts, a little
-    * apart in case the failure passes, it is given up and its owner told (`pollerFailed`), once. Nothing is rebuilt:
-    * what broke it, most likely its descriptor closed from elsewhere, is a bug to be seen, not papered over.
+  /** A poll failed, other than by being interrupted. A kqueue that fails is not something to recover from by trying for
+    * ever, which would keep the worker turning at full speed and its ops waiting: after a few attempts, a little apart
+    * in case the failure passes, it is given up and its owner told (`pollerFailed`), once. Nothing is rebuilt: what
+    * broke it, most likely its descriptor closed from elsewhere, is a bug to be seen, not papered over.
     */
   private def pollFailed(failure: java.io.IOException): Unit = {
     pollFailures += 1
@@ -150,8 +149,8 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
       pollerFailed(new java.io.IOException(s"kqueue $id gave up after $pollFailures failed polls", failure))
   }
 
-  /** Waiting with no kqueue: parked until the deadline or a wake-up, so that the worker still fires its timers and
-    * runs what it is given, and the program can unwind. No handle is ever reported ready.
+  /** Waiting with no kqueue: parked until the deadline or a wake-up, so that the worker still fires its timers and runs
+    * what it is given, and the program can unwind. No handle is ever reported ready.
     */
   private def waitWithoutKqueue(timeout: Long): Unit =
     if timeout > 0 then java.util.concurrent.locks.LockSupport.parkNanos(this, timeout)

@@ -9,6 +9,7 @@ import gears.async.Future.Promise
 import gears.async.cancellationScope
 import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.MonitorPoller
+import gears.async.io.shareable.Worker
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
@@ -47,7 +48,7 @@ private[kqueue] final class SlowScheduler
     with NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
   def heapOfCurrentWorker(): String = workerOfCurrentThread().debugTimerState()
-  override def makeWorker(id: Int) = new WorkpoolScheduler.Worker[SlowOp](id) with MonitorPoller {
+  override def makeWorker(id: Int) = new Worker[SlowOp](id) with MonitorPoller {
     override def performOp(op: SlowOp)(using Async): Unit = {
       addTimer(op)
       op.parkUntilSettled()
@@ -134,7 +135,9 @@ class OpPerformanceSuite extends munit.FunSuite {
     }
   }
 
-  test("a performer whose group is cancelled waits only on its op, which settles as cancelled once the cancel reaches it") {
+  test(
+    "a performer whose group is cancelled waits only on its op, which settles as cancelled once the cancel reaches it"
+  ) {
     onPool { io =>
       val op = SlowOp(10.seconds, 0)
       val group = CompletionGroup()

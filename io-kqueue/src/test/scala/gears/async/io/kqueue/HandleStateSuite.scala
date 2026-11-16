@@ -3,17 +3,17 @@ package kqueue
 
 import gears.async.io.shareable.AbstractBaseHandle
 import gears.async.io.shareable.BaseHandle
+import gears.async.io.shareable.CloseListener
 import gears.async.io.shareable.EventSource
+import gears.async.io.shareable.HandleState
 import gears.async.io.shareable.ReadinessOp
 import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
-import gears.async.io.shareable.CloseListener
-import gears.async.io.shareable.HandleState
 
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.atomic.AtomicInteger
 
-/** A handle's state and its count of claimed work, which share one word: work is claimed only while the handle is
-  * open, and a closing handle is closed once, by whoever releases the last of its work.
+/** A handle's state and its count of claimed work, which share one word: work is claimed only while the handle is open,
+  * and a closing handle is closed once, by whoever releases the last of its work.
   */
 class HandleStateSuite extends munit.FunSuite {
 
@@ -114,16 +114,16 @@ class HandleStateSuite extends munit.FunSuite {
     val source = FakeSource()
     val op = FakeOp()
     for _ <- 1 to 3 do
-      val tick = handle.readinessTick(read = true)
-      assert(handle.awaitReadiness(read = true, op, tick, source) eq source)
-      handle.reportReady(read = true, source, ReadinessOp.Unknown)
-      assert(!handle.clearWaiter(read = true, op), "an op that did its work is no longer the waiter")
+      val tick = handle.readiness(read = true).tick
+      assert(handle.readiness(read = true).registerWaiter(op, tick, source) eq source)
+      handle.readiness(read = true).report(source, ReadinessOp.Unknown)
+      assert(!handle.readiness(read = true).clearWaiter(op), "an op that did its work is no longer the waiter")
     assertEquals(op.woken, 3)
     assertEquals(source.started.get(), 1)
     // Reported ready with no op waiting, time after time: the handle gives the source up.
-    while source.stopped.get() == 0 do handle.reportReady(read = true, source, ReadinessOp.Unknown)
-    assert(!handle.listenedBy(read = true, source))
-    assert(handle.awaitReadiness(read = true, op, handle.readinessTick(read = true), source) eq source)
+    while source.stopped.get() == 0 do handle.readiness(read = true).report(source, ReadinessOp.Unknown)
+    assert(!handle.readiness(read = true).listenedBy(source))
+    assert(handle.readiness(read = true).registerWaiter(op, handle.readiness(read = true).tick, source) eq source)
     assertEquals(source.started.get(), 2)
   }
 
@@ -131,48 +131,48 @@ class HandleStateSuite extends munit.FunSuite {
     val handle = TestHandle()
     val source = FakeSource()
     val op = FakeOp()
-    def tick = handle.readinessTick(read = true)
-    def drained = handle.drainedAt(read = true, tick)
-    def waitNow(): Unit = assert(handle.awaitReadiness(read = true, op, tick, source) eq source)
+    def tick = handle.readiness(read = true).tick
+    def drained = handle.readiness(read = true).drainedAt(tick)
+    def waitNow(): Unit = assert(handle.readiness(read = true).registerWaiter(op, tick, source) eq source)
     assert(!drained)
 
     waitNow()
     assert(drained, "an op waits because the handle was not ready")
-    assert(!handle.drainedAt(read = false, handle.readinessTick(read = false)), "each direction on its own")
+    assert(!handle.readiness(read = false).drainedAt(handle.readiness(read = false).tick), "each direction on its own")
 
     op.moves = 4
-    handle.reportReady(read = true, source, available = 4)
+    handle.readiness(read = true).report(source, available = 4)
     assert(drained, "the op took all that was reported")
 
     // Reported with no op waiting: there may be something, and an op that read the tick before is told to look again.
     val stale = tick
-    handle.reportReady(read = true, source, available = 4)
+    handle.readiness(read = true).report(source, available = 4)
     assert(!drained)
-    assert(handle.awaitReadiness(read = true, op, stale, source) == null)
+    assert(handle.readiness(read = true).registerWaiter(op, stale, source) == null)
 
     waitNow()
     op.moves = 4
-    handle.reportReady(read = true, source, available = 10)
+    handle.readiness(read = true).report(source, available = 10)
     assert(!drained, "the op left some of what was reported")
 
     waitNow()
     op.moves = 0
-    handle.reportReady(read = true, source, ReadinessOp.Unknown)
+    handle.readiness(read = true).report(source, ReadinessOp.Unknown)
     assert(!drained, "the end of a stream, which no report follows")
 
     // An op that finds the handle not ready after all waits on, its claim given back.
     waitNow()
     op.moves = ReadinessOp.Blocked
-    handle.reportReady(read = true, source, available = 4)
+    handle.readiness(read = true).report(source, available = 4)
     assertEquals(op.released, 1)
-    assert(handle.clearWaiter(read = true, op), "it was still the waiter")
+    assert(handle.readiness(read = true).clearWaiter(op), "it was still the waiter")
 
     // A report from a source that is not the listener is not counted.
     val before = tick
-    handle.reportReady(read = true, FakeSource(), available = 4)
+    handle.readiness(read = true).report(FakeSource(), available = 4)
     assertEquals(tick, before)
 
-    while source.stopped.get() == 0 do handle.reportReady(read = true, source, ReadinessOp.Unknown)
+    while source.stopped.get() == 0 do handle.readiness(read = true).report(source, ReadinessOp.Unknown)
     assert(!drained, "no listener would report anything new")
   }
 
@@ -196,11 +196,12 @@ class HandleStateSuite extends munit.FunSuite {
         def releaseReady(): Boolean = true
         def handleClosing(): Unit = ()
       }
-      assert(handle.awaitReadiness(read = true, op, handle.readinessTick(read = true), source) eq source)
+      assert(handle.readiness(read = true).registerWaiter(op, handle.readiness(read = true).tick, source) eq source)
       val reporter = new Thread(() => {
-        while handle.getState != HandleState.ClosedState do handle.reportReady(read = true, source, ReadinessOp.Unknown)
+        while handle.getState != HandleState.ClosedState do
+          handle.readiness(read = true).report(source, ReadinessOp.Unknown)
         var i = 0
-        while i < 100 do { handle.reportReady(read = true, source, ReadinessOp.Unknown); i += 1 }
+        while i < 100 do { handle.readiness(read = true).report(source, ReadinessOp.Unknown); i += 1 }
       })
       reporter.start()
       while working.get() < 50 do Thread.onSpinWait()
