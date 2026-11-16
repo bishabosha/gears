@@ -535,6 +535,15 @@ object WorkpoolScheduler {
     /** Set by the scheduler before the worker's thread starts: what a fatal error does beyond being reported. */
     private[WorkpoolScheduler] var onFatal: Throwable => Unit = _ => ()
 
+    /** A worker whose poller has failed can't be told that its handles are ready: the ops waiting on them would wait
+      * for ever. Fatal to the program, as an error in a worker is: it is reported, and cancels the program (see
+      * `rootGroup`), which the worker stays for, as it still runs its tasks and fires its timers.
+      */
+    override protected def pollerFailed(failure: Throwable): Unit = {
+      reportFailure(failure)
+      onFatal(failure)
+    }
+
     private def reportFailure(failure: Throwable): Unit = {
       val current = Thread.currentThread()
       // A handler that throws must not take the worker with it either.
