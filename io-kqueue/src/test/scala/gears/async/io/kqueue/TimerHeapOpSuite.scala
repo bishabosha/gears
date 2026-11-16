@@ -2,14 +2,10 @@ package gears.async.io
 package kqueue
 
 import gears.async.Async
-import gears.async.Cancellable
-import gears.async.CompletionGroup
 import gears.async.Listener
-import gears.async.cancellationScope
 import gears.async.default.given
 import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.RepeatableAbstractTimerHeapOp
-import gears.async.io.shareable.TimerHeap
 import gears.async.io.shareable.TimerHeapImpl
 import gears.async.io.shareable.TimerHeap.TimerOp
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel

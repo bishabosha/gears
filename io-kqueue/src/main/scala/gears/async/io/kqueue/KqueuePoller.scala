@@ -77,8 +77,8 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
     case _ => ()
 
   /** `fd` became ready: its handle's waiter does its work, or, finding it not ready after all, waits on for the next
-    * time. With no waiter the handle only counts it, for an op that is about to wait (see `HandleReadiness.registerWaiter`), and to
-    * give this listener up once that has happened too often.
+    * time. With no waiter the handle only counts it, for an op that is about to wait (see
+    * `HandleReadiness.registerWaiter`), and to give this listener up once that has happened too often.
     */
   private def dispatch(fd: Int, read: Boolean, available: Long): Unit = {
     val current = handles

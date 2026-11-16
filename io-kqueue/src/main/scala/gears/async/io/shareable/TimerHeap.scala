@@ -3,9 +3,7 @@ package gears.async.io.shareable
 import gears.async.Cancellable
 import gears.async.io.shareable.Poller
 
-import scala.util.Try
-
-import TimerHeap.{TimerHeap, TimerOp, TimerSource}
+import TimerHeap.{TimerHeap, TimerOp}
 
 object TimerHeap {
 

@@ -3,7 +3,6 @@ package gears.async.io.shareable
 import gears.async.Async
 import gears.async.io.Received
 import gears.async.io.Slot
-import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.TimerHeapOp.Outcome
 
 import java.nio.ByteBuffer
@@ -32,13 +31,6 @@ abstract class AbstractReadinessOp[H <: BaseHandle { type Source = W }, W <: Eve
 
   final def handleClosing(): Unit =
     if claimAtReady() then completeFromReady(Failure(new ClosedChannelException()))
-
-  private def attemptClaimed(): Int =
-    handle.claimWork()
-    try attempt()
-    finally handle.releaseWork()
-
-  final def actImmediate(): Boolean = attemptClaimed() != AbstractReadinessOp.Blocked
 
   final def readyWakeup(): Int =
     var moved = ReadinessOp.SettledOtherwise
@@ -143,8 +135,10 @@ abstract class AbstractReadOp[H <: BaseReadableHandle { type Source = W }, W <: 
 }
 
 /** A scattering read: into `bufs` in order, each filled before the next is begun. */
-abstract class AbstractScatterReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
-    extends AbstractStreamReadOp[H, W](handle) {
+abstract class AbstractScatterReadOp[H <: BaseReadableHandle { type Source = W }, W <: EventSource](
+    handle: H,
+    bufs: Array[ByteBuffer]
+) extends AbstractStreamReadOp[H, W](handle) {
   if bufs.isEmpty then throw new IllegalArgumentException("A scattering read needs a buffer")
   if bufs.exists(_.isReadOnly()) then
     throw new IllegalArgumentException("A scattering read needs buffers it can write to")
@@ -209,16 +203,20 @@ abstract class AbstractStreamWriteOp[H <: BaseWritableHandle { type Source = W }
   protected final def isRead: Boolean = false
 }
 
-abstract class AbstractWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](handle: H, buf: ByteBuffer)
-    extends AbstractStreamWriteOp[H, W](handle) {
+abstract class AbstractWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](
+    handle: H,
+    buf: ByteBuffer
+) extends AbstractStreamWriteOp[H, W](handle) {
 
   /** A write that would block is -1, which is `Blocked`; with nothing to write, the op is done, moving nothing. */
   protected final def attempt(): Int = if buf.hasRemaining() then _writeHandle(handle, buf) else 0
 }
 
 /** A gathering write: from `bufs` in order, each drained before the next is begun. */
-abstract class AbstractGatherWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](handle: H, bufs: Array[ByteBuffer])
-    extends AbstractStreamWriteOp[H, W](handle) {
+abstract class AbstractGatherWriteOp[H <: BaseWritableHandle { type Source = W }, W <: EventSource](
+    handle: H,
+    bufs: Array[ByteBuffer]
+) extends AbstractStreamWriteOp[H, W](handle) {
 
   protected final def attempt(): Int = if bufs.exists(_.hasRemaining()) then _writevHandle(handle, bufs) else 0
 }

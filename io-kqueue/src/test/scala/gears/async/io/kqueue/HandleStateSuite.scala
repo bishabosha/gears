@@ -7,7 +7,7 @@ import gears.async.io.shareable.CloseListener
 import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.HandleState
 import gears.async.io.shareable.ReadinessOp
-import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
+import gears.async.io.shareable.TimerHeap.TimerOp
 
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.atomic.AtomicInteger

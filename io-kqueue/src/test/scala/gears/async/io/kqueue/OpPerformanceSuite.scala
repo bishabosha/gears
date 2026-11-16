@@ -6,7 +6,6 @@ import gears.async.AsyncSupport
 import gears.async.CompletionGroup
 import gears.async.Future
 import gears.async.Future.Promise
-import gears.async.cancellationScope
 import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.Worker

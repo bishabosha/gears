@@ -1,6 +1,6 @@
 package gears.async.io.shareable
 
-import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
+import gears.async.io.shareable.TimerHeap.TimerSource
 
 /** What reports that handles are ready, a worker's kqueue for one, as the handles and their ops know it. It is a source
   * of timers too: an op that waits for a handle keeps its time limit where the handle is listened for, so that one

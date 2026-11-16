@@ -28,9 +28,6 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
 
   /** Whether the worker has taken `task`, which it refuses once it has left `loop`. */
   def submit(task: Runnable): Boolean = {
-    println(
-      s"submit called on worker $id on thread ${Thread.currentThread().getName()}"
-    )
     inbox.add(task): Unit
     wake()
     !exited || !inbox.takeBack(task)
@@ -130,9 +127,6 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
   private val ready = new java.util.ArrayDeque[Continuation[?, ?]]
 
   private[shareable] def resumeNext[T, R](suspension: Suspension[T, R], value: T, pinned: Boolean): Unit =
-    println(
-      s"resumeNext called on worker $id on thread ${Thread.currentThread().getName()}"
-    )
     ready.addLast(Continuation(suspension, value, pinned))
 
   private[shareable] val thread = {

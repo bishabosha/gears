@@ -7,23 +7,16 @@ import gears.async.Cancellable
 import gears.async.CompletionGroup
 import gears.async.Listener
 import gears.async.Scheduler
-import gears.async.SuspendSupport
-import gears.async.Suspension
-import gears.async.cancellationScope
 import gears.async.io.Backend
 import gears.async.io.Interface
 import gears.async.io.Io
 import gears.async.io.shareable.TimerHeap
-import gears.async.io.shareable.TimerHeap.{TimerOp, TimerSource}
+import gears.async.io.shareable.TimerHeap.TimerOp
 import gears.async.io.shareable.WorkpoolScheduler.DoAfter
-import gears.async.native.NativeSuspend
 
-import java.io.IOException
 import scala.concurrent.duration.FiniteDuration
-import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
-import scala.util.control.NonFatal
 
 import WorkpoolScheduler.{AsyncOp, ReentrantOp}
 
@@ -49,10 +42,6 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
       else home.asInstanceOf[PoolWorker].submit(() => suspension.resume(arg)): Unit
     // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
     else nextWorker().submit(() => suspension.resume(arg)): Unit
-
-  /** Schedule a computation with the suspension boundary already created. */
-  // override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
-  //   s.execute(() => boundary(body))
 
   /** A worker of this pool: one that performs its interface's ops. */
   type PoolWorker = Worker { type Op = WorkpoolScheduler.this.Op }

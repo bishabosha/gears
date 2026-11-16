@@ -1,12 +1,9 @@
 package gears.async.io.kqueue
 
 import gears.async.Async
-import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.Worker
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
-
-import java.io.IOException
 
 class KqueueScheduler(workers: Int)
     extends WorkpoolScheduler[KqueueOps.type](KqueueBackend, KqueueOps, workers),
