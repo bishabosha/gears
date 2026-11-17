@@ -6,7 +6,9 @@ import gears.async.io.Received
 import gears.async.io.Slot
 import gears.async.io.SocketOption
 import gears.async.io.SocketOptions
+import gears.async.io.posix.Descriptors
 import gears.async.io.posix.PosixDatagrams
+import gears.async.io.posix.PosixFiles
 import gears.async.io.posix.PosixReadOps
 import gears.async.io.posix.PosixSockets
 import gears.async.io.posix.PosixWriteOps
@@ -18,11 +20,16 @@ import gears.async.io.shareable.AbstractBlockingOp
 import gears.async.io.shareable.AbstractBlockingValueOp
 import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractConnectOp
+import gears.async.io.shareable.AbstractFilePooledReadOp
+import gears.async.io.shareable.AbstractFileReadOp
+import gears.async.io.shareable.AbstractFileSyncOp
+import gears.async.io.shareable.AbstractFileWriteOp
 import gears.async.io.shareable.AbstractGatherWriteOp
 import gears.async.io.shareable.AbstractHandleCallOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.AbstractOpenFileOp
 import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
@@ -183,3 +190,29 @@ private[kqueue] final class KqueueBlocking(body: () => Unit) extends AbstractBlo
 private[kqueue] final class KqueueBlockingValue[A <: AnyRef](body: () => A, into: Slot[A])
     extends AbstractBlockingValueOp(body, into),
       KqueueOffThreadOp
+
+// ---- Regular files: `start` is the offset a positional op begins at, or negative for the file's stream position
+
+private[kqueue] final class KqueueOpenFile(path: String, write: Boolean, into: Slot[KqueueFile])
+    extends AbstractOpenFileOp(path, write, into),
+      KqueueOffThreadOp:
+  def _openFile(path: String, write: Boolean, owner: HandleOwner): KqueueFile =
+    new KqueueFile(Descriptors.openFile(path, write), owner)
+
+private[kqueue] final class KqueueFileRead(file: KqueueFile, bufs: Array[ByteBuffer], start: Long)
+    extends AbstractFileReadOp(file, bufs, start),
+      KqueueOffThreadOp:
+  def _readAt(file: KqueueFile, buf: ByteBuffer, offset: Long): Int = PosixFiles.readAt(file.fd, buf, offset)
+
+private[kqueue] final class KqueueFileWrite(file: KqueueFile, bufs: Array[ByteBuffer], start: Long)
+    extends AbstractFileWriteOp(file, bufs, start),
+      KqueueOffThreadOp:
+  def _writeAt(file: KqueueFile, buf: ByteBuffer, offset: Long): Int = PosixFiles.writeAt(file.fd, buf, offset)
+
+private[kqueue] final class KqueueFilePooledRead(file: KqueueFile, pool: LendingPool, into: Slot[Received])
+    extends AbstractFilePooledReadOp(file, pool, into),
+      KqueueOffThreadOp:
+  def _readAt(file: KqueueFile, buf: ByteBuffer, offset: Long): Int = PosixFiles.readAt(file.fd, buf, offset)
+
+private[kqueue] final class KqueueFileSync(file: KqueueFile) extends AbstractFileSyncOp(file), KqueueOffThreadOp:
+  def _sync(file: KqueueFile): Unit = PosixFiles.sync(file.fd)

@@ -46,6 +46,10 @@ class KqueueUnixStreamSuite extends UnixStreamContract with FailsOnStarvation {
   val backend: Backend { type Interface <: UnixStreams } = KqueueBackend
 }
 
+class KqueueFileSuite extends FileContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: RegularFiles } = KqueueBackend
+}
+
 class KqueueSimpleIOSuite extends SimpleIOChecks with PipeFixture with FailsOnStarvation {
   val backend: KqueueBackend.type = KqueueBackend
 }
@@ -95,6 +99,10 @@ class KqueueOnOneIpDatagramSuite extends IpDatagramContract with OnWorkers(1) wi
 
 class KqueueOnOneUnixStreamSuite extends UnixStreamContract with OnWorkers(1) with FailsOnStarvation {
   val backend: Backend { type Interface <: UnixStreams } = KqueueBackend
+}
+
+class KqueueOnOneFileSuite extends FileContract with OnWorkers(1) with FailsOnStarvation {
+  val backend: Backend { type Interface <: RegularFiles } = KqueueBackend
 }
 
 class KqueueOnTwoIpStreamSuite extends IpStreamContract with OnWorkers(2) with FailsOnStarvation {

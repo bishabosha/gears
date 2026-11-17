@@ -11,6 +11,7 @@ import gears.async.io.posix.UnixBinding
 import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.BaseReadableHandle
 import gears.async.io.shareable.BaseWritableHandle
+import gears.async.io.shareable.FilePosition
 import gears.async.io.shareable.HandleOwner
 
 sealed trait KqueueHandle extends PosixKernelHandle, BaseHandle:
@@ -21,6 +22,15 @@ sealed trait KqueueWritable extends KqueueHandle, BaseWritableHandle
 
 final class PipeRead(fd: Int, owner: HandleOwner) extends PosixKernelHandle(fd, owner) with KqueueReadable
 final class PipeWrite(fd: Int, owner: HandleOwner) extends PosixKernelHandle(fd, owner) with KqueueWritable
+
+/** A regular file: read and written at offsets, and as a stream at the position it carries. Its ops are done off the
+  * workers, never waited for here: the system reports a file ready whatever it would do.
+  */
+final class KqueueFile(fd: Int, owner: HandleOwner)
+    extends PosixKernelHandle(fd, owner),
+      KqueueReadable,
+      KqueueWritable,
+      FilePosition
 
 /** A socket: what its options and addresses are asked of. */
 sealed trait KqueueSocket extends KqueueHandle, PosixSocket
