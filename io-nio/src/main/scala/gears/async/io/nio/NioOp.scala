@@ -4,11 +4,17 @@ import gears.async.Async
 import gears.async.io.Deadline
 import gears.async.io.Received
 import gears.async.io.Slot
+import gears.async.io.SocketOptions
+import gears.async.io.shareable.AbstractAcceptAllOp
+import gears.async.io.shareable.AbstractAcceptOp
 import gears.async.io.shareable.AbstractCloseOp
+import gears.async.io.shareable.AbstractConnectOp
 import gears.async.io.shareable.AbstractGatherWriteOp
+import gears.async.io.shareable.AbstractHandleCallOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.AbstractScatterReadOp
@@ -34,6 +40,9 @@ sealed trait NioReadinessOp extends NioOp:
 /** An op done as it is performed, with nothing to wait for (see `ImmediateOp`). */
 sealed trait NioImmediateOp extends NioOp:
   def perform(owner: HandleOwner): Unit
+
+sealed trait NioConnectOp extends NioOp:
+  def performConnect(self: NioPoller)(using Async): Unit
 
 sealed trait NioTimerOp extends NioOp
 
@@ -100,3 +109,31 @@ private[nio] final class NioMakePipe(readSlot: Slot[NioReadable], writeSlot: Slo
 private[nio] final class NioMakeTimer(duration: FiniteDuration) extends AbstractMakeTimerOp(duration) with NioTimerOp
 
 private[nio] final class NioMakeDeadline(initial: Long) extends AbstractMakeDeadlineOp(initial) with NioDeadlineOp
+
+// ---- Stream sockets
+
+private[nio] final class NioConnect(address: SocketAddress, options: SocketOptions, into: Slot[NioConnection])
+    extends AbstractConnectOp(into),
+      NioConnectOp:
+  def _startConnect(owner: HandleOwner): NioConnection = NioSockets.startConnect(address, options, owner)
+  def _finishConnect(socket: NioConnection): Boolean = NioSockets.finishConnect(socket)
+
+private[nio] final class NioListen(address: SocketAddress, options: SocketOptions, into: Slot[NioListener])
+    extends AbstractOpenOp(into),
+      NioImmediateOp:
+  def _open(owner: HandleOwner): NioListener = NioSockets.listen(address, options, owner)
+
+private[nio] final class NioAccept(listener: NioListener, into: Slot[NioConnection])
+    extends AbstractAcceptOp(listener, into),
+      NioReadinessOp:
+  def _accept(listener: NioListener): NioConnection | Null = NioSockets.accept(listener)
+
+private[nio] final class NioAcceptAll(listener: NioListener, into: Slot[Array[NioConnection]], max: Int)
+    extends AbstractAcceptAllOp(listener, into, max),
+      NioReadinessOp:
+  def _accept(listener: NioListener): NioConnection | Null = NioSockets.accept(listener)
+
+private[nio] final class NioShutdownOutput(connection: NioConnection)
+    extends AbstractHandleCallOp(connection),
+      NioImmediateOp:
+  def _call(connection: NioConnection): Unit = connection.socket.shutdownOutput(): Unit
