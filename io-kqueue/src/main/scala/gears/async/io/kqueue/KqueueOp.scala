@@ -4,13 +4,21 @@ import gears.async.Async
 import gears.async.io.Deadline
 import gears.async.io.Received
 import gears.async.io.Slot
+import gears.async.io.SocketOptions
 import gears.async.io.posix.PosixReadOps
+import gears.async.io.posix.PosixSockets
 import gears.async.io.posix.PosixWriteOps
+import gears.async.io.posix.SocketAddress
+import gears.async.io.shareable.AbstractAcceptAllOp
+import gears.async.io.shareable.AbstractAcceptOp
 import gears.async.io.shareable.AbstractCloseOp
+import gears.async.io.shareable.AbstractConnectOp
 import gears.async.io.shareable.AbstractGatherWriteOp
+import gears.async.io.shareable.AbstractHandleCallOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.AbstractScatterReadOp
@@ -39,6 +47,11 @@ sealed trait KqueueImmediateOp extends KqueueOp:
 sealed trait KqueueReadableOp extends KqueueReadinessOp
 
 sealed trait KqueueWritableOp extends KqueueReadinessOp
+
+sealed trait KqueueAcceptOp extends KqueueReadinessOp
+
+sealed trait KqueueConnectOp extends KqueueOp:
+  def performConnect(self: KqueuePoller)(using Async): Unit
 
 sealed trait KqueueTimerOp extends KqueueOp
 
@@ -88,3 +101,31 @@ private[kqueue] final class KqueueMakeTimer(duration: FiniteDuration)
 private[kqueue] final class KqueueMakeDeadline(initial: Long)
     extends AbstractMakeDeadlineOp(initial)
     with KqueueDeadlineOp
+
+// ---- Stream sockets
+
+private[kqueue] final class KqueueConnect(address: SocketAddress, options: SocketOptions, into: Slot[KqueueConnection])
+    extends AbstractConnectOp(into),
+      KqueueConnectOp:
+  def _startConnect(owner: HandleOwner): KqueueConnection = KqueueSockets.startConnect(address, options, owner)
+  def _finishConnect(socket: KqueueConnection): Boolean = KqueueSockets.finishConnect(socket)
+
+private[kqueue] final class KqueueListen(address: SocketAddress, options: SocketOptions, into: Slot[KqueueListener])
+    extends AbstractOpenOp(into),
+      KqueueImmediateOp:
+  def _open(owner: HandleOwner): KqueueListener = KqueueSockets.listen(address, options, owner)
+
+private[kqueue] final class KqueueAccept(listener: KqueueListener, into: Slot[KqueueConnection])
+    extends AbstractAcceptOp(listener, into),
+      KqueueAcceptOp:
+  def _accept(listener: KqueueListener): KqueueConnection | Null = KqueueSockets.accept(listener)
+
+private[kqueue] final class KqueueAcceptAll(listener: KqueueListener, into: Slot[Array[KqueueConnection]], max: Int)
+    extends AbstractAcceptAllOp(listener, into, max),
+      KqueueAcceptOp:
+  def _accept(listener: KqueueListener): KqueueConnection | Null = KqueueSockets.accept(listener)
+
+private[kqueue] final class KqueueShutdownOutput(connection: KqueueConnection)
+    extends AbstractHandleCallOp(connection),
+      KqueueImmediateOp:
+  def _call(connection: KqueueConnection): Unit = PosixSockets.shutdownOutput(connection.fd)
