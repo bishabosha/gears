@@ -1,5 +1,6 @@
 package gears.async.io.nio
 
+import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
 import gears.async.io.Handles
@@ -193,6 +194,11 @@ sealed trait NioIpDatagrams extends IpDatagrams { self: NioInterface & NioHandle
     NioSockets.addressOf(handle, peer = true).asInstanceOf[IpSocketAddress]
 }
 
+sealed trait NioBlockingOps extends Blocking { self: NioInterface =>
+  override def blocking(body: () => Unit): NioOp = NioBlocking(body)
+  override def blocking[A <: AnyRef](body: () => A, into: Slot[A]): NioOp = NioBlockingValue(body, into)
+}
+
 object NioOps
     extends NioInterface,
       NioHandles,
@@ -202,4 +208,5 @@ object NioOps
       NioStreamSockets,
       NioIpStreams,
       NioUnixStreams,
-      NioIpDatagrams {}
+      NioIpDatagrams,
+      NioBlockingOps {}

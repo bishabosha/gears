@@ -14,6 +14,10 @@ class NioThreadedTimerSuite extends ThreadedTimerContract {
   val backend: Backend = NioBackend
 }
 
+class NioBlockingSuite extends BlockingContract {
+  val backend: Backend { type Interface <: Blocking } = NioBackend
+}
+
 class NioPipeSuite extends PipeContract {
   val backend: NioBackend.type = NioBackend
 }
@@ -55,6 +59,10 @@ class NioPoolContractSuite extends OpsContract {
 
 class NioPoolThreadedTimerSuite extends ThreadedTimerContract {
   val backend: Backend = NioPoolBackend
+}
+
+class NioPoolBlockingSuite extends BlockingContract {
+  val backend: Backend { type Interface <: Blocking } = NioPoolBackend
 }
 
 class NioPoolPipeSuite extends PipeContract {

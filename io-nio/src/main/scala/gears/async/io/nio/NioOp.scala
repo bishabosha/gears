@@ -9,6 +9,8 @@ import gears.async.io.SocketOption
 import gears.async.io.SocketOptions
 import gears.async.io.shareable.AbstractAcceptAllOp
 import gears.async.io.shareable.AbstractAcceptOp
+import gears.async.io.shareable.AbstractBlockingOp
+import gears.async.io.shareable.AbstractBlockingValueOp
 import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractConnectOp
 import gears.async.io.shareable.AbstractGatherWriteOp
@@ -26,6 +28,7 @@ import gears.async.io.shareable.AbstractWriteOp
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.LendingPool
 import gears.async.io.shareable.TimerHeapOp
+import gears.async.io.shareable.Worker
 
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
@@ -45,6 +48,10 @@ sealed trait NioReadinessOp extends NioOp:
 /** An op done as it is performed, with nothing to wait for (see `ImmediateOp`). */
 sealed trait NioImmediateOp extends NioOp:
   def perform(owner: HandleOwner): Unit
+
+/** An op whose work is done off the workers' threads (see `WorkOffThread`). */
+sealed trait NioOffThreadOp extends NioOp:
+  def performOffThread(worker: Worker & NioPoller)(using Async): Unit
 
 sealed trait NioConnectOp extends NioOp:
   def performConnect(self: NioPoller)(using Async): Unit
@@ -171,3 +178,11 @@ private[nio] final class NioSend(socket: NioDatagramSocket, bufs: Array[ByteBuff
       NioReadinessOp:
   def _send(socket: NioDatagramSocket, bufs: Array[ByteBuffer]): Boolean =
     NioDatagrams.send(socket.datagrams, bufs, to)
+
+// ---- Blocking code
+
+private[nio] final class NioBlocking(body: () => Unit) extends AbstractBlockingOp(body), NioOffThreadOp
+
+private[nio] final class NioBlockingValue[A <: AnyRef](body: () => A, into: Slot[A])
+    extends AbstractBlockingValueOp(body, into),
+      NioOffThreadOp
