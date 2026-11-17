@@ -2,6 +2,7 @@ package gears.async.io.nio
 
 import gears.async.Async
 import gears.async.io.Deadline
+import gears.async.io.IpAddress
 import gears.async.io.IpSocketAddress
 import gears.async.io.Received
 import gears.async.io.Slot
@@ -27,6 +28,7 @@ import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.AbstractReceiveOp
+import gears.async.io.shareable.AbstractResolveOp
 import gears.async.io.shareable.AbstractScatterReadOp
 import gears.async.io.shareable.AbstractSendOp
 import gears.async.io.shareable.AbstractWriteOp
@@ -216,3 +218,14 @@ private[nio] final class NioFilePooledRead(file: NioFile, pool: LendingPool, int
 
 private[nio] final class NioFileSync(file: NioFile) extends AbstractFileSyncOp(file), NioOffThreadOp:
   def _sync(file: NioFile): Unit = NioFiles.sync(file)
+
+// ---- Name resolution
+
+/** The JDK's lookup blocks, so it runs off the workers. An unknown host is the JDK's `UnknownHostException`, which is
+  * an `IOException`.
+  */
+private[nio] final class NioResolve(host: String, into: Slot[List[IpAddress]])
+    extends AbstractResolveOp(host, into),
+      NioOffThreadOp:
+  def _lookup(host: String): List[IpAddress] =
+    java.net.InetAddress.getAllByName(host).toList.map(NioAddresses.ip).distinct
