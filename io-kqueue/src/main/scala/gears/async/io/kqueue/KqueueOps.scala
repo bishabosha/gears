@@ -15,6 +15,7 @@ import gears.async.io.SocketOptionOps
 import gears.async.io.SocketOptions
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
+import gears.async.io.UnixStreams
 import gears.async.io.posix.PosixSocketOptions
 import gears.async.io.shareable.Checks
 import gears.async.io.shareable.HandleOwner
@@ -135,6 +136,20 @@ sealed trait KqueueIpStreams extends IpStreams {
   }
 }
 
+sealed trait KqueueUnixStreams extends UnixStreams {
+  self: KqueueInterface & KqueueHandles & KqueueByteStreams & KqueueStreamSockets & KqueueSocketOptions =>
+
+  override def connect(address: UnixAddress, options: SocketOptions, into: Slot[KqueueConnection]): KqueueOp = {
+    Checks.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
+    KqueueConnect(Checks.unix(address), options, into)
+  }
+
+  override def listen(address: UnixAddress, options: SocketOptions, into: Slot[KqueueListener]): KqueueOp = {
+    Checks.checkOptions(options, supports, SocketOption.Kind.UnixListener)
+    KqueueListen(Checks.unix(address), options, into)
+  }
+}
+
 object KqueueOps
     extends KqueueInterface,
       KqueueHandles,
@@ -142,4 +157,5 @@ object KqueueOps
       KqueuePipeOps,
       KqueueSocketOptions,
       KqueueStreamSockets,
-      KqueueIpStreams {}
+      KqueueIpStreams,
+      KqueueUnixStreams {}
