@@ -48,6 +48,26 @@ final class KqueueListener(
   override protected def queuesWaiters(read: Boolean): Boolean = true
   override protected def beforeDescriptorCloses(): Unit = if bound != null then bound.remove()
 
+/** A datagram socket, whose receives take turns, as do its sends. A Unix one removes the socket file it bound as it
+  * closes.
+  */
+sealed abstract class KqueueDatagramSocket(
+    fd: Int,
+    val kind: SocketOption.Kind,
+    val ipv6: Boolean,
+    bound: UnixBinding | Null,
+    owner: HandleOwner
+) extends PosixKernelHandle(fd, owner),
+      KqueueSocket:
+  override protected def queuesWaiters(read: Boolean): Boolean = true
+  override protected def beforeDescriptorCloses(): Unit = if bound != null then bound.remove()
+
+final class KqueueBoundDatagram(fd: Int, ipv6: Boolean, owner: HandleOwner)
+    extends KqueueDatagramSocket(fd, SocketOption.Kind.BoundDatagram, ipv6, null, owner)
+
+final class KqueueConnectedDatagram(fd: Int, ipv6: Boolean, owner: HandleOwner)
+    extends KqueueDatagramSocket(fd, SocketOption.Kind.ConnectedDatagram, ipv6, null, owner)
+
 /** Opens this backend's sockets: the POSIX calls, with the handles made here. */
 object KqueueSockets extends PosixSocketOpener:
   type Connection = KqueueConnection

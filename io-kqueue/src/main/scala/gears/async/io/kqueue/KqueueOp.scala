@@ -4,11 +4,14 @@ import gears.async.Async
 import gears.async.io.Deadline
 import gears.async.io.Received
 import gears.async.io.Slot
+import gears.async.io.SocketOption
 import gears.async.io.SocketOptions
+import gears.async.io.posix.PosixDatagrams
 import gears.async.io.posix.PosixReadOps
 import gears.async.io.posix.PosixSockets
 import gears.async.io.posix.PosixWriteOps
 import gears.async.io.posix.SocketAddress
+import gears.async.io.posix.UnixBinding
 import gears.async.io.shareable.AbstractAcceptAllOp
 import gears.async.io.shareable.AbstractAcceptOp
 import gears.async.io.shareable.AbstractCloseOp
@@ -21,7 +24,9 @@ import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
+import gears.async.io.shareable.AbstractReceiveOp
 import gears.async.io.shareable.AbstractScatterReadOp
+import gears.async.io.shareable.AbstractSendOp
 import gears.async.io.shareable.AbstractWriteOp
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.LendingPool
@@ -49,6 +54,8 @@ sealed trait KqueueReadableOp extends KqueueReadinessOp
 sealed trait KqueueWritableOp extends KqueueReadinessOp
 
 sealed trait KqueueAcceptOp extends KqueueReadinessOp
+
+sealed trait KqueueDatagramOp extends KqueueReadinessOp
 
 sealed trait KqueueConnectOp extends KqueueOp:
   def performConnect(self: KqueuePoller)(using Async): Unit
@@ -129,3 +136,35 @@ private[kqueue] final class KqueueShutdownOutput(connection: KqueueConnection)
     extends AbstractHandleCallOp(connection),
       KqueueImmediateOp:
   def _call(connection: KqueueConnection): Unit = PosixSockets.shutdownOutput(connection.fd)
+
+// ---- Datagram sockets
+
+/** Opens a datagram socket of kind `kind`, bound to `local` and connected to `remote` where given, as the handle `make`
+  * makes of it.
+  */
+private[kqueue] final class KqueueOpenDatagram[D <: KqueueDatagramSocket](
+    local: SocketAddress | Null,
+    remote: SocketAddress | Null,
+    options: SocketOptions,
+    kind: SocketOption.Kind,
+    into: Slot[D]
+)(make: (Int, Boolean, UnixBinding | Null, HandleOwner) => D)
+    extends AbstractOpenOp(into),
+      KqueueImmediateOp:
+  def _open(owner: HandleOwner): D = KqueueSockets.openDatagram(local, remote, options, kind, owner)(make)
+
+private[kqueue] final class KqueueReceive[A <: AnyRef](
+    socket: KqueueDatagramSocket,
+    buf: ByteBuffer,
+    from: Slot[A] | Null
+) extends AbstractReceiveOp(socket, buf, from),
+      KqueueDatagramOp:
+  def _receive(socket: KqueueDatagramSocket, buf: ByteBuffer, from: Slot[A] | Null): Boolean =
+    PosixDatagrams.receive(socket.fd, buf, from)
+
+/** Sends to `to`, or to the socket's peer if it is null, which a connected socket's send has it. */
+private[kqueue] final class KqueueSend(socket: KqueueDatagramSocket, bufs: Array[ByteBuffer], to: SocketAddress | Null)
+    extends AbstractSendOp(socket, bufs, connected = to == null),
+      KqueueDatagramOp:
+  def _send(socket: KqueueDatagramSocket, bufs: Array[ByteBuffer]): Boolean =
+    PosixDatagrams.send(socket.fd, socket.ipv6, bufs, to)

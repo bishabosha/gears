@@ -117,6 +117,32 @@ trait PosixSocketOpener {
     }
   }
 
+  /** A datagram socket bound to `local`, if given, and connected to `remote`, if given, of kind `kind`, as the handle
+    * `make` makes of its descriptor, whether it is IPv6, and the socket file it bound, if any.
+    */
+  final def openDatagram[D](
+      local: SocketAddress | Null,
+      remote: SocketAddress | Null,
+      options: SocketOptions,
+      kind: SocketOption.Kind,
+      owner: HandleOwner
+  )(make: (Int, Boolean, UnixBinding | Null, HandleOwner) => D): D = {
+    val either = if local != null then local else remote
+    if either == null then throw new IllegalArgumentException("A datagram socket needs a local or a remote address")
+    val ipv6 = flavorOf(either) == Flavor.IPv6
+    var bound: UnixBinding | Null = null
+    val fd = socketFor(either, Transport.Datagram) { fd =>
+      applyOptions(fd, ipv6, options, kind)
+      if local != null then bound = bindTo(fd, local)
+      try if remote != null then connectTo(fd, remote) // assigns an IP socket an ephemeral local port
+      catch
+        case failure: Throwable =>
+          if bound != null then bound.nn.remove()
+          throw failure
+    }
+    handleOf(fd, bound)(make(fd, ipv6, bound, owner))
+  }
+
   /** The address `socket` is bound to, or with `peer` its peer's. Fails on a closed handle, as its ops do. */
   final def addressOf(socket: PosixSocket, peer: Boolean): SocketAddress = {
     socket.claimWork()
