@@ -5,6 +5,7 @@ import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
 import gears.async.io.Handles
 import gears.async.io.Interface
+import gears.async.io.IpAddress
 import gears.async.io.IpDatagrams
 import gears.async.io.IpSocketAddress
 import gears.async.io.IpStreams
@@ -12,6 +13,7 @@ import gears.async.io.Pipes
 import gears.async.io.Received
 import gears.async.io.RegularFiles
 import gears.async.io.Repeatable
+import gears.async.io.Resolving
 import gears.async.io.Slot
 import gears.async.io.SocketOption
 import gears.async.io.SocketOptionOps
@@ -319,6 +321,10 @@ sealed trait KqueueRegularFiles extends RegularFiles {
   override def sync(handle: KqueueFile): KqueueOp & Repeatable = KqueueFileSync(handle)
 }
 
+sealed trait KqueueResolving extends Resolving { self: KqueueInterface =>
+  override def resolve(host: String, into: Slot[List[IpAddress]]): KqueueOp = KqueueResolve(host, into)
+}
+
 object KqueueOps
     extends KqueueInterface,
       KqueueHandles,
@@ -331,4 +337,5 @@ object KqueueOps
       KqueueIpDatagrams,
       KqueueUnixDatagrams,
       KqueueBlockingOps,
-      KqueueRegularFiles {}
+      KqueueRegularFiles,
+      KqueueResolving {}

@@ -7,6 +7,11 @@ import gears.async.Future
 import gears.async.io.testkit.*
 import gears.io.testkit.SimpleIOChecks
 import gears.io.testkit.SimpleIOIpStreamChecks
+import gears.io.testkit.SimpleIOResolveChecks
+
+import java.net.Inet6Address
+import java.net.NetworkInterface
+import scala.jdk.CollectionConverters.*
 
 /** Each suite sees only the capabilities required by its contracts. */
 class KqueueContractSuite extends OpsContract with FailsOnStarvation {
@@ -50,6 +55,29 @@ class KqueueFileSuite extends FileContract with FailsOnStarvation {
   val backend: Backend { type Interface <: RegularFiles } = KqueueBackend
 }
 
+class KqueueResolveSuite extends ResolveContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: Resolving } = KqueueBackend
+
+  override protected def namedScopedAddresses: List[(String, IpAddress)] =
+    NetworkInterface
+      .getNetworkInterfaces()
+      .asScala
+      .flatMap(interface =>
+        interface.getInetAddresses().asScala.collect {
+          case address: Inet6Address if address.isLinkLocalAddress() && address.getScopeId() > 0 =>
+            (interface.getName(), address)
+        }
+      )
+      .nextOption()
+      .toList
+      .flatMap { (name, address) =>
+        val expected = IpAddress.fromBytes(Protocol.IPv6, address.getAddress(), address.getScopeId())
+        val compressed = expected.toString.takeWhile(_ != '%')
+        val expanded = address.getHostAddress().takeWhile(_ != '%')
+        List(s"$compressed%$name", s"$expanded%$name", s"[$compressed%$name]").map(_ -> expected)
+      }
+}
+
 class KqueueSimpleIOSuite extends SimpleIOChecks with PipeFixture with FailsOnStarvation {
   val backend: KqueueBackend.type = KqueueBackend
 }
@@ -60,6 +88,10 @@ class KqueueSimpleIOSocketSuite extends SimpleIOChecks with IpStreamFixture with
 
 class KqueueSimpleIOIpStreamSuite extends SimpleIOIpStreamChecks with FailsOnStarvation {
   val backend: Backend { type Interface <: IpStreams } = KqueueBackend
+}
+
+class KqueueSimpleIOResolveSuite extends SimpleIOResolveChecks with FailsOnStarvation {
+  val backend: Backend { type Interface <: Resolving } = KqueueBackend
 }
 
 /** Runs a suite's programs on a pool of `count` workers rather than `Io.run`'s one for each processor. On one worker

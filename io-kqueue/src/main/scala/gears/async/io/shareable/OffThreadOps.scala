@@ -221,3 +221,27 @@ abstract class AbstractBlockingValueOp[A <: AnyRef](body: () => A, into: Slot[A]
   protected final def work(): Unit = value = body()
   protected final def commit(): Unit = into.set(value.nn)
 }
+
+/** Resolves a host name (`Resolving.resolve`), which blocks, so off the workers. A lookup can't be interrupted, and
+  * nothing of the caller's is lent to it: a cancel or the time limit is delivered at once, the lookup running on to its
+  * end with its result dropped. Performed once.
+  */
+abstract class AbstractResolveOp(host: String, into: Slot[List[IpAddress]])
+    extends SingleUseAbstractTimerHeapOp,
+      WorkOffThread {
+  Checks.checkHost(host)
+
+  /** Every address of `host`, each once, or an `IOException` saying why there is none. May block. */
+  def _lookup(host: String): List[IpAddress]
+
+  private var found: List[IpAddress] = Nil
+
+  override def onEntry(): Unit =
+    super.onEntry()
+    Checks.checkEmpty(into)
+
+  protected final def interruptible: Boolean = false
+  protected final def waits: Boolean = false
+  protected final def work(): Unit = found = Checks.resolved(host, _lookup(host))
+  protected final def commit(): Unit = into.set(found)
+}

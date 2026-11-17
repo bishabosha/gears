@@ -2,6 +2,7 @@ package gears.async.io.kqueue
 
 import gears.async.Async
 import gears.async.io.Deadline
+import gears.async.io.IpAddress
 import gears.async.io.Received
 import gears.async.io.Slot
 import gears.async.io.SocketOption
@@ -10,6 +11,7 @@ import gears.async.io.posix.Descriptors
 import gears.async.io.posix.PosixDatagrams
 import gears.async.io.posix.PosixFiles
 import gears.async.io.posix.PosixReadOps
+import gears.async.io.posix.PosixResolver
 import gears.async.io.posix.PosixSockets
 import gears.async.io.posix.PosixWriteOps
 import gears.async.io.posix.SocketAddress
@@ -34,6 +36,7 @@ import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
 import gears.async.io.shareable.AbstractReceiveOp
+import gears.async.io.shareable.AbstractResolveOp
 import gears.async.io.shareable.AbstractScatterReadOp
 import gears.async.io.shareable.AbstractSendOp
 import gears.async.io.shareable.AbstractWriteOp
@@ -216,3 +219,13 @@ private[kqueue] final class KqueueFilePooledRead(file: KqueueFile, pool: Lending
 
 private[kqueue] final class KqueueFileSync(file: KqueueFile) extends AbstractFileSyncOp(file), KqueueOffThreadOp:
   def _sync(file: KqueueFile): Unit = PosixFiles.sync(file.fd)
+
+// ---- Name resolution
+
+/** There is no `getaddrinfo` that does not block, so the lookup runs off the workers, the way libuv and tokio do it. */
+private[kqueue] final class KqueueResolve(host: String, into: Slot[List[IpAddress]])
+    extends AbstractResolveOp(host, into),
+      KqueueOffThreadOp:
+  def _lookup(host: String): List[IpAddress] = PosixResolver.lookup(host) match
+    case Right(addresses) => addresses
+    case Left(error)      => throw new java.io.IOException(s"Failed to resolve $host: $error")
