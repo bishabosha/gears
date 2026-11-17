@@ -31,6 +31,10 @@ class NioIpStreamSuite extends IpStreamContract {
   val backend: Backend { type Interface <: IpStreams } = NioBackend
 }
 
+class NioIpDatagramSuite extends IpDatagramContract {
+  val backend: Backend { type Interface <: IpDatagrams } = NioBackend
+}
+
 class NioUnixStreamSuite extends UnixStreamContract {
   val backend: Backend { type Interface <: UnixStreams } = NioBackend
 }
@@ -67,6 +71,10 @@ class NioPoolSocketStreamSuite extends StreamContract with IpStreamFixture {
 
 class NioPoolIpStreamSuite extends IpStreamContract {
   val backend: Backend { type Interface <: IpStreams } = NioPoolBackend
+}
+
+class NioPoolIpDatagramSuite extends IpDatagramContract {
+  val backend: Backend { type Interface <: IpDatagrams } = NioPoolBackend
 }
 
 class NioPoolUnixStreamSuite extends UnixStreamContract {

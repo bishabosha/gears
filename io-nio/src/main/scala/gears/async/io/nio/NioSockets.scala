@@ -11,6 +11,8 @@ import java.net.InetSocketAddress
 import java.net.StandardProtocolFamily
 import java.net.StandardSocketOptions
 import java.net.UnixDomainSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
 import java.nio.channels.NetworkChannel
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
@@ -261,5 +263,80 @@ private[nio] object NioSockets {
         case datagrams: java.nio.channels.DatagramChannel if peer => NioAddresses.of(datagrams.getRemoteAddress())
         case network                                              => NioAddresses.of(network.getLocalAddress())
     finally socket.releaseWork()
+  }
+}
+
+/** This backend's datagram sockets, non-blocking, over the JDK's datagram channels. */
+private[nio] object NioDatagrams {
+
+  /** A datagram socket bound to `local`, if given, and connected to `remote`, if given, as the handle `make` makes of
+    * its channel.
+    */
+  def open[D](
+      local: IpSocketAddress | Null,
+      remote: IpSocketAddress | Null,
+      options: SocketOptions,
+      kind: SocketOption.Kind,
+      owner: HandleOwner
+  )(make: (DatagramChannel, HandleOwner) => D): D = {
+    val either = if local != null then local else remote
+    if either == null then throw new IllegalArgumentException("A datagram socket needs a local or a remote address")
+    val datagrams = DatagramChannel.open(NioAddresses.family(either))
+    try
+      datagrams.configureBlocking(false)
+      SocketOption.opening(options, kind).foreach((option, value) => NioSocketOptions.set(datagrams, option, value))
+      if local != null then datagrams.bind(NioAddresses.jdk(local))
+      if remote != null then datagrams.connect(NioAddresses.jdk(remote)) // assigns an ephemeral local port
+      make(datagrams, owner)
+    catch
+      case failure: Throwable =>
+        datagrams.close()
+        throw failure
+  }
+
+  /** Takes one packet, if there is one, into `buf`, cleared first and left flipped, what does not fit dropped, and
+    * writes its sender into `from` if that is given: whether there was one.
+    */
+  def receive[A <: AnyRef](datagrams: DatagramChannel, buf: ByteBuffer, from: Slot[A] | Null): Boolean = {
+    buf.clear()
+    val sender =
+      try datagrams.receive(buf)
+      catch
+        // JDK 21 refuses a buffer of a shared arena here: through a buffer of its own, of the same capacity.
+        case _: UnsupportedOperationException =>
+          val packet = ByteBuffer.allocate(buf.capacity())
+          val sender = datagrams.receive(packet)
+          if sender != null then buf.put(packet.flip())
+          sender
+    if sender == null then false
+    else
+      buf.flip()
+      if from != null then from.set(NioAddresses.of(sender).asInstanceOf[A])
+      true
+  }
+
+  /** Sends what remains of `bufs` as one packet, to `to`, or to the socket's peer if it is null, consuming them:
+    * whether it was sent, or the socket had no room. A channel reports an empty packet sent and a packet it had no room
+    * for the same way, as nothing written: an empty one is taken as sent.
+    */
+  def send(datagrams: DatagramChannel, bufs: Array[ByteBuffer], to: IpSocketAddress | Null): Boolean = {
+    val size = bufs.foldLeft(0L)(_ + _.remaining())
+    val sent =
+      try
+        if to == null then datagrams.write(bufs)
+        else if bufs.length == 1 then datagrams.send(bufs(0), NioAddresses.jdk(to)).toLong
+        else sendCopied(datagrams, bufs, to)
+      catch case _: UnsupportedOperationException => sendCopied(datagrams, bufs, to) // as `receive`, on JDK 21
+    sent > 0 || size == 0
+  }
+
+  /** As one buffer of the backend's own: a datagram channel sends several buffers as one packet only to its peer. */
+  private def sendCopied(datagrams: DatagramChannel, bufs: Array[ByteBuffer], to: IpSocketAddress | Null): Long = {
+    val packet = ByteBuffer.allocate(bufs.foldLeft(0)(_ + _.remaining()))
+    bufs.foreach(buf => packet.put(buf.duplicate()))
+    packet.flip()
+    val sent = if to == null then datagrams.write(packet) else datagrams.send(packet, NioAddresses.jdk(to))
+    if sent > 0 then bufs.foreach(buf => buf.position(buf.limit()))
+    sent.toLong
   }
 }

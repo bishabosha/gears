@@ -10,6 +10,7 @@ import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.HandleState
 
+import java.nio.channels.DatagramChannel
 import java.nio.channels.GatheringByteChannel
 import java.nio.channels.NetworkChannel
 import java.nio.channels.Pipe
@@ -132,3 +133,20 @@ final class NioListener(
   private[nio] def interest(read: Boolean): Int = SelectionKey.OP_ACCEPT
   override protected def queuesWaiters(read: Boolean): Boolean = true
   override protected def beforeChannelCloses(): Unit = if bound != null then bound.remove()
+
+/** An IP datagram socket, whose receives take turns, as do its sends. */
+sealed abstract class NioDatagramSocket(
+    private[nio] val datagrams: DatagramChannel,
+    val kind: SocketOption.Kind,
+    owner: HandleOwner
+) extends NioChannelHandle(datagrams, owner),
+      NioSocket:
+  def network: NetworkChannel = datagrams
+  private[nio] def interest(read: Boolean): Int = if read then SelectionKey.OP_READ else SelectionKey.OP_WRITE
+  override protected def queuesWaiters(read: Boolean): Boolean = true
+
+final class NioBoundDatagram(datagrams: DatagramChannel, owner: HandleOwner)
+    extends NioDatagramSocket(datagrams, SocketOption.Kind.BoundDatagram, owner)
+
+final class NioConnectedDatagram(datagrams: DatagramChannel, owner: HandleOwner)
+    extends NioDatagramSocket(datagrams, SocketOption.Kind.ConnectedDatagram, owner)

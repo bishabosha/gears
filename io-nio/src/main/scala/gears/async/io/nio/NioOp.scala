@@ -2,8 +2,10 @@ package gears.async.io.nio
 
 import gears.async.Async
 import gears.async.io.Deadline
+import gears.async.io.IpSocketAddress
 import gears.async.io.Received
 import gears.async.io.Slot
+import gears.async.io.SocketOption
 import gears.async.io.SocketOptions
 import gears.async.io.shareable.AbstractAcceptAllOp
 import gears.async.io.shareable.AbstractAcceptOp
@@ -17,13 +19,16 @@ import gears.async.io.shareable.AbstractMakeTimerOp
 import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
+import gears.async.io.shareable.AbstractReceiveOp
 import gears.async.io.shareable.AbstractScatterReadOp
+import gears.async.io.shareable.AbstractSendOp
 import gears.async.io.shareable.AbstractWriteOp
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.LendingPool
 import gears.async.io.shareable.TimerHeapOp
 
 import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
 import java.nio.channels.Pipe
 import scala.concurrent.duration.FiniteDuration
 
@@ -137,3 +142,32 @@ private[nio] final class NioShutdownOutput(connection: NioConnection)
     extends AbstractHandleCallOp(connection),
       NioImmediateOp:
   def _call(connection: NioConnection): Unit = connection.socket.shutdownOutput(): Unit
+
+// ---- Datagram sockets
+
+/** Opens a datagram socket of kind `kind`, bound to `local` and connected to `remote` where given, as the handle `make`
+  * makes of it.
+  */
+private[nio] final class NioOpenDatagram[D <: NioDatagramSocket](
+    local: IpSocketAddress | Null,
+    remote: IpSocketAddress | Null,
+    options: SocketOptions,
+    kind: SocketOption.Kind,
+    into: Slot[D]
+)(make: (DatagramChannel, HandleOwner) => D)
+    extends AbstractOpenOp(into),
+      NioImmediateOp:
+  def _open(owner: HandleOwner): D = NioDatagrams.open(local, remote, options, kind, owner)(make)
+
+private[nio] final class NioReceive[A <: AnyRef](socket: NioDatagramSocket, buf: ByteBuffer, from: Slot[A] | Null)
+    extends AbstractReceiveOp(socket, buf, from),
+      NioReadinessOp:
+  def _receive(socket: NioDatagramSocket, buf: ByteBuffer, from: Slot[A] | Null): Boolean =
+    NioDatagrams.receive(socket.datagrams, buf, from)
+
+/** Sends to `to`, or to the socket's peer if it is null, which a connected socket's send has it. */
+private[nio] final class NioSend(socket: NioDatagramSocket, bufs: Array[ByteBuffer], to: IpSocketAddress | Null)
+    extends AbstractSendOp(socket, bufs, connected = to == null),
+      NioReadinessOp:
+  def _send(socket: NioDatagramSocket, bufs: Array[ByteBuffer]): Boolean =
+    NioDatagrams.send(socket.datagrams, bufs, to)

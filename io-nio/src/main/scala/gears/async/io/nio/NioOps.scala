@@ -4,6 +4,7 @@ import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
 import gears.async.io.Handles
 import gears.async.io.Interface
+import gears.async.io.IpDatagrams
 import gears.async.io.IpSocketAddress
 import gears.async.io.IpStreams
 import gears.async.io.Pipes
@@ -17,6 +18,7 @@ import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
 import gears.async.io.UnixStreams
 import gears.async.io.shareable.Checks
+import gears.async.io.shareable.IpAddresses
 import gears.async.io.shareable.LendingPool
 
 import java.nio.ByteBuffer
@@ -142,6 +144,55 @@ sealed trait NioUnixStreams extends UnixStreams {
   }
 }
 
+sealed trait NioIpDatagrams extends IpDatagrams { self: NioInterface & NioHandles & NioSocketOptionOps =>
+  override type BoundDatagram = NioBoundDatagram
+  override type ConnectedDatagram = NioConnectedDatagram
+
+  override def bindDatagram(local: IpSocketAddress, options: SocketOptions, into: Slot[NioBoundDatagram]): NioOp = {
+    val kind = SocketOption.Kind.BoundDatagram
+    Checks.checkOptions(options, supports, kind)
+    NioOpenDatagram(local, null, options, kind, into)(new NioBoundDatagram(_, _))
+  }
+
+  override def connectDatagram(
+      local: IpSocketAddress | Null,
+      remote: IpSocketAddress,
+      options: SocketOptions,
+      into: Slot[NioConnectedDatagram]
+  ): NioOp = {
+    val kind = SocketOption.Kind.ConnectedDatagram
+    Checks.checkOptions(options, supports, kind)
+    val (from, to) = IpAddresses.pair(local, remote)
+    NioOpenDatagram(from, to, options, kind, into)(new NioConnectedDatagram(_, _))
+  }
+
+  override def receive(handle: NioBoundDatagram, buf: ByteBuffer, from: Slot[IpSocketAddress]): NioOp & Repeatable =
+    NioReceive(handle, buf, from)
+
+  override def receive(handle: NioConnectedDatagram, buf: ByteBuffer): NioOp & Repeatable =
+    NioReceive[IpSocketAddress](handle, buf, null)
+
+  override def send(handle: NioBoundDatagram, buf: ByteBuffer, to: IpSocketAddress): NioOp & Repeatable =
+    NioSend(handle, Array(buf), to)
+
+  override def send(handle: NioConnectedDatagram, buf: ByteBuffer): NioOp & Repeatable =
+    NioSend(handle, Array(buf), null)
+
+  override def send(handle: NioBoundDatagram, bufs: Array[ByteBuffer], to: IpSocketAddress): NioOp & Repeatable =
+    NioSend(handle, bufs, to)
+
+  override def send(handle: NioConnectedDatagram, bufs: Array[ByteBuffer]): NioOp & Repeatable =
+    NioSend(handle, bufs, null)
+
+  @annotation.targetName("datagramLocalAddress")
+  override def localAddress(handle: NioBoundDatagram | NioConnectedDatagram): IpSocketAddress =
+    NioSockets.addressOf(handle, peer = false).asInstanceOf[IpSocketAddress]
+
+  @annotation.targetName("datagramPeerAddress")
+  override def peerAddress(handle: NioConnectedDatagram): IpSocketAddress =
+    NioSockets.addressOf(handle, peer = true).asInstanceOf[IpSocketAddress]
+}
+
 object NioOps
     extends NioInterface,
       NioHandles,
@@ -150,4 +201,5 @@ object NioOps
       NioSocketOptionOps,
       NioStreamSockets,
       NioIpStreams,
-      NioUnixStreams {}
+      NioUnixStreams,
+      NioIpDatagrams {}
