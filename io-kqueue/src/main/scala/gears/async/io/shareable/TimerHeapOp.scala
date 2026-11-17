@@ -107,20 +107,9 @@ sealed abstract class AbstractTimerHeapOp extends Async.Source[Outcome] with Tim
     if result.get() != null then result.set(null)
   }
 
-  /** The worker this performance's future is pinned to, or null (see `WorkpoolScheduler.pinned`). Written by the
-    * performer before the op is given to anything that could settle it.
-    */
-  private var pinHome: AnyRef | Null = null
-
-  final def pinnedTo(home: AnyRef | Null): Unit = if pinHome ne home then pinHome = home
-
-  /** Gives the waiting performer its outcome, which resumes it. For a pinned future, the thread doing so is told where
-    * it belongs, for the scheduler to resume it there and nowhere else.
-    */
+  /** Gives the waiting performer its outcome, which resumes it. */
   private def tell(waiting: Listener[Outcome], result: Outcome): Unit =
-    val home = pinHome
-    if home == null then waiting.completeNow(result, this): Unit
-    else WorkpoolScheduler.resumingAt(home)(waiting.completeNow(result, this): Unit)
+    waiting.completeNow(result, this): Unit
 
   /** Whether this performance may have been given to something that can settle it: a worker's heap, its handle as a
     * waiter, or a close. The performer's alone to read and write.

@@ -3,8 +3,8 @@ package kqueue
 
 import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.TimerHeap
-import gears.async.io.shareable.TimerHeapImpl
 import gears.async.io.shareable.TimerHeap.TimerOp
+import gears.async.io.shareable.TimerHeapImpl
 
 import scala.collection.mutable
 

@@ -69,17 +69,6 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
   /** Whether the worker is waiting, or about to, with nothing to do. */
   @volatile private var parked = false
 
-  private[shareable] def isParked: Boolean = parked
-
-  /** Set by the scheduler before the worker's thread starts: whether some worker waits with nothing to do. */
-  private[shareable] var idleExists: () => Boolean = () => false
-
-  /** On this worker's own thread: a task any worker with nothing to do may take at once, and one is called for. */
-  private[shareable] def offer(task: Runnable): Unit = {
-    inbox.add(task): Unit
-    askForThief()
-  }
-
   private[shareable] def wakeIfParked(): Boolean =
     if parked then
       parked = false // so that the next call wakes another
@@ -114,9 +103,7 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
     wake()
   }
 
-  /** A future to resume. One that is `pinned` to this worker is resumed by it; any other may be given away. */
-  private class Continuation[T, R](val suspension: Suspension[T, R], val value: T, val pinned: Boolean)
-      extends Runnable:
+  private class Continuation[T, R](val suspension: Suspension[T, R], val value: T):
     def run(): Unit = {
       val _ = suspension.resume(value)
     }
@@ -126,8 +113,8 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
     */
   private val ready = new java.util.ArrayDeque[Continuation[?, ?]]
 
-  private[shareable] def resumeNext[T, R](suspension: Suspension[T, R], value: T, pinned: Boolean): Unit =
-    ready.addLast(Continuation(suspension, value, pinned))
+  private[shareable] def resumeNext[T, R](suspension: Suspension[T, R], value: T): Unit =
+    ready.addLast(Continuation(suspension, value))
 
   private[shareable] val thread = {
     val t = new WorkerThread(this, () => loop())
@@ -185,29 +172,6 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
     catch case _: Throwable => failure.printStackTrace()
   }
 
-  /** Worker thread only: the pinned futures `shareUnpinned` passes over, on their way back to `ready`. */
-  private val passedOver = new java.util.ArrayDeque[Continuation[?, ?]]
-
-  /** As a turn begins, with the futures the last poll found ready to resume: if there are more than a couple and some
-    * worker has nothing to do, half of them, the latest, go to the inbox for it to take, and it is called. Those pinned
-    * to this worker stay. What is not taken this worker runs itself, after the rest.
-    */
-  private def shareUnpinned(): Unit = {
-    val waiting = ready.size()
-    if waiting > 2 && idleExists() then
-      var look = waiting / 2
-      var moved = 0
-      while look > 0 do
-        val continuation = ready.pollLast()
-        if continuation.pinned then passedOver.addFirst(continuation)
-        else
-          inbox.add(continuation): Unit
-          moved += 1
-        look -= 1
-      while !passedOver.isEmpty() do ready.addLast(passedOver.pollFirst())
-      if moved > 0 then askForThief()
-  }
-
   /** Has a budget so that tasks resuming each other can't keep the worker from its timers and inbox. */
   private def runReady(): Unit = {
     var readyBudget = 32
@@ -245,7 +209,6 @@ abstract class Worker(val id: Int) extends TimerHeapImpl, EventSource {
   def loop(): Unit = {
     while !stopped || !isEmpty() do
       val now = System.nanoTime()
-      shareUnpinned()
       fireTimers(now)
       runReady()
       drainInbox()

@@ -5,7 +5,6 @@ import gears.async.AsyncOperations
 import gears.async.AsyncSupport
 import gears.async.Cancellable
 import gears.async.CompletionGroup
-import gears.async.Listener
 import gears.async.Scheduler
 import gears.async.io.Backend
 import gears.async.io.Interface
@@ -31,15 +30,8 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
 
   override private[async] def resumeAsync[T, R](suspension: Suspension[T, R])(arg: T)(using s: Scheduler): Unit =
     // Not here and now: the caller holds the listener's lock, and may hold a source's, partway through changing it.
-    val thread = Thread.currentThread()
-    val worker = workerOf(thread)
-    if worker != null then
-      // Where whoever is resuming it says a pinned future belongs (`resumingAt`). Any other future is resumed here,
-      // and may be given to a worker with nothing to do before it is (`Worker.shareUnpinned`).
-      val home = thread.asInstanceOf[WorkpoolScheduler.WorkerThread].resumeHome
-      if home == null then worker.resumeNext(suspension, arg, pinned = false)
-      else if home eq worker then worker.resumeNext(suspension, arg, pinned = true)
-      else home.asInstanceOf[PoolWorker].submit(() => suspension.resume(arg)): Unit
+    val worker = workerOf(Thread.currentThread())
+    if worker != null then worker.resumeNext(suspension, arg)
     // A pool that has shut down refuses it: like a timer still pending, that waiter is never resumed.
     else nextWorker().submit(() => suspension.resume(arg)): Unit
 
@@ -80,7 +72,6 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     worker.onFatal = failFatally
     worker.steal = () => stealFor(worker)
     worker.callThief = () => wakeThief(worker)
-    worker.idleExists = () => anyParked()
   }
   // Only now: a worker's thread started as the worker was made would run it before its subclass had its fields.
   workerGroup.foreach(_.thread.start())
@@ -114,9 +105,6 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
         `yield`()
         worker = selectWorker() // the future may go on elsewhere
       op.setTimeout(timeoutMillis)
-      op.pinnedTo(summon[Async] match
-        case pinned: PinnedAsync => pinned.home
-        case _                   => null)
       try {
         worker.performOp(op)
       } finally {
@@ -168,66 +156,6 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     task
   }
 
-  private def anyParked(): Boolean = {
-    var i = 0
-    var found = false
-    while !found && i < workerGroup.length do
-      found = workerGroup(i).isParked
-      i += 1
-    found
-  }
-
-  /** `Io.pinned` on a pool: the future stays on the worker it is on while `body` runs. Whatever resumes it, it goes on
-    * there and nowhere else: an op of this pool's resumes it there itself, and anything else it waits for is followed
-    * by a move back. Outside any such scope a future is resumed where its op was done, and from there may be taken by a
-    * worker with nothing to do (`Worker.shareUnpinned`); as `body` ends the future offers itself to one, if there is
-    * one. A scope inside another is already pinned, and does neither.
-    */
-  override def pinned[T](body: Async ?=> T)(using async: Async): T =
-    async match
-      case _: PinnedAsync => body
-      case _              =>
-        try body(using PinnedAsync(async, workerOfCurrentThread()))
-        finally offer(async)
-
-  /** Moves the future to `home`, if it is not there. Under no group: a cancel must not leave it somewhere else. */
-  private def goTo(base: Async, home: PoolWorker): Unit =
-    if workerOf(Thread.currentThread()) ne home then base.withGroup(CompletionGroup.Unlinked).await(Hop(home))
-
-  /** Has a worker with nothing to do take the future, if there is one; otherwise it goes on where it is. */
-  private def offer(base: Async): Unit = {
-    val worker = workerOf(Thread.currentThread())
-    if worker != null && anyParked() then base.withGroup(CompletionGroup.Unlinked).await(Offer(worker))
-  }
-
-  /** The context of a future inside `pinned`: whatever it waits for, it goes on at `home`. */
-  private final class PinnedAsync(val outer: Async, val home: PoolWorker)
-      extends Async(using outer.support, outer.scheduler) {
-    def group: CompletionGroup = outer.group
-    def withGroup(group: CompletionGroup): Async = PinnedAsync(outer.withGroup(group), home)
-    def await[T](src: Async.Source[T]): T =
-      // An op of this pool's resumes it at home itself (`resumingAt`). Anything else may resume it elsewhere.
-      try outer.await(src)
-      finally goTo(outer, home)
-  }
-
-  /** Completes its one listener on `home`'s thread, which resumes the future awaiting it there. */
-  private final class Hop(home: PoolWorker) extends Async.Source[Unit] {
-    def poll(k: Listener[Unit]): Boolean = false
-    def onComplete(k: Listener[Unit]): Unit =
-      home.submit(() => WorkpoolScheduler.resumingAt(home)(k.completeNow((), this): Unit)): Unit
-    def dropListener(k: Listener[Unit]): Unit = ()
-  }
-
-  /** Completes its one listener from a task of `worker`'s that any worker with nothing to do may take, and that
-    * `worker` runs itself if none does: the future awaiting it goes on wherever that is.
-    */
-  private final class Offer(worker: PoolWorker) extends Async.Source[Unit] {
-    def poll(k: Listener[Unit]): Boolean = false
-    def onComplete(k: Listener[Unit]): Unit = worker.offer(() => k.completeNow((), this): Unit)
-    def dropListener(k: Listener[Unit]): Unit = ()
-  }
-
   /** Wakes one worker that is waiting with nothing to do, if there is one, for it to take from `busy`. */
   private def wakeThief(busy: PoolWorker): Unit = {
     val count = workerGroup.length
@@ -261,9 +189,6 @@ object WorkpoolScheduler {
     def parkUntilSettled()(using Async): Unit
 
     def clearTimeout(): Unit
-
-    /** The worker the future performing the op is pinned to, or null: set for each performance. */
-    def pinnedTo(home: AnyRef | Null): Unit
   }
 
   val SuccessUnit: Try[Unit] = Success(())
@@ -272,25 +197,7 @@ object WorkpoolScheduler {
   inline val OpBudget = 64
 
   /** A worker's thread, which carries its worker for whoever asks which worker the current thread is. */
-  final class WorkerThread(val worker: Worker, body: Runnable) extends Thread(body) {
-
-    /** While this thread completes the listener of a pinned future: the worker the future is pinned to, which is where
-      * the scheduler then resumes it. Null otherwise. This thread's alone.
-      */
-    var resumeHome: AnyRef | Null = null
-  }
-
-  /** Runs `complete`, which completes a listener of a future pinned to `home`: a worker's thread notes `home` for the
-    * scheduler's `resumeAsync`, which comes within. On any other thread the future is resumed on some worker, and finds
-    * its own way home (`PinnedAsync.await`).
-    */
-  inline def resumingAt(home: AnyRef)(inline complete: Unit): Unit =
-    Thread.currentThread() match
-      case thread: WorkerThread =>
-        thread.resumeHome = home
-        try complete
-        finally thread.resumeHome = null
-      case _ => complete
+  final class WorkerThread(val worker: Worker, body: Runnable) extends Thread(body)
 
   trait ReentrantOp extends Cancellable {
 

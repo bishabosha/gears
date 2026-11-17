@@ -99,9 +99,9 @@ class KqueuePollFailureSuite extends munit.FunSuite {
         }
         assert(pool.fatalFailure.isInstanceOf[IOException], String.valueOf(pool.fatalFailure))
         outcome match
-          case Failure(_: CancellationException)                              => () // the program itself was cancelled
-          case scala.util.Success(Failure(_: CancellationException))          => () // or saw its reader cancelled first
-          case other => fail(s"not cancelled: $other")
+          case Failure(_: CancellationException)                     => () // the program itself was cancelled
+          case scala.util.Success(Failure(_: CancellationException)) => () // or saw its reader cancelled first
+          case other                                                 => fail(s"not cancelled: $other")
       finally pool.shutdown()
     }
   }

@@ -5,12 +5,12 @@ import gears.async.Async
 import gears.async.Listener
 import gears.async.default.given
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.RepeatableAbstractTimerHeapOp
-import gears.async.io.shareable.TimerHeapImpl
 import gears.async.io.shareable.TimerHeap.TimerOp
+import gears.async.io.shareable.TimerHeapImpl
 import gears.async.io.shareable.TimerHeapOp.CancelledSentinel
 import gears.async.io.shareable.TimerHeapOp.Outcome
-import gears.async.io.shareable.MonitorPoller
 import gears.async.io.shareable.WorkpoolScheduler
 
 import java.util.concurrent.CancellationException
@@ -48,8 +48,8 @@ class TimerHeapOpSuite extends munit.FunSuite {
     case _                       => false
   }
 
-  /** An op entered as its performer would, and waited on: it is linked to a group of its own for as long as it
-    * waits, as `parkUntilSettled` links it.
+  /** An op entered as its performer would, and waited on: it is linked to a group of its own for as long as it waits,
+    * as `parkUntilSettled` links it.
     */
   private def entered[T <: CountingTimer](timer: T)(body: T => Async ?=> Unit): Unit =
     Async.blocking {
@@ -234,10 +234,13 @@ class TimerHeapOpSuite extends munit.FunSuite {
         assert(heap.nextReadyTimer(due) eq op) // a worker claims it
         op.clearTimeout() // the performer, cancelled, is on its way out
         op.timerWakeup(due)
-        assert(op.poll().exists {
-          case Failure(_: TimeoutException) => true
-          case _                            => false
-        }, op.poll().toString)
+        assert(
+          op.poll().exists {
+            case Failure(_: TimeoutException) => true
+            case _                            => false
+          },
+          op.poll().toString
+        )
         assertEquals(op.worked, 0)
       }
     }
