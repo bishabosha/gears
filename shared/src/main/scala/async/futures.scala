@@ -222,11 +222,17 @@ object Future:
     link()
     ac.support.scheduleBoundary:
       val result = Async.withNewCompletionGroup(innerGroup) {
-        Try({
-          val r = body
-          checkCancellation()
-          r
-        }).recoverWith { case _: InterruptedException | _: CancellationException =>
+        // `Try` leaves an `InterruptedException` to be thrown, as it is not `NonFatal`: caught here, or the future
+        // would never complete.
+        val outcome =
+          try
+            Try({
+              val r = body
+              checkCancellation()
+              r
+            })
+          catch case interrupted: InterruptedException => Failure(interrupted)
+        outcome.recoverWith { case _: InterruptedException | _: CancellationException =>
           Failure(new CancellationException())
         }
       }(using FutureAsync(CompletionGroup.Unlinked))
