@@ -3,6 +3,7 @@ package gears.async.io.kqueue
 import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
+import gears.async.io.Fifos
 import gears.async.io.Handles
 import gears.async.io.Interface
 import gears.async.io.IpAddress
@@ -325,6 +326,14 @@ sealed trait KqueueResolving extends Resolving { self: KqueueInterface =>
   override def resolve(host: String, into: Slot[List[IpAddress]]): KqueueOp = KqueueResolve(host, into)
 }
 
+sealed trait KqueueFifos extends Fifos { self: KqueueInterface & KqueueHandles & KqueueByteStreams =>
+  override def openFifoForReading(path: String, into: Slot[KqueueReadable]): KqueueOp =
+    KqueueOpenFifo[KqueueReadable](path, write = false, into)(new FifoRead(_, _))
+
+  override def openFifoForWriting(path: String, into: Slot[KqueueWritable]): KqueueOp =
+    KqueueOpenFifo[KqueueWritable](path, write = true, into)(new FifoWrite(_, _))
+}
+
 object KqueueOps
     extends KqueueInterface,
       KqueueHandles,
@@ -338,4 +347,5 @@ object KqueueOps
       KqueueUnixDatagrams,
       KqueueBlockingOps,
       KqueueRegularFiles,
-      KqueueResolving {}
+      KqueueResolving,
+      KqueueFifos {}

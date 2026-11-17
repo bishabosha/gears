@@ -229,3 +229,19 @@ private[kqueue] final class KqueueResolve(host: String, into: Slot[List[IpAddres
   def _lookup(host: String): List[IpAddress] = PosixResolver.lookup(host) match
     case Right(addresses) => addresses
     case Left(error)      => throw new java.io.IOException(s"Failed to resolve $host: $error")
+
+// ---- FIFOs
+
+/** Opens the FIFO at `path`, without waiting for its other end, as the handle `make` makes of its descriptor. */
+private[kqueue] final class KqueueOpenFifo[K <: KqueueHandle](path: String, write: Boolean, into: Slot[K])(
+    make: (Int, HandleOwner) => K
+) extends AbstractOpenOp(into),
+      KqueueImmediateOp:
+  gears.async.io.shareable.Checks.checkPath(path)
+  def _open(owner: HandleOwner): K =
+    val fd = Descriptors.openFifo(path, write)
+    try make(fd, owner)
+    catch
+      case failure: Throwable =>
+        Descriptors.closeHandle(fd)
+        throw failure

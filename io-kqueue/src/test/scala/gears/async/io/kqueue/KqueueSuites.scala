@@ -78,6 +78,14 @@ class KqueueResolveSuite extends ResolveContract with FailsOnStarvation {
       }
 }
 
+class KqueueFifoSuite extends FifoContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: Fifos } = KqueueBackend
+}
+
+class KqueueFifoFileSuite extends FifoFileContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: Fifos & RegularFiles } = KqueueBackend
+}
+
 class KqueueSimpleIOSuite extends SimpleIOChecks with PipeFixture with FailsOnStarvation {
   val backend: KqueueBackend.type = KqueueBackend
 }
