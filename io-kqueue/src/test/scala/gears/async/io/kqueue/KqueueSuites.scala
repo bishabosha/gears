@@ -152,3 +152,12 @@ class KqueueOnTwoIpStreamSuite extends IpStreamContract with OnWorkers(2) with F
 class KqueueOnTwoIpDatagramSuite extends IpDatagramContract with OnWorkers(2) with FailsOnStarvation {
   val backend: Backend { type Interface <: IpDatagrams } = KqueueBackend
 }
+
+// What a run leaves when it ends: on the pool and on one worker.
+class KqueueRunEndSuite extends RunEndContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: Blocking & Pipes } = KqueueBackend
+}
+
+class KqueueOnOneRunEndSuite extends RunEndContract with OnWorkers(1) with FailsOnStarvation {
+  val backend: Backend { type Interface <: Blocking & Pipes } = KqueueBackend
+}
