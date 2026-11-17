@@ -13,11 +13,16 @@ import gears.async.io.shareable.AbstractBlockingOp
 import gears.async.io.shareable.AbstractBlockingValueOp
 import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractConnectOp
+import gears.async.io.shareable.AbstractFilePooledReadOp
+import gears.async.io.shareable.AbstractFileReadOp
+import gears.async.io.shareable.AbstractFileSyncOp
+import gears.async.io.shareable.AbstractFileWriteOp
 import gears.async.io.shareable.AbstractGatherWriteOp
 import gears.async.io.shareable.AbstractHandleCallOp
 import gears.async.io.shareable.AbstractMakeDeadlineOp
 import gears.async.io.shareable.AbstractMakePipeOp
 import gears.async.io.shareable.AbstractMakeTimerOp
+import gears.async.io.shareable.AbstractOpenFileOp
 import gears.async.io.shareable.AbstractOpenOp
 import gears.async.io.shareable.AbstractPooledReadOp
 import gears.async.io.shareable.AbstractReadOp
@@ -186,3 +191,28 @@ private[nio] final class NioBlocking(body: () => Unit) extends AbstractBlockingO
 private[nio] final class NioBlockingValue[A <: AnyRef](body: () => A, into: Slot[A])
     extends AbstractBlockingValueOp(body, into),
       NioOffThreadOp
+
+// ---- Regular files: `start` is the offset a positional op begins at, or negative for the file's stream position
+
+private[nio] final class NioOpenFile(path: String, write: Boolean, into: Slot[NioFile])
+    extends AbstractOpenFileOp(path, write, into),
+      NioOffThreadOp:
+  def _openFile(path: String, write: Boolean, owner: HandleOwner): NioFile = NioFiles.open(path, write, owner)
+
+private[nio] final class NioFileRead(file: NioFile, bufs: Array[ByteBuffer], start: Long)
+    extends AbstractFileReadOp(file, bufs, start),
+      NioOffThreadOp:
+  def _readAt(file: NioFile, buf: ByteBuffer, offset: Long): Int = NioFiles.readAt(file, buf, offset)
+
+private[nio] final class NioFileWrite(file: NioFile, bufs: Array[ByteBuffer], start: Long)
+    extends AbstractFileWriteOp(file, bufs, start),
+      NioOffThreadOp:
+  def _writeAt(file: NioFile, buf: ByteBuffer, offset: Long): Int = NioFiles.writeAt(file, buf, offset)
+
+private[nio] final class NioFilePooledRead(file: NioFile, pool: LendingPool, into: Slot[Received])
+    extends AbstractFilePooledReadOp(file, pool, into),
+      NioOffThreadOp:
+  def _readAt(file: NioFile, buf: ByteBuffer, offset: Long): Int = NioFiles.readAt(file, buf, offset)
+
+private[nio] final class NioFileSync(file: NioFile) extends AbstractFileSyncOp(file), NioOffThreadOp:
+  def _sync(file: NioFile): Unit = NioFiles.sync(file)
