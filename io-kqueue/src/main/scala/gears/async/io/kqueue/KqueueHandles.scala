@@ -68,6 +68,12 @@ final class KqueueBoundDatagram(fd: Int, ipv6: Boolean, owner: HandleOwner)
 final class KqueueConnectedDatagram(fd: Int, ipv6: Boolean, owner: HandleOwner)
     extends KqueueDatagramSocket(fd, SocketOption.Kind.ConnectedDatagram, ipv6, null, owner)
 
+final class KqueueUnixBoundDatagram(fd: Int, bound: UnixBinding | Null, owner: HandleOwner)
+    extends KqueueDatagramSocket(fd, SocketOption.Kind.UnixBoundDatagram, false, bound, owner)
+
+final class KqueueUnixConnectedDatagram(fd: Int, bound: UnixBinding | Null, owner: HandleOwner)
+    extends KqueueDatagramSocket(fd, SocketOption.Kind.UnixConnectedDatagram, false, bound, owner)
+
 /** Opens this backend's sockets: the POSIX calls, with the handles made here. */
 object KqueueSockets extends PosixSocketOpener:
   type Connection = KqueueConnection

@@ -34,6 +34,10 @@ class KqueueIpDatagramSuite extends IpDatagramContract with FailsOnStarvation {
   val backend: Backend { type Interface <: IpDatagrams } = KqueueBackend
 }
 
+class KqueueUnixDatagramSuite extends UnixDatagramContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: UnixDatagrams } = KqueueBackend
+}
+
 class KqueueUnixStreamSuite extends UnixStreamContract with FailsOnStarvation {
   val backend: Backend { type Interface <: UnixStreams } = KqueueBackend
 }

@@ -16,6 +16,7 @@ import gears.async.io.SocketOptionOps
 import gears.async.io.SocketOptions
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
+import gears.async.io.UnixDatagrams
 import gears.async.io.UnixStreams
 import gears.async.io.posix.PosixSocketOptions
 import gears.async.io.shareable.Checks
@@ -215,6 +216,74 @@ sealed trait KqueueIpDatagrams extends IpDatagrams { self: KqueueInterface & Kqu
     KqueueSockets.addressOf(handle, peer = true).asInstanceOf[IpSocketAddress]
 }
 
+sealed trait KqueueUnixDatagrams extends UnixDatagrams {
+  self: KqueueInterface & KqueueHandles & KqueueSocketOptions =>
+  override type UnixBoundDatagram = KqueueUnixBoundDatagram
+  override type UnixConnectedDatagram = KqueueUnixConnectedDatagram
+
+  override def bindDatagram(
+      local: UnixAddress,
+      options: SocketOptions,
+      into: Slot[KqueueUnixBoundDatagram]
+  ): KqueueOp = {
+    val kind = SocketOption.Kind.UnixBoundDatagram
+    Checks.checkOptions(options, supports, kind)
+    KqueueOpenDatagram(Checks.unix(local), null, options, kind, into)((fd, _, bound, owner) =>
+      new KqueueUnixBoundDatagram(fd, bound, owner)
+    )
+  }
+
+  override def connectDatagram(
+      local: UnixAddress | Null,
+      remote: UnixAddress,
+      options: SocketOptions,
+      into: Slot[KqueueUnixConnectedDatagram]
+  ): KqueueOp = {
+    val kind = SocketOption.Kind.UnixConnectedDatagram
+    Checks.checkOptions(options, supports, kind)
+    val from = if local == null then null else Checks.unix(local)
+    KqueueOpenDatagram(from, Checks.unix(remote), options, kind, into)((fd, _, bound, owner) =>
+      new KqueueUnixConnectedDatagram(fd, bound, owner)
+    )
+  }
+
+  @annotation.targetName("receiveUnix")
+  override def receive(
+      handle: KqueueUnixBoundDatagram,
+      buf: ByteBuffer,
+      from: Slot[UnixAddress]
+  ): KqueueDatagramOp & Repeatable = KqueueReceive(handle, buf, from)
+
+  @annotation.targetName("receiveUnixConnected")
+  override def receive(handle: KqueueUnixConnectedDatagram, buf: ByteBuffer): KqueueDatagramOp & Repeatable =
+    KqueueReceive[UnixAddress](handle, buf, null)
+
+  override def send(handle: KqueueUnixBoundDatagram, buf: ByteBuffer, to: UnixAddress): KqueueDatagramOp & Repeatable =
+    KqueueSend(handle, Array(buf), Checks.unix(to))
+
+  @annotation.targetName("sendUnixConnected")
+  override def send(handle: KqueueUnixConnectedDatagram, buf: ByteBuffer): KqueueDatagramOp & Repeatable =
+    KqueueSend(handle, Array(buf), null)
+
+  override def send(
+      handle: KqueueUnixBoundDatagram,
+      bufs: Array[ByteBuffer],
+      to: UnixAddress
+  ): KqueueDatagramOp & Repeatable = KqueueSend(handle, bufs, Checks.unix(to))
+
+  @annotation.targetName("sendUnixConnectedMany")
+  override def send(handle: KqueueUnixConnectedDatagram, bufs: Array[ByteBuffer]): KqueueDatagramOp & Repeatable =
+    KqueueSend(handle, bufs, null)
+
+  @annotation.targetName("unixDatagramLocalAddress")
+  override def localAddress(handle: KqueueUnixBoundDatagram | KqueueUnixConnectedDatagram): UnixAddress =
+    KqueueSockets.addressOf(handle, peer = false).asInstanceOf[UnixAddress]
+
+  @annotation.targetName("unixDatagramPeerAddress")
+  override def peerAddress(handle: KqueueUnixConnectedDatagram): UnixAddress =
+    KqueueSockets.addressOf(handle, peer = true).asInstanceOf[UnixAddress]
+}
+
 object KqueueOps
     extends KqueueInterface,
       KqueueHandles,
@@ -224,4 +293,5 @@ object KqueueOps
       KqueueStreamSockets,
       KqueueIpStreams,
       KqueueUnixStreams,
-      KqueueIpDatagrams {}
+      KqueueIpDatagrams,
+      KqueueUnixDatagrams {}
