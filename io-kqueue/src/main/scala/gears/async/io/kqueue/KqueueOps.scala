@@ -1,5 +1,6 @@
 package gears.async.io.kqueue
 
+import gears.async.io.Blocking
 import gears.async.io.BufferPool
 import gears.async.io.ByteStreams
 import gears.async.io.Handles
@@ -284,6 +285,11 @@ sealed trait KqueueUnixDatagrams extends UnixDatagrams {
     KqueueSockets.addressOf(handle, peer = true).asInstanceOf[UnixAddress]
 }
 
+sealed trait KqueueBlockingOps extends Blocking { self: KqueueInterface =>
+  override def blocking(body: () => Unit): KqueueOp = KqueueBlocking(body)
+  override def blocking[A <: AnyRef](body: () => A, into: Slot[A]): KqueueOp = KqueueBlockingValue(body, into)
+}
+
 object KqueueOps
     extends KqueueInterface,
       KqueueHandles,
@@ -294,4 +300,5 @@ object KqueueOps
       KqueueIpStreams,
       KqueueUnixStreams,
       KqueueIpDatagrams,
-      KqueueUnixDatagrams {}
+      KqueueUnixDatagrams,
+      KqueueBlockingOps {}

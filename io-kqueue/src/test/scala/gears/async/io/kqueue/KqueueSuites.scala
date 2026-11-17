@@ -17,6 +17,10 @@ class KqueueThreadedTimerSuite extends ThreadedTimerContract with FailsOnStarvat
   val backend: Backend = KqueueBackend
 }
 
+class KqueueBlockingSuite extends BlockingContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: Blocking } = KqueueBackend
+}
+
 class KqueuePipeSuite extends PipeContract with FailsOnStarvation {
   val backend: KqueueBackend.type = KqueueBackend
 }
@@ -63,6 +67,10 @@ trait OnWorkers(count: Int) extends FailsOnStarvation {
 
 class KqueueOnOneContractSuite extends OpsContract with OnWorkers(1) with FailsOnStarvation {
   val backend: Backend = KqueueBackend
+}
+
+class KqueueOnOneBlockingSuite extends BlockingContract with OnWorkers(1) with FailsOnStarvation {
+  val backend: Backend { type Interface <: Blocking } = KqueueBackend
 }
 
 class KqueueOnOnePipeSuite extends PipeContract with OnWorkers(1) with FailsOnStarvation {

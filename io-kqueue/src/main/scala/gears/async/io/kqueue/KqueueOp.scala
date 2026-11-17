@@ -14,6 +14,8 @@ import gears.async.io.posix.SocketAddress
 import gears.async.io.posix.UnixBinding
 import gears.async.io.shareable.AbstractAcceptAllOp
 import gears.async.io.shareable.AbstractAcceptOp
+import gears.async.io.shareable.AbstractBlockingOp
+import gears.async.io.shareable.AbstractBlockingValueOp
 import gears.async.io.shareable.AbstractCloseOp
 import gears.async.io.shareable.AbstractConnectOp
 import gears.async.io.shareable.AbstractGatherWriteOp
@@ -31,6 +33,7 @@ import gears.async.io.shareable.AbstractWriteOp
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.LendingPool
 import gears.async.io.shareable.TimerHeapOp
+import gears.async.io.shareable.Worker
 
 import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
@@ -54,6 +57,10 @@ sealed trait KqueueReadableOp extends KqueueReadinessOp
 sealed trait KqueueWritableOp extends KqueueReadinessOp
 
 sealed trait KqueueAcceptOp extends KqueueReadinessOp
+
+/** An op whose work is done off the workers' threads (see `WorkOffThread`). */
+sealed trait KqueueOffThreadOp extends KqueueOp:
+  def performOffThread(worker: Worker & KqueuePoller)(using Async): Unit
 
 sealed trait KqueueDatagramOp extends KqueueReadinessOp
 
@@ -168,3 +175,11 @@ private[kqueue] final class KqueueSend(socket: KqueueDatagramSocket, bufs: Array
       KqueueDatagramOp:
   def _send(socket: KqueueDatagramSocket, bufs: Array[ByteBuffer]): Boolean =
     PosixDatagrams.send(socket.fd, socket.ipv6, bufs, to)
+
+// ---- Blocking code
+
+private[kqueue] final class KqueueBlocking(body: () => Unit) extends AbstractBlockingOp(body), KqueueOffThreadOp
+
+private[kqueue] final class KqueueBlockingValue[A <: AnyRef](body: () => A, into: Slot[A])
+    extends AbstractBlockingValueOp(body, into),
+      KqueueOffThreadOp
