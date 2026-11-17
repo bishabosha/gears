@@ -15,6 +15,7 @@ import gears.async.io.SocketOptionOps
 import gears.async.io.SocketOptions
 import gears.async.io.StreamSockets
 import gears.async.io.UnixAddress
+import gears.async.io.UnixStreams
 import gears.async.io.shareable.Checks
 import gears.async.io.shareable.LendingPool
 
@@ -127,6 +128,20 @@ sealed trait NioIpStreams extends IpStreams {
   }
 }
 
+sealed trait NioUnixStreams extends UnixStreams {
+  self: NioInterface & NioHandles & NioByteStreams & NioStreamSockets & NioSocketOptionOps =>
+
+  override def connect(address: UnixAddress, options: SocketOptions, into: Slot[NioConnection]): NioOp = {
+    Checks.checkOptions(options, supports, SocketOption.Kind.UnixConnection)
+    NioConnect(Checks.unix(address), options, into)
+  }
+
+  override def listen(address: UnixAddress, options: SocketOptions, into: Slot[NioListener]): NioOp = {
+    Checks.checkOptions(options, supports, SocketOption.Kind.UnixListener)
+    NioListen(Checks.unix(address), options, into)
+  }
+}
+
 object NioOps
     extends NioInterface,
       NioHandles,
@@ -134,4 +149,5 @@ object NioOps
       NioPipeOps,
       NioSocketOptionOps,
       NioStreamSockets,
-      NioIpStreams {}
+      NioIpStreams,
+      NioUnixStreams {}
