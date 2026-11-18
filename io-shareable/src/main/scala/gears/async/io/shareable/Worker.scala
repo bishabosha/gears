@@ -102,6 +102,26 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
   /** Set by the scheduler before the worker's thread starts: wakes a worker that waits with nothing to do. */
   private[shareable] var callThief: () => Unit = () => ()
 
+  /** Set by the scheduler before the worker's thread starts: whether a worker waits with nothing to do. */
+  private[shareable] var thiefWaits: () => Boolean = () => false
+
+  /** With more futures to resume than a turn runs, and a worker with nothing to do: the newer half go where it takes
+    * them from, and it is woken. Each goes on there until its next op waits, which brings it back, as its handle is
+    * listened for here. Worker thread only.
+    */
+  private def shareBacklog(): Unit =
+    if ready.size > Worker.SharedBacklog && thiefWaits() then
+      var share = ready.size / 2
+      val shared = new Array[Runnable](share)
+      while share > 0 do
+        share -= 1
+        shared(share) = ready.pollLast().nn
+      var i = 0
+      while i < shared.length do
+        inbox.add(shared(i)): Unit
+        i += 1
+      askForThief()
+
   /** Whether this worker has called for a thief this turn. Worker thread only. One is called for at most once a turn,
     * when the worker is given a task it will not come to at once or ends a turn with tasks left over: so that what one
     * worker can keep up with stays on it, and what it can't, or what waits behind a task that keeps it, is shared out a
@@ -117,6 +137,8 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
 
   /** Whether the worker is waiting, or about to, with nothing to do. */
   @volatile private var parked = false
+
+  private[shareable] def isParked: Boolean = parked
 
   private[shareable] def wakeIfParked(): Boolean =
     if parked then
@@ -152,7 +174,7 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     wake()
   }
 
-  private class Continuation[T, R](val suspension: Suspension[T, R], val value: T):
+  private class Continuation[T, R](val suspension: Suspension[T, R], val value: T) extends Runnable:
     def run(): Unit = {
       val _ = suspension.resume(value)
     }
@@ -328,6 +350,7 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
       turns += 1
       if wakePending.get() then wakePending.set(false)
       val now = System.nanoTime()
+      shareBacklog()
       if !fireTimers(now, drive) || !runReady(drive) || !drainInbox(drive) then return
       // `stop`'s wake-up may have been spent while the inbox was still draining.
       if !stopped then
@@ -360,6 +383,10 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
 }
 
 object Worker {
+
+  /** How many futures a worker keeps to resume itself before it shares half of them with a worker that has nothing. */
+  inline val SharedBacklog = 4
+
   final class DoAfter(val owner: Worker, val deadlineNow: Long, body: Runnable) extends TimerOp, Cancellable {
     @volatile private var cancelled = false
     def timerWakeup(actAfter: Long): Unit = {

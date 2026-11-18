@@ -117,6 +117,7 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     worker.onFatal = failFatally
     worker.steal = () => stealFor(worker)
     worker.callThief = () => wakeThief(worker)
+    worker.thiefWaits = () => anyParked(worker)
     worker.handOver = () => drive(worker)
   }
   // Only now: a worker's thread started as the worker was made would run it before its subclass had its fields.
@@ -314,6 +315,15 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
         task = from.takeHalfFor(thief)
         looks -= 1
     task
+  }
+
+  private def anyParked(busy: PoolWorker): Boolean = {
+    val count = workerGroup.length
+    var i = 1
+    while i < count do
+      if workerGroup((busy.id + i) % count).isParked then return true
+      i += 1
+    false
   }
 
   /** Wakes one worker that is waiting with nothing to do, if there is one, for it to take from `busy`. */
