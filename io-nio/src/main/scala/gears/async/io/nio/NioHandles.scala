@@ -3,6 +3,7 @@ package gears.async.io.nio
 import gears.async.io.SocketOption
 import gears.async.io.SocketOptions
 import gears.async.io.shareable.AbstractBaseHandle
+import gears.async.io.shareable.AbstractReadinessHandle
 import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.BaseReadableHandle
 import gears.async.io.shareable.BaseWritableHandle
@@ -21,10 +22,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
-sealed trait NioHandle extends BaseHandle:
-
-  /** A worker's selector, for a handle with a channel it takes; nothing, for a file, which is never waited for. */
-  type Source <: NioPoller { type Handle >: NioHandle.this.type }
+sealed trait NioHandle extends BaseHandle
 
 /** A handle read as a stream, from `reads`. */
 sealed trait NioReadable extends NioHandle, BaseReadableHandle:
@@ -43,7 +41,8 @@ private[nio] type NioChannelWritable = NioWritable & NioChannelHandle
   */
 abstract class NioChannelHandle(val channel: SelectableChannel, owner: HandleOwner)
     extends AbstractBaseHandle(owner),
-      NioHandle:
+      NioHandle,
+      AbstractReadinessHandle:
   type Source = NioPoller
   channel.configureBlocking(false)
   open() // construction is acquisition of the handle
@@ -165,7 +164,6 @@ final class NioFile(private[nio] val file: FileChannel, owner: HandleOwner)
       NioReadable,
       NioWritable,
       FilePosition:
-  type Source = Nothing
   open() // construction is acquisition of the handle
 
   def reads: ScatteringByteChannel = file

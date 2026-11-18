@@ -35,7 +35,9 @@ abstract class AbstractHandleCallOp[H <: BaseHandle](handle: H) extends Immediat
   * it is made. One that fails, is cancelled or times out first leaves the slot empty and closes the socket, which never
   * reached the caller. Performed once.
   */
-abstract class AbstractConnectOp[H <: BaseHandle](into: Slot[H]) extends SingleUseAbstractTimerHeapOp, ReadyWaiting {
+abstract class AbstractConnectOp[H <: ReadinessHandle](into: Slot[H])
+    extends SingleUseAbstractTimerHeapOp,
+      ReadyWaiting {
 
   /** The socket as the op waits on it: one listened for where the op keeps its time limit. */
   type Connecting = H { type Source = AbstractConnectOp.this.Source }
@@ -79,7 +81,7 @@ abstract class AbstractConnectOp[H <: BaseHandle](into: Slot[H]) extends SingleU
 /** Accepts one connection on a listener: the one at the head of its queue of pending connections, waiting for one while
   * there is none. Accepts performed at once on one listener take turns (see `WaiterQueue`).
   */
-abstract class AbstractAcceptOp[L <: BaseHandle, C <: AnyRef](
+abstract class AbstractAcceptOp[L <: ReadinessHandle, C <: AnyRef](
     listener: L,
     into: Slot[C]
 ) extends AbstractReadinessOp[L](listener) {
@@ -104,7 +106,7 @@ abstract class AbstractAcceptOp[L <: BaseHandle, C <: AnyRef](
 
 /** Accepts the connections pending on a listener, at most `max`: at least one, waiting while there is none. */
 abstract class AbstractAcceptAllOp[
-    L <: BaseHandle,
+    L <: ReadinessHandle,
     C <: AnyRef: scala.reflect.ClassTag
 ](
     listener: L,

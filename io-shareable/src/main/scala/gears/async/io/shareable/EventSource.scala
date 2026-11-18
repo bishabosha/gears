@@ -10,10 +10,10 @@ import gears.async.io.shareable.TimerHeap.TimerSource
 trait EventSource extends TimerSource {
 
   /** The handles this source can listen for: its backend's. A handle names the sources that listen for it in turn
-    * (`BaseHandle.Source`), which must take it, so a source is never given a handle of another kind, and has no need to
-    * check.
+    * (`ReadinessHandle.Source`), which must take it, so a source is never given a handle of another kind, and has no
+    * need to check.
     */
-  type Handle <: BaseHandle
+  type Handle <: ReadinessHandle
 
   /** This source has become `handle`'s listener for reads, or for writes: from now on it reports each time the handle
     * becomes ready, not for as long as it is, and at once if it is ready now. Called once for as long as it stays the
@@ -110,7 +110,7 @@ object ReadinessOp:
   * it has for each direction (`AbstractBaseHandle.queuesWaiters`).
   */
 sealed abstract class HandleReadiness[S <: EventSource] private[shareable] (
-    protected val handle: AbstractBaseHandle { type Source >: S },
+    protected val handle: AbstractReadinessHandle { type Source >: S },
     protected val read: Boolean
 ) {
 
@@ -223,7 +223,7 @@ sealed abstract class HandleReadiness[S <: EventSource] private[shareable] (
 
 /** The readiness of a stream, for one direction: one op waits at a time. */
 private[shareable] final class SingleWaiter[S <: EventSource](
-    handle: AbstractBaseHandle { type Source >: S },
+    handle: AbstractReadinessHandle { type Source >: S },
     read: Boolean
 ) extends HandleReadiness[S](handle, read) {
 
@@ -314,7 +314,7 @@ private[shareable] final class SingleWaiter[S <: EventSource](
   * the lock, and does its work outside it, with the handle's work claimed, which is what keeps a close away.
   */
 private[shareable] final class WaiterQueue[S <: EventSource](
-    handle: AbstractBaseHandle { type Source >: S },
+    handle: AbstractReadinessHandle { type Source >: S },
     read: Boolean
 ) extends HandleReadiness[S](handle, read) {
 

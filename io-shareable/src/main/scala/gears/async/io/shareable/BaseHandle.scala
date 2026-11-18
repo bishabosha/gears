@@ -11,23 +11,29 @@ trait BaseHandle extends HandleState.Holder:
   def open(): Unit
   def requestClose(): Boolean
 
-  /** What the handle keeps for the ops that wait for it to be readable, or to be writable, and for the event source
-    * that tells them when it is.
-    */
-  def readiness(read: Boolean): HandleReadiness[Source]
-
-  /** The event sources that can listen for this handle: its backend's workers, which take it as one of the handles they
-    * listen for (`EventSource.Handle`). An op that waits on the handle gets its listener back as one, and so can keep
-    * its time limit there.
-    */
-  type Source <: EventSource { type Handle >: BaseHandle.this.type }
-
   /** Has `owner` told once the handle is closed, at once if it already is. For whoever's `requestClose` began the close
     * and returned false: a close has one owner, so one listener at most.
     */
   def onClosed(owner: CloseListener): Unit
   def claimWork(): Unit
   def releaseWork(): Unit
+
+/** A handle whose ops wait for it to be ready: it has the event sources that can listen for it, and the state it keeps
+  * for them and for the ops that wait. A handle whose ops never wait, as a file's are done off the workers, is a
+  * `BaseHandle` and no more.
+  */
+trait ReadinessHandle extends BaseHandle:
+
+  /** The event sources that can listen for this handle: its backend's workers, which take it as one of the handles they
+    * listen for (`EventSource.Handle`). An op that waits on the handle gets its listener back as one, and so can keep
+    * its time limit there.
+    */
+  type Source <: EventSource { type Handle >: ReadinessHandle.this.type }
+
+  /** What the handle keeps for the ops that wait for it to be readable, or to be writable, and for the event source
+    * that tells them when it is.
+    */
+  def readiness(read: Boolean): HandleReadiness[Source]
 
 trait BaseReadableHandle extends BaseHandle
 trait BaseWritableHandle extends BaseHandle
@@ -50,17 +56,16 @@ abstract class AbstractBaseHandle(val owner: HandleOwner) extends BaseHandle:
   def cleanup()(using ClosePermit): Boolean
 
   final private def closeHandle()(using ClosePermit): Boolean =
-    // First, before anything is released: whoever waits fails. Then the listeners drop the handle, while its
-    // descriptor is still its own; what they registered with the kernel goes as the descriptor is closed.
-    reads.failWaiters()
-    writes.failWaiters()
-    reads.forgetListener()
-    writes.forgetListener()
+    // First, before anything is released: whoever waits fails, and whatever listens for the handle drops it.
+    releaseWaiters()
     val closedSync = cleanup()
     if closedSync then
       assert(getState == ClosedState)
       completeClose()
     closedSync
+
+  /** As the handle closes, before `cleanup`: what waits on it fails, for a handle that anything waits on. */
+  protected[shareable] def releaseWaiters(): Unit = ()
 
   /** Whoever waits for the close to be done: null until there is one, its owner while it waits, and `Closed` from when
     * the close is done, whichever comes first. The owner is told exactly once, by whichever of the two comes second.
@@ -78,6 +83,39 @@ abstract class AbstractBaseHandle(val owner: HandleOwner) extends BaseHandle:
       closeListener.get() match
         case AbstractBaseHandle.Closed => owner.handleClosed()
         case _                         => throw new IllegalStateException("A close already has its owner waiting")
+
+  final def open(): Unit =
+    if compareAndSetState(UnenteredState, OpenState) then owner.opened(this)
+    else throw new IllegalStateException("Handle is already open or closed")
+
+  final def claimWork(): Unit =
+    claimIfOpen() match
+      case OpenState                  => ()
+      case ClosedState | ClosingState => throw new ClosedChannelException()
+      case UnenteredState             => throw new IOException("Handle is not open")
+
+  /** Work claimed is released even once the handle is closing: the last of it then closes the handle. */
+  final def releaseWork(): Unit =
+    if releaseClaimed() then
+      given ClosePermit = ()
+      val _ = closeHandle()
+
+  final def requestClose(): Boolean =
+    val begun = beginClose()
+    begun.found match
+      case OpenState =>
+        if begun.idle then
+          given ClosePermit = ()
+          closeHandle()
+        else false // the last work released closes it
+      // Closing is done once: a second close fails as any op on a closed handle does.
+      case ClosingState | ClosedState => throw new ClosedChannelException()
+      case UnenteredState             => throw new IllegalStateException("Handle is not open")
+
+/** The readiness state of a handle whose ops wait for it, for a backend's handle classes to mix in beside what closes
+  * them: one `HandleReadiness` for reads and one for writes, which a close fails the waiters of.
+  */
+trait AbstractReadinessHandle extends AbstractBaseHandle, ReadinessHandle:
 
   /** Whether the ops that wait for this handle to be readable, or to be writable, take turns in a queue, as a
     * listener's accepts and a datagram socket's receives and sends do, rather than one being allowed at a time, as of a
@@ -121,30 +159,13 @@ abstract class AbstractBaseHandle(val owner: HandleOwner) extends BaseHandle:
     */
   protected[shareable] def idleReportsLimit: Int = 16
 
-  final def open(): Unit =
-    if compareAndSetState(UnenteredState, OpenState) then owner.opened(this)
-    else throw new IllegalStateException("Handle is already open or closed")
-
-  final def claimWork(): Unit =
-    claimIfOpen() match
-      case OpenState                  => ()
-      case ClosedState | ClosingState => throw new ClosedChannelException()
-      case UnenteredState             => throw new IOException("Handle is not open")
-
-  /** Work claimed is released even once the handle is closing: the last of it then closes the handle. */
-  final def releaseWork(): Unit =
-    if releaseClaimed() then
-      given ClosePermit = ()
-      val _ = closeHandle()
-
-  final def requestClose(): Boolean =
-    val begun = beginClose()
-    begun.found match
-      case OpenState =>
-        if begun.idle then
-          given ClosePermit = ()
-          closeHandle()
-        else false // the last work released closes it
-      // Closing is done once: a second close fails as any op on a closed handle does.
-      case ClosingState | ClosedState => throw new ClosedChannelException()
-      case UnenteredState             => throw new IllegalStateException("Handle is not open")
+  /** Whoever waits fails, and then the listeners drop the handle, while its descriptor is still its own; what they
+    * registered with the kernel goes as the descriptor is closed. A handle closed before it was fully made has no
+    * waiters yet.
+    */
+  override protected[shareable] def releaseWaiters(): Unit =
+    if reads != null && writes != null then
+      reads.failWaiters()
+      writes.failWaiters()
+      reads.forgetListener()
+      writes.forgetListener()
