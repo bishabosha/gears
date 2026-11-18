@@ -291,15 +291,28 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     else if !nextWorker().submit(body) then throw new IllegalStateException("Scheduler has shut down")
 
   /** A task for `thief`, which has nothing to do, to run now, with half of what the worker it came from had to spare
-    * moved to the thief's inbox: from the next worker with tasks to spare, or null.
+    * moved to the thief's inbox: from the worker with the most to spare, so that a backlog is evened out whichever
+    * worker comes for it, or null.
     */
   private def stealFor(thief: PoolWorker): Runnable | Null = {
     val count = workerGroup.length
     var task: Runnable | Null = null
-    var i = 1
-    while task == null && i < count do
-      task = workerGroup((thief.id + i) % count).takeHalfFor(thief)
-      i += 1
+    var looks = count // each look that finds nothing to take was beaten to it by another thief
+    while task == null && looks > 0 do
+      var most = 0
+      var from: PoolWorker | Null = null
+      var i = 1
+      while i < count do
+        val worker = workerGroup((thief.id + i) % count)
+        val spare = worker.spare
+        if spare > most then
+          most = spare
+          from = worker
+        i += 1
+      if from == null then looks = 0
+      else
+        task = from.takeHalfFor(thief)
+        looks -= 1
     task
   }
 

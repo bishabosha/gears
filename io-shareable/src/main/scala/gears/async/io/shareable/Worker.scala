@@ -54,6 +54,9 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     */
   private[shareable] def takeHalfFor(thief: Worker): Runnable | Null = inbox.takeHalfInto(thief.inbox)
 
+  /** How many tasks this worker has for a thief to take half of, read from any thread. */
+  private[shareable] def spare: Int = inbox.spare
+
   /** How many turns the worker has begun. Read by the pool's starvation monitor, to tell a worker that is not coming to
     * its inbox: written by the worker's thread only, and read there a look at a time, so it is not volatile.
     */
@@ -333,6 +336,10 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
         else inbox.clearSurplus()
         val stolen = if isEmpty() then steal() else null
         if stolen != null then
+          // More came with it than this worker comes to at once: another with nothing to do takes half of those, or of
+          // what is left where they came from, before this one runs any. So a backlog reaches every worker in the time
+          // it takes to wake them, not a worker a turn.
+          if inbox.size > 1 then askForThief()
           guarded(stolen.run())
           if drives != drive || !runReady(drive) then return
           // Its own handles' events still get their turn, without waiting: there may be more to take.

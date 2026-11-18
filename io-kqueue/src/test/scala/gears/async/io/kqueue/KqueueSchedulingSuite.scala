@@ -279,6 +279,17 @@ class KqueueSchedulingSuite extends munit.FunSuite {
     }
   }
 
+  test("a burst of futures from one worker reaches every worker, not one more a turn") {
+    onPool(4) {
+      val work = 10L // ms each, keeping its worker
+      val start = System.nanoTime()
+      val threads = List.fill(32)(Future { Thread.sleep(work); Thread.currentThread().getName() }).map(_.await)
+      val took = (System.nanoTime() - start) / 1_000_000L
+      assertEquals(threads.distinct.size, 4, threads.distinct.toString)
+      assert(took < 32 * work / 2, s"took ${took}ms, as long as two workers")
+    }
+  }
+
   /** The reports of starved workers made by the pool `body` runs its program on, with the handler it is given. */
   private def reportsDuring(body: shareable.Starvation.Handler => Unit): List[shareable.Starvation.Report] = {
     val reports = new java.util.concurrent.ConcurrentLinkedQueue[shareable.Starvation.Report]
