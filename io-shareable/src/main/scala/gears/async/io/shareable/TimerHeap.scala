@@ -74,7 +74,23 @@ object TimerHeap {
   * time. Its order is by `heapKey` and never by a deadline read afresh, as a deadline can move at any moment.
   */
 abstract class TimerHeapImpl extends Poller with TimerHeap {
-  private object timerLock
+
+  /** Claims the heap for one edit, or one look at it, by the calling thread, and gives it up again: what guards the
+    * heap, which is its platform's to choose. Edits are short, never wait, and never claim the heap again inside one.
+    * The worker's own thread makes nearly all of them; other threads make some, a future that was moved to another
+    * worker and takes its op off this one's heap, the pool's monitor looking for a due timer, whoever schedules or
+    * cancels something to run later. So a platform picks what costs least with nobody else there: on the JVM a lock is
+    * that, and on Scala Native, where entering a monitor is several atomic operations and a look-up of the current
+    * thread, a flag is.
+    */
+  protected def claimHeap(): Unit
+  protected def releaseHeap(): Unit
+
+  private inline def editing[T](inline edit: T): T = {
+    claimHeap()
+    try edit
+    finally releaseHeap()
+  }
 
   private var heap = new Array[TimerOp](16)
   private var size = 0
@@ -136,7 +152,7 @@ abstract class TimerHeapImpl extends Poller with TimerHeap {
   }
 
   /** A timer moved later is still at its old place. It is put right here, once that place comes up. */
-  final def nextReadyTimer(now: Long): Timer | Null = timerLock.synchronized {
+  final def nextReadyTimer(now: Long): Timer | Null = editing {
     var next: Timer | Null = null
     var looking = true
     while looking do
@@ -151,18 +167,18 @@ abstract class TimerHeapImpl extends Poller with TimerHeap {
     next
   }
 
-  final def peekNextDeadline(): Long = timerLock.synchronized {
+  final def peekNextDeadline(): Long = editing {
     if size > 0 then heap(0).heapKey else -1
   }
 
-  final def debugTimerState() = timerLock.synchronized {
+  final def debugTimerState() = editing {
     heap.iterator.take(size).mkString("[", ", ", "]")
   }
 
   /** Wakes the worker only for a new earliest deadline: otherwise it wakes in time as it is. */
   final def addTimer(timerOp: Timer): Unit = {
     if !timerOp.hasDeadline then throw new IllegalArgumentException("Only an op with a deadline goes on the heap")
-    val isNext = timerLock.synchronized {
+    val isNext = editing {
       if size == heap.length then heap = java.util.Arrays.copyOf(heap, 2 * size)
       timerOp.heapKey = timerOp.deadlineNow
       size += 1
@@ -182,14 +198,14 @@ abstract class TimerHeapImpl extends Poller with TimerHeap {
   final override def removeTimer(timerOp: TimerOp): Boolean =
     if timerOp.heapIndex < 0 then false
     else
-      timerLock.synchronized {
+      editing {
         val held = holds(timerOp)
         if held then takeAt(timerOp.heapIndex)
         held
       }
 
   final def notifyDeadlineChange(timerOp: TimerOp): Unit = {
-    val isNext = timerLock.synchronized {
+    val isNext = editing {
       val held = holds(timerOp)
       if held then rekey(timerOp)
       held && (heap(0) eq timerOp)
