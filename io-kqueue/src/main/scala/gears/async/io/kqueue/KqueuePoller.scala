@@ -132,6 +132,8 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
   /** The worker's thread, once it has waited here: what a wake-up unparks when there is no kqueue to trigger. */
   @volatile private var waitingThread: Thread | Null = null
 
+  override protected def drivenBy(thread: Thread): Unit = waitingThread = thread
+
   private def wakeWaiting(): Unit = {
     val thread = waitingThread
     if thread != null then java.util.concurrent.locks.LockSupport.unpark(thread)
@@ -180,7 +182,6 @@ trait KqueuePoller(maxEvents: Int) extends Poller, EventSource {
       if !isEmpty() then 0L
       else if deadlineTask >= 0 then Math.max(deadlineTask - now, 0)
       else -1L
-    if waitingThread == null then waitingThread = Thread.currentThread()
     val polled =
       if broken then
         waitWithoutKqueue(timeout)
