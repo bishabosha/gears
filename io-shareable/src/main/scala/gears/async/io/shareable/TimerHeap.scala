@@ -172,12 +172,21 @@ abstract class TimerHeapImpl extends Poller with TimerHeap {
     if isNext then wake()
   }
 
-  /** Doesn't wake the worker, which at worst wakes for a timer no longer there, and finds nothing to do. */
-  final override def removeTimer(timerOp: TimerOp): Boolean = timerLock.synchronized {
-    val held = holds(timerOp)
-    if held then takeAt(timerOp.heapIndex)
-    held
-  }
+  /** Doesn't wake the worker, which at worst wakes for a timer no longer there, and finds nothing to do.
+    *
+    * A timer that has fired was taken out as it did, and is found so with no lock: its place is read as it was last
+    * written, which is the performer's own write as it put the timer in, a place it was moved to since, or the heap's
+    * as it took it out, of which the performer, resumed by the firing, sees the last. A place that is stale is not
+    * "none", and is then looked at again under the lock.
+    */
+  final override def removeTimer(timerOp: TimerOp): Boolean =
+    if timerOp.heapIndex < 0 then false
+    else
+      timerLock.synchronized {
+        val held = holds(timerOp)
+        if held then takeAt(timerOp.heapIndex)
+        held
+      }
 
   final def notifyDeadlineChange(timerOp: TimerOp): Unit = {
     val isNext = timerLock.synchronized {
