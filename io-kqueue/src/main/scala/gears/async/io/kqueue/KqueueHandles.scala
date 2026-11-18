@@ -12,7 +12,6 @@ import gears.async.io.posix.UnixBinding
 import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.BaseReadableHandle
 import gears.async.io.shareable.BaseWritableHandle
-import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.FilePosition
 import gears.async.io.shareable.HandleOwner
 
@@ -116,7 +115,7 @@ final class FifoRead(fd: Int, owner: HandleOwner) extends PosixKernelHandle(fd, 
   /** Whether the listener has been asked to look, in a while, at whether a read still waits. */
   private val lookPending = new java.util.concurrent.atomic.AtomicBoolean(false)
 
-  override def waiterWaits(read: Boolean, listener: EventSource): Unit =
+  override def waiterWaits(read: Boolean, listener: KqueuePoller): Unit =
     if read && lookPending.compareAndSet(false, true) then listener.runAfter(FifoRead.WatchAfterNanos, () => look())
 
   /** A read that waits now, whether or not it is the one that asked, has the descriptor watched. */

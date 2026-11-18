@@ -16,10 +16,11 @@ trait BaseHandle extends HandleState.Holder:
     */
   def readiness(read: Boolean): HandleReadiness[Source]
 
-  /** The event sources that can listen for this handle: its backend's workers. An op that waits on the handle gets its
-    * listener back as one, and so can keep its time limit there.
+  /** The event sources that can listen for this handle: its backend's workers, which take it as one of the handles they
+    * listen for (`EventSource.Handle`). An op that waits on the handle gets its listener back as one, and so can keep
+    * its time limit there.
     */
-  type Source <: EventSource
+  type Source <: EventSource { type Handle >: BaseHandle.this.type }
 
   /** Has `owner` told once the handle is closed, at once if it already is. For whoever's `requestClose` began the close
     * and returned false: a close has one owner, so one listener at most.
@@ -102,7 +103,16 @@ abstract class AbstractBaseHandle(val owner: HandleOwner) extends BaseHandle:
     * handle whose listener may never learn that it is, which then has something else find out, and tell the listener
     * (`EventSource.reportLater`). Called on the waiting op's thread, with no lock held.
     */
-  def waiterWaits(read: Boolean, listener: EventSource): Unit = ()
+  def waiterWaits(read: Boolean, listener: Source): Unit = ()
+
+  // What the handle's readiness asks of a listener, asked here, where the handle is known to be one the listener takes.
+
+  private[shareable] final def listenedForBy(source: Source, read: Boolean): Unit = source.startListening(this, read)
+
+  private[shareable] final def noLongerListenedForBy(source: Source, read: Boolean): Unit =
+    source.stopListening(this, read)
+
+  private[shareable] final def forgottenBy(source: Source): Unit = source.forgetHandle(this)
 
   /** How many times in a row the handle is reported ready with no op waiting before it gives up its listener. Until
     * then an op that waits costs no system call; past it, the handle is taken to be one whose ops find it ready, for

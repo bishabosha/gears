@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class HandleStateSuite extends munit.FunSuite {
 
   private final class TestHandle(queued: Boolean = false) extends AbstractBaseHandle(new HandleOwner) {
-    type Source = EventSource
+    type Source = EventSource { type Handle = BaseHandle }
     override protected def queuesWaiters(read: Boolean): Boolean = queued
     val cleanups = AtomicInteger(0)
     open()
@@ -93,6 +93,7 @@ class HandleStateSuite extends munit.FunSuite {
   }
 
   private final class FakeSource extends EventSource {
+    type Handle = BaseHandle
     val handleOwner = new HandleOwner
     val started = AtomicInteger(0)
     val stopped = AtomicInteger(0)

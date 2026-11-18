@@ -6,7 +6,6 @@ import gears.async.io.shareable.AbstractBaseHandle
 import gears.async.io.shareable.BaseHandle
 import gears.async.io.shareable.BaseReadableHandle
 import gears.async.io.shareable.BaseWritableHandle
-import gears.async.io.shareable.EventSource
 import gears.async.io.shareable.FilePosition
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.HandleState
@@ -23,7 +22,9 @@ import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 
 sealed trait NioHandle extends BaseHandle:
-  type Source = NioPoller
+
+  /** A worker's selector, for a handle with a channel it takes; nothing, for a file, which is never waited for. */
+  type Source <: NioPoller { type Handle >: NioHandle.this.type }
 
 /** A handle read as a stream, from `reads`. */
 sealed trait NioReadable extends NioHandle, BaseReadableHandle:
@@ -33,12 +34,17 @@ sealed trait NioReadable extends NioHandle, BaseReadableHandle:
 sealed trait NioWritable extends NioHandle, BaseWritableHandle:
   def writes: GatheringByteChannel
 
+/** A stream that is waited for on a selector: a pipe's end or a connection, not a file. */
+private[nio] type NioChannelReadable = NioReadable & NioChannelHandle
+private[nio] type NioChannelWritable = NioWritable & NioChannelHandle
+
 /** A handle over a channel a selector can watch, which is made non-blocking here: every op on it is tried, and waits
   * for a worker's selector to report the channel ready if it could not be done.
   */
 abstract class NioChannelHandle(val channel: SelectableChannel, owner: HandleOwner)
     extends AbstractBaseHandle(owner),
       NioHandle:
+  type Source = NioPoller
   channel.configureBlocking(false)
   open() // construction is acquisition of the handle
 
@@ -64,9 +70,7 @@ abstract class NioChannelHandle(val channel: SelectableChannel, owner: HandleOwn
       completeClose()
 
   /** Each op that begins to wait has its listener's selector report the channel (see `NioPoller.arm`). */
-  override def waiterWaits(read: Boolean, listener: EventSource): Unit = listener match
-    case poller: NioPoller => poller.arm(this, read)
-    case _                 => ()
+  override def waiterWaits(read: Boolean, listener: NioPoller): Unit = listener.arm(this, read)
 
   /** As the handle closes, while its channel is still open: what it leaves outside it is removed. */
   protected def beforeChannelCloses(): Unit = ()
@@ -161,6 +165,7 @@ final class NioFile(private[nio] val file: FileChannel, owner: HandleOwner)
       NioReadable,
       NioWritable,
       FilePosition:
+  type Source = Nothing
   open() // construction is acquisition of the handle
 
   def reads: ScatteringByteChannel = file
