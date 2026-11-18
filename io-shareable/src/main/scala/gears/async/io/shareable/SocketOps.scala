@@ -4,9 +4,11 @@ package shareable
 /** An op that opens a handle at once, without waiting, and writes it into a slot: a listener, a datagram socket, a
   * FIFO. Performed once. What opens it is the backend's (`_open`).
   */
-abstract class AbstractOpenOp[K <: AnyRef](into: Slot[K]) extends ImmediateOp {
+abstract class AbstractOpenOp[K <: BaseHandle](into: Slot[K]) extends ImmediateOp {
 
-  /** Opens the handle, as `owner`'s, or throws why it could not be: nothing is left open by one that throws. */
+  /** Makes the handle, as `owner`'s, or throws why it could not be: nothing is left open by one that throws. The op
+    * opens what this returns (`BaseHandle.open`), once it is fully made.
+    */
   def _open(owner: HandleOwner): K
 
   /** Before anything is opened: an occupied slot could not take the handle. */
@@ -14,7 +16,10 @@ abstract class AbstractOpenOp[K <: AnyRef](into: Slot[K]) extends ImmediateOp {
     super.onEntry()
     Checks.checkEmpty(into)
 
-  final def perform(owner: HandleOwner): Unit = into.set(_open(owner))
+  final def perform(owner: HandleOwner): Unit =
+    val made = _open(owner)
+    made.open()
+    into.set(made)
 }
 
 /** An op that makes one call on an open handle, which returns at once: shutting a connection down for writing.
@@ -42,7 +47,9 @@ abstract class AbstractConnectOp[H <: ReadinessHandle](into: Slot[H])
   /** The socket as the op waits on it: one listened for where the op keeps its time limit. */
   type Connecting = H { type Source = AbstractConnectOp.this.Source }
 
-  /** Opens the socket, as `owner`'s, and begins connecting it, without blocking, or throws why it could not. */
+  /** Makes the socket, as `owner`'s, and begins connecting it, without blocking, or throws why it could not. The op
+    * opens what this returns.
+    */
   def _startConnect(owner: HandleOwner): Connecting
 
   /** Whether `socket`'s connect has gone through; throws its failure if it has failed. Must not block. */
@@ -69,6 +76,7 @@ abstract class AbstractConnectOp[H <: ReadinessHandle](into: Slot[H])
 
   final def performConnect(self: Source)(using gears.async.Async): Unit =
     val opened = _startConnect(self.handleOwner)
+    opened.open()
     socket = opened
     try performWhenReadyOn(opened)(self)
     finally
@@ -81,12 +89,13 @@ abstract class AbstractConnectOp[H <: ReadinessHandle](into: Slot[H])
 /** Accepts one connection on a listener: the one at the head of its queue of pending connections, waiting for one while
   * there is none. Accepts performed at once on one listener take turns (see `WaiterQueue`).
   */
-abstract class AbstractAcceptOp[L <: ReadinessHandle, C <: AnyRef](
+abstract class AbstractAcceptOp[L <: ReadinessHandle, C <: BaseHandle](
     listener: L,
     into: Slot[C]
 ) extends AbstractReadinessOp[L](listener) {
 
   /** A connection pending on `listener`, accepted, as its listener's run's, or null if there is none. Must not block.
+    * The op opens what this returns.
     */
   def _accept(listener: L): C | Null
 
@@ -100,6 +109,7 @@ abstract class AbstractAcceptOp[L <: ReadinessHandle, C <: AnyRef](
     val accepted = _accept(listener)
     if accepted == null then ReadyWaiting.Blocked
     else
+      accepted.nn.open()
       into.set(accepted.nn)
       1
 }
@@ -107,7 +117,7 @@ abstract class AbstractAcceptOp[L <: ReadinessHandle, C <: AnyRef](
 /** Accepts the connections pending on a listener, at most `max`: at least one, waiting while there is none. */
 abstract class AbstractAcceptAllOp[
     L <: ReadinessHandle,
-    C <: AnyRef: scala.reflect.ClassTag
+    C <: BaseHandle: scala.reflect.ClassTag
 ](
     listener: L,
     into: Slot[Array[C]],
@@ -128,6 +138,7 @@ abstract class AbstractAcceptAllOp[
     val first = _accept(listener)
     if first == null then ReadyWaiting.Blocked
     else
+      first.nn.open()
       val accepted = scala.collection.mutable.ArrayBuffer[C](first.nn)
       // What is accepted is the caller's whatever happens to the next: one that fails ends the batch, not the op.
       var more = true
@@ -135,7 +146,10 @@ abstract class AbstractAcceptAllOp[
         val next =
           try _accept(listener)
           catch case _: java.io.IOException => null
-        if next == null then more = false else accepted += next.nn
+        if next == null then more = false
+        else
+          next.nn.open()
+          accepted += next.nn
       into.set(accepted.toArray)
       accepted.size
 }

@@ -8,6 +8,10 @@ trait BaseHandle extends HandleState.Holder:
 
   /** The run the handle was opened in, as its pool's `HandleOwner`: the only one whose ops may use it. */
   def owner: HandleOwner
+
+  /** Makes the handle its owner's, and usable: once, by the op that made it, after it is fully constructed, as from
+    * then on its pool may close it from any thread.
+    */
   def open(): Unit
   def requestClose(): Boolean
 
@@ -160,12 +164,10 @@ trait AbstractReadinessHandle extends AbstractBaseHandle, ReadinessHandle:
   protected[shareable] def idleReportsLimit: Int = 16
 
   /** Whoever waits fails, and then the listeners drop the handle, while its descriptor is still its own; what they
-    * registered with the kernel goes as the descriptor is closed. A handle closed before it was fully made has no
-    * waiters yet.
+    * registered with the kernel goes as the descriptor is closed.
     */
   override protected[shareable] def releaseWaiters(): Unit =
-    if reads != null && writes != null then
-      reads.failWaiters()
-      writes.failWaiters()
-      reads.forgetListener()
-      writes.forgetListener()
+    reads.failWaiters()
+    writes.failWaiters()
+    reads.forgetListener()
+    writes.forgetListener()

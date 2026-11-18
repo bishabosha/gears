@@ -45,7 +45,6 @@ abstract class NioChannelHandle(val channel: SelectableChannel, owner: HandleOwn
       AbstractReadinessHandle:
   type Source = NioPoller
   channel.configureBlocking(false)
-  open() // construction is acquisition of the handle
 
   /** What a selector is asked to report for ops that wait to read, or to write. */
   private[nio] def interest(read: Boolean): Int
@@ -164,7 +163,6 @@ final class NioFile(private[nio] val file: FileChannel, owner: HandleOwner)
       NioReadable,
       NioWritable,
       FilePosition:
-  open() // construction is acquisition of the handle
 
   def reads: ScatteringByteChannel = file
   def writes: GatheringByteChannel = file
