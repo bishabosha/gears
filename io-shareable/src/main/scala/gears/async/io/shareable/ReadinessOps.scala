@@ -35,8 +35,8 @@ trait ReadyWaiting extends AbstractTimerHeapOp, TimeoutOnWake, ReadinessOp {
 
   final def failReady(failure: Throwable): Unit = completeFromReady(Failure(failure))
 
-  final def readyWakeup(): Int =
-    var moved = ReadinessOp.SettledOtherwise
+  final def readyWakeup(): Readiness =
+    var moved = Readiness.SettledOtherwise
     val result: Outcome | Null =
       try
         if cancelledDuringWork then TimerHeapOp.CancelledSentinel
@@ -45,17 +45,17 @@ trait ReadyWaiting extends AbstractTimerHeapOp, TimeoutOnWake, ReadinessOp {
           val did = attempt()
           if did.isBlocked then null
           else
-            moved = did.count
+            moved = Readiness.of(did)
             WorkpoolScheduler.SuccessUnit
       catch
         case NonFatal(ex) =>
-          moved = ReadinessOp.SettledOtherwise
+          moved = Readiness.SettledOtherwise
           Failure(ex)
         case fatal: Throwable =>
           // As in `timerWakeup`: an op left claimed would keep its performer waiting for ever.
           completeFromReady(Failure(fatal))
           throw fatal
-    if result == null then ReadinessOp.Blocked
+    if result == null then Readiness.Blocked
     else
       completeFromReady(result)
       moved
