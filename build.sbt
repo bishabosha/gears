@@ -227,3 +227,31 @@ lazy val ioCapBench =
       nativeConfig ~= { _.withMultithreading(true).withMode(scala.scalanative.build.Mode.releaseFast) }
     )
     .dependsOn(ioPoller)
+
+// The Node.js backend: the interface on Node's own I/O, `net`, `dgram`, `fs` and `dns`, for Scala.js programs linked
+// to WebAssembly, which suspend with JSPI. Scala.js only.
+lazy val ioNode =
+  (project in file("io-node"))
+    .enablePlugins(ScalaJSPlugin)
+    .settings(jsWasmSettings)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += munit % Test,
+      testFrameworks += MUnitFramework,
+      // One event loop runs every suite: run together, their timers would be measured against each other's work.
+      Test / parallelExecution := false
+    )
+    .dependsOn(root.js, ioTestkit.js % Test)
+
+// The Node.js backend's demo application: the testkit's gears demos over it, linked with `ioNodeDemos/fastLinkJS` and
+// run as `node <linked>/main.js <command>`, since Scala.js's `run` passes a program no arguments.
+lazy val ioNodeDemos =
+  (project in file("io-node/demos"))
+    .enablePlugins(ScalaJSPlugin)
+    .settings(jsWasmSettings)
+    .settings(
+      publish / skip := true,
+      scalaJSUseMainModuleInitializer := true,
+      Compile / mainClass := Some("nodedemos.NodeDemos")
+    )
+    .dependsOn(ioNode, ioTestkit.js)
