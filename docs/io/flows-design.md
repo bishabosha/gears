@@ -20,7 +20,7 @@ program is written against, and what it rests on.
 
 | Layer | What it is | Who uses it |
 |---|---|---|
-| `Server`, `Connection`, `Flow`, `Sink`, `Pipe` | streams and their combinators, a listener served on every shard | programs |
+| `Server`, `Connection`, `Flow`, `Sink` | streams and their combinators, a listener served on every shard | programs |
 | `Reactor`, its `Outbox` and `Signal` | flows of direct-style code run by one future over one queue | the layer above, and code that needs a hot loop of its own |
 | `SubmissionQueues`: `performQueue`, shards, a queue's signal | many ops performed with one wait | the reactor |
 | ops begun and ended in two parts (`beginOn`, `endOn`) | each kind of op without its wait | the queue |
@@ -48,29 +48,50 @@ One future runs many flows. A flow is a continuation of that future, with an `As
 `reactor.io` has the type of the `Io` it was made of (`Io[io.ops.type]`), so handles and ops of the one are the
 other's.
 
-### Flow, Sink, Pipe
+### Flow and Sink
+
+A flow is the code that produces it, and `emit` is how that code hands an element on:
 
 ```scala
-trait Flow[+A] { def pull()(using Async): A | Flow.End.type }
-trait Sink[-A] { def send(a: A)(using Async): Unit; def flush()(using Async): Unit }
-trait Pipe[-A, +B] { def apply(in: Flow[A]): Flow[B] }
+def lines(bytes: Flow[ByteBuffer]): Flow[String] = Flow:
+  val line = new StringBuilder
+  for chunk <- bytes do
+    while chunk.hasRemaining() do
+      val next = chunk.get().toChar
+      if next == '\n' then { emit(line.result()); line.clear() } else line += next
 ```
 
-- A flow is pulled. Nothing is read until something pulls, and that is all the backpressure there is on the way in.
-- `map`, `filter`, `foreach`, `fold` are inline loops over `pull`; `take`, `through`, `to` are plain methods. None has
-  a runtime of its own, and all work under any `Async`.
+```scala
+trait Flow[+A] { def foreach(each: A => Unit)(using Async): Unit }
+trait Sink[-A] { def send(a: A)(using Async): Unit; def flush()(using Async): Unit }
+```
+
+- A flow is pushed. Running it (`foreach`, and so `for ... do`, `fold`, `toList`, `to` a sink) runs its code on the
+  caller's own stack, and an `emit` is a call of what consumes the element, returning when that has done with it.
+  Nothing is read until a flow is run, and a consumer that is slow, or waits, holds its producer where it is: that
+  is all the backpressure there is on the way in.
+- `map`, `filter`, `flatMap`, `collect`, `take`, `takeWhile`, `drop`, `scan`, `zipWithIndex`, `tap`, `++` are each a
+  flow that runs the one before it and emits. `for a <- flow if p(a) yield f(a)` is a flow. `through` takes a
+  function from a flow to a flow, which is all a decoder is. None has a runtime of its own; all work under any
+  `Async`.
+- A flow left early (`take`, `headOption`) has its producer leave where it was, through its `finally` blocks, as a
+  `break` does.
 - `groupBy` deals elements by key into a flow for each key; `foreachPar` runs a flow for each element and joins
   them. In a flow of a reactor's they use its signals and forks; elsewhere channels and futures.
 - A sink takes an element at once and waits only when too much is taken and unwritten. A connection's sink is its
   outbox, so a send is whole, in order, and written with the rest of the turn's.
 
+It was first written the other way round, a flow pulled an element at a time (`pull(): A | End`). A decoder then had
+to be a state machine that remembered where it was between pulls; as a generator it is a loop. The bench's server
+measured the same either way (kqueue 3.50 against 3.40 with one worker and 1.13 against 1.13 with four, Node.js 5.47
+against 5.47, all within their ranges).
+
 ### Server and Connection
 
 ```scala
-val server = Server.tcp(io, address)
-server.serve { connection =>
-  connection.bytes.through(frames).groupBy(_.stream).foreachPar { (stream, requests) =>
-    requests.foreach(request => connection.sink.send(answer(stream, request)))
+Server.tcp(address).serve { connection =>
+  frames(connection.bytes).groupBy(_.stream).foreachPar { (stream, requests) =>
+    for request <- requests do connection.send(answer(stream, request))
   }
 }
 ```
@@ -82,10 +103,12 @@ once the connections there are have been served.
 
 ## Decisions
 
-1. **Pull, not push.** It keeps direct style and makes backpressure the absence of a pull. The cost is that fan-out
-   needs a flow for each branch.
-2. **Lent elements.** A connection's bytes are its read buffer, good until the next pull. What crosses to another
-   flow (`groupBy`) must be owned, so a decoder that feeds one copies. In the bench that is an array for each frame.
+1. **Pushed, and written as a generator.** A flow is direct-style code that emits; what consumes it is called, not
+   scheduled. Backpressure is the call not having returned. The cost is that two flows cannot be run in step with
+   one another (a zip) without a flow of their own for one of them.
+2. **Lent elements.** A connection's bytes are its read buffer, good until what consumes it returns. What crosses to
+   another flow (`groupBy`) must be owned, so a decoder that feeds one copies. In the bench that is an array for each
+   frame.
 3. **A flow does not require a reactor.** Every combinator works under any `Async`; `groupBy`, `foreachPar` and a
    shared sink are flows of the reactor's when there is one, and channels, futures and a locked buffer when there is
    not. The reactor is how those are made cheap, not a second world.
@@ -200,7 +223,7 @@ What was one thing is three, which a backend has or has not independently:
 `Reactor` is internal (`private[io]`) and needs none of them: it uses shards if it is pinned and a queue if it is
 queued. A program sees `Server`, `Connection`, `Flow`, `Sink`, and `Server.Strategy` if it wants to choose.
 
-`Server.tcp(io, address, sizes, strategy = Auto)` looks once, as it is made, at what the backend's ops are:
+`Server.tcp(address, sizes, strategy = Auto)`, its `Io` given, looks once, as it is made, at what the backend's ops are:
 
 | Flows are continuations | `Shards` | `SubmissionQueues` | `Auto` picks |
 |---|---|---|---|

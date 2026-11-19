@@ -4,6 +4,7 @@ package testkit
 import gears.async.Async
 import gears.async.Future
 import gears.async.Semaphore
+import gears.async.io.Flow.emit
 
 import java.nio.ByteBuffer
 
@@ -53,10 +54,10 @@ trait FlowContract extends ContractSuite {
   ): Throwable | Null =
     running { io ?=>
       if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then {
-        intercept[IllegalArgumentException](Server.tcp(io, Loopback, sizes, strategy)): Unit
+        intercept[IllegalArgumentException](Server.tcp(Loopback, sizes, strategy)): Unit
         Refused
       } else {
-        val server = Server.tcp(io, Loopback, sizes, strategy)
+        val server = Server.tcp(Loopback, sizes, strategy)
         val served = Future(server.serve(handler))
         try check(io, server)
         finally server.close()
@@ -87,24 +88,104 @@ trait FlowContract extends ContractSuite {
     assert(ring.isEmpty)
   }
 
-  test("a flow's combinators, under any Async") {
+  test("a flow is the code that emits it, run each time the flow is, and not before") {
     running {
-      import Flow.*
-      val evens = Flow.of(1, 2, 3, 4, 5, 6, 7, 8).filter(_ % 2 == 0).map(_ * 10)
-      assertEquals(evens.take(3).fold(List.empty[Int])((seen, next) => next :: seen).reverse, List(20, 40, 60))
-      val doubled: Pipe[Int, Int] = in => in.map(_ * 2)
-      var sum = 0
-      Flow.of(1, 2, 3).through(doubled).foreach(sum += _)
-      assertEquals(sum, 12)
-      assert(Flow.of[Int]().pull().asInstanceOf[AnyRef] eq Flow.End)
+      var runs = 0
+      val numbers = Flow[Int] {
+        runs += 1
+        emit(1)
+        emit(2)
+        emit(3)
+      }
+      assertEquals(runs, 0)
+      assertEquals(numbers.toList, List(1, 2, 3))
+      assertEquals(numbers.fold(0)(_ + _), 6)
+      assertEquals(runs, 2)
+    }
+  }
+
+  test("an emit returns when its consumer has done with the element") {
+    running {
+      val order = List.newBuilder[String]
+      val flow = Flow[Int] {
+        for i <- 1 to 2 do {
+          order += s"emit $i"
+          emit(i)
+          order += s"emitted $i"
+        }
+      }
+      for element <- flow do order += s"consumed $element"
+      assertEquals(order.result(), List("emit 1", "consumed 1", "emitted 1", "emit 2", "consumed 2", "emitted 2"))
+    }
+  }
+
+  test("a flow in a for: its elements filtered and mapped, and flows one inside another") {
+    running {
+      val evens = for element <- Flow.of(1, 2, 3, 4, 5, 6, 7, 8) if element % 2 == 0 yield element * 10
+      assertEquals(evens.toList, List(20, 40, 60, 80))
+      val pairs = for {
+        letter <- Flow.of("a", "b")
+        number <- Flow.of(1, 2)
+      } yield s"$letter$number"
+      assertEquals(pairs.toList, List("a1", "a2", "b1", "b2"))
+    }
+  }
+
+  test("a flow's combinators") {
+    running {
+      val numbers = Flow.from(1 to 10)
+      assertEquals(numbers.drop(7).toList, List(8, 9, 10))
+      assertEquals(numbers.takeWhile(_ < 4).toList, List(1, 2, 3))
+      assertEquals(numbers.take(0).toList, Nil)
+      assertEquals(numbers.scan(0)(_ + _).take(4).toList, List(1, 3, 6, 10))
+      assertEquals(Flow.of("a", "b").zipWithIndex.toList, List(("a", 0L), ("b", 1L)))
+      assertEquals((Flow.of(1) ++ Flow.of(2, 3)).toList, List(1, 2, 3))
+      assertEquals(numbers.collect { case n if n > 8 => n.toString }.toList, List("9", "10"))
+      assertEquals(numbers.headOption, Some(1))
+      assertEquals(Flow.empty.headOption, None)
+      val seen = List.newBuilder[Int]
+      assertEquals(numbers.tap(seen += _).take(2).toList, List(1, 2))
+      assertEquals(seen.result(), List(1, 2))
+      val doubled: Flow[Int] => Flow[Int] = _.map(_ * 2)
+      assertEquals(Flow.of(1, 2, 3).through(doubled).toList, List(2, 4, 6))
+    }
+  }
+
+  test("a flow that is left early is left through its producer's finally, and emits no more") {
+    running {
+      var emitted = 0
+      var left = false
+      val endless = Flow[Int] {
+        try
+          while true do {
+            emitted += 1
+            emit(emitted)
+          }
+        finally left = true
+      }
+      assertEquals(endless.take(3).toList, List(1, 2, 3))
+      assertEquals(emitted, 3)
+      assert(left)
+    }
+  }
+
+  test("a flow's failure is thrown where the flow is run") {
+    running {
+      val failing = Flow[Int] {
+        emit(1)
+        throw new IllegalStateException("producer failed")
+      }
+      val seen = List.newBuilder[Int]
+      val thrown = intercept[IllegalStateException](failing.foreach(seen += _))
+      assertEquals(thrown.getMessage, "producer failed")
+      assertEquals(seen.result(), List(1))
     }
   }
 
   test("groupBy and foreachPar with no reactor: every element reaches its key's flow, in order") {
     running {
-      import Flow.*
       val seen = new java.util.concurrent.ConcurrentHashMap[Int, List[Int]]()
-      Flow.of((1 to 40)*).groupBy(_ % 4).foreachPar { (key, elements) =>
+      Flow.from(1 to 40).groupBy(_ % 4).foreachPar { (key, elements) =>
         seen.put(key, elements.fold(List.empty[Int])((sofar, next) => next :: sofar).reverse): Unit
       }
       for key <- 0 until 4 do assertEquals(seen.get(key), (1 to 40).filter(_ % 4 == key).toList)
@@ -113,7 +194,6 @@ trait FlowContract extends ContractSuite {
 
   test("foreachPar with no reactor throws a failure of one of its flows") {
     running {
-      import Flow.*
       val thrown = intercept[IllegalStateException] {
         Flow.of(1, 2, 3).foreachPar(element => if element == 2 then throw new IllegalStateException("two"))
       }
@@ -125,8 +205,7 @@ trait FlowContract extends ContractSuite {
 
     test(s"$strategy: a connection's bytes sent to its sink are echoed, and the server ends when closed") {
       val failure = serving(strategy) { connection =>
-        import Flow.*
-        connection.bytes.to(connection.sink)
+          connection.bytes.to(connection.sink)
       } { (io, server) =>
         val client = connect(io, server)
         val message = "hello, flows".getBytes("UTF-8")
@@ -159,27 +238,12 @@ trait FlowContract extends ContractSuite {
       val keys = 4
       val each = 32
       val failure = serving(strategy) { connection =>
-        import Flow.*
-        val guard = new Semaphore(1)
+          val guard = new Semaphore(1)
         var answered = 0
         // A byte is a frame: its low two bits its stream.
-        val frames: Pipe[ByteBuffer, Integer] = in =>
-          new Flow[Integer] {
-            private var chunk: ByteBuffer | Null = null
-            def pull()(using Async): Integer | Flow.End.type = {
-              var result: Integer | Flow.End.type | Null = null
-              while result == null do {
-                val have = chunk
-                if have != null && have.hasRemaining() then result = Integer.valueOf(have.get() & 0xff)
-                else
-                  in.pull() match {
-                    case Flow.End => result = Flow.End
-                    case more     => chunk = more.asInstanceOf[ByteBuffer]
-                  }
-              }
-              result.nn
-            }
-          }
+        def frames(bytes: Flow[ByteBuffer]): Flow[Integer] = Flow {
+          for chunk <- bytes do while chunk.hasRemaining() do emit(Integer.valueOf(chunk.get() & 0xff))
+        }
         connection.bytes.through(frames).groupBy(_.intValue & 3).foreachPar { (key, values) =>
           values.foreach { value =>
             // What the streams share is locked, whatever serves them.
@@ -212,8 +276,7 @@ trait FlowContract extends ContractSuite {
 
     test(s"$strategy: a handler spawns futures and awaits them, others served meanwhile") {
       val failure = serving(strategy) { connection =>
-        import Flow.*
-        connection.bytes.foreach { chunk =>
+          connection.bytes.foreach { chunk =>
           val bytes = copy(chunk)
           val answer = Async.group(Future(bytes.map(byte => (byte + 1).toByte)).await)
           connection.sink.send(ByteBuffer.wrap(answer))
@@ -258,8 +321,7 @@ trait FlowContract extends ContractSuite {
 
     test(s"$strategy: a handler's failure closes its connection, leaves the others, and is thrown by serve") {
       val failure = serving(strategy) { connection =>
-        import Flow.*
-        connection.bytes.foreach { chunk =>
+          connection.bytes.foreach { chunk =>
           if chunk.get(chunk.position()) == 'X' then throw new IllegalStateException("handler failed")
           connection.sink.send(chunk)
         }

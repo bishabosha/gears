@@ -8,15 +8,19 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** EXPERIMENT. A connection as a server's handler has it: what it brings, and where what is sent on it goes. */
 final class Connection private[io] (
-    /** What the connection brings, as it brings it: its read buffer, lent until the next `pull`. Ends when the peer
-      * has.
+    /** What the connection brings, as it brings it: its read buffer, lent until what consumes it returns. Ends when
+      * the peer has. To be run once.
       */
     val bytes: Flow[ByteBuffer],
     /** What is sent on the connection: taken at once, and written, with whatever else was sent meanwhile by any flow
       * of the handler's, with one write when none of them has more to do.
       */
     val sink: Sink[ByteBuffer]
-)
+) {
+
+  /** Sends what remains of `bytes` on the connection: `sink.send`. */
+  def send(bytes: ByteBuffer)(using Async): Unit = sink.send(bytes)
+}
 
 /** EXPERIMENT. A listener and the reactors that serve what it accepts, one for each shard of the backend's queues:
   * a connection is accepted by a future of its own and handed to a shard's reactor, in turn, where the handler runs
@@ -162,14 +166,7 @@ final class Server private (
             while out.hasRemaining() do on.perform(write)
           }
         }
-        val bytes = new Flow[ByteBuffer] {
-          def pull()(using Async): ByteBuffer | Flow.End.type = {
-            buf.clear()
-            on.perform(read)
-            buf.flip()
-            if buf.hasRemaining() then buf else Flow.End
-          }
-        }
+        val bytes = Server.reading(buf)(on.perform(read))
         val sink = new Sink[ByteBuffer] {
           def send(element: ByteBuffer)(using Async): Unit = outbox.put(element)
           def flush()(using Async): Unit = outbox.drain()
@@ -195,14 +192,7 @@ final class Server private (
       val outbox = reactor.outbox(sizes.buffers(sizes.write), sizes.buffers(sizes.write))(out =>
         on.ops.write(connection, out)
       )
-      val bytes = new Flow[ByteBuffer] {
-        def pull()(using Async): ByteBuffer | Flow.End.type = {
-          buf.clear()
-          on.perform(read)
-          buf.flip()
-          if buf.hasRemaining() then buf else Flow.End
-        }
-      }
+      val bytes = Server.reading(buf)(on.perform(read))
       val sink = new Sink[ByteBuffer] {
         def send(element: ByteBuffer)(using Async): Unit = outbox.put(element)
         def flush()(using Async): Unit = outbox.drain()
@@ -258,6 +248,19 @@ object Server {
     case QueuedReactors
   }
 
+  /** A connection's bytes: `read` fills `buf`, which is lent to the consumer until it returns, until a read brings
+    * nothing, which is the peer's end.
+    */
+  private def reading(buf: ByteBuffer)(read: Async ?=> Unit): Flow[ByteBuffer] = Flow {
+    var open = true
+    while open do {
+      buf.clear()
+      read
+      buf.flip()
+      if buf.hasRemaining() then Flow.emit(buf) else open = false
+    }
+  }
+
   /** The strategies `io`'s backend can serve by. */
   def strategies(io: Io[IpStreams]): List[Strategy] = {
     val sharded = io.ops.isInstanceOf[Shards]
@@ -273,12 +276,10 @@ object Server {
 
   /** A server listening at `address`, a port of 0 for any. It serves by `strategy`.
     */
-  def tcp(
+  def tcp(address: IpSocketAddress, sizes: Sizes = Sizes(), strategy: Strategy = Strategy.Auto)(using
       io: Io[IpStreams],
-      address: IpSocketAddress,
-      sizes: Sizes = Sizes(),
-      strategy: Strategy = Strategy.Auto
-  )(using Async): Server = {
+      async: Async
+  ): Server = {
     val into = Slot[io.ops.Listener]()
     io.perform(io.ops.listen(address, into))
     new Server(io, into.clear(), sizes, strategy)
