@@ -94,8 +94,9 @@ trait MemoryStreamFixture extends gears.async.io.testkit.StreamFixture {
     val memory = new MemoryStream
     val reads = new MemorySide(memory, reads = true)
     val writes = new MemorySide(memory, reads = false)
-    val in = new ReadEnd("memory stream's read end", reads)
-    val out = new WriteEnd("memory stream's write end", writes)
+    val owner = io.asInstanceOf[NodeRun].owner
+    val in = new ReadEnd("memory stream's read end", owner, reads)
+    val out = new WriteEnd("memory stream's write end", owner, writes)
     // The handles gave each side its listener; the stream tells through them.
     memory.onReadable = () => { val tell = reads.onReadable; if tell != null then tell() }
     memory.onWritable = () => { val tell = writes.onWritable; if tell != null then tell() }

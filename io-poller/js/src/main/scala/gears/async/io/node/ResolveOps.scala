@@ -17,7 +17,7 @@ import scala.scalajs.js
 private[node] abstract class AbstractResolveOp(name: String, into: Slot[List[IpAddress]])
     extends SingleUseOp
     with CallOp {
-  override protected def onEntry(): Unit = Slots.requireEmpty(into)
+  override def onEntry(): Unit = Slots.requireEmpty(into)
 
   private val found: js.Function2[js.Dynamic, js.Dynamic, Unit] = (failure, entries) =>
     if pending then

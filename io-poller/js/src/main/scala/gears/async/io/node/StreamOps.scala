@@ -5,8 +5,10 @@ import gears.async.io.node.base.AbstractReadinessOp
 import gears.async.io.node.host.ByteSink
 import gears.async.io.node.host.ByteSource
 import gears.async.io.node.host.NodeBuffer
+import gears.async.io.shareable.Moved
 
 import java.nio.ByteBuffer
+import scala.scalajs.js.typedarray.TypedArrayBufferOps.*
 import scala.scalajs.js.typedarray.Uint8Array
 
 private[node] object Slots {
@@ -38,6 +40,11 @@ private[node] sealed trait ReadInto {
 
   /** Takes what was read, at most `room` bytes; null at the end, when nothing was. */
   def take(chunk: Uint8Array | Null): Unit
+
+  /** The one buffer the read is into, if it is into one whose memory JavaScript has: a source then copies into it as
+    * it takes the bytes. Null otherwise.
+    */
+  def single: ByteBuffer | Null = null
 }
 
 /** Into the caller's buffers, one or several, each filled before the next is begun. */
@@ -51,6 +58,8 @@ private[node] final class IntoBuffers(bufs: Array[ByteBuffer]) extends ReadInto 
   def room: Int = NodeBuffer.room(bufs)
 
   def take(chunk: Uint8Array | Null): Unit = if chunk != null then NodeBuffer.fill(bufs, chunk)
+
+  override val single: ByteBuffer | Null = if bufs.length == 1 && bufs(0).hasArrayBuffer() then bufs(0) else null
 }
 
 /** Into a slot, as a buffer of `pool`'s: the chunk Node handed over, with no copy. */
@@ -70,20 +79,28 @@ private[node] final class IntoPool(pool: NodePool, slot: Slot[Received]) extends
 /** A read of a stream: at once if bytes, or the end, have come, else as the handle's waiter until they do. */
 private[node] abstract class AbstractStreamReadOp(handle: StreamReadable, into: ReadInto)
     extends AbstractReadinessOp[StreamReadable](handle) {
-  override protected def onEntry(): Unit = into.check()
+  override def onEntry(): Unit = into.check()
 
   protected final def isRead: Boolean = true
 
-  protected final def attempt(): Int = {
+  protected final def attempt(): Moved = {
     into.ready()
-    val chunk = handle.source.read(into.room)
-    if chunk == null then AbstractReadinessOp.Blocked
-    else if chunk eq ByteSource.Ended then {
-      into.take(null)
-      0
+    val buf = into.single
+    if buf != null then {
+      val count = handle.source.readInto(buf)
+      if count == ByteSource.NoneYet then Moved.Blocked
+      else if count == ByteSource.AtEnd then Moved.EndOfStream
+      else Moved(count)
     } else {
-      into.take(chunk)
-      chunk.length
+      val chunk = handle.source.read(into.room)
+      if chunk == null then Moved.Blocked
+      else if chunk eq ByteSource.Ended then {
+        into.take(null)
+        Moved.EndOfStream
+      } else {
+        into.take(chunk)
+        Moved(chunk.length)
+      }
     }
   }
 }
@@ -96,10 +113,10 @@ private[node] abstract class AbstractStreamWriteOp(handle: StreamWritable, bufs:
     extends AbstractReadinessOp[StreamWritable](handle) {
   protected final def isRead: Boolean = false
 
-  protected final def attempt(): Int =
-    if NodeBuffer.remaining(bufs) == 0 then 0
+  protected final def attempt(): Moved =
+    if NodeBuffer.remaining(bufs) == 0 then Moved(0)
     else {
       val written = handle.sink.write(bufs)
-      if written == ByteSink.Blocked then AbstractReadinessOp.Blocked else written
+      if written == ByteSink.Blocked then Moved.Blocked else Moved(written)
     }
 }

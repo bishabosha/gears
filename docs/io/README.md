@@ -27,11 +27,11 @@ it. Futures, groups, `sleep` and `withTimeout` work as anywhere in gears, `sleep
 | `ioTestkit` (`io-testkit/`, JVM, Scala Native and Scala.js) | the contract suites and `BufferArena` (`gears.async.io.testkit`), `SimpleIO` with `SimpleIOChecks` (`gears.io.testkit`), and the gears demos (`gears.io.demos`) with their command line, `DemoCommands` | core, munit, mainargs |
 | `ioReference` (`io-reference/`, JVM) | the reference backend, `gears.async.io.reference.ReferenceBackend`, and its suites | core, the testkit's contracts |
 | `ioReferenceDemos` (`io-reference/demos/`) | the demos over the reference backend: `ioReferenceDemos/run <command>` | the reference backend, the testkit |
-| `ioNode` (`io-node/`, Scala.js) | the Node.js backend, `gears.async.io.node.NodeBackend`, and its suites | core, the testkit's contracts |
-| `ioNodeDemos` (`io-node/demos/`) | the demos over the Node.js backend, linked with `ioNodeDemos/fastLinkJS` and run by Node | the Node.js backend, the testkit |
+| `ioPoller` (`io-poller/`, JVM, Scala Native and Scala.js) | the backends over each platform's event queue, and their suites: `gears.async.io.nio.NioBackend` and `NioPoolBackend` on the JVM, `gears.async.io.eventpolling.EventPollingBackend` on Scala Native (kqueue or epoll by the system), `gears.async.io.node.NodeBackend` on Scala.js; `shared/` has what all three have in common (`gears.async.io.shareable`) and `jvm-native/` what the two with threads have besides | core, the testkit's contracts |
+| `ioPollerDemos` (`io-poller/demos/`) | the demos over those backends: `ioPollerDemosJVM/run <command>`, `ioPollerDemosNative/run <command>`, and for Node.js `ioPollerDemosJS/fastLinkJS`, run by Node | the backends, the testkit |
 
 The interface is in `shared/`, so it compiles on every platform gears does, and so does the testkit; the
-JVM and Scala.js each have a backend to run its contracts and demos on, Scala Native none yet. A backend outside this repository is written in a package
+JVM, Scala Native and Scala.js each have a backend to run its contracts and demos on. A backend outside this repository is written in a package
 under `gears.async.io`, since what a backend implements and programs do not see is `private[io]`: how it performs an
 op (`Io.performWithin`) and how it runs a program (`Backend.run`, which `Io.run` calls). A handle is an object of its
 backend's own class, so a program can neither forge one nor pass one backend's handle to another, whose `Handle` is a
@@ -226,15 +226,17 @@ repeatable pooled read consumed as a gears channel, with the pool's window and t
 `SimpleIOChecks` checks its stream helpers over a supplied stream fixture; `SimpleIOIpStreamChecks` and
 `SimpleIOResolveChecks` check their respective capabilities independently. Each demo takes the `Io` it runs with, over
 the capabilities it needs, and its `Async`, and only a backend's demo application starts a run:
-`ioReferenceDemos/run <command>`, or, for the Node.js backend, `ioNodeDemos/fastLinkJS` and then
-`node --stack-size=204800 target/out/sjs1/scala-3.9.0/ionodedemos/ionodedemos-fastopt/main.js <command>`.
+`ioReferenceDemos/run <command>`, or, for the Node.js backend, `ioPollerDemosJS/fastLinkJS` and then
+`node --stack-size=204800 target/out/sjs1/scala-3.9.0/iopollerdemos/iopollerdemos-fastopt/main.js <command>`.
 
 ## Running the suites
 
 ```
 sbt --client ioReference/test        # capability contracts, futures and SimpleIO over the reference backend
 sbt --client ioTestkitJVM/test       # the testkit's own tests
-sbt --client ioNode/test             # the contracts and SimpleIO over the Node.js backend (Node.js 26+)
+sbt --client ioPollerJS/testFull     # the contracts and SimpleIO over the Node.js backend (Node.js 26+)
+sbt --client ioPollerJVM/testFull    # the same over the JVM's backends, with the pool's own tests
+sbt --client ioPollerNative/testFull # and over the native one, on kqueue or epoll by the system
 sbt --client 'ioTestkitNative/compile; ioTestkitJS/compile'
 ```
 

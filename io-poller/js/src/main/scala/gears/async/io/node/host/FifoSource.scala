@@ -1,7 +1,7 @@
 package gears.async.io.node.host
 
 import gears.async.io.node.base.DoAfter
-import gears.async.io.node.base.TimerSource
+import gears.async.io.node.base.NodeSource
 import gears.async.io.node.internal.Fs
 
 import java.io.IOException
@@ -19,7 +19,8 @@ import scala.scalajs.js.typedarray.Uint8Array
   * backend polls. A look is a call of Node's that runs to its end, so what it finds after its read was cancelled stays
   * for the next read, no byte lost, and a close waits for it.
   */
-private[node] final class FifoSource(fd: Int, timers: TimerSource) extends ByteSource {
+private[node] final class FifoSource(fd: Int) extends ByteSource {
+  private def timers = NodeSource
   import FifoSource.*
 
   private var found: Uint8Array | Null = null

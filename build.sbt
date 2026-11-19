@@ -195,22 +195,30 @@ lazy val ioPoller =
     .dependsOn(root, ioTestkit % Test)
 
 // The backends' demo applications: the testkit's gears demos over them, as `ioPollerDemosJVM/run <command>` and
-// `ioPollerDemosNative/run <command>`.
+// `ioPollerDemosNative/run <command>`. The Node.js one is linked with `ioPollerDemosJS/fastLinkJS` and run as
+// `node <linked>/main.js <command>`, since Scala.js's `run` passes a program no arguments.
 lazy val ioPollerDemos =
-  crossProject(JVMPlatform, NativePlatform)
+  crossProject(JSPlatform, JVMPlatform, NativePlatform)
     .crossType(CrossType.Full)
     .in(file("io-poller/demos"))
-    .settings(
-      publish / skip := true,
-      scalacOptions += "-release:21",
-      run / fork := true
+    .settings(publish / skip := true)
+    .jsSettings(jsWasmSettings)
+    .jsSettings(
+      scalaJSUseMainModuleInitializer := true,
+      Compile / mainClass := Some("nodedemos.NodeDemos")
     )
     .jvmSettings(
+      scalacOptions += "-release:21",
+      run / fork := true,
       Compile / mainClass := Some("niodemos.NioDemos"),
       // For `--backend nio-pool`.
       run / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
     )
-    .nativeSettings(Compile / mainClass := Some("eventpollingdemos.EventPollingDemos"))
+    .nativeSettings(
+      scalacOptions += "-release:21",
+      run / fork := true,
+      Compile / mainClass := Some("eventpollingdemos.EventPollingDemos")
+    )
     .dependsOn(ioPoller, ioTestkit)
 
 // The bench: scenarios over every capability (`io-bench/shared`), run over this branch's backends, the JVM's
@@ -233,31 +241,3 @@ lazy val ioCapBench =
       nativeConfig ~= { _.withMultithreading(true).withMode(scala.scalanative.build.Mode.releaseFast) }
     )
     .dependsOn(ioPoller)
-
-// The Node.js backend: the interface on Node's own I/O, `net`, `dgram`, `fs` and `dns`, for Scala.js programs linked
-// to WebAssembly, which suspend with JSPI. Scala.js only.
-lazy val ioNode =
-  (project in file("io-node"))
-    .enablePlugins(ScalaJSPlugin)
-    .settings(jsWasmSettings)
-    .settings(
-      publish / skip := true,
-      libraryDependencies += munit % Test,
-      testFrameworks += MUnitFramework,
-      // One event loop runs every suite: run together, their timers would be measured against each other's work.
-      Test / parallelExecution := false
-    )
-    .dependsOn(root.js, ioTestkit.js % Test)
-
-// The Node.js backend's demo application: the testkit's gears demos over it, linked with `ioNodeDemos/fastLinkJS` and
-// run as `node <linked>/main.js <command>`, since Scala.js's `run` passes a program no arguments.
-lazy val ioNodeDemos =
-  (project in file("io-node/demos"))
-    .enablePlugins(ScalaJSPlugin)
-    .settings(jsWasmSettings)
-    .settings(
-      publish / skip := true,
-      scalaJSUseMainModuleInitializer := true,
-      Compile / mainClass := Some("nodedemos.NodeDemos")
-    )
-    .dependsOn(ioNode, ioTestkit.js)

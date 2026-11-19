@@ -14,6 +14,20 @@ trait ByteSource {
     */
   def read(max: Int): Uint8Array | Null
 
+  /** As `read`, into `buf`, which has room and whose memory JavaScript has (`hasArrayBuffer`), its position advanced:
+    * how many bytes, `ByteSource.NoneYet` if a read would block, or `ByteSource.AtEnd`. A source that can copy as it
+    * takes does both in one step.
+    */
+  def readInto(buf: ByteBuffer): Int = {
+    val chunk = read(buf.remaining())
+    if chunk == null then ByteSource.NoneYet
+    else if chunk eq ByteSource.Ended then ByteSource.AtEnd
+    else {
+      NodeBuffer.fillFrom(buf, chunk, chunk.length)
+      chunk.length
+    }
+  }
+
   /** Called when bytes, the end or a failure may have come: set by the source's handle. */
   var onReadable: (() => Unit) | Null = null
 
@@ -28,6 +42,10 @@ object ByteSource {
 
   /** What `read` gives at the end of the stream. */
   val Ended: Uint8Array = new Uint8Array(0)
+
+  /** What `readInto` gives if a read would block, and at the end of the stream. */
+  inline val NoneYet = 0
+  inline val AtEnd = -1
 }
 
 /** Where a stream's bytes go, as Node takes them, written without waiting. */

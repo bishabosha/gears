@@ -2,31 +2,26 @@ package gears.async.io
 package node
 
 import gears.async.io.node.base.BaseHandle
-import gears.async.io.node.base.OneWaiterEachWay
-import gears.async.io.node.base.ReadinessOp
-import gears.async.io.node.base.WaitQueue
+import gears.async.io.node.base.WaitableHandle
 import gears.async.io.node.host.Addresses
 import gears.async.io.node.host.ByteSink
 import gears.async.io.node.host.ByteSource
+import gears.async.io.node.host.NodeBuffer
 import gears.async.io.node.host.NodeErr
+import gears.async.io.node.host.NodeGlue
 import gears.async.io.node.host.NodeStream
 import gears.async.io.node.internal.Fs
+import gears.async.io.shareable.HandleOwner
 
 import java.io.IOException
-import java.nio.channels.ClosedChannelException
+import java.nio.ByteBuffer
 import scala.scalajs.js
+import scala.scalajs.js.typedarray.TypedArrayBufferOps.*
 import scala.scalajs.js.typedarray.Uint8Array
 
-/** The failure of an op on a closed handle, naming it: a closed channel's, as `Handles.close` has it. */
-final class HandleClosedException(handle: AnyRef) extends ClosedChannelException {
-  override def getMessage: String = s"$handle is closed"
-}
-
 /** A handle of the Node.js backend: an I/O object of Node's (see `BaseHandle` for how it is closed). */
-sealed abstract class NodeHandle(kind: String) extends BaseHandle {
+sealed abstract class NodeHandle(kind: String, owner: HandleOwner) extends BaseHandle(owner) {
   private val id = NodeHandle.next()
-
-  protected def closedFailure(): IOException = new HandleClosedException(this)
 
   override def toString: String = s"$kind #$id"
 }
@@ -47,12 +42,12 @@ sealed trait NodeReadable extends NodeHandle
 sealed trait NodeWritable extends NodeHandle
 
 /** A handle read through a source of Node's, by ops that wait for it to be readable. */
-sealed trait StreamReadable extends NodeReadable {
+sealed trait StreamReadable extends NodeReadable, WaitableHandle {
   private[node] def source: ByteSource
 }
 
 /** A handle written through a sink of Node's, by ops that wait for it to be writable. */
-sealed trait StreamWritable extends NodeWritable {
+sealed trait StreamWritable extends NodeWritable, WaitableHandle {
   private[node] def sink: ByteSink
 }
 
@@ -60,17 +55,17 @@ sealed trait StreamWritable extends NodeWritable {
   * through the one function the handle gives it as it is made, and the handle its waiter: an op that waits is a
   * reference held here, and costs Node nothing.
   */
-sealed abstract class StreamHandle(kind: String, reads: ByteSource | Null, writes: ByteSink | Null)
-    extends NodeHandle(kind)
-    with OneWaiterEachWay {
-  if reads != null then reads.onReadable = () => readyWaiter(read = true)
-  if writes != null then writes.onWritable = () => readyWaiter(read = false)
+sealed abstract class StreamHandle(kind: String, owner: HandleOwner, reads: ByteSource | Null, writes: ByteSink | Null)
+    extends NodeHandle(kind, owner)
+    with WaitableHandle {
+  if reads != null then reads.onReadable = () => ready(read = true)
+  if writes != null then writes.onWritable = () => ready(read = false)
 
-  override protected def listening(read: Boolean, on: Boolean): Unit =
+  override protected def listen(read: Boolean, on: Boolean): Unit =
     if read && reads != null then reads.listening(on)
 
   /** Closes the read side, then the write side if it is another object; done once both are. */
-  protected def cleanup(): Boolean = {
+  protected def closeObject(): Boolean = {
     val done = () => completeClose()
     if reads != null then reads.close(done)
     else writes.nn.close(done)
@@ -78,29 +73,44 @@ sealed abstract class StreamHandle(kind: String, reads: ByteSource | Null, write
 }
 
 /** A stream's read end with no write end: a FIFO's. */
-final class ReadEnd private[node] (kind: String, private[node] val source: ByteSource)
-    extends StreamHandle(kind, source, null)
+final class ReadEnd private[node] (kind: String, owner: HandleOwner, private[node] val source: ByteSource)
+    extends StreamHandle(kind, owner, source, null)
     with StreamReadable
 
 /** A stream's write end with no read end: a FIFO's. */
-final class WriteEnd private[node] (kind: String, private[node] val sink: ByteSink)
-    extends StreamHandle(kind, null, sink)
+final class WriteEnd private[node] (kind: String, owner: HandleOwner, private[node] val sink: ByteSink)
+    extends StreamHandle(kind, owner, null, sink)
     with StreamWritable
 
 /** A connected stream socket, IP or Unix, with its addresses as they were when it connected: Node forgets them once the
   * socket has ended.
   */
 final class ConnectionHandle private (
+    owner: HandleOwner,
     socket: js.Dynamic,
     stream: NodeStream,
     private[node] val unix: Boolean,
-    private[node] val local: IpSocketAddress | UnixAddress,
-    private[node] val peer: IpSocketAddress | UnixAddress,
+    private var knownLocal: IpSocketAddress | UnixAddress | Null,
+    private var knownPeer: IpSocketAddress | UnixAddress | Null,
     private var noDelay: Boolean
-) extends StreamHandle(if unix then "Unix connection" else "connection", stream, stream)
+) extends StreamHandle(if unix then "Unix connection" else "connection", owner, stream, stream)
     with StreamReadable
     with StreamWritable {
   if !unix then socket.setNoDelay(noDelay)
+
+  // An IP connection's addresses are asked of Node when they are first asked for here, as the system is asked on the
+  // other platforms: each is two calls to the system that most connections never need. Asked once the socket has
+  // gone, Node has none to give, and the asking fails.
+
+  private[node] def local: IpSocketAddress | UnixAddress = {
+    if knownLocal == null then knownLocal = Addresses.reported(socket.localAddress, socket.localPort)
+    knownLocal.nn
+  }
+
+  private[node] def peer: IpSocketAddress | UnixAddress = {
+    if knownPeer == null then knownPeer = Addresses.reported(socket.remoteAddress, socket.remotePort)
+    knownPeer.nn
+  }
 
   private[node] def source: ByteSource = stream
   private[node] def sink: ByteSink = stream
@@ -125,20 +135,29 @@ final class ConnectionHandle private (
 
 private[node] object ConnectionHandle {
 
-  /** The connection `socket` is, an IP one, with the addresses Node has for it now. */
-  def ip(socket: js.Dynamic, noDelay: Boolean): ConnectionHandle =
+  /** The connection `socket` is, an IP one. */
+  def ip(socket: js.Dynamic, noDelay: Boolean, owner: HandleOwner): ConnectionHandle =
     new ConnectionHandle(
+      owner,
       socket,
       new NodeStream(socket, readable = true, writable = true),
       false,
-      Addresses.reported(socket.localAddress, socket.localPort),
-      Addresses.reported(socket.remoteAddress, socket.remotePort),
+      null,
+      null,
       noDelay
     )
 
   /** The connection `socket` is, a Unix one: Node does not tell its names, so they are those the backend knows. */
-  def unix(socket: js.Dynamic, local: UnixAddress, peer: UnixAddress): ConnectionHandle =
-    new ConnectionHandle(socket, new NodeStream(socket, readable = true, writable = true), true, local, peer, false)
+  def unix(socket: js.Dynamic, local: UnixAddress, peer: UnixAddress, owner: HandleOwner): ConnectionHandle =
+    new ConnectionHandle(
+      owner,
+      socket,
+      new NodeStream(socket, readable = true, writable = true),
+      true,
+      local,
+      peer,
+      false
+    )
 }
 
 /** A listening stream socket, IP or Unix. Node accepts the connections that come as they come, so those no accept has
@@ -146,13 +165,17 @@ private[node] object ConnectionHandle {
   * waiting take them in the order they came.
   */
 final class ListenerHandle private[node] (
+    owner: HandleOwner,
     server: js.Dynamic,
     private[node] val unix: Boolean,
     private[node] val local: IpSocketAddress | UnixAddress,
     options: SocketOptions
-) extends NodeHandle(if unix then "Unix listener" else "listener") {
+) extends NodeHandle(if unix then "Unix listener" else "listener", owner)
+    with WaitableHandle {
   private val arrived = scala.collection.mutable.ArrayDeque.empty[ConnectionHandle]
-  private val accepts = new WaitQueue
+
+  /** Accepts take turns: each takes whole connections. */
+  override protected def queuesWaiters(read: Boolean): Boolean = true
   private val noDelay = options.get(SocketOption.NoDelay) != false
   private var failed: IOException | Null = null
   private var shut = false
@@ -162,10 +185,11 @@ final class ListenerHandle private[node] (
     else
       try {
         arrived.append(
-          if unix then ConnectionHandle.unix(socket, local.asInstanceOf[UnixAddress], UnixAddress(""))
-          else ConnectionHandle.ip(socket, noDelay)
+          // What a listener accepts is its run's.
+          if unix then ConnectionHandle.unix(socket, local.asInstanceOf[UnixAddress], UnixAddress(""), owner)
+          else ConnectionHandle.ip(socket, noDelay, owner)
         )
-        accepts.ready()
+        ready(read = true)
       } catch {
         case _: Exception => // gone before it was accepted: Node no longer has its addresses
           socket.on("error", NodeStream.ignore)
@@ -177,7 +201,7 @@ final class ListenerHandle private[node] (
     */
   private val errored: js.Function1[js.Dynamic, Unit] = failure => {
     failed = NodeErr.io(failure)
-    accepts.ready()
+    ready(read = true)
   }
 
   server.on("connection", connected)
@@ -208,17 +232,13 @@ final class ListenerHandle private[node] (
   /** The first `count` connections that arrived have been accepted. */
   private[node] def dropArrived(count: Int): Unit = arrived.remove(0, count)
 
-  def awaitReadiness(read: Boolean, op: ReadinessOp): Unit = accepts.add(op)
-  def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = accepts.remove(op)
-  protected def failWaiters(): Unit = accepts.failAll()
-
   /** What closing does to the listener's path, for a Unix one: set by its opener. */
   private[node] var closing: (() => Unit) => Unit = close => close()
 
   /** The connections no accept took are closed with the listener, as the system closes those in its queue; one Node
     * hands over after this is closed as it comes.
     */
-  protected def cleanup(): Boolean = {
+  protected def closeObject(): Boolean = {
     shut = true
     for connection <- arrived do connection.requestClose(): Unit
     arrived.clear()
@@ -238,13 +258,18 @@ private[node] object ListenerHandle {
   * (`SO_RCVBUF`, as Node reports it): one that arrives when they fill it is dropped, as the system drops it. The
   * receives waiting take them in the order they came.
   */
-sealed abstract class DatagramHandle(name: String, socket: js.Dynamic, v6: Boolean) extends NodeHandle(name) {
+sealed abstract class DatagramHandle(name: String, owner: HandleOwner, socket: js.Dynamic, v6: Boolean)
+    extends NodeHandle(name, owner)
+    with WaitableHandle {
+
+  /** Receives take turns: each takes a whole packet. */
+  override protected def queuesWaiters(read: Boolean): Boolean = true
+
   private[node] val local: IpSocketAddress = {
     val bound = NodeErr.guard(socket.address())
     Addresses.reported(bound.address, bound.port)
   }
   private val packets = scala.collection.mutable.ArrayDeque.empty[DatagramHandle.Packet]
-  private val receives = new WaitQueue
   private var held = 0
   private var capacity = receiveBufferSize()
   private var failed: IOException | Null = null
@@ -259,7 +284,7 @@ sealed abstract class DatagramHandle(name: String, socket: js.Dynamic, v6: Boole
     if held + packet.cost <= capacity then {
       packets.append(packet)
       held += packet.cost
-      receives.ready()
+      ready(read = true)
     }
   }
 
@@ -273,7 +298,7 @@ sealed abstract class DatagramHandle(name: String, socket: js.Dynamic, v6: Boole
     val ofAPacket = DatagramHandle.PacketFates.contains(code)
     if !(ofAPacket && kind == SocketOption.Kind.BoundDatagram) then {
       failed = NodeErr.io(failure)
-      receives.ready()
+      ready(read = true)
     }
   }
 
@@ -305,14 +330,61 @@ sealed abstract class DatagramHandle(name: String, socket: js.Dynamic, v6: Boole
   private[node] def send(packet: Uint8Array, to: IpSocketAddress | Null, sent: js.Function1[js.Dynamic, Unit]): Unit =
     NodeErr.guard {
       if to == null then socket.send(packet, sent)
-      else
-        socket.send(
-          packet,
-          to.port,
-          if v6 then Addresses.hostForIPv6(to.address) else Addresses.host(to.address),
+      else socket.send(packet, to.port, hostOf(to.address), sent)
+    }: Unit
+
+  /** Sends the bytes of `bufs`, left as they are, as one packet: as `send`. One buffer whose memory JavaScript has is
+    * copied and sent in one call.
+    */
+  private[node] def sendFrom(
+      bufs: Array[ByteBuffer],
+      to: IpSocketAddress | Null,
+      sent: js.Function1[js.Dynamic, Unit]
+  ): Unit =
+    if bufs.length == 1 && bufs(0).hasArrayBuffer() then
+      NodeErr.guard {
+        val buf = bufs(0)
+        NodeGlue.sendFrom(
+          socket,
+          buf.arrayBuffer(),
+          buf.arrayBufferOffset() + buf.position(),
+          buf.remaining(),
+          if to == null then 0 else to.port,
+          if to == null then js.undefined else hostOf(to.address),
           sent
         )
-    }: Unit
+      }
+    else send(NodeBuffer.copy(bufs, NodeBuffer.room(bufs)), to, sent)
+
+  // A socket mostly sends to the address it last sent to, and hears from the one it last heard from: each is kept as
+  // Node takes or gives it, text, beside what it is here, so that a packet costs no writing out or reading of one.
+
+  private var lastSentTo: IpAddress | Null = null
+  private var lastSentToHost: String = ""
+
+  private def hostOf(address: IpAddress): String = {
+    if !(lastSentTo eq address) && lastSentTo != address then {
+      lastSentToHost = if v6 then Addresses.hostForIPv6(address) else Addresses.host(address)
+      lastSentTo = address
+    }
+    lastSentToHost
+  }
+
+  private var lastSenderText: Any = null
+  private var lastSenderPort: Any = null
+  private var lastSender: IpSocketAddress | Null = null
+
+  /** The sender of `packet`, as Node reports it. */
+  private[node] def senderOf(packet: DatagramHandle.Packet): IpSocketAddress = {
+    val text: Any = packet.sender.address
+    val port: Any = packet.sender.port
+    if lastSender == null || text != lastSenderText || port != lastSenderPort then {
+      lastSender = Addresses.reported(text, port)
+      lastSenderText = text
+      lastSenderPort = port
+    }
+    lastSender.nn
+  }
 
   private[node] def option(option: SocketOption[?]): Any = NodeErr.guard(option match {
     case SocketOption.ReceiveBuffer => socket.getRecvBufferSize().asInstanceOf[Int]
@@ -328,11 +400,7 @@ sealed abstract class DatagramHandle(name: String, socket: js.Dynamic, v6: Boole
     case other                   => throw new IllegalArgumentException(s"This backend has no socket option $other")
   })
 
-  def awaitReadiness(read: Boolean, op: ReadinessOp): Unit = receives.add(op)
-  def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = receives.remove(op)
-  protected def failWaiters(): Unit = receives.failAll()
-
-  protected def cleanup(): Boolean = {
+  protected def closeObject(): Boolean = {
     packets.clear()
     held = 0
     val closed: js.Function0[Unit] = () => completeClose()
@@ -357,16 +425,17 @@ private[node] object DatagramHandle {
   val PacketFates: Set[Any] = Set("ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN")
 }
 
-final class BoundDatagramHandle private[node] (socket: js.Dynamic, v6: Boolean)
-    extends DatagramHandle("bound datagram socket", socket, v6) {
+final class BoundDatagramHandle private[node] (owner: HandleOwner, socket: js.Dynamic, v6: Boolean)
+    extends DatagramHandle("bound datagram socket", owner, socket, v6) {
   private[node] def kind: SocketOption.Kind = SocketOption.Kind.BoundDatagram
 }
 
 final class ConnectedDatagramHandle private[node] (
+    owner: HandleOwner,
     socket: js.Dynamic,
     v6: Boolean,
     private[node] val peer: IpSocketAddress
-) extends DatagramHandle("connected datagram socket", socket, v6) {
+) extends DatagramHandle("connected datagram socket", owner, socket, v6) {
   private[node] def kind: SocketOption.Kind = SocketOption.Kind.ConnectedDatagram
 }
 
@@ -374,8 +443,12 @@ final class ConnectedDatagramHandle private[node] (
   * back: as a stream at the position the handle carries, one read and one write at a time, or at offsets. A call is
   * work claimed on the handle, so a close waits for it, and the descriptor is never another file's under a call.
   */
-final class FileHandle private[node] (private[node] val fd: Int, path: String, private[node] val writable: Boolean)
-    extends NodeHandle(s"file $path")
+final class FileHandle private[node] (
+    owner: HandleOwner,
+    private[node] val fd: Int,
+    path: String,
+    private[node] val writable: Boolean
+) extends NodeHandle(s"file $path", owner)
     with NodeReadable
     with NodeWritable {
 
@@ -395,13 +468,7 @@ final class FileHandle private[node] (private[node] val fd: Int, path: String, p
 
   private[node] def endStream(read: Boolean): Unit = if read then reading = false else writing = false
 
-  /** A file's ops are calls, which do not wait for the handle. */
-  def awaitReadiness(read: Boolean, op: ReadinessOp): Unit =
-    throw new UnsupportedOperationException("A file is always ready")
-  def clearWaiter(read: Boolean, op: ReadinessOp): Boolean = false
-  protected def failWaiters(): Unit = ()
-
-  protected def cleanup(): Boolean = {
+  protected def closeObject(): Boolean = {
     val closed: js.Function1[js.Dynamic, Unit] = _ => completeClose()
     NodeErr.guard(Fs.close(fd, closed))
     false

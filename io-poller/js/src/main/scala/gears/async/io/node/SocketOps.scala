@@ -13,6 +13,7 @@ import gears.async.io.node.host.NodeStream
 import gears.async.io.node.host.UnixPaths
 import gears.async.io.node.internal.Dgram
 import gears.async.io.node.internal.Net
+import gears.async.io.shareable.Moved
 
 import java.nio.ByteBuffer
 import scala.scalajs.js
@@ -24,7 +25,7 @@ import scala.scalajs.js
 private[node] abstract class AbstractOpenOp[A <: AnyRef](into: Slot[A]) extends SingleUseOp with CallOp {
   private var opened = false
 
-  override protected def onEntry(): Unit = Slots.requireEmpty(into)
+  override def onEntry(): Unit = Slots.requireEmpty(into)
 
   /** Node's callbacks end here: with what was opened, made by `make` if the op still waits for it. */
   protected final def openedAs(make: => A): Unit =
@@ -57,8 +58,9 @@ private[node] abstract class AbstractConnectOp(
       val connecting = socket.nn
       connecting.removeListener("error", failed)
       address match {
-        case unix: UnixAddress  => ConnectionHandle.unix(connecting, UnixAddress(""), unix)
-        case _: IpSocketAddress => ConnectionHandle.ip(connecting, options.get(SocketOption.NoDelay) != false)
+        case unix: UnixAddress  => ConnectionHandle.unix(connecting, UnixAddress(""), unix, runOwner)
+        case _: IpSocketAddress =>
+          ConnectionHandle.ip(connecting, options.get(SocketOption.NoDelay) != false, runOwner)
       }
     }
 
@@ -99,13 +101,13 @@ private[node] abstract class AbstractListenOp(
       val bound = server.nn
       val listener = address match {
         case unix: UnixAddress =>
-          val listener = new ListenerHandle(bound, true, unix, options)
+          val listener = new ListenerHandle(runOwner, bound, true, unix, options)
           val own = UnixPaths.identity(unix.path)
           listener.closing = close => UnixPaths.closing(unix.path, own)(close)
           listener
         case _: IpSocketAddress =>
           val at = bound.address()
-          new ListenerHandle(bound, false, Addresses.reported(at.address, at.port), options)
+          new ListenerHandle(runOwner, bound, false, Addresses.reported(at.address, at.port), options)
       }
       bound.removeListener("error", failed)
       listener
@@ -145,17 +147,17 @@ private[node] abstract class AbstractAcceptOp(
     slot: Slot[?],
     deliver: Array[ConnectionHandle] => Unit
 ) extends AbstractReadinessOp[ListenerHandle](listener) {
-  override protected def onEntry(): Unit = Slots.requireEmpty(slot)
+  override def onEntry(): Unit = Slots.requireEmpty(slot)
 
   protected final def isRead: Boolean = true
 
-  protected final def attempt(): Int = {
+  protected final def attempt(): Moved = {
     val accepted = handle.peekArrived(max)
-    if accepted == null then AbstractReadinessOp.Blocked
+    if accepted == null then Moved.Blocked
     else {
       deliver(accepted)
       handle.dropArrived(accepted.length)
-      accepted.length
+      Moved(accepted.length)
     }
   }
 }
@@ -183,8 +185,8 @@ private[node] abstract class AbstractOpenDatagramOp[H <: DatagramHandle](
           case _                          => ()
         }
       val handle =
-        if remote == null then new BoundDatagramHandle(opening, v6)
-        else new ConnectedDatagramHandle(opening, v6, remote)
+        if remote == null then new BoundDatagramHandle(runOwner, opening, v6)
+        else new ConnectedDatagramHandle(runOwner, opening, v6, remote)
       opening.removeListener("error", failed)
       handle.asInstanceOf[H]
     }
@@ -226,7 +228,7 @@ private[node] abstract class AbstractReceiveOp(
     buf: ByteBuffer,
     from: Slot[IpSocketAddress] | Null
 ) extends AbstractReadinessOp[DatagramHandle](socket) {
-  override protected def onEntry(): Unit = {
+  override def onEntry(): Unit = {
     if from != null then Slots.requireEmpty(from)
     if buf.capacity() == 0 then
       throw new IllegalArgumentException("A receive into a buffer of no capacity would drop a whole packet")
@@ -234,20 +236,20 @@ private[node] abstract class AbstractReceiveOp(
 
   protected final def isRead: Boolean = true
 
-  protected final def attempt(): Int = {
+  protected final def attempt(): Moved = {
     val packet = handle.peekPacket()
-    if packet == null then AbstractReadinessOp.Blocked
+    if packet == null then Moved.Blocked
     else {
       if from != null then {
         if !from.isEmpty then throw new IllegalArgumentException("The receive's slot was filled while it waited")
-        from.set(Addresses.reported(packet.sender.address, packet.sender.port))
+        from.set(handle.senderOf(packet))
       }
       val bytes = packet.bytes
       buf.clear()
-      NodeBuffer.fill(Array(buf), bytes.subarray(0, math.min(bytes.length, buf.capacity()))) // the rest dropped
+      NodeBuffer.fillFrom(buf, bytes, math.min(bytes.length, buf.capacity())) // the rest dropped
       buf.flip()
       handle.dropPacket()
-      buf.remaining()
+      Moved(buf.remaining())
     }
   }
 }
@@ -262,7 +264,7 @@ private[node] abstract class AbstractSendOp(
     to: IpSocketAddress | Null
 ) extends RepeatableOp
     with HandleCall[DatagramHandle] {
-  override protected def onEntry(): Unit =
+  override def onEntry(): Unit =
     if to == null && NodeBuffer.remaining(bufs) == 0 then
       throw new IllegalArgumentException("A connected datagram socket sends no empty packet")
 
@@ -279,7 +281,6 @@ private[node] abstract class AbstractSendOp(
   protected final def call(): Unit = calling {
     handle.takeFailure()
     // Copied without consuming: the buffers are consumed once the packet has been sent, not if the send fails.
-    val packet = NodeBuffer.drain(bufs.map(_.duplicate()), NodeBuffer.room(bufs))
-    handle.send(packet, to, sent)
+    handle.sendFrom(bufs, to, sent)
   }
 }

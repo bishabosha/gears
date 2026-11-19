@@ -33,6 +33,36 @@ class NodeEdgeSuite extends IpStreamFixture with NodeSuite {
     }
   }
 
+  test("a run that returns with a read pending and handles open closes them, and no other run may use them") {
+    var left: (AnyRef, AnyRef, AnyRef) | Null = null
+    running { io ?=>
+      val (in, out) = stream(io)
+      val listening = Slot[io.ops.Listener]()
+      io.perform(io.ops.listen(loopback, listening))
+      Future(io.perform(io.ops.read(in, allocate(16))))
+      settle(io)
+      left = (in, out, listening.clear()) // never closed, and carried out of the run
+    }
+    val (leftIn, leftOut, leftListener) = left.nn
+    for handle <- List(leftIn, leftOut, leftListener) do
+      assertNotEquals(
+        handle.asInstanceOf[shareable.BaseHandle].getState,
+        shareable.HandleState.OpenState,
+        s"$handle was left open by its run"
+      )
+    // A handle is its run's: brought into another, here by a cast, it is refused.
+    running { io ?=>
+      val in = leftIn.asInstanceOf[io.ops.Readable]
+      val out = leftOut.asInstanceOf[io.ops.Writable]
+      val reading = attempt(io, io.ops.read(in, allocate(16)))
+      assert(reading.isInstanceOf[IllegalArgumentException], String.valueOf(reading))
+      val writing = attempt(io, io.ops.write(out, bytes("y")))
+      assert(writing.isInstanceOf[IllegalArgumentException], String.valueOf(writing))
+      val closing = attempt(io, io.ops.close(in))
+      assert(closing.isInstanceOf[IllegalArgumentException], String.valueOf(closing))
+    }
+  }
+
   test("a pooled read whose slot is filled while it waits fails, taking no bytes and holding no buffer") {
     val pool = backend.pool(bufferSize = 16, buffers = 1)
     try

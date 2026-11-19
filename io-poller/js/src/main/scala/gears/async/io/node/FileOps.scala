@@ -5,13 +5,14 @@ import gears.async.io.node.base.CallOp
 import gears.async.io.node.base.HandleCall
 import gears.async.io.node.base.RepeatableOp
 import gears.async.io.node.base.SingleUseOp
-import gears.async.io.node.base.TimerSource
 import gears.async.io.node.host.FifoSource
 import gears.async.io.node.host.NodeBuffer
 import gears.async.io.node.host.NodeErr
 import gears.async.io.node.host.NodeStream
 import gears.async.io.node.internal.Fs
 import gears.async.io.node.internal.Net
+
+import gears.async.io.shareable.HandleOwner
 
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -34,7 +35,7 @@ private[node] object FileOps {
 private[node] abstract class AbstractOpenPathOp[A <: AnyRef](path: String, write: Boolean, into: Slot[A])
     extends SingleUseOp
     with CallOp {
-  override protected def onEntry(): Unit = Slots.requireEmpty(into)
+  override def onEntry(): Unit = Slots.requireEmpty(into)
 
   /** What the descriptor is handed over as, or a failure if the file is not of the kind the op opens. */
   protected def opened(fd: Int, stats: js.Dynamic): A
@@ -81,7 +82,7 @@ private[node] abstract class AbstractFileReadOp(protected val handle: FileHandle
   private var at = offset
   private var chunk: Uint8Array | Null = null
 
-  override protected def onEntry(): Unit = into.check()
+  override def onEntry(): Unit = into.check()
 
   // On a failure Node gives no count, so it is taken as a number only once there is none.
   private val read: js.Function2[js.Dynamic, js.Dynamic, Unit] = (failure, count) => {
@@ -152,7 +153,7 @@ private[node] abstract class AbstractFileWriteOp(
       calling {
         if !handle.writable then throw new IOException(s"$handle was opened for reading, not writing")
         // Copied without consuming: the buffers are passed over by what the call wrote, if it completes.
-        val chunk = NodeBuffer.drain(bufs.map(_.duplicate()), math.min(NodeBuffer.room(bufs), FileOps.LargestCall))
+        val chunk = NodeBuffer.copy(bufs, math.min(NodeBuffer.room(bufs), FileOps.LargestCall))
         if streaming then handle.beginStream(read = false, this)
         try Fs.write(handle.fd, chunk, 0, chunk.length, (if streaming then handle.position else at).toDouble, wrote)
         catch {
@@ -178,11 +179,15 @@ private[node] abstract class AbstractSyncOp(protected val handle: FileHandle)
 private[node] object Fifos {
 
   /** A FIFO's read end, over its descriptor (see `FifoSource`). */
-  def readEnd(fd: Int, timers: TimerSource): ReadEnd = new ReadEnd("FIFO's read end", new FifoSource(fd, timers))
+  def readEnd(fd: Int, owner: HandleOwner): ReadEnd = new ReadEnd("FIFO's read end", owner, new FifoSource(fd))
 
   /** A FIFO's write end: a stream of Node's over its descriptor. */
-  def writeEnd(fd: Int): WriteEnd = {
+  def writeEnd(fd: Int, owner: HandleOwner): WriteEnd = {
     val socket = new Net.Socket(js.Dynamic.literal(fd = fd, readable = false, writable = true))
-    new WriteEnd("FIFO's write end", new NodeStream(socket.asInstanceOf[js.Dynamic], readable = false, writable = true))
+    new WriteEnd(
+      "FIFO's write end",
+      owner,
+      new NodeStream(socket.asInstanceOf[js.Dynamic], readable = false, writable = true)
+    )
   }
 }
