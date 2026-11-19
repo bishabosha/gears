@@ -1,4 +1,4 @@
-package gears.async.io.kqueue
+package gears.async.io.eventpolling
 
 import gears.async.Async
 import gears.async.io.shareable.HandleOwner
@@ -7,32 +7,41 @@ import gears.async.io.shareable.Worker
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
-/** A pool of `workers` kqueue workers. A worker kept from its tasks is reported to `onStarvation` (see `Starvation`).
+/** A pool of `workers` workers, each with an event poller of the system's. A worker kept from its tasks is reported to
+  * `onStarvation` (see `Starvation`). Which poller is its subclass's: `KqueueScheduler` or `EpollScheduler`.
   */
-class KqueueScheduler(workers: Int, onStarvation: Starvation.Handler = Starvation.printWarning)
-    extends WorkpoolScheduler[KqueueOps.type](KqueueBackend, KqueueOps, workers, onStarvation),
+abstract class EventPollingScheduler(workers: Int, onStarvation: Starvation.Handler)
+    extends WorkpoolScheduler[EventPollingOps.type](EventPollingBackend, EventPollingOps, workers, onStarvation),
       NativeSuspend {
   override protected def selectWorker() = workerOfCurrentThread()
 
-  override def makeWorker(id: Int, owner: HandleOwner): KqueueWorker = new KqueueWorker(id, owner)
+  override def makeWorker(id: Int, owner: HandleOwner): EventPollingWorker
 
-  class KqueueWorker(id: Int, owner: HandleOwner) extends Worker(id, owner), KqueuePoller(255) {
-    type Op = KqueueOp
+  /** A worker of this backend's, whatever its poller is. */
+  abstract class EventPollingWorker(id: Int, owner: HandleOwner) extends Worker(id, owner), EventPoller {
+    type Op = EventPollingOp
 
     /** either schedules a waiter (false), or completes immediately (true) */
-    override def performOp(op: KqueueOp)(using Async): Unit = {
+    override def performOp(op: EventPollingOp)(using Async): Unit = {
       op match
-        case timer: KqueueMakeTimer =>
+        case timer: EventPollingMakeTimer =>
           timer.holdTimerOn(this)
           timer.parkUntilSettled()
-        case deadline: KqueueMakeDeadline =>
+        case deadline: EventPollingMakeDeadline =>
           deadline.holdTimerOn(this)
           deadline.parkUntilSettled()
-        case close: KqueueCloseOp         => close.performClose(this)
-        case ready: KqueueReadinessOp     => ready.performWhenReady(this)
-        case immediate: KqueueImmediateOp => immediate.perform(handleOwner)
-        case work: KqueueOffThreadOp      => work.performInPlace(this)
-        case connect: KqueueConnectOp     => connect.performConnect(this)
+        case close: EventPollingCloseOp         => close.performClose(this)
+        case ready: EventPollingReadinessOp     => ready.performWhenReady(this)
+        case immediate: EventPollingImmediateOp => immediate.perform(handleOwner)
+        case work: EventPollingOffThreadOp      => work.performInPlace(this)
+        case connect: EventPollingConnectOp     => connect.performConnect(this)
     }
   }
+}
+
+object EventPollingScheduler {
+
+  /** The pool for the system the program is linked for (see `EventPollingBackend.scheduler`). */
+  def apply(workers: Int, onStarvation: Starvation.Handler = Starvation.printWarning): EventPollingScheduler =
+    EventPollingBackend.scheduler(workers, onStarvation)
 }

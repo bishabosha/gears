@@ -1,4 +1,4 @@
-package gears.async.io.kqueue
+package gears.async.io.eventpolling
 
 import gears.async.Async
 import gears.async.Async.Source
@@ -80,7 +80,7 @@ def testProgram(io: Io[Pipes])(using Async.Spawn): Unit =
   // println("done")
 
 @main def simpleRun(): Unit = {
-  given KqueueBackend.type = KqueueBackend
+  given EventPollingBackend.type = EventPollingBackend
   Io.run { io ?=>
     testProgram(io)
   }
