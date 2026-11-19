@@ -35,6 +35,25 @@ object CapBench {
     "tcp-realistic",
     "tcp-realistic-bulk",
     "tcp-realistic-gather",
+    "queue-concurrent",
+    "queue-realistic",
+    "queue-realistic-bulk",
+    "reactor-concurrent",
+    "reactor-realistic",
+    "reactor-realistic-bulk",
+    "reactor-await",
+    "reactor-mux",
+    "reactor-mux-batched",
+    "flow-mux",
+    "flow-mux-futures",
+    "flow-mux-pinned-futures",
+    "flow-mux-reactor",
+    "flow-mux-queued",
+    "flow-mux-pinned",
+    "reactor-concurrent-pinned",
+    "reactor-realistic-pinned",
+    "reactor-concurrent-unqueued",
+    "reactor-realistic-unqueued",
     "work-realistic",
     "unix-pingpong",
     "unix-concurrent",
@@ -101,13 +120,45 @@ object CapBench {
   // ---- byte streams, whatever they are over
 
   /** An echo of `rounds` messages from `in` to `out`, and its client: each message echoed back before the next. */
-  private def echoPair(io: Io[ByteStreams], rounds: Int)(
+  /** How the servers of a scenario are run: a future each, or, for `reactors`, as flows of a reactor for each shard of
+    * the backend's queues, the same code performing the same ops.
+    */
+  private final class Servers(reactors: Boolean, mode: Int = Reactor.Queued) {
+    private val held = scala.collection.mutable.ListBuffer[Io[?] => Async => Unit]()
+    private var under: Io[?] | Null = null
+
+    def start[T <: Io[?]](io: T)(body: T => Async ?=> Unit)(using Async.Spawn): List[Future[Unit]] =
+      if !reactors then List(Future(body(io)))
+      else {
+        under = io
+        held += ((on: Io[?]) => (async: Async) => body(on.asInstanceOf[T])(using async))
+        Nil
+      }
+
+    def launch()(using Async.Spawn): List[Future[Unit]] =
+      if held.isEmpty then Nil
+      else {
+        import SubmissionQueues.queueShards
+        val io = under.nn.asInstanceOf[Io[SubmissionQueues]]
+        val shards = io.queueShards
+        val bodies = held.toList.zipWithIndex
+        (0 until shards).toList.map { shard =>
+          Future {
+            val reactor = Reactor(io, shard, mode)
+            for (body, index) <- bodies if index % shards == shard do reactor.spawn(body(reactor.io)(summon[Async]))
+            reactor.run()
+          }
+        }
+      }
+  }
+
+  private def echoPair(io: Io[ByteStreams], rounds: Int, servers: Servers = new Servers(false))(
       serverIn: io.ops.Readable,
       serverOut: io.ops.Writable,
       clientIn: io.ops.Readable,
       clientOut: io.ops.Writable
   )(using Async.Spawn): List[Future[Unit]] = {
-    val echo = Future {
+    val echo = servers.start[io.type](io) { io =>
       val buf = buffer(MessageSize)
       val read = io.ops.read(serverIn, buf)
       val write = io.ops.write(serverOut, buf)
@@ -132,7 +183,7 @@ object CapBench {
         while in.hasRemaining() do io.perform(read)
         i += 1
     }
-    List(echo, client)
+    client :: echo
   }
 
   /** `chunks` chunks written to `out`, which `end` then ends, and read from `in` until its end. With GEARS_TRACE set,
@@ -253,13 +304,17 @@ object CapBench {
     (listener, pairs)
   }
 
-  private def socketEcho(sockets: Sockets[? <: StreamSockets], connections: Int, rounds: Int, name: String)(using
-      Async.Spawn
-  ): Unit = {
+  private def socketEcho(
+      sockets: Sockets[? <: StreamSockets],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      servers: Servers = new Servers(false)
+  )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(
-      pairs.flatMap((client, server) => echoPair(io, rounds)(server, server, client, client))
+      pairs.flatMap((client, server) => echoPair(io, rounds, servers)(server, server, client, client)) ++ servers.launch()
     )
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
@@ -506,13 +561,17 @@ object CapBench {
     }
   }
 
-  private def realistic(sockets: Sockets[? <: StreamSockets], connections: Int, rounds: Int, name: String)(using
-      Async.Spawn
-  ): Unit = {
+  private def realistic(
+      sockets: Sockets[? <: StreamSockets],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      servers: Servers = new Servers(false)
+  )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(pairs.zipWithIndex.flatMap { case ((client, server), id) =>
-      val serving = Future {
+      val serving = servers.start[io.type](io) { io =>
         val end = new RespEnd(io, LargestValue)(server, server)
         val cache = new CacheServer
         val request = new Array[Byte](LargestValue)
@@ -536,8 +595,8 @@ object CapBench {
           i += 1
         }
       }
-      List(serving, asking)
-    })
+      asking :: serving
+    } ++ servers.launch())
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
   }
@@ -696,15 +755,16 @@ object CapBench {
       connections: Int,
       rounds: Int,
       name: String,
-      gathering: Boolean
+      gathering: Boolean,
+      servers: Servers = new Servers(false)
   )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(pairs.zipWithIndex.flatMap { case ((client, server), id) =>
       val serving =
-        if gathering then Future(serveGathering(io, rounds)(server, server))
+        if gathering then List(Future(serveGathering(io, rounds)(server, server)))
         else
-          Future {
+          servers.start[io.type](io) { io =>
             val end = new RespEnd(io, LargestBatch)(server, server)
             val cache = new CacheServer
             val requests = new Array[Byte](LargestBatch)
@@ -763,8 +823,8 @@ object CapBench {
           i += batch
         }
       }
-      List(serving, asking)
-    })
+      asking :: serving
+    } ++ servers.launch())
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
   }
@@ -812,6 +872,581 @@ object CapBench {
           try io.perform(io.ops.close(connection))
           catch case _: java.io.IOException => ()
       }
+    }
+  }
+
+  // ---- one future serving every connection, through a queue of ops (`SubmissionQueues`)
+
+  /** `count` connections over TCP, through one listener, each as (client end, server end). */
+  private def connectedTcp(io: Io[IpStreams], count: Int)(using
+      Async.Spawn
+  ): (io.ops.Listener, List[(io.ops.Connection, io.ops.Connection)]) = {
+    val listener =
+      opening[io.ops.Listener](io)(into => io.ops.listen(IpSocketAddress(IpAddress.IPv4Loopback, 0), into))
+    val address = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress]
+    val accepted = Slot[io.ops.Connection]()
+    val accept = io.ops.accept(listener, accepted)
+    val pairs = List.fill(count) {
+      val connecting = Future(opening[io.ops.Connection](io)(into => io.ops.connect(address, into)))
+      io.perform(accept)
+      (connecting.await, accepted.clear())
+    }
+    (listener, pairs)
+  }
+
+  /** What the queue's server keeps for a connection: its buffer, the read and the write of it, and how much is left. */
+  private final class Served[R, W](val buf: java.nio.ByteBuffer, val read: R, val write: W, var left: Long) {
+    val cache = new CacheServer
+    val requests = new Array[Byte](LargestBatch)
+    val responses = new Array[Byte](LargestBatch)
+    var have = 0
+  }
+
+  /** `tcp-concurrent` with its server one future: a read is in flight on every connection, what one brings is written
+    * back by an op that is most often done as it is started, and the future waits once for however many reads a turn
+    * of the backend completes. The clients are `tcp-concurrent`'s, a future each.
+    */
+  private def queueEcho(io: Io[IpStreams & SubmissionQueues], connections: Int, rounds: Int, name: String)(using
+      Async.Spawn
+  ): Unit = {
+    import SubmissionQueues.performQueue
+    val (listener, pairs) = connectedTcp(io, connections)
+    timed(name, rounds.toLong * connections) {
+      val shards = io.queueShards
+      val serving = (0 until shards).toList.map { shard => Future {
+        val ops = new SubmissionQueue[io.Op](shard)
+        val completed = new CompletionQueue[io.Op]
+        var open = 0
+        for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do {
+          val buf = buffer(MessageSize)
+          val served = new Served(buf, io.ops.read(server, buf), io.ops.write(server, buf), rounds.toLong * MessageSize)
+          ops.submit(served.read, served)
+          open += 1
+        }
+        var waits = 0L
+        var taken = 0L
+        while open > 0 do {
+          io.performQueue(ops, completed)
+          waits += 1
+          taken += completed.count
+          var i = 0
+          while i < completed.count do {
+            val failure = completed.failure(i)
+            if failure != null then throw failure
+            val served = completed.tag(i).asInstanceOf[Served[io.Op, io.Op]]
+            val buf = served.buf
+            if completed.op(i).asInstanceOf[AnyRef] eq served.read.asInstanceOf[AnyRef] then {
+              served.left -= buf.position()
+              buf.flip()
+              ops.submit(served.write, served)
+            } else if buf.hasRemaining() then ops.submit(served.write, served)
+            else if served.left > 0 then {
+              buf.clear()
+              ops.submit(served.read, served)
+            } else open -= 1
+            i += 1
+          }
+          completed.clear()
+        }
+        if BenchFiles.environment("GEARS_TRACE") != null then
+          System.err.println(s"queue: $waits calls of performQueue, $taken completions, ${taken.toDouble / waits} each")
+      } }
+      val asking = pairs.map { (client, _) =>
+        Future {
+          val out = buffer(MessageSize)
+          val in = buffer(MessageSize)
+          val write = io.ops.write(client, out)
+          val read = io.ops.read(client, in)
+          var i = 0
+          while i < rounds do {
+            out.clear()
+            while out.hasRemaining() do io.perform(write)
+            in.clear()
+            while in.hasRemaining() do io.perform(read)
+            i += 1
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** The session cache with its connection carrying `Batch` streams, as HTTP/2's does: a request and its answer are
+    * frames, a stream's number, a length, and the bytes. The client sends a request on every stream at once and takes
+    * the answers as they come. The server is flows of a reactor: one for a connection reads and hands each frame to
+    * its stream's flow, which answers it. Each stream's flow writes its answer itself, one at a time on the
+    * connection; or, `batched`, puts it in the connection's outbox, and the reactor writes what the streams put with
+    * one op.
+    */
+  private def reactorMux(
+      io: Io[IpStreams & SubmissionQueues],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      batched: Boolean
+  )(using Async.Spawn): Unit = {
+    import SubmissionQueues.queueShards
+    val Frame = 4
+    val Most = LargestBatch + Frame * Batch
+    def length(in: Array[Byte], at: Int): Int = ((in(at + 2) & 0xff) << 8) | (in(at + 3) & 0xff)
+    def head(in: Array[Byte], at: Int, stream: Int, length: Int): Unit = {
+      in(at) = stream.toByte
+      in(at + 1) = 0
+      in(at + 2) = (length >> 8).toByte
+      in(at + 3) = length.toByte
+    }
+    val (listener, pairs) = connectedTcp(io, connections)
+    val shards = io.queueShards
+    timed(name, rounds.toLong * connections) {
+      val serving = (0 until shards).toList.map { shard =>
+        Future {
+          val reactor = Reactor(io, shard)
+          val on: io.type = reactor.io.asInstanceOf[io.type]
+          final class Stream {
+            val request = new Array[Byte](LargestValue)
+            var have = 0
+            val arrived = new reactor.Signal
+          }
+          for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do {
+            val cache = new CacheServer
+            val outbox =
+              if batched then
+                reactor.outbox(buffer(Most), buffer(Most))(buf => on.ops.write(server, buf).asInstanceOf[reactor.under.Op])
+              else null
+            var writing = false
+            val turn = new reactor.Signal
+            val streams = Array.fill(Batch)(new Stream)
+            for k <- 0 until Batch do
+              reactor.spawn {
+                val stream = streams(k)
+                val response = new Array[Byte](LargestValue + Frame)
+                val buf = buffer(LargestValue + Frame)
+                val write = on.ops.write(server, buf)
+                val mine = (rounds - k + Batch - 1) / Batch
+                var served = 0
+                while served < mine do {
+                  while stream.have == 0 do stream.arrived.park()
+                  val end = cache.handle(stream.request, 0, response, Frame)
+                  stream.have = 0
+                  head(response, 0, k, end - Frame)
+                  if batched then outbox.nn.put(response, 0, end)
+                  else {
+                    while writing do turn.park()
+                    writing = true
+                    buf.clear()
+                    buf.put(response, 0, end)
+                    buf.flip()
+                    while buf.hasRemaining() do on.perform(write)
+                    writing = false
+                    turn.wake()
+                  }
+                  served += 1
+                }
+              }
+            reactor.spawn {
+              val buf = buffer(Most)
+              val read = on.ops.read(server, buf)
+              val kept = new Array[Byte](2 * Most)
+              var have = 0
+              var taken = 0
+              while taken < rounds do {
+                buf.clear()
+                on.perform(read)
+                buf.flip()
+                val came = buf.remaining()
+                if came == 0 then throw new java.io.EOFException("The connection ended within a request")
+                buf.get(kept, have, came)
+                have += came
+                var from = 0
+                while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+                  val stream = streams(kept(from))
+                  val size = length(kept, from)
+                  System.arraycopy(kept, from + Frame, stream.request, 0, size)
+                  stream.have = size
+                  stream.arrived.wake()
+                  from += Frame + size
+                  taken += 1
+                }
+                if from > 0 then {
+                  System.arraycopy(kept, from, kept, 0, have - from)
+                  have -= from
+                }
+              }
+            }
+          }
+          reactor.run()
+        }
+      }
+      val asking = pairs.zipWithIndex.map { case ((client, _), id) =>
+        Future {
+          val end = new RespEnd(io, Most)(client, client)
+          val user = new CacheClient(id)
+          val requests = new Array[Byte](Most)
+          val responses = new Array[Byte](2 * Most)
+          val answers = new Array[Array[Byte]](Batch)
+          var i = 0
+          while i < rounds do {
+            val batch = math.min(Batch, rounds - i)
+            var size = 0
+            var k = 0
+            while k < batch do {
+              val start = size
+              size = user.request(i + k, requests, start + Frame)
+              head(requests, start, k, size - start - Frame)
+              answers(k) = user.answer
+              k += 1
+            }
+            end.send(requests, size)
+            var have = 0
+            var from = 0
+            var checked = 0
+            while checked < batch do {
+              have += end.more(responses, have)
+              while have - from >= Frame && have - from >= Frame + length(responses, from) do {
+                val stream = responses(from)
+                val until = from + Frame + length(responses, from)
+                user.check(i + stream, answers(stream), responses, from + Frame, until)
+                from = until
+                checked += 1
+              }
+            }
+            i += batch
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** A frame of `reactor-mux`'s, its bytes its own. */
+  private final class MuxFrame(val stream: Int, val bytes: Array[Byte])
+
+  /** `reactor-mux-batched` with its server written with `Server`, `Flow` and `Sink`: no reactor, outbox or signal in
+    * it. Connections are accepted as they come and handed to the shards' reactors; a connection's bytes are decoded
+    * into frames, dealt by stream, and each stream's flow answers into the connection's sink. A frame's bytes are an
+    * array of its own, as what goes from one flow to another has to be.
+    */
+  private def flowMux(
+      io: Io[IpStreams],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      strategy: Server.Strategy
+  )(using Async.Spawn): Unit = {
+    // A strategy the backend has not is no scenario of its.
+    if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then return
+    val Frame = 4
+    val Most = LargestBatch + Frame * Batch
+    def length(in: Array[Byte], at: Int): Int = ((in(at + 2) & 0xff) << 8) | (in(at + 3) & 0xff)
+    def head(in: Array[Byte], at: Int, stream: Int, length: Int): Unit = {
+      in(at) = stream.toByte
+      in(at + 1) = 0
+      in(at + 2) = (length >> 8).toByte
+      in(at + 3) = length.toByte
+    }
+    /** Bytes as they come into frames: what is left of one read begins the next frame. */
+    def frames: Pipe[ByteBuffer, MuxFrame] = in =>
+      new Flow[MuxFrame] {
+        private val kept = new Array[Byte](2 * Most)
+        private var have = 0
+        private var from = 0
+        def pull()(using Async): MuxFrame | Flow.End.type = {
+          var result: MuxFrame | Flow.End.type | Null = null
+          while result == null do
+            if have - from >= Frame && have - from >= Frame + length(kept, from) then {
+              val size = length(kept, from)
+              result = new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size))
+              from += Frame + size
+            } else {
+              if from > 0 then {
+                System.arraycopy(kept, from, kept, 0, have - from)
+                have -= from
+                from = 0
+              }
+              in.pull() match {
+                case Flow.End => result = Flow.End
+                case more     =>
+                  val buf = more.asInstanceOf[ByteBuffer]
+                  val came = buf.remaining()
+                  buf.get(kept, have, came)
+                  have += came
+              }
+            }
+          result.nn
+        }
+      }
+
+    val server =
+      Server.tcp(
+        io,
+        IpSocketAddress(IpAddress.IPv4Loopback, 0),
+        Server.Sizes(read = Most, write = Most, buffers = buffer),
+        strategy
+      )
+    if BenchFiles.environment("GEARS_TRACE") != null then System.err.println(s"$name: ${server.strategy}")
+    val address = server.address
+    val serving = Future {
+      server.serve { connection =>
+        val cache = new CacheServer
+        val guard = new gears.async.Semaphore(1)
+        connection.bytes.through(frames).groupBy(_.stream).foreachPar { (stream, requests) =>
+          val response = new Array[Byte](LargestValue + Frame)
+          val out = ByteBuffer.wrap(response)
+          requests.foreach { request =>
+            // The handler does not know how it is served: made of futures, a connection's streams are on any
+            // thread, so the cache they share is locked, with a lock that awaits and is no thread's.
+            val end = {
+              val held = guard.acquire()
+              try cache.handle(request.bytes, 0, response, Frame)
+              finally held.release()
+            }
+            head(response, 0, stream, end - Frame)
+            out.clear()
+            out.limit(end)
+            connection.sink.send(out)
+          }
+        }
+      }
+    }
+    val clients = List.tabulate(connections)(_ => opening[io.ops.Connection](io)(into => io.ops.connect(address, into)))
+    timed(name, rounds.toLong * connections) {
+      clients.zipWithIndex.map { (client, id) =>
+        Future {
+          val end = new RespEnd(io, Most)(client, client)
+          // A client for each stream, with keys of its own: streams are answered in no order among themselves.
+          val users = Array.tabulate(Batch)(k => new CacheClient(id * Batch + k))
+          val requests = new Array[Byte](Most)
+          val responses = new Array[Byte](2 * Most)
+          val answers = new Array[Array[Byte]](Batch)
+          var i = 0
+          while i < rounds do {
+            val batch = math.min(Batch, rounds - i)
+            var size = 0
+            var k = 0
+            while k < batch do {
+              val start = size
+              size = users(k).request(i / Batch, requests, start + Frame)
+              head(requests, start, k, size - start - Frame)
+              answers(k) = users(k).answer
+              k += 1
+            }
+            end.send(requests, size)
+            var have = 0
+            var from = 0
+            var checked = 0
+            while checked < batch do {
+              have += end.more(responses, have)
+              while have - from >= Frame && have - from >= Frame + length(responses, from) do {
+                val stream = responses(from)
+                val until = from + Frame + length(responses, from)
+                users(stream).check(i / Batch, answers(stream), responses, from + Frame, until)
+                from = until
+                checked += 1
+              }
+            }
+            i += batch
+          }
+        }
+      }
+    }
+    closeAll(io, clients)
+    server.close()
+    serving.await
+  }
+
+  /** An echo whose server, a flow for each connection, spawns a future for every message, to sum its bytes, and awaits
+    * it before it answers with the sum in the message's first byte: a flow that spawns and awaits, among flows that
+    * go on meanwhile. The client checks the sum.
+    */
+  private def reactorAwait(io: Io[IpStreams & SubmissionQueues], connections: Int, rounds: Int, name: String)(using
+      Async.Spawn
+  ): Unit = {
+    import SubmissionQueues.queueShards
+    val (listener, pairs) = connectedTcp(io, connections)
+    val shards = io.queueShards
+    timed(name, rounds.toLong * connections) {
+      val serving = (0 until shards).toList.map { shard =>
+        Future {
+          val reactor = Reactor(io, shard)
+          val on: io.type = reactor.io.asInstanceOf[io.type]
+          for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do
+            reactor.spawn {
+              Async.group {
+                val buf = buffer(MessageSize)
+                val read = on.ops.read(server, buf)
+                val write = on.ops.write(server, buf)
+                var i = 0
+                while i < rounds do {
+                  buf.clear()
+                  while buf.hasRemaining() do on.perform(read)
+                  val summing = Future {
+                    var sum = 0
+                    var k = 0
+                    while k < MessageSize do { sum += buf.get(k); k += 1 }
+                    sum.toByte
+                  }
+                  buf.put(0, summing.await)
+                  buf.flip()
+                  while buf.hasRemaining() do on.perform(write)
+                  i += 1
+                }
+              }
+            }
+          reactor.run()
+        }
+      }
+      val asking = pairs.zipWithIndex.map { case ((client, _), id) =>
+        Future {
+          val out = buffer(MessageSize)
+          val in = buffer(MessageSize)
+          val write = io.ops.write(client, out)
+          val read = io.ops.read(client, in)
+          var i = 0
+          while i < rounds do {
+            out.clear()
+            var k = 0
+            var sum = 0
+            while k < MessageSize do { val b = (i + id + k).toByte; out.put(k, b); sum += b; k += 1 }
+            while out.hasRemaining() do io.perform(write)
+            in.clear()
+            while in.hasRemaining() do io.perform(read)
+            if in.get(0) != sum.toByte then throw new IllegalStateException(s"sum ${in.get(0)}, not ${sum.toByte}")
+            i += 1
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** `tcp-realistic`, or with `together` `tcp-realistic-bulk`, with its server one future over a queue of ops, as
+    * `queueEcho`'s is: each connection's requests are answered from what the server keeps for it.
+    */
+  private def queueRealistic(
+      io: Io[IpStreams & SubmissionQueues],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      together: Boolean
+  )(using Async.Spawn): Unit = {
+    import SubmissionQueues.performQueue
+    val (listener, pairs) = connectedTcp(io, connections)
+    timed(name, rounds.toLong * connections) {
+      val shards = io.queueShards
+      val serving = (0 until shards).toList.map { shard => Future {
+        val ops = new SubmissionQueue[io.Op](shard)
+        val completed = new CompletionQueue[io.Op]
+        var open = 0
+        for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do {
+          val buf = arrayBuffer(LargestBatch)
+          val served = new Served(buf, io.ops.read(server, buf), io.ops.write(server, buf), rounds.toLong)
+          ops.submit(served.read, served)
+          open += 1
+        }
+        while open > 0 do {
+          io.performQueue(ops, completed)
+          var i = 0
+          while i < completed.count do {
+            val failure = completed.failure(i)
+            if failure != null then throw failure
+            val served = completed.tag(i).asInstanceOf[Served[io.Op, io.Op]]
+            val buf = served.buf
+            if completed.op(i).asInstanceOf[AnyRef] eq served.read.asInstanceOf[AnyRef] then {
+              // What the read brought joins what was kept, and every whole request in it is answered.
+              buf.flip()
+              val came = buf.remaining()
+              if came == 0 then throw new java.io.EOFException("The connection ended within a request")
+              buf.get(served.requests, served.have, came)
+              var have = served.have + came
+              var from = 0
+              var written = 0
+              var next = Resp.end(served.requests, from, have)
+              while next >= 0 do {
+                written = served.cache.handle(served.requests, from, served.responses, written)
+                served.left -= 1
+                from = next
+                next = Resp.end(served.requests, from, have)
+              }
+              if from > 0 then {
+                System.arraycopy(served.requests, from, served.requests, 0, have - from)
+                have -= from
+              }
+              served.have = have
+              buf.clear()
+              if written > 0 then {
+                buf.put(served.responses, 0, written)
+                buf.flip()
+                ops.submit(served.write, served)
+              } else ops.submit(served.read, served)
+            } else if buf.hasRemaining() then ops.submit(served.write, served)
+            else if served.left > 0 then {
+              buf.clear()
+              ops.submit(served.read, served)
+            } else open -= 1
+            i += 1
+          }
+          completed.clear()
+        }
+      } }
+      val asking = pairs.zipWithIndex.map { case ((client, _), id) =>
+        Future {
+          if together then askTogether(io, id, rounds)(client)
+          else {
+            val end = new RespEnd(io, LargestValue)(client, client)
+            val user = new CacheClient(id)
+            val request = new Array[Byte](LargestValue)
+            val response = new Array[Byte](LargestValue)
+            var i = 0
+            while i < rounds do {
+              end.send(request, user.request(i, request, 0))
+              user.check(i, user.answer, response, 0, end.receive(response))
+              i += 1
+            }
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** The client of `tcp-realistic-bulk`: its requests sent `Batch` at once, their answers checked as they come. */
+  private def askTogether(io: Io[ByteStreams], id: Int, rounds: Int)(client: io.ops.Readable & io.ops.Writable)(using
+      Async
+  ): Unit = {
+    val end = new RespEnd(io, LargestBatch)(client, client)
+    val user = new CacheClient(id)
+    val requests = new Array[Byte](LargestBatch)
+    val responses = new Array[Byte](LargestBatch)
+    val answers = new Array[Array[Byte]](Batch)
+    var i = 0
+    while i < rounds do {
+      val batch = math.min(Batch, rounds - i)
+      var length = 0
+      var k = 0
+      while k < batch do {
+        length = user.request(i + k, requests, length)
+        answers(k) = user.answer
+        k += 1
+      }
+      end.send(requests, length)
+      var have = 0
+      var from = 0
+      var checked = 0
+      while checked < batch do {
+        have += end.more(responses, have)
+        var next = Resp.end(responses, from, have)
+        while next >= 0 && checked < batch do {
+          user.check(i + checked, answers(checked), responses, from, next)
+          checked += 1
+          from = next
+          next = Resp.end(responses, from, have)
+        }
+      }
+      i += batch
     }
   }
 
@@ -1075,6 +1710,9 @@ object CapBench {
   private def supports(ops: Interface, scenario: String): Boolean = scenario.takeWhile(_ != '-') match
     case "pipe"     => ops.isInstanceOf[Pipes]
     case "tcp"      => ops.isInstanceOf[IpStreams]
+    case "queue"    => ops.isInstanceOf[IpStreams] && ops.isInstanceOf[SubmissionQueues]
+    case "reactor"  => ops.isInstanceOf[IpStreams] && ops.isInstanceOf[SubmissionQueues]
+    case "flow"     => ops.isInstanceOf[IpStreams]
     case "unix"     => ops.isInstanceOf[UnixStreams]
     case "udp"      => ops.isInstanceOf[IpDatagrams]
     case "udg"      => ops.isInstanceOf[UnixDatagrams]
@@ -1151,6 +1789,81 @@ object CapBench {
       case "tcp-stream"      => socketStream(tcp(io), count(20_000), "tcp-stream")
       case "tcp-connect"     => socketConnect(tcp(io), count(1_000), "tcp-connect")
       case "tcp-realistic"   => realistic(tcp(io), many, count(2_000), "tcp-realistic")
+      case "flow-mux" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux", Server.Strategy.Auto)
+      case "flow-mux-pinned" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-pinned", Server.Strategy.PinnedReactors)
+      case "flow-mux-queued" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-queued", Server.Strategy.QueuedReactors)
+      case "reactor-concurrent-pinned" =>
+        socketEcho(
+          tcp(io.asInstanceOf[Io[IpStreams]]),
+          many,
+          count(5_000),
+          "reactor-concurrent-pinned",
+          new Servers(true, Reactor.Pinned)
+        )
+      case "reactor-realistic-pinned" =>
+        realistic(
+          tcp(io.asInstanceOf[Io[IpStreams]]),
+          many,
+          count(2_000),
+          "reactor-realistic-pinned",
+          new Servers(true, Reactor.Pinned)
+        )
+      case "flow-mux-reactor" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-reactor", Server.Strategy.Reactor)
+      case "reactor-concurrent-unqueued" =>
+        socketEcho(
+          tcp(io.asInstanceOf[Io[IpStreams]]),
+          many,
+          count(5_000),
+          "reactor-concurrent-unqueued",
+          new Servers(true, Reactor.Unqueued)
+        )
+      case "reactor-realistic-unqueued" =>
+        realistic(
+          tcp(io.asInstanceOf[Io[IpStreams]]),
+          many,
+          count(2_000),
+          "reactor-realistic-unqueued",
+          new Servers(true, Reactor.Unqueued)
+        )
+      case "flow-mux-pinned-futures" =>
+        flowMux(
+          io.asInstanceOf[Io[IpStreams & SubmissionQueues]],
+          many,
+          count(2_000),
+          "flow-mux-pinned-futures",
+          Server.Strategy.PinnedFutures
+        )
+      case "flow-mux-futures" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-futures", Server.Strategy.Futures)
+      case "reactor-mux" =>
+        reactorMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "reactor-mux", false)
+      case "reactor-mux-batched" =>
+        reactorMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "reactor-mux-batched", true)
+      case "reactor-await" =>
+        reactorAwait(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(5_000), "reactor-await")
+      case "reactor-concurrent" =>
+        socketEcho(tcp(io.asInstanceOf[Io[IpStreams]]), many, count(5_000), "reactor-concurrent", new Servers(true))
+      case "reactor-realistic" =>
+        realistic(tcp(io.asInstanceOf[Io[IpStreams]]), many, count(2_000), "reactor-realistic", new Servers(true))
+      case "reactor-realistic-bulk" =>
+        realisticBulk(
+          tcp(io.asInstanceOf[Io[IpStreams]]),
+          many,
+          count(2_000),
+          "reactor-realistic-bulk",
+          gathering = false,
+          new Servers(true)
+        )
+      case "queue-concurrent" =>
+        queueEcho(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(5_000), "queue-concurrent")
+      case "queue-realistic" =>
+        queueRealistic(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "queue-realistic", false)
+      case "queue-realistic-bulk" =>
+        queueRealistic(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "queue-realistic-bulk", true)
       case "tcp-realistic-bulk" =>
         realisticBulk(tcp(io), many, count(2_000), "tcp-realistic-bulk", gathering = false)
       case "tcp-realistic-gather" =>

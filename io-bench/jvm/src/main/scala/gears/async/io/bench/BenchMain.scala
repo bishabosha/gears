@@ -6,7 +6,7 @@ import gears.async.io.nio.NioPoolBackend
 
 /** The bench over this branch's JVM backends: `--backend threads` (`NioBackend`, the default) or `--backend pool`
   * (`NioPoolBackend`, which needs `--add-opens java.base/java.lang=ALL-UNNAMED`), on `--workers` workers, with
-  * `CapBench`'s own arguments.
+  * `CapBench`'s own arguments; or `--backend reference`, the reference backend, which has no workers.
   */
 object BenchMain {
   def main(args: Array[String]): Unit = {
@@ -21,6 +21,8 @@ object BenchMain {
     backend match
       case "threads" => NioBackend.runOn(workers, warn)(io ?=> CapBench.run(io, parsed))
       case "pool"    => NioPoolBackend.runOn(workers, warn)(io ?=> CapBench.run(io, parsed))
-      case other     => throw new IllegalArgumentException(s"no backend $other: threads, pool")
+      // The reference backend: no workers, each op on the virtual thread that performs it.
+      case "reference" => reference.ReferenceBackend.run(io ?=> CapBench.run(io, parsed))
+      case other       => throw new IllegalArgumentException(s"no backend $other: threads, pool, reference")
   }
 }

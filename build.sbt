@@ -274,3 +274,5 @@ lazy val ioCapBench =
       }
     )
     .dependsOn(ioPoller)
+    // The reference backend too, on the JVM: `--backend reference`.
+    .jvmConfigure(_.dependsOn(ioReference))
