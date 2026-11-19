@@ -42,25 +42,21 @@ import gears.async.io.shareable.AbstractSendOp
 import gears.async.io.shareable.AbstractWriteOp
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.LendingPool
-import gears.async.io.shareable.TimerHeapOp
+import gears.async.io.shareable.PoolOp
 import gears.async.io.shareable.Worker
 
 import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
 
-sealed trait EventPollingOp extends TimerHeapOp:
+/** An op of this backend's, of one of the kinds a pool's worker performs (see `PoolOp`). */
+sealed trait EventPollingOp extends PoolOp[EventPoller]:
 
-  /** A kqueue worker takes any kqueue op among its timers (see `EventPoller.Timer`). */
-  type Source = EventPoller
+  /** A worker takes any op of this backend's among its timers (see `EventPoller.Timer`). */
   final def _holdTimer(worker: EventPoller): Unit = worker.addTimer(this)
 
-/** An op that waits for its handle to be ready, on the worker that listens for it (see `ReadyWaiting`). */
-sealed trait EventPollingReadinessOp extends EventPollingOp:
-  def performWhenReady(self: EventPoller)(using Async): Unit
+sealed trait EventPollingReadinessOp extends EventPollingOp, PoolOp.Readiness[EventPoller]
 
-/** An op done as it is performed, with nothing to wait for (see `ImmediateOp`). */
-sealed trait EventPollingImmediateOp extends EventPollingOp:
-  def perform(owner: HandleOwner): Unit
+sealed trait EventPollingImmediateOp extends EventPollingOp, PoolOp.Immediate[EventPoller]
 
 sealed trait EventPollingReadableOp extends EventPollingReadinessOp
 
@@ -68,24 +64,19 @@ sealed trait EventPollingWritableOp extends EventPollingReadinessOp
 
 sealed trait EventPollingAcceptOp extends EventPollingReadinessOp
 
-/** An op whose work is done off the workers' threads (see `WorkOffThread`). */
-sealed trait EventPollingOffThreadOp extends EventPollingOp:
-  def performOffThread(worker: Worker & EventPoller)(using Async): Unit
-  def performInPlace(worker: Worker & EventPoller)(using Async): Unit
+sealed trait EventPollingOffThreadOp extends EventPollingOp, PoolOp.OffThread[EventPoller]
 
 sealed trait EventPollingDatagramOp extends EventPollingReadinessOp
 
-sealed trait EventPollingConnectOp extends EventPollingOp:
-  def performConnect(self: EventPoller)(using Async): Unit
+sealed trait EventPollingConnectOp extends EventPollingOp, PoolOp.Connect[EventPoller]
 
-sealed trait EventPollingTimerOp extends EventPollingOp
+sealed trait EventPollingTimerOp extends EventPollingOp, PoolOp.Timed[EventPoller]
 
 sealed trait EventPollingPipeOp extends EventPollingImmediateOp
 
-sealed trait EventPollingDeadlineOp extends EventPollingOp with Deadline
+sealed trait EventPollingDeadlineOp extends EventPollingOp, PoolOp.Timed[EventPoller], Deadline
 
-sealed trait EventPollingCloseOp extends EventPollingOp:
-  def performClose(self: EventPoller)(using Async): Unit
+sealed trait EventPollingCloseOp extends EventPollingOp, PoolOp.Close[EventPoller]
 
 private[eventpolling] final class EventPollingRead(handle: EventPollingWaitingReadable, buf: ByteBuffer)
     extends AbstractReadOp(handle, buf),

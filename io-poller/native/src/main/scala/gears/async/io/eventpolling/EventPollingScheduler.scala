@@ -3,7 +3,8 @@ package gears.async.io.eventpolling
 import gears.async.Async
 import gears.async.io.shareable.HandleOwner
 import gears.async.io.shareable.Starvation
-import gears.async.io.shareable.Worker
+import gears.async.io.shareable.PoolOp
+import gears.async.io.shareable.PoolOpWorker
 import gears.async.io.shareable.WorkpoolScheduler
 import gears.async.native.NativeSuspend
 
@@ -18,24 +19,13 @@ abstract class EventPollingScheduler(workers: Int, onStarvation: Starvation.Hand
   override def makeWorker(id: Int, owner: HandleOwner): EventPollingWorker
 
   /** A worker of this backend's, whatever its poller is. */
-  abstract class EventPollingWorker(id: Int, owner: HandleOwner) extends Worker(id, owner), EventPoller {
+  abstract class EventPollingWorker(id: Int, owner: HandleOwner)
+      extends PoolOpWorker[EventPoller](id, owner),
+        EventPoller {
     type Op = EventPollingOp
 
-    /** either schedules a waiter (false), or completes immediately (true) */
-    override def performOp(op: EventPollingOp)(using Async): Unit = {
-      op match
-        case timer: EventPollingMakeTimer =>
-          timer.holdTimerOn(this)
-          timer.parkUntilSettled()
-        case deadline: EventPollingMakeDeadline =>
-          deadline.holdTimerOn(this)
-          deadline.parkUntilSettled()
-        case close: EventPollingCloseOp         => close.performClose(this)
-        case ready: EventPollingReadinessOp     => ready.performWhenReady(this)
-        case immediate: EventPollingImmediateOp => immediate.perform(handleOwner)
-        case work: EventPollingOffThreadOp      => work.performInPlace(this)
-        case connect: EventPollingConnectOp     => connect.performConnect(this)
-    }
+    /** On the worker's own thread, with the worker handed over, if it has nothing else to run (see `performInPlace`). */
+    protected[io] def performBlocking(work: PoolOp.OffThread[EventPoller])(using Async): Unit = work.performInPlace(this)
   }
 }
 

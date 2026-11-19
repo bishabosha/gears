@@ -1,7 +1,6 @@
 package gears.async.io.eventpolling
 
-import gears.async.io.shareable.EventSource
-import gears.async.io.shareable.Poller
+import gears.async.io.shareable.PoolSource
 import gears.async.io.shareable.TimerHeap.TimerOp
 
 import java.io.IOException
@@ -16,7 +15,7 @@ import java.io.IOException
   * `lookBeforeWaiting`, `waitFor`), what each event it gave says (`report`), and how it is woken and closed
   * (`trigger`, `closeQueue`).
   */
-trait EventPoller extends Poller, EventSource {
+trait EventPoller extends PoolSource {
 
   /** Its timers include every op of this backend's: the worker it is part of takes its pool's ops. */
   type Timer >: EventPollingOp <: TimerOp
@@ -151,24 +150,11 @@ trait EventPoller extends Poller, EventSource {
   /** Set before the queue is closed, which the worker does as it leaves its loop. */
   @volatile private var closed = false
 
-  /** Set once the queue is given up: from then on this waits without it, and reports no handle ready. */
-  @volatile private var broken = false
-
-  /** The worker's thread, once it has waited here: what a wake-up unparks when there is no queue to trigger. */
-  @volatile private var waitingThread: Thread | Null = null
-
-  override protected def drivenBy(thread: Thread): Unit = waitingThread = thread
-
-  private def wakeWaiting(): Unit = {
-    val thread = waitingThread
-    if thread != null then java.util.concurrent.locks.LockSupport.unpark(thread)
-  }
-
   /** A worker that has left has nothing to wake, and a `wake` racing its `close` may find the queue gone: neither is a
     * failure. Should its descriptor have been reused by then, the worst this does is wake another once.
     */
   final def wake(): Unit =
-    if broken then wakeWaiting()
+    if hasGivenUp then wakeWaiting()
     else if !closed then
       try trigger()
       catch
@@ -187,17 +173,8 @@ trait EventPoller extends Poller, EventSource {
   private def pollFailed(failure: IOException): Unit = {
     pollFailures += 1
     if pollFailures < EventPoller.PollAttempts then Thread.sleep(pollFailures.toLong) // a millisecond, then two
-    else
-      broken = true
-      pollerFailed(new IOException(s"$queueName $id gave up after $pollFailures failed polls", failure))
+    else giveUp(new IOException(s"$queueName $id gave up after $pollFailures failed polls", failure))
   }
-
-  /** Waiting with no queue: parked until the deadline or a wake-up, so that the worker still fires its timers and runs
-    * what it is given, and the program can unwind. No handle is ever reported ready.
-    */
-  private def waitWithoutQueue(timeout: Long): Unit =
-    if timeout > 0 then java.util.concurrent.locks.LockSupport.parkNanos(this, timeout)
-    else if timeout < 0 then java.util.concurrent.locks.LockSupport.park(this)
 
   protected final def waitForDeadline(deadlineTask: Long): Unit = {
     val now = System.nanoTime()
@@ -208,7 +185,7 @@ trait EventPoller extends Poller, EventSource {
       else if deadlineTask >= 0 then Math.max(deadlineTask - now, 0)
       else -1L
     val polled =
-      if broken then
+      if hasGivenUp then
         waitWithoutQueue(timeout)
         0
       else
@@ -236,7 +213,7 @@ trait EventPoller extends Poller, EventSource {
     closed = true
     // A queue that was given up may have nothing left to close.
     try closeQueue()
-    catch case _: IOException if broken => ()
+    catch case _: IOException if hasGivenUp => ()
   }
 }
 
