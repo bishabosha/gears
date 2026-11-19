@@ -1147,65 +1147,50 @@ object CapBench {
       in(at + 3) = length.toByte
     }
     /** Bytes as they come into frames: what is left of one read begins the next frame. */
-    def frames: Pipe[ByteBuffer, MuxFrame] = in =>
-      new Flow[MuxFrame] {
-        private val kept = new Array[Byte](2 * Most)
-        private var have = 0
-        private var from = 0
-        def pull()(using Async): MuxFrame | Flow.End.type = {
-          var result: MuxFrame | Flow.End.type | Null = null
-          while result == null do
-            if have - from >= Frame && have - from >= Frame + length(kept, from) then {
-              val size = length(kept, from)
-              result = new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size))
-              from += Frame + size
-            } else {
-              if from > 0 then {
-                System.arraycopy(kept, from, kept, 0, have - from)
-                have -= from
-                from = 0
-              }
-              in.pull() match {
-                case Flow.End => result = Flow.End
-                case more     =>
-                  val buf = more.asInstanceOf[ByteBuffer]
-                  val came = buf.remaining()
-                  buf.get(kept, have, came)
-                  have += came
-              }
-            }
-          result.nn
+    def frames(bytes: Flow[ByteBuffer]): Flow[MuxFrame] = Flow {
+      val kept = new Array[Byte](2 * Most)
+      var have = 0
+      for chunk <- bytes do {
+        val came = chunk.remaining()
+        chunk.get(kept, have, came)
+        have += came
+        var from = 0
+        while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+          val size = length(kept, from)
+          Flow.emit(new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size)))
+          from += Frame + size
+        }
+        if from > 0 then {
+          System.arraycopy(kept, from, kept, 0, have - from)
+          have -= from
         }
       }
+    }
 
     val server =
       Server.tcp(
-        io,
         IpSocketAddress(IpAddress.IPv4Loopback, 0),
         Server.Sizes(read = Most, write = Most, buffers = buffer),
         strategy
-      )
+      )(using io)
     if BenchFiles.environment("GEARS_TRACE") != null then System.err.println(s"$name: ${server.strategy}")
     val address = server.address
     val serving = Future {
       server.serve { connection =>
         val cache = new CacheServer
         val guard = new gears.async.Semaphore(1)
-        connection.bytes.through(frames).groupBy(_.stream).foreachPar { (stream, requests) =>
+        frames(connection.bytes).groupBy(_.stream).foreachPar { (stream, requests) =>
           val response = new Array[Byte](LargestValue + Frame)
           val out = ByteBuffer.wrap(response)
-          requests.foreach { request =>
+          for request <- requests do {
             // The handler does not know how it is served: made of futures, a connection's streams are on any
             // thread, so the cache they share is locked, with a lock that awaits and is no thread's.
-            val end = {
-              val held = guard.acquire()
+            val held = guard.acquire()
+            val end =
               try cache.handle(request.bytes, 0, response, Frame)
               finally held.release()
-            }
             head(response, 0, stream, end - Frame)
-            out.clear()
-            out.limit(end)
-            connection.sink.send(out)
+            connection.send(out.clear().limit(end))
           }
         }
       }
