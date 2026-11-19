@@ -161,7 +161,7 @@ trait AbstractReadinessHandle extends AbstractBaseHandle, ReadinessHandle:
     * which the reports only wake the listener for nothing, and tie the handle's next wait to a worker that may by then
     * be kept busy.
     */
-  protected[shareable] def idleReportsLimit: Int = 16
+  protected[io] def idleReportsLimit: Int = 16
 
   /** Whoever waits fails, and then the listeners drop the handle, while its descriptor is still its own; what they
     * registered with the kernel goes as the descriptor is closed.
