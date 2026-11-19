@@ -1,0 +1,452 @@
+package gears.async.io
+package testkit
+
+import gears.async.Async
+import gears.async.Future
+import gears.async.Semaphore
+
+import java.nio.ByteBuffer
+
+/** What `Flow`, `Sink` and `Server` must do on a backend with IP stream sockets, under every way a server may serve
+  * (`Server.Strategy`): a handler is the same under each, so each check is made under each. A strategy the backend
+  * cannot serve by must be refused.
+  */
+trait FlowContract extends ContractSuite {
+  val backend: Backend { type Interface <: IpStreams }
+
+  private val Loopback = IpSocketAddress(IpAddress.IPv4Loopback, 0)
+
+  private def sizes(read: Int = 4096, write: Int = 4096): Server.Sizes =
+    Server.Sizes(read = read, write = write, buffers = allocate)
+
+  private def connect(io: Io[backend.Interface], server: Server)(using Async): io.ops.Connection =
+    opening(io)(slot => io.ops.connect(server.address, slot))
+
+  private def send(io: Io[backend.Interface], to: io.ops.Connection, values: Array[Byte])(using Async): Unit = {
+    val buf = allocate(values.length)
+    buf.put(values).flip()
+    writeAll(io, to, buf)
+  }
+
+  /** The next `count` bytes from `from`; fewer if it ends first. */
+  private def receive(io: Io[backend.Interface], from: io.ops.Connection, count: Int)(using Async): Array[Byte] = {
+    val buf = allocate(count)
+    val read = io.ops.read(from, buf)
+    var ended = false
+    while buf.hasRemaining() && !ended do {
+      val before = buf.position()
+      try io.perform(read)
+      catch case _: java.io.IOException => ended = true
+      if buf.position() == before then ended = true
+    }
+    buf.flip()
+    val out = new Array[Byte](buf.remaining())
+    buf.get(out)
+    out
+  }
+
+  /** Runs `check` against a server serving with `handler` by `strategy`, and then closes it and waits for `serve` to
+    * return: its result, a failure if a handler failed. A strategy the backend has not must be refused instead.
+    */
+  private def serving(strategy: Server.Strategy, sizes: Server.Sizes = sizes())(handler: Connection => Async ?=> Unit)(
+      check: (Io[backend.Interface], Server) => Async.Spawn ?=> Unit
+  ): Throwable | Null =
+    running { io ?=>
+      if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then {
+        intercept[IllegalArgumentException](Server.tcp(io, Loopback, sizes, strategy)): Unit
+        Refused
+      } else {
+        val server = Server.tcp(io, Loopback, sizes, strategy)
+        val served = Future(server.serve(handler))
+        try check(io, server)
+        finally server.close()
+        failureOf(served)
+      }
+    }
+
+  /** What `serving` gives for a strategy the backend has not, which was refused as it must be. */
+  private object Refused extends Throwable
+
+  private def assertServed(failure: Throwable | Null): Unit =
+    assert(failure == null || (failure eq Refused), s"serve ended with $failure")
+
+  private def copy(buf: ByteBuffer): Array[Byte] = {
+    val out = new Array[Byte](buf.remaining())
+    buf.get(out)
+    out
+  }
+
+  test("a queue that grows after it has been taken from keeps what it holds, in order") {
+    val ring = new Ring[String]()
+    ring.add("first")
+    assertEquals(ring.poll(), "first")
+    for i <- 0 until 100 do ring.add(s"e$i")
+    assertEquals(ring.size, 100)
+    for i <- 0 until 100 do assertEquals(ring.poll(), s"e$i")
+    assertEquals(ring.poll(), null)
+    assert(ring.isEmpty)
+  }
+
+  test("a flow's combinators, under any Async") {
+    running {
+      import Flow.*
+      val evens = Flow.of(1, 2, 3, 4, 5, 6, 7, 8).filter(_ % 2 == 0).map(_ * 10)
+      assertEquals(evens.take(3).fold(List.empty[Int])((seen, next) => next :: seen).reverse, List(20, 40, 60))
+      val doubled: Pipe[Int, Int] = in => in.map(_ * 2)
+      var sum = 0
+      Flow.of(1, 2, 3).through(doubled).foreach(sum += _)
+      assertEquals(sum, 12)
+      assert(Flow.of[Int]().pull().asInstanceOf[AnyRef] eq Flow.End)
+    }
+  }
+
+  test("groupBy and foreachPar with no reactor: every element reaches its key's flow, in order") {
+    running {
+      import Flow.*
+      val seen = new java.util.concurrent.ConcurrentHashMap[Int, List[Int]]()
+      Flow.of((1 to 40)*).groupBy(_ % 4).foreachPar { (key, elements) =>
+        seen.put(key, elements.fold(List.empty[Int])((sofar, next) => next :: sofar).reverse): Unit
+      }
+      for key <- 0 until 4 do assertEquals(seen.get(key), (1 to 40).filter(_ % 4 == key).toList)
+    }
+  }
+
+  test("foreachPar with no reactor throws a failure of one of its flows") {
+    running {
+      import Flow.*
+      val thrown = intercept[IllegalStateException] {
+        Flow.of(1, 2, 3).foreachPar(element => if element == 2 then throw new IllegalStateException("two"))
+      }
+      assertEquals(thrown.getMessage, "two")
+    }
+  }
+
+  for strategy <- Server.Strategy.values do {
+
+    test(s"$strategy: a connection's bytes sent to its sink are echoed, and the server ends when closed") {
+      val failure = serving(strategy) { connection =>
+        import Flow.*
+        connection.bytes.to(connection.sink)
+      } { (io, server) =>
+        val client = connect(io, server)
+        val message = "hello, flows".getBytes("UTF-8")
+        send(io, client, message)
+        assertEquals(receive(io, client, message.length).toList, message.toList)
+        send(io, client, message)
+        assertEquals(receive(io, client, message.length).toList, message.toList)
+        close(io, client)
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: a server closed with no connection ends") {
+      assertServed(serving(strategy)(_ => ())((_, _) => ()))
+    }
+
+    test(s"$strategy: a connection is closed when its handler ends, what it sent written first") {
+      val failure = serving(strategy) { connection =>
+        connection.sink.send(ByteBuffer.wrap("bye".getBytes("UTF-8")))
+      } { (io, server) =>
+        val client = connect(io, server)
+        // Three bytes, and then the end.
+        assertEquals(new String(receive(io, client, 8), "UTF-8"), "bye")
+        close(io, client)
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: streams dealt by key answer in their own flows, each send whole and each key's in order") {
+      val keys = 4
+      val each = 32
+      val failure = serving(strategy) { connection =>
+        import Flow.*
+        val guard = new Semaphore(1)
+        var answered = 0
+        // A byte is a frame: its low two bits its stream.
+        val frames: Pipe[ByteBuffer, Integer] = in =>
+          new Flow[Integer] {
+            private var chunk: ByteBuffer | Null = null
+            def pull()(using Async): Integer | Flow.End.type = {
+              var result: Integer | Flow.End.type | Null = null
+              while result == null do {
+                val have = chunk
+                if have != null && have.hasRemaining() then result = Integer.valueOf(have.get() & 0xff)
+                else
+                  in.pull() match {
+                    case Flow.End => result = Flow.End
+                    case more     => chunk = more.asInstanceOf[ByteBuffer]
+                  }
+              }
+              result.nn
+            }
+          }
+        connection.bytes.through(frames).groupBy(_.intValue & 3).foreachPar { (key, values) =>
+          values.foreach { value =>
+            // What the streams share is locked, whatever serves them.
+            val held = guard.acquire()
+            try answered += 1
+            finally held.release()
+            connection.sink.send(ByteBuffer.wrap(Array[Byte]('<', key.toByte, value.byteValue, '>')))
+          }
+        }
+        assertEquals(answered, keys * each)
+      } { (io, server) =>
+        val client = connect(io, server)
+        send(io, client, Array.tabulate(keys * each)(_.toByte))
+        val answers = receive(io, client, keys * each * 4)
+        assertEquals(answers.length, keys * each * 4)
+        val seen = Array.fill(keys)(List.empty[Int])
+        for at <- 0 until answers.length by 4 do {
+          assertEquals(answers(at).toChar, '<')
+          assertEquals(answers(at + 3).toChar, '>')
+          val key = answers(at + 1).toInt
+          val value = answers(at + 2) & 0xff
+          assertEquals(value & 3, key)
+          seen(key) = value :: seen(key)
+        }
+        for key <- 0 until keys do assertEquals(seen(key).reverse, (0 until keys * each).filter(_ % keys == key).toList)
+        close(io, client)
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: a handler spawns futures and awaits them, others served meanwhile") {
+      val failure = serving(strategy) { connection =>
+        import Flow.*
+        connection.bytes.foreach { chunk =>
+          val bytes = copy(chunk)
+          val answer = Async.group(Future(bytes.map(byte => (byte + 1).toByte)).await)
+          connection.sink.send(ByteBuffer.wrap(answer))
+        }
+      } { (io, server) =>
+        val clients = List.fill(6)(connect(io, server))
+        val asking = clients.zipWithIndex.map { (client, index) =>
+          Future {
+            for round <- 0 until 8 do {
+              send(io, client, Array[Byte](index.toByte, round.toByte))
+              assertEquals(receive(io, client, 2).toList, List[Byte]((index + 1).toByte, (round + 1).toByte))
+            }
+          }
+        }
+        asking.foreach(_.await)
+        clients.foreach(close(io, _))
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: more is sent than the sink holds, and all of it arrives in order") {
+      val total = 64 * 1024
+      val failure = serving(strategy, sizes(read = 512, write = 1024)) { connection =>
+        val chunk = new Array[Byte](700)
+        var sent = 0
+        while sent < total do {
+          val size = math.min(chunk.length, total - sent)
+          for at <- 0 until size do chunk(at) = ((sent + at) % 251).toByte
+          connection.sink.send(ByteBuffer.wrap(chunk, 0, size))
+          sent += size
+        }
+        connection.sink.flush()
+      } { (io, server) =>
+        val client = connect(io, server)
+        val got = receive(io, client, total)
+        assertEquals(got.length, total)
+        for at <- 0 until total do if got(at) != (at % 251).toByte then fail(s"byte $at is ${got(at)}")
+        close(io, client)
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: a handler's failure closes its connection, leaves the others, and is thrown by serve") {
+      val failure = serving(strategy) { connection =>
+        import Flow.*
+        connection.bytes.foreach { chunk =>
+          if chunk.get(chunk.position()) == 'X' then throw new IllegalStateException("handler failed")
+          connection.sink.send(chunk)
+        }
+      } { (io, server) =>
+        val failing = connect(io, server)
+        val served = connect(io, server)
+        send(io, failing, Array[Byte]('X'))
+        // Its connection is closed: nothing more comes.
+        assertEquals(receive(io, failing, 1).length, 0)
+        send(io, served, Array[Byte]('a', 'b'))
+        assertEquals(receive(io, served, 2).toList, List[Byte]('a', 'b'))
+        close(io, failing)
+        close(io, served)
+      }
+      if failure ne Refused then {
+        assert(failure.isInstanceOf[IllegalStateException], s"serve ended with $failure")
+        assertEquals(failure.nn.getMessage, "handler failed")
+      }
+    }
+  }
+}
+
+/** What a backend with shards must do: an op performed on a shard's view is the op, whichever shard. */
+trait ShardsContract extends ContractSuite with IpStreamFixture {
+  val backend: Backend { type Interface <: IpStreams & Shards }
+
+  test("ops performed on each shard's view echo as on the Io itself") {
+    running { io ?=>
+      import Shards.*
+      assert(io.shards >= 1)
+      val listener = opening[io.ops.Listener](io)(slot => io.ops.listen(IpSocketAddress(IpAddress.IPv4Loopback, 0), slot))
+      val address = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress]
+      try
+        for shard <- 0 until io.shards do {
+          val on = io.onShard(shard)
+          val (client, server) = pair(io, listener)(opening(io)(slot => io.ops.connect(address, slot)))
+          try {
+            val out = bytes(s"shard $shard")
+            val write = on.ops.write(client, out)
+            while out.hasRemaining() do on.perform(write)
+            val in = allocate(out.limit())
+            // The read waits: the echo's other half is written only once it does.
+            val reading = Future {
+              val read = on.ops.read(server, in)
+              while in.hasRemaining() do on.perform(read)
+            }
+            reading.await
+            assertEquals(text(in), s"shard $shard")
+            // And one that has to wait on the shard.
+            val later = allocate(4)
+            val waiting = Future(on.perform(on.ops.read(client, later)))
+            settle(io)
+            val reply = bytes("pong")
+            val answer = on.ops.write(server, reply)
+            while reply.hasRemaining() do on.perform(answer)
+            waiting.await
+            assert(later.position() > 0)
+          } finally {
+            close(io, client)
+            close(io, server)
+          }
+        }
+      finally close(io, listener)
+    }
+  }
+
+  test("a shard there is not is refused") {
+    running { io ?=>
+      import Shards.*
+      intercept[IllegalArgumentException](io.onShard(io.shards)): Unit
+      intercept[IllegalArgumentException](io.onShard(-1)): Unit
+    }
+  }
+}
+
+/** What a backend with submission queues must do. */
+trait SubmissionQueueContract extends ContractSuite with IpStreamFixture {
+  val backend: Backend { type Interface <: IpStreams & SubmissionQueues }
+
+  private def paired[T](body: (Io[backend.Interface], AnyRef, AnyRef) => Async.Spawn ?=> T): T =
+    running { io ?=>
+      val listener = opening[io.ops.Listener](io)(slot => io.ops.listen(IpSocketAddress(IpAddress.IPv4Loopback, 0), slot))
+      val address = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress]
+      val (client, server) = pair(io, listener)(opening(io)(slot => io.ops.connect(address, slot)))
+      try body(io, client, server)
+      finally {
+        close(io, client)
+        close(io, server)
+        close(io, listener)
+      }
+    }
+
+  test("ops submitted are performed and come back completed, each with its tag") {
+    paired { (io, c, s) =>
+      import SubmissionQueues.*
+      val client = c.asInstanceOf[io.ops.Connection]
+      val server = s.asInstanceOf[io.ops.Connection]
+      val out = bytes("queued")
+      val in = allocate(6)
+      val ops = new SubmissionQueue[io.Op]
+      val completed = new CompletionQueue[io.Op]
+      ops.submit(io.ops.write(client, out), "write")
+      ops.submit(io.ops.read(server, in), "read")
+      assertEquals(ops.submitted, 2)
+      var tags = Set.empty[AnyRef | Null]
+      while tags.size < 2 do {
+        io.performQueue(ops, completed)
+        for i <- 0 until completed.count do {
+          assertEquals(completed.failure(i), null)
+          tags += completed.tag(i)
+        }
+        completed.clear()
+      }
+      assertEquals(tags, Set[AnyRef | Null]("write", "read"))
+      assert(ops.isEmpty)
+      assert(in.position() > 0)
+    }
+  }
+
+  test("an op that has to wait stays in flight, and is completed by a later call") {
+    paired { (io, c, s) =>
+      import SubmissionQueues.*
+      val client = c.asInstanceOf[io.ops.Connection]
+      val server = s.asInstanceOf[io.ops.Connection]
+      val in = allocate(4)
+      val ops = new SubmissionQueue[io.Op]
+      val completed = new CompletionQueue[io.Op]
+      ops.submit(io.ops.read(server, in), "read")
+      // A timer among the ops is what bounds the wait.
+      ops.submit(io.ops.timer(20), "timer")
+      io.performQueue(ops, completed)
+      assertEquals(completed.count, 1)
+      assertEquals(completed.tag(0), "timer")
+      assertEquals(ops.inFlight, 1)
+      completed.clear()
+      writeAll(io, client, bytes("late"))
+      io.performQueue(ops, completed)
+      assertEquals(completed.count, 1)
+      assertEquals(completed.tag(0), "read")
+      assertEquals(completed.failure(0), null)
+      assertEquals(ops.inFlight, 0)
+    }
+  }
+
+  test("an op's time limit is its completion's failure, not thrown") {
+    paired { (io, _, s) =>
+      import SubmissionQueues.*
+      import scala.concurrent.duration.*
+      val server = s.asInstanceOf[io.ops.Connection]
+      val ops = new SubmissionQueue[io.Op]
+      val completed = new CompletionQueue[io.Op]
+      ops.submit(io.ops.read(server, allocate(4)), "read", 20.millis)
+      io.performQueue(ops, completed)
+      assertEquals(completed.count, 1)
+      assert(completed.failure(0).isInstanceOf[java.util.concurrent.TimeoutException], s"${completed.failure(0)}")
+    }
+  }
+
+  test("a performQueue with nothing submitted and nothing in flight returns") {
+    running { io ?=>
+      import SubmissionQueues.*
+      val ops = new SubmissionQueue[io.Op]
+      val completed = new CompletionQueue[io.Op]
+      io.performQueue(ops, completed)
+      assertEquals(completed.count, 0)
+    }
+  }
+
+  test("a caller cancelled as it waits has its ops in flight cancelled, and they can be performed again") {
+    paired { (io, c, s) =>
+      import SubmissionQueues.*
+      val client = c.asInstanceOf[io.ops.Connection]
+      val server = s.asInstanceOf[io.ops.Connection]
+      val in = allocate(4)
+      val read = io.ops.read(server, in)
+      val waiting = Future {
+        val ops = new SubmissionQueue[io.Op]
+        val completed = new CompletionQueue[io.Op]
+        ops.submit(read)
+        io.performQueue(ops, completed)
+      }
+      settle(io)
+      waiting.cancel()
+      assert(failureOf(waiting).isInstanceOf[java.util.concurrent.CancellationException])
+      writeAll(io, client, bytes("more"))
+      io.perform(read)
+      assert(in.position() > 0)
+    }
+  }
+}

@@ -74,6 +74,25 @@ abstract class AbstractConnectOp[H <: ReadinessHandle](into: Slot[H])
       published = true
       Moved(0)
 
+  /** `performConnect` up to its wait, for a queue. */
+  final def beginConnect(self: Source): Boolean =
+    val opened = _startConnect(self.handleOwner)
+    opened.open()
+    socket = opened
+    try beginWhenReadyOn(opened)(self)
+    catch
+      case failure: Throwable =>
+        endConnect()
+        throw failure
+
+  /** After `beginConnect`: a socket that did not connect, which nothing else has, is closed. */
+  final def endConnect(): Unit =
+    endWaiting()
+    val opened = socket
+    if opened != null && !published then
+      try opened.requestClose(): Unit
+      catch case _: java.io.IOException => ()
+
   final def performConnect(self: Source)(using gears.async.Async): Unit =
     val opened = _startConnect(self.handleOwner)
     opened.open()

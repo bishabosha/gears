@@ -28,7 +28,7 @@ import gears.async.io.shareable.LendingPool
 import java.nio.ByteBuffer
 import scala.concurrent.duration.FiniteDuration
 
-sealed trait NioInterface extends Interface {
+sealed trait NioInterface extends Interface, gears.async.io.SubmissionQueues, gears.async.io.Shards {
   override type Op = NioOp
 
   override def timer(duration: FiniteDuration): NioTimerOp & Repeatable = {

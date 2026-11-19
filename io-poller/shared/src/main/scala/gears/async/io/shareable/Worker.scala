@@ -147,6 +147,21 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
       true
     else false
 
+  /** One op of a queue's started now, on this worker (see `Pipeline.startNow`). */
+  def startQueued[O](ops: gears.async.io.SubmissionQueue[O], op: O, tag: AnyRef | Null, limit: Long)(
+      whole: (Op, Long) => Unit
+  )(using gears.async.Async): Boolean =
+    throw new UnsupportedOperationException("This worker's ops are not of the kinds a queue performs")
+
+  /** What `Io.performQueue` does, on this worker: the ops of `ops` are begun here, and those that wait are listened for
+    * here. `whole` performs an op that is not begun and ended in two parts. For a worker whose ops are of the kinds a
+    * backend has (`PoolOpWorker`).
+    */
+  def performQueue[O](ops: gears.async.io.SubmissionQueue[O], completed: gears.async.io.CompletionQueue[O])(
+      whole: (Op, Long) => Unit
+  )(using gears.async.Async): Unit =
+    throw new UnsupportedOperationException("This worker's ops are not of the kinds a queue performs")
+
   /** How many ops have been performed on this worker since it last began a turn or had a future yield: an op that waits
     * ends the run of whoever performs it, so only ops done as they are tried add up. Worker thread only.
     */

@@ -48,6 +48,41 @@ trait Io[+I <: Interface] extends AsyncOperations {
     performWithin(op, millis)
   }
 
+  /** For a `Reactor`: starts one op of `ops`'s now. Whether it is done, its failure thrown; if not it is in flight, or
+    * submitted, with `tag`, and its completion comes with a later `performQueue`.
+    */
+  private[io] def startSubmitted(ops: SubmissionQueue[Op], op: Op, tag: AnyRef | Null, timeoutMillis: Long)(using
+      Async
+  ): Boolean = {
+    ops.submitWithin(op, tag, timeoutMillis)
+    false
+  }
+
+  /** Whether a flow of a reactor's is resumed where it is, as a continuation, and not by way of a thread of its own:
+    * a fact of the platform's suspension, which `Server` reads to tell whether a reactor is worth having.
+    */
+  private[io] def flowsAreContinuations: Boolean = false
+
+  /** Whether an op that waits does so with its performer's `Async`, as `Async.await` does: what lets a reactor with no
+    * queue set a flow aside for its op. Not where a backend suspends its performer by a way of its own, or parks its
+    * thread: there the whole reactor would wait for one flow's op. A backend says so if it is so.
+    */
+  private[io] def opsAwaitThroughAsync: Boolean = false
+
+  /** Performs `op` as `performWithin` does, but begun on the thread of `shard`'s, one of `submissionShards`, whichever
+    * thread the caller is on: so listened for there if it waits, and settled there. A backend with one thread, or
+    * none of its own, performs it as ever.
+    */
+  private[io] def performPinned(shard: Int, op: Op, timeoutMillis: Long)(using Async): Unit =
+    performWithin(op, timeoutMillis)
+
+  /** What `SubmissionQueues.queueShards` is, for a backend that has that capability. */
+  private[io] def submissionShards: Int = 1
+
+  /** What `SubmissionQueues.performQueue` does, for a backend that has that capability. */
+  private[io] def performSubmitted(ops: SubmissionQueue[Op], completed: CompletionQueue[Op])(using Async): Unit =
+    throw new UnsupportedOperationException("This backend has no submission queues")
+
   /** Performs `op` with a time limit of `timeoutMillis`, none if it is negative: what each backend's `Io` does. */
   private[io] def performWithin(op: Op, timeoutMillis: Long)(using Async): Unit
 

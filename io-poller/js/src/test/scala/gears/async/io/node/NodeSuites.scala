@@ -227,3 +227,11 @@ class NodeFifoSuite extends FifoContract with NodeSuite {
 class NodeFifoFileSuite extends FifoFileContract with NodeSuite {
   val backend: Backend { type Interface <: Fifos & RegularFiles } = NodeBackend
 }
+
+class NodeFlowSuite extends FlowContract with NodeSuite {
+  val backend: Backend { type Interface <: IpStreams } = NodeBackend
+}
+
+class NodeSubmissionQueueSuite extends SubmissionQueueContract with NodeSuite {
+  val backend: Backend { type Interface <: IpStreams & SubmissionQueues } = NodeBackend
+}

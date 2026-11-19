@@ -249,6 +249,48 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     }
   }
 
+  /** Many ops, with one wait for all of them (see `Pipeline`): begun on the performer's worker, which listens for those
+    * that wait.
+    */
+  override private[io] def performSubmitted(
+      ops: gears.async.io.SubmissionQueue[Op],
+      completed: gears.async.io.CompletionQueue[Op]
+  )(using Async): Unit = {
+    var worker = selectWorker()
+    if budgetSpent(worker) then
+      `yield`()
+      worker = selectWorker()
+    // A shard's queue is its worker's, whichever worker its future is on just now: the worker listens for its ops, and
+    // resumes the future on itself as it settles them.
+    val shard = ops.shard
+    val pinned = if shard >= 0 then workerFor(shard.toLong) else worker
+    pinned.performQueue(ops, completed)((op, limit) => performWithin(op.asInstanceOf[Op], limit))
+  }
+
+  override private[io] def submissionShards: Int = workers
+
+  /** An op's wait is `Async.await` of the op (`Parking`). */
+  override private[io] def opsAwaitThroughAsync: Boolean = true
+
+  override private[io] def performPinned(shard: Int, op: Op, timeoutMillis: Long)(using Async): Unit =
+    op.performWith {
+      val worker = workerFor(shard.toLong)
+      op.setTimeout(timeoutMillis)
+      try worker.performOp(op.asInstanceOf[worker.Op])
+      finally op.clearTimeout()
+    }
+
+  override private[io] def startSubmitted(
+      ops: gears.async.io.SubmissionQueue[Op],
+      op: Op,
+      tag: AnyRef | Null,
+      timeoutMillis: Long
+  )(using Async): Boolean = {
+    val shard = ops.shard
+    val pinned = if shard >= 0 then workerFor(shard.toLong) else selectWorker()
+    pinned.startQueued(ops, op, tag, timeoutMillis)((op, limit) => performWithin(op.asInstanceOf[Op], limit))
+  }
+
   /** Whether the future performing an op on `worker` now should yield first (see `Worker.opBudgetSpent`): for a pool
     * whose futures run on its workers, which is what the budget is for.
     */

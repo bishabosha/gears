@@ -14,6 +14,9 @@ import gears.async.native.NativeSuspend
 abstract class EventPollingScheduler(workers: Int, onStarvation: Starvation.Handler)
     extends WorkpoolScheduler[EventPollingOps.type](EventPollingBackend, EventPollingOps, workers, onStarvation),
       NativeSuspend {
+  /** A flow is a continuation, resumed where the reactor is. */
+  override private[io] def flowsAreContinuations: Boolean = true
+
   override protected def selectWorker() = workerOfCurrentThread()
 
   override def makeWorker(id: Int, owner: HandleOwner): EventPollingWorker

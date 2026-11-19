@@ -30,6 +30,17 @@ abstract class AbstractCloseOp(val handle: BaseHandle)
     if !pollClose() then shouldWait = true
     if shouldWait then parkUntilSettled()
 
+  /** `performClose` up to its wait, for a queue: whether the handle is closed, and there is no time limit to keep. */
+  final def beginClose(self: Source): Boolean =
+    self.handleOwner.check(handle)
+    var waits = false
+    if hasDeadline then
+      holdTimerOn(self)
+      waits = true
+    expose()
+    if !pollClose() then waits = true
+    !waits
+
   /** Whether the handle is closed already. If not, work claimed on it is still under way, and the last of it to be
     * released closes the handle and tells this op, its one owner.
     */

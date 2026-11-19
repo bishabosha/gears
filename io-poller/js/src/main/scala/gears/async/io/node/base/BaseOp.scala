@@ -129,6 +129,29 @@ trait CallOp extends CallState {
   /** The kind of op that is Node's own, beside the shared layer's (`BackendOp`). */
   final def performOn(performer: shareable.OpPerformer[NodeSource.type] & NodeSource.type)(using Async): Unit =
     performCall(performer)
+
+  // For a submission queue: the call is made, and what it calls back settles the op.
+
+  final override def begins: Boolean = true
+
+  final override def beginOn(performer: shareable.OpPerformer[NodeSource.type] & NodeSource.type): Boolean = {
+    val owner = performer.handleOwner
+    performedFor = owner
+    admit(owner)
+    try call()
+    catch {
+      case failure: Throwable =>
+        abandonCall(failure)
+        throw failure
+    }
+    if !settled then {
+      expose()
+      if hasDeadline then holdTimerOn(performer)
+    }
+    settled
+  }
+
+  final override def endOn(): Unit = finish()
 }
 
 /** A call on a handle that the event loop cannot take back, a file's read or a datagram's send: the handle's work is
