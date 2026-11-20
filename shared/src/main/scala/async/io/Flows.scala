@@ -78,9 +78,63 @@ object Flow {
   /** What `Flow { ... }` and the combinators make: one class for all of them, each a function of its own, so that a
     * place where a flow is made adds a function to the program and not a class.
     */
-  final class Made[U, A](from: Flow[U] | Null, override val depth: Int, run: (Flow[U], A => Unit, Async) => Unit)
-      extends Flow[A] {
+  final class Made[U, A](
+      val from: Flow[U] | Null,
+      override val depth: Int,
+      run: (Flow[U], A => Unit, Async) => Unit,
+      /** For a flow that is one of another by a stage that never waits: what that stage does to the step after it.
+        * Null for a flow that is code of its own.
+        */
+      val stage: (Step[A] => Step[U]) | Null = null
+  ) extends Flow[A] {
     def foreach(each: A => Unit)(using async: Async): Unit = run(from.asInstanceOf[Flow[U]], each, async)
+  }
+
+  /** What elements are pushed to, one at a time, and told when there are no more: a stage of a pipeline as something
+    * that is called and returns, with nothing of it left on a stack between elements.
+    */
+  abstract class Step[-A] {
+    def push(element: A): Unit
+    def end(): Unit
+  }
+
+  /** A step that is a function of an element, and ends the step after it. */
+  final class Pushing[A](each: A => Unit, next: Step[?]) extends Step[A] {
+    def push(element: A): Unit = each(element)
+    def end(): Unit = next.end()
+  }
+
+  /** A flow that elements are pushed into by whoever drives a pipeline: the beginning of one that is not run but
+    * stepped. It cannot be run.
+    */
+  final class Port[A] extends Flow[A] {
+    def foreach(each: A => Unit)(using Async): Unit =
+      throw new UnsupportedOperationException("This flow is driven, an element at a time: it is not run")
+  }
+
+  /** `flow` as a step: what to push `root`'s elements to so that `flow`'s reach `last`. Null if `flow` is not made of
+    * `root` by stages alone.
+    */
+  private[io] def compile[A](flow: Flow[A], root: Flow[?], last: Step[A]): Step[Any] | Null =
+    if flow eq root then last.asInstanceOf[Step[Any]]
+    else
+      flow match {
+        case made: Made[u, A] @unchecked if made.stage != null && made.from != null =>
+          compile(made.from.nn, root, made.stage.nn(last))
+        case _ => null
+      }
+
+  /** A flow made of `upstream` by a stage that never waits: `body` for when it is run, `make` for when it is stepped. */
+  private[io] inline def staged[U, A](upstream: Flow[U])(inline body: Flow[U] => Emit[A] ?=> Async ?=> Unit)(
+      inline make: Step[A] => Step[U]
+  ): Flow[A] = {
+    val from = shallow(upstream)
+    new Made[U, A](
+      from,
+      from.depth + 1,
+      (from, each, async) => body(from)(using new Emit[A](each))(using async),
+      next => make(next)
+    )
   }
 
   /** A flow made of `upstream`, one stage more: `body` is given what to run in its place, which is `upstream`, or,
@@ -404,6 +458,38 @@ object Flow {
     }
   }
 
+  /** A step with nothing after it. */
+  private object Ended extends Step[Any] {
+    def push(element: Any): Unit = ()
+    def end(): Unit = ()
+  }
+
+  /** `groupThrough`'s step: a step for each key, made as the key is first met, all of them into `next`. */
+  private final class Dealing[A, K, B](key: A => K, sub: (K, Flow[A]) => Flow[B], next: Step[B]) extends Step[A] {
+    private val keys = new java.util.HashMap[K, Step[Any]]()
+    // A key's pipeline ends into this, which does not end what all of them share.
+    private val shared = new Pushing[B](next.push, Ended)
+
+    def push(element: A): Unit = {
+      val k = key(element)
+      var step = keys.get(k)
+      if step == null then {
+        val port = new Port[A]
+        val made = compile(sub(k, port), port, shared)
+        if made == null then
+          throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages that do not wait")
+        step = made
+        keys.put(k, step): Unit
+      }
+      step.push(element)
+    }
+
+    def end(): Unit = {
+      keys.values().forEach(_.end())
+      next.end()
+    }
+  }
+
   /** The flows' elements, one flow after another, however many there are. */
   def concat[A](flows: IterableOnce[Flow[A]]): Flow[A] = Flow(flows.iterator.foreach(_.foreach(emit)))
 
@@ -423,9 +509,15 @@ object Flow {
 
     // ---- one flow of another, nothing running between them
 
-    inline def map[B](inline f: A => B): Flow[B] = over(flow)(from => from.foreach(element => emit(f(element))))
+    inline def map[B](inline f: A => B): Flow[B] =
+      staged[A, B](flow)(from => from.foreach(element => emit(f(element))))(next =>
+        new Pushing[A](element => next.push(f(element)), next)
+      )
 
-    inline def filter(inline keep: A => Boolean): Flow[A] = over(flow)(from => from.foreach(element => if keep(element) then emit(element)))
+    inline def filter(inline keep: A => Boolean): Flow[A] =
+      staged[A, A](flow)(from => from.foreach(element => if keep(element) then emit(element)))(next =>
+        new Pushing[A](element => if keep(element) then next.push(element), next)
+      )
 
     /** For `for a <- flow if ... do`. */
     inline def withFilter(inline keep: A => Boolean): Flow[A] = filter(keep)
@@ -434,7 +526,9 @@ object Flow {
     inline def flatMap[B](inline f: A => Flow[B]): Flow[B] = over(flow)(from => from.foreach(element => f(element).foreach(emit)))
 
     def collect[B](f: PartialFunction[A, B]): Flow[B] =
-      over(flow)(from => from.foreach(element => if f.isDefinedAt(element) then emit(f(element))))
+      staged[A, B](flow)(from => from.foreach(element => if f.isDefinedAt(element) then emit(f(element))))(next =>
+        new Pushing[A](element => if f.isDefinedAt(element) then next.push(f(element)), next)
+      )
 
     /** This flow's elements, and then `next`'s. */
     def ++[B >: A](next: Flow[B]): Flow[B] = {
@@ -477,7 +571,35 @@ object Flow {
 
     /** The elements `f` makes of each, in turn. */
     inline def mapConcat[B](inline f: A => IterableOnce[B]): Flow[B] =
-      over(flow)(from => from.foreach(element => f(element).iterator.foreach(emit)))
+      staged[A, B](flow)(from => from.foreach(element => f(element).iterator.foreach(emit)))(next =>
+        new Pushing[A](element => f(element).iterator.foreach(next.push), next)
+      )
+
+    /** A stage with something of its own to keep between elements, a decoder say: `handler` is called once, as the
+      * flow begins, with what to call for each element it makes, and gives what to call with each element that
+      * comes. Neither may wait: it is a stage that is stepped, not run.
+      *
+      * {{{
+      * bytes.process[String] { emit =>
+      *   val line = new StringBuilder
+      *   chunk => while chunk.hasRemaining() do { ... emit(line.result()) ... }
+      * }
+      * }}}
+      */
+    def process[B](handler: (B => Unit) => (A => Unit)): Flow[B] =
+      staged[A, B](flow)(from => from.foreach(handler(emit)))(next => new Pushing[A](handler(next.push), next))
+
+    /** The elements dealt by `key`, each key's through a pipeline of its own, and what those make, as it is made:
+      * `sub` is called once for a key, as it is first met, with the key and the flow of its elements, and gives what
+      * becomes of them. It is `groupBy` for streams that never wait: nothing runs beside anything, a key's stages are
+      * called with each of its elements as it comes. `sub`'s flow must be made of the one it is given by stages.
+      */
+    def groupThrough[K, B](key: A => K)(sub: (K, Flow[A]) => Flow[B]): Flow[B] =
+      staged[A, B](flow) { from =>
+        val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended))
+        from.foreach(dealing.push)
+        dealing.end()
+      }(next => new Dealing[A, K, B](key, sub, next))
 
     /** The elements in lists of `size`, the last of what is left. */
     def grouped(size: Int): Flow[List[A]] = over(flow) { from =>
@@ -556,7 +678,10 @@ object Flow {
     }
 
     /** Each element, as it goes by. */
-    inline def tap(inline see: A => Unit): Flow[A] = over(flow)(from => from.foreach { element => see(element); emit(element) })
+    inline def tap(inline see: A => Unit): Flow[A] =
+      staged[A, A](flow)(from => from.foreach { element => see(element); emit(element) })(next =>
+        new Pushing[A](element => { see(element); next.push(element) }, next)
+      )
 
     /** What `f` has made of the elements so far, after each. */
     inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] = over(flow) { from =>

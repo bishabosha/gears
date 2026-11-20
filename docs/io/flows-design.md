@@ -433,6 +433,54 @@ limit being the op's own on its worker's heap and a cancel taking the performer 
 measured inside the ranges of the wait it replaced (kqueue: echo 7.10 against 7.25, realistic 9.48 against 9.67 with
 one worker; 3.88 against 3.86 with four). An op's wait is a system call's worth; its listener is not what it costs.
 
+## Pipelines of stages, and a machine that steps them
+
+A handler that is run needs somewhere to stand while it waits: a future or a flow for the connection, and for each of
+its streams. A pipeline whose stages never wait needs nowhere. Its stages are functions called with an element and
+returning, so a connection is its buffers and a read in flight, and a stream is an object in a map.
+
+Stages are the combinators that could always have been functions: `map`, `filter`, `collect`, `mapConcat`, `tap`,
+and two for this. `process(handler)` is a stage with something to keep between elements, a decoder: `handler` is
+called once with what to call for each element it makes, and gives what to call with each that comes.
+`groupThrough(key)(sub)` deals elements by key, each key's through a pipeline of its own, `sub` called once for a
+key. A flow made by stages is the same flow as before when it is run; it can also be stepped (`Flow.Step`).
+
+```scala
+server.serveFlow { connection =>
+  val cache = new Cache
+  connection.bytes.process[Frame](decoder).groupThrough(_.stream) { (stream, requests) =>
+    requests.map(request => answer(cache, stream, request))
+  }
+}
+```
+
+`serveFlow` takes what makes a connection's pipeline, the flow of what is to be sent. Where the backend has
+submission queues a machine for each shard serves it: a read in flight for each connection, each chunk pushed through
+its stages as its read completes, what comes out written, the read not armed again while more than a write's worth
+waits. Elsewhere, or asked, the same pipeline is run by `serve`, a future or a flow for each connection and none for
+a stream. Either way a connection's stages are called one chunk after another on one thread, so what its streams
+share needs no lock, which a handler that is run cannot count on.
+
+16 streams a connection, 64 connections, microseconds a request, medians, each in a process of its own:
+
+| | handler, futures | handler, reactors | stages, run by `serve` | stages, the machine | no streams |
+|---|---:|---:|---:|---:|---:|
+| kqueue, 1 worker (7 runs) | 3.79 | 3.36 | 2.83 | 2.75 (2.64-2.94) | 2.58 |
+| kqueue, 4 workers (7 runs) | 1.18 | 1.10 | 0.87 | 0.85 (0.84-0.87) | 0.72 |
+| Node.js (5 runs) | 5.61 | 5.43 | 4.44 | 4.31 (4.21-4.45) | 3.64 |
+| NIO pool, 1 worker | 1.77 | 2.77 | 0.99 | 0.86 (0.79-0.88) | 0.83 |
+| NIO pool, 4 workers | 0.49 | 0.69 | 0.41 | 0.44 (0.43-0.44) | 0.38 |
+
+- Stages are 20 to 28% faster than a handler on reactors on kqueue and Node.js, and on the JVM 16 to 50% faster than
+  a handler on futures, the best it had. They are within 7 to 20% of the same work with no streams at all.
+- Nearly all of that is the stages, not the machine. The machine is 2 to 3% ahead of `serve` running the same
+  pipeline on kqueue and Node.js, 13% ahead on one NIO worker, and behind on four.
+- It is one design on every backend, the JVM among them, which reactors never were.
+
+What a pipeline of stages cannot do is wait inside a stage: ask another service, read a file. That needs a stage that
+waits, not built, or a handler that is run. A send larger than a connection's write buffer is refused by a handler's
+sink and grown for by the machine; the two should agree.
+
 ## Locks
 
 A lock that belongs to a thread (`synchronized`, `ReentrantLock`) is wrong for state that flows or futures share

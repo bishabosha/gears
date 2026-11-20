@@ -52,6 +52,8 @@ object CapBench {
     "flow-mux-pinned-futures",
     "flow-mux-shard-futures",
     "flow-mux-reactor",
+    "flow-mux-machine",
+    "flow-mux-staged",
     "flow-mux-queued",
     "flow-mux-pinned",
     "reactor-concurrent-pinned",
@@ -1137,7 +1139,9 @@ object CapBench {
       connections: Int,
       rounds: Int,
       name: String,
-      strategy: Server.Strategy
+      strategy: Server.Strategy,
+      /** None for a handler that is run; else a pipeline of stages, served by the machine or, false, by futures. */
+      staged: Option[Boolean] = None
   )(using Async.Spawn): Unit = {
     // A strategy the backend has not is no scenario of its.
     if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then return
@@ -1179,8 +1183,46 @@ object CapBench {
       )(using io)
     if BenchFiles.environment("GEARS_TRACE") != null then System.err.println(s"$name: ${server.strategy}")
     val address = server.address
+    /** `frames` as a stage that is stepped: the same loop, called with each chunk as it comes. */
+    def decoding(emit: MuxFrame => Unit): ByteBuffer => Unit = {
+      val kept = new Array[Byte](2 * Most)
+      var have = 0
+      chunk => {
+        val came = chunk.remaining()
+        chunk.get(kept, have, came)
+        have += came
+        var from = 0
+        while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+          val size = length(kept, from)
+          emit(new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size)))
+          from += Frame + size
+        }
+        if from > 0 then {
+          System.arraycopy(kept, from, kept, 0, have - from)
+          have -= from
+        }
+      }
+    }
     val serving = Future {
-      server.serve { connection =>
+      if staged.isDefined then
+        // No handler is run: a connection's pipeline is described once, and its stages called as its bytes come, one
+        // chunk after another on one thread, so what its streams share needs no lock.
+        server.serveFlow(
+          connection => {
+            val cache = new CacheServer
+            connection.bytes.process[MuxFrame](decoding).groupThrough(_.stream) { (stream, requests) =>
+              val response = new Array[Byte](LargestValue + Frame)
+              val out = ByteBuffer.wrap(response)
+              requests.map { request =>
+                val end = cache.handle(request.bytes, 0, response, Frame)
+                head(response, 0, stream, end - Frame)
+                out.clear().limit(end)
+              }
+            }
+          },
+          machine = staged.get
+        )
+      else server.serve { connection =>
         val cache = new CacheServer
         val guard = new gears.async.Semaphore(1)
         frames(connection.bytes).groupBy(_.stream).foreachPar { (stream, requests) =>
@@ -1840,6 +1882,10 @@ object CapBench {
           "reactor-realistic-pinned",
           new Servers(true, Reactor.Pinned)
         )
+      case "flow-mux-machine" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine", Server.Strategy.Auto, Some(true))
+      case "flow-mux-staged" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged", Server.Strategy.Auto, Some(false))
       case "flow-mux-reactor" =>
         flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-reactor", Server.Strategy.Reactor)
       case "reactor-concurrent-unqueued" =>

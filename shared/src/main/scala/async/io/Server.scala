@@ -75,6 +75,209 @@ final class Server private (
     * once the connections there are have been served, with the first failure a handler had thrown. A connection is
     * closed as its handler ends, what it sent written first.
     */
+  /** Serves every connection that comes by a pipeline: `pipeline` is called once for a connection, and gives the flow
+    * of what is to be sent on it, made of the connection's `bytes` by stages that do not wait (`map`, `filter`,
+    * `collect`, `mapConcat`, `process`, `groupThrough`, `tap`). Nothing of a connection is then run: as its bytes come
+    * they are pushed through its stages, on one thread, one chunk after another, and what comes out is written.
+    *
+    * Where the backend has submission queues that is done by a machine, one for each shard, with no future, flow or
+    * stack for a connection at all. Elsewhere, or with `machine` false, the same pipeline is run by a future for each
+    * connection, as `serve` would run `pipeline(connection).to(connection.sink)`.
+    */
+  def serveFlow(pipeline: Connection => Flow[ByteBuffer], machine: Boolean = true)(using Async): Unit =
+    if machine && io.ops.isInstanceOf[SubmissionQueues] then serveByMachine(pipeline)
+    else serve(connection => Flow.to(pipeline(connection))(connection.sink))
+
+  private def serveByMachine(pipeline: Connection => Flow[ByteBuffer])(using Async): Unit = {
+    Async.group {
+      val shards = io.submissionShards
+      val drivers = Array.tabulate(shards)(shard => new Driver(shard, pipeline))
+      val running = drivers.toList.map(driver => Future(driver.run()))
+      val accepting = Future {
+        val accepted = Slot[io.ops.Connection]()
+        val accept = io.ops.accept(listener, accepted)
+        var next = 0
+        while true do {
+          io.perform(accept)
+          drivers(next % shards).hand(accepted.clear())
+          next += 1
+        }
+      }
+      stopping.set { () =>
+        accepting.cancel()
+        drivers.foreach(_.close())
+      }
+      if closed then stopping.get().nn.apply()
+      running.foreach(_.await)
+      io.perform(io.ops.close(listener))
+    }
+    val thrown = failure
+    if thrown != null then throw thrown
+  }
+
+  /** A shard's machine: every connection handed to it is a few fields and a read in flight on the shard's submission
+    * queue. One future runs it, and waits once for whatever its connections wait for.
+    */
+  private final class Driver(shard: Int, pipeline: Connection => Flow[ByteBuffer]) {
+    private val ops = new SubmissionQueue[io.Op](shard)
+    private val completed = new CompletionQueue[io.Op]
+    private val handed = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
+    @volatile private var open = true
+    private var live = 0
+
+    /** From any thread. */
+    def hand(connection: io.ops.Connection): Unit = {
+      handed.add(connection.asInstanceOf[AnyRef]): Unit
+      ops.signal()
+    }
+
+    def close(): Unit = {
+      open = false
+      ops.signal()
+    }
+
+    def run()(using Async): Unit =
+      while open || live > 0 || !handed.isEmpty() do {
+        var next = handed.poll()
+        while next != null do {
+          live += 1
+          val served = new Served(next.asInstanceOf[io.ops.Connection])
+          served.begin()
+          next = handed.poll()
+        }
+        // With no connection yet, or none with anything in flight, it waits to be handed one, or closed.
+        ops.lingers = open
+        io.performSubmitted(ops, completed)
+        var i = 0
+        while i < completed.count do {
+          completed.tag(i).asInstanceOf[Served].done(completed.op(i), completed.failure(i))
+          i += 1
+        }
+        completed.clear()
+      }
+
+    /** A connection: what is read into, what is written from, the read and the write of them, and the step its bytes
+      * are pushed to.
+      */
+    private final class Served(connection: io.ops.Connection) {
+      private val in = sizes.buffers(sizes.read)
+      private val read = io.ops.read(connection, in)
+      // One fills while the other is written.
+      private var filling = sizes.buffers(sizes.write)
+      private var sending = sizes.buffers(sizes.write)
+      private var fillWrite = io.ops.write(connection, filling)
+      private var sendWrite = io.ops.write(connection, sending)
+      private var reading = false
+      private var writing = false
+      private var ended = false
+      private var closing = false
+      private var step: Flow.Step[Any] | Null = null
+
+      private def same(a: Any, b: Any): Boolean = a.asInstanceOf[AnyRef] eq b.asInstanceOf[AnyRef]
+
+      /** What comes out of the pipeline is copied in here, to be written when this chunk's stages have returned. */
+      private def take(bytes: ByteBuffer): Unit = {
+        val length = bytes.remaining()
+        if filling.remaining() < length then {
+          val larger = sizes.buffers(math.max(filling.capacity() * 2, filling.position() + length))
+          filling.flip()
+          larger.put(filling)
+          filling = larger
+          fillWrite = io.ops.write(connection, larger)
+        }
+        filling.put(bytes)
+      }
+
+      def begin(): Unit =
+        try {
+          filling.clear()
+          sending.clear()
+          val port = new Flow.Port[ByteBuffer]
+          val sink = new Sink[ByteBuffer] {
+            def send(element: ByteBuffer)(using Async): Unit = take(element)
+            def flush()(using Async): Unit = ()
+          }
+          val out = new Flow.Step[ByteBuffer] {
+            def push(element: ByteBuffer): Unit = take(element)
+            def end(): Unit = ()
+          }
+          val made = Flow.compile(pipeline(new Connection(port, sink)), port, out)
+          if made == null then
+            throw new IllegalArgumentException(
+              "serveFlow's pipeline must be made of the connection's bytes by stages that do not wait; `serve` runs any"
+            )
+          step = made
+          arm()
+        } catch case thrown: Throwable => fail(thrown)
+
+      private def arm(): Unit = {
+        in.clear()
+        ops.submit(read, this)
+        reading = true
+      }
+
+      private def flush(): Unit =
+        if !writing && filling.position() > 0 then {
+          val buffer = filling
+          filling = sending
+          sending = buffer
+          val write = fillWrite
+          fillWrite = sendWrite
+          sendWrite = write
+          sending.flip()
+          filling.clear()
+          ops.submit(sendWrite, this)
+          writing = true
+        }
+
+      private def fail(thrown: Throwable): Unit = {
+        if failure == null then failure = thrown
+        ended = true
+        leave(now = true)
+      }
+
+      /** The connection is closed once it has ended and what it sent is written; `now`, whatever is in flight. */
+      private def leave(now: Boolean): Unit =
+        if !closing && ended && (now || (!writing && !reading && filling.position() == 0)) then {
+          closing = true
+          ops.submit(io.ops.close(connection), this)
+        }
+
+      def done(op: io.Op, thrown: Throwable | Null): Unit =
+        if closing then {
+          // Its close, or what the close cut short.
+          if !same(op, read) && !same(op, sendWrite) then live -= 1
+        } else if same(op, read) then {
+          reading = false
+          if thrown != null then fail(thrown)
+          else
+            try {
+              in.flip()
+              if in.hasRemaining() then step.nn.push(in)
+              else {
+                ended = true
+                step.nn.end()
+              }
+              flush()
+              // Not read again while more waits to be written than a write's worth: its peer is not taking it.
+              if !ended && !(writing && filling.position() >= sizes.write) then arm()
+              leave(now = false)
+            } catch case failed: Throwable => fail(failed)
+        } else {
+          if thrown != null then {
+            writing = false
+            fail(thrown)
+          } else if sending.hasRemaining() then ops.submit(sendWrite, this)
+          else {
+            writing = false
+            flush()
+            if !reading && !ended then arm()
+            leave(now = false)
+          }
+        }
+    }
+  }
+
   def serve(handler: Connection => Async ?=> Unit)(using Async): Unit = {
     if !reactors then serveWithFutures(handler)
     else Async.group {

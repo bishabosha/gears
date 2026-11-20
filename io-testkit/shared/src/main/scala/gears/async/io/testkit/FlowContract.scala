@@ -367,6 +367,139 @@ trait FlowContract extends ContractSuite {
     }
   }
 
+  for machine <- List(true, false) do {
+    val how = if machine then "by the machine where there is one" else "by what runs a handler"
+
+    test(s"a pipeline of stages is served $how: bytes in, bytes out, and the server ends when closed") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              // The even bytes, each with the one after it.
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .filter(_ % 2 == 0)
+                .mapConcat(value => List(value, value + 1))
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val clients = List.fill(5)(connect(io, server))
+          val asking = clients.map { client =>
+            Future {
+              for round <- 0 until 20 do {
+                send(io, client, Array.tabulate(8)(i => (round + i).toByte))
+                val evens = (0 until 8).map(round + _).filter(_ % 2 == 0)
+                assertEquals(receive(io, client, 8).toList, evens.flatMap(v => List(v.toByte, (v + 1).toByte)).toList)
+              }
+            }
+          }
+          asking.foreach(_.await)
+          clients.foreach(close(io, _))
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"streams dealt through pipelines of their own, served $how, keep what is each key's") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .groupThrough(_ & 3) { (key, values) =>
+                  // A count of its own for each key.
+                  var seen = 0
+                  values.map { value =>
+                    seen += 1
+                    ByteBuffer.wrap(Array[Byte](key.toByte, seen.toByte, value.toByte))
+                  }
+                },
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(64)(_.toByte))
+          val answers =
+            receive(io, client, 64 * 3).grouped(3).map(triple => (triple(0).toInt, triple(1).toInt, triple(2) & 0xff)).toList
+          assertEquals(answers, (0 until 64).map(value => (value & 3, value / 4 + 1, value)).toList)
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"more comes out of a pipeline than a write holds, served $how, and all of it arrives") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes(read = 256, write = 512))
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                // Each within what a write holds, as a send must be; together many times that.
+                .map(value => ByteBuffer.wrap(Array.fill[Byte](400)(value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(40)(_.toByte))
+          val got = receive(io, client, 40 * 400)
+          assertEquals(got.length, 40 * 400)
+          for at <- got.indices do if got(at) != (at / 400).toByte then fail(s"byte $at is ${got(at)}")
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"a stage that fails, served $how, closes its connection, leaves the others, and is thrown") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes.map { chunk =>
+                if chunk.get(chunk.position()) == 'X' then throw new IllegalStateException("stage failed")
+                chunk
+              },
+            machine
+          )
+        }
+        try {
+          val failing = connect(io, server)
+          val fine = connect(io, server)
+          send(io, failing, Array[Byte]('X'))
+          assertEquals(receive(io, failing, 1).length, 0)
+          send(io, fine, Array[Byte]('a', 'b'))
+          assertEquals(receive(io, fine, 2).toList, List[Byte]('a', 'b'))
+          close(io, failing)
+          close(io, fine)
+        } finally server.close()
+        val failure = failureOf(served)
+        assert(failure.isInstanceOf[IllegalStateException], s"serveFlow ended with $failure")
+      }
+    }
+  }
+
+  test("stages are the same run as stepped: process and groupThrough under any Async") {
+    running {
+      val seen = Flow
+        .from(1 to 12)
+        .process[Int](emit => value => { emit(value); if value % 6 == 0 then emit(-value) })
+        .groupThrough(value => math.abs(value) % 3)((key, values) => values.map(value => s"$key:$value"))
+        .toList
+      assertEquals(seen.count(_.startsWith("0:")), 6)
+      assertEquals(seen.filter(_.startsWith("1:")), List("1:1", "1:4", "1:7", "1:10"))
+    }
+  }
+
   for strategy <- Server.Strategy.values do {
 
     test(s"$strategy: a connection's bytes sent to its sink are echoed, and the server ends when closed") {
