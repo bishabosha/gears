@@ -269,6 +269,24 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
 
   override private[io] def submissionShards: Int = workers
 
+  /** On the shard's own thread it is the worker's turn's end; from another, a task of the worker's, which is soon. */
+  override private[io] def afterTurn(shard: Int)(run: Runnable): Unit = {
+    val worker = workerFor(shard.toLong)
+    if workerOf(callerThread()) eq worker then worker.afterTurn(run)
+    else if !worker.submit(run) then throw new IllegalStateException("Scheduler has shut down")
+  }
+
+  /** The future waits for a task of the shard's worker, and so is resumed by it, on it. */
+  override private[io] def moveTo(shard: Int)(using async: Async): Unit = {
+    val worker = workerFor(shard.toLong)
+    if workerOf(callerThread()) ne worker then {
+      val there = gears.async.Future.Promise[Unit]()
+      if !worker.submit(() => there.complete(scala.util.Success(()))) then
+        throw new IllegalStateException("Scheduler has shut down")
+      there.asFuture.await
+    }
+  }
+
   /** An op's wait is `Async.await` of the op (`Parking`). */
   override private[io] def opsAwaitThroughAsync: Boolean = true
 

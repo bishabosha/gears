@@ -50,6 +50,7 @@ object CapBench {
     "flow-mux",
     "flow-mux-futures",
     "flow-mux-pinned-futures",
+    "flow-mux-shard-futures",
     "flow-mux-reactor",
     "flow-mux-queued",
     "flow-mux-pinned",
@@ -1857,6 +1858,8 @@ object CapBench {
           "reactor-realistic-unqueued",
           new Servers(true, Reactor.Unqueued)
         )
+      case "flow-mux-shard-futures" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-shard-futures", Server.Strategy.ShardFutures)
       case "flow-mux-pinned-futures" =>
         flowMux(
           io.asInstanceOf[Io[IpStreams & SubmissionQueues]],

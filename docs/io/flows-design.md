@@ -307,6 +307,46 @@ found since: `java.util.ArrayDeque` on Scala.js loses what it holds when it grow
 The reactor and `groupBy` use a queue of their own (`Ring`), as the readiness layer's waiter queue does
 (`RingDeque`); the build has since moved to Scala.js 1.23.0, where `ArrayDeque` is right.
 
+## Scheduler hooks, and a reactor made of futures
+
+Two questions, tried together. If a reactor gains by affinity and by one write a turn, can the pool's scheduler give
+those to plain futures? And how does a reactor whose flows are futures, waiting with the `Async` every future has,
+compare with one whose flows are continuations of its own?
+
+Two hooks on `Io`, each with a meaning on any backend and an implementation worth something on the pools:
+
+- `afterTurn(shard)(run)`: `run` runs when the shard's worker has run what was ready this turn, before it looks for
+  more. The worker's loop has a place for it, after its timers, its ready continuations and its inbox.
+- `moveTo(shard)`: the calling future goes on on the shard's worker, so that what it begins is there too.
+
+`Server.Strategy.ShardFutures` is `PinnedFutures` with both: a connection's future begins on its shard, and what its
+flows send in a turn is written when the turn's work is done, the writer woken by the hook and not by each send. Its
+streams are futures, dealt to by channels, its shared state locked: a reactor's two gains with futures for flows,
+which is as near as a reactor made of futures comes, since a future may still be taken by another worker and so
+cannot share a reactor's unguarded signals.
+
+16 streams a connection, microseconds a request, medians (kqueue 7 runs, NIO 3):
+
+| | `Futures` | `PinnedFutures` | `ShardFutures` | `PinnedReactors` | `QueuedReactors` |
+|---|---:|---:|---:|---:|---:|
+| kqueue, 1 worker | 4.09 | 3.66 (3.57-3.84) | 3.55 (3.49-3.79) | 2.94 | 2.98 |
+| kqueue, 4 workers | 1.60 | 1.16 (1.15-1.18) | 1.12 (1.09-1.16) | 0.88 | 0.86 |
+| NIO pool, 1 worker | 2.02 | 1.82 | 1.85 | 2.34 | 2.29 |
+| NIO pool, 4 workers | 0.58 | 0.51 | 0.50 | 0.59 | 0.57 |
+
+- The hooks are worth little over pinning alone: 3% on four kqueue workers, inside the ranges with one, nothing on
+  the JVM. Pinned, a connection's futures were on their shard already, and the writer future, woken by the first send
+  and run after what was ready, was writing once a turn already.
+- With both, futures are still 21 to 27% behind continuation flows on Scala Native. What is left is not where a
+  future runs or when it writes but what a wait costs it: a listener with a lock, a link to its group made and
+  unmade, a channel's lock for each element dealt to a stream, where a reactor's flow parks on a signal that is two
+  fields and is resumed from a queue no other thread sees.
+- On the JVM futures are ahead, as before: a flow there is a thread as a future is.
+
+So the reactor is not made unnecessary by hooks of this kind. To have its speed from the scheduler itself, the
+scheduler would need what makes a reactor's wait cheap: futures that are never another worker's, and waits between
+them that need no lock for that reason. That is the reactor's inside, moved into the worker; it was not tried.
+
 ## Locks
 
 A lock that belongs to a thread (`synchronized`, `ReentrantLock`) is wrong for state that flows or futures share

@@ -58,6 +58,20 @@ trait Io[+I <: Interface] extends AsyncOperations {
     false
   }
 
+  // Hooks of the scheduler's, for what serves many futures on a shard: each has a meaning on any backend, and is
+  // worth something on one whose threads are its own.
+
+  /** Runs `run` when the thread of `shard`'s has run what was ready this turn, before it looks for more: once, for
+    * however many asked in the turn, each of whom calls it. For what is better done once for a turn than once for
+    * each thing in it, a connection's writes say. A backend with no turns runs it at once.
+    */
+  private[io] def afterTurn(shard: Int)(run: Runnable): Unit = run.run()
+
+  /** Has the calling future go on on the thread of `shard`'s, if it is not there: what it then begins, and what it
+    * is resumed by, are that thread's. A backend with no threads of its own does nothing.
+    */
+  private[io] def moveTo(shard: Int)(using Async): Unit = ()
+
   /** Whether a flow of a reactor's is resumed where it is, as a continuation, and not by way of a thread of its own:
     * a fact of the platform's suspension, which `Server` reads to tell whether a reactor is worth having.
     */
