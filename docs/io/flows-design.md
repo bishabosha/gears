@@ -405,6 +405,29 @@ Both cost more a request as connections grow, and the two do not keep one distan
 at 256 connections and level at 1,024; on Node.js they are 6% behind at 256 and 29% at 1,024, which is 16,000
 futures. Why was not looked for. So futures are near reactors, not a replacement measured at every size.
 
+### What the rest of the gap is
+
+Looked for on kqueue, where futures are some 10% behind reactors. It is no one thing:
+
+- **Instructions.** 512,000 requests on one worker retire 24.6 thousand million instructions served by futures and
+  23.6 by reactors: 2,000 more a request, of 48,000, which is 4%.
+- **Memory.** The same run's peak is 782 MB against 560, and with 256 connections on four workers 1,503 against
+  1,202. Time differs by more than instructions do (13% against 4% there), which is what touching more memory looks
+  like.
+- **Where a wait is made.** A wait on Scala Native copies the stack between where a future or a flow began and
+  where it parks, out to the heap and back. A stream's future parked 27 frames from its beginning, a reactor's flow
+  16: a future begins inside a `Try`, a completion group's scope and the lambdas of both, and its stream was a
+  `Flow { ... }` with frames of its own. Written out and made a class, six of the eleven went, and that was worth 2%
+  (3.62 to 3.56 with one worker, the echo 7.41 to 7.23), with nothing to be seen on four.
+- **Not it:** the queue between a stream and its dealer, made a ring with nothing allocated for an element, and the
+  worker's list of what to run at a turn's end, no longer copied each turn. Both are kept, and neither moved a figure.
+  A profile of the whole process, clients and all, shows no symbol more than half a percent apart between the two.
+
+So what is left is spread over a future being a larger thing than a flow: more frames under each wait, a few more
+objects for each park and resume, structures that are safe for two threads where a flow's are for one. On Node.js
+with 1,024 connections a second look found futures 12% behind (9.52 against 8.52, instructions 7% more, memory the
+same), not the 29% of the first, which had runs that did not finish.
+
 Tried and not kept: an op's own wait by a park. It passed the contracts for cancelling and for time limits, a time
 limit being the op's own on its worker's heap and a cancel taking the performer from where it is parked, and it
 measured inside the ranges of the wait it replaced (kqueue: echo 7.10 against 7.25, realistic 9.48 against 9.67 with

@@ -249,21 +249,24 @@ object Future:
 
     link()
     ac.support.scheduleBoundary:
-      val result = Async.withNewCompletionGroup(innerGroup) {
-        // `Try` leaves an `InterruptedException` to be thrown, as it is not `NonFatal`: caught here, or the future
-        // would never complete.
-        val outcome =
-          try
-            Try({
-              val r = body
+      // Written out, where it was `Async.withNewCompletionGroup` around a `Try`: each was two frames between the
+      // body and the boundary, which every wait of the future's copies out and back.
+      val unlinked = FutureAsync(CompletionGroup.Unlinked)
+      val result =
+        try
+          val outcome: Try[T] =
+            try
+              val r = body(using Async.spawning(unlinked.withGroup(innerGroup)))
               checkCancellation()
-              r
-            })
-          catch case interrupted: InterruptedException => Failure(interrupted)
-        outcome.recoverWith { case _: InterruptedException | _: CancellationException =>
-          Failure(new CancellationException())
-        }
-      }(using FutureAsync(CompletionGroup.Unlinked))
+              Success(r)
+            catch
+              // Not `NonFatal`: caught here, or the future would never complete.
+              case interrupted: InterruptedException => Failure(interrupted)
+              case NonFatal(failure)                 => Failure(failure)
+          outcome match
+            case Failure(_: InterruptedException | _: CancellationException) => Failure(new CancellationException())
+            case other                                                       => other
+        finally Async.cancelAndWaitGroup(innerGroup)(using unlinked)
       complete(result)
 
   end RunnableFuture

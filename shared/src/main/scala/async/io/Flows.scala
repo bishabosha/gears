@@ -731,18 +731,7 @@ object Flow {
           val made = new Mailbox
           dealt.put(k, made): Unit
           made.put(element.asInstanceOf[AnyRef])
-          emit(
-            (
-              k,
-              Flow[A] {
-                var next = made.take()
-                while next ne End do {
-                  Flow.emit(next.asInstanceOf[A])
-                  next = made.take()
-                }
-              }
-            )
-          )
+          emit((k, new FromMailbox[A](made)))
         }
       }
     finally {
@@ -751,41 +740,64 @@ object Flow {
     }
   }
 
-  /** A queue from one future to another. */
+  /** A key's flow of `groupBy`'s: what its mailbox is given, until the end. A class, not a `Flow { ... }`: it is where
+    * a stream's future waits, and whatever is between that and its beginning is copied at each wait.
+    */
+  private final class FromMailbox[A](mailbox: Mailbox) extends Flow[A] {
+    def foreach(each: A => Unit)(using Async): Unit = {
+      var next = mailbox.take()
+      while next ne End do {
+        each(next.asInstanceOf[A])
+        next = mailbox.take()
+      }
+    }
+  }
+
+  /** A queue from one future to another, one that fills it and one that empties it: a ring with a place for each to
+    * say how far it has got, and nothing made for an element.
+    */
   private final class Mailbox {
-    private val elements = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
-    private val held = new java.util.concurrent.atomic.AtomicInteger(0)
+    // Room for what the writer may put before it waits, and the end.
+    private inline val Size = 128
+    private val slots = new java.util.concurrent.atomic.AtomicReferenceArray[AnyRef | Null](Size)
+    private val put = new java.util.concurrent.atomic.AtomicLong(0)
+    private val taken = new java.util.concurrent.atomic.AtomicLong(0)
     private val reader = new java.util.concurrent.atomic.AtomicReference[Runnable | Null](null)
     private val writer = new java.util.concurrent.atomic.AtomicReference[Runnable | Null](null)
 
-    private def wake(parked: java.util.concurrent.atomic.AtomicReference[Runnable | Null]): Unit = {
-      val resume = parked.getAndSet(null)
-      if resume != null then resume.run()
-    }
+    private def wake(parked: java.util.concurrent.atomic.AtomicReference[Runnable | Null]): Unit =
+      if parked.get() != null then {
+        val resume = parked.getAndSet(null)
+        if resume != null then resume.run()
+      }
 
-    /** Adds `element`, and waits if the reader is `Lag` behind. */
+    /** Adds `element`, and waits first if the reader is `Lag` behind. The writer's alone. */
     def put(element: AnyRef)(using async: Async): Unit = {
-      elements.add(element): Unit
-      val now = held.incrementAndGet()
-      wake(reader)
-      if now > Lag then
+      val at = put.get()
+      while at - taken.get() >= Lag do
         async.park { resume =>
           writer.set(resume)
           // Taken meanwhile: nobody was there to wake.
-          if held.get() <= Lag then wake(writer)
+          if at - taken.get() < Lag then wake(writer)
         }
+      slots.set((at & (Size - 1)).toInt, element)
+      put.set(at + 1)
+      wake(reader)
     }
 
+    /** The next element, waited for. The reader's alone. */
     def take()(using async: Async): AnyRef = {
-      var element = elements.poll()
-      while element == null do {
+      val at = taken.get()
+      while put.get() == at do
         async.park { resume =>
           reader.set(resume)
-          if !elements.isEmpty() then wake(reader)
+          if put.get() != at then wake(reader)
         }
-        element = elements.poll()
-      }
-      if held.decrementAndGet() == Lag then wake(writer)
+      val index = (at & (Size - 1)).toInt
+      val element = slots.get(index).nn
+      slots.set(index, null)
+      taken.set(at + 1)
+      wake(writer)
       element
     }
   }

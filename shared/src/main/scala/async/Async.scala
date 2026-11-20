@@ -131,13 +131,16 @@ object Async extends AsyncImpl:
     */
   opaque type Spawn <: Async = Async
 
+  /** `async`, as what may spawn: for what makes a scope's `Async` itself. */
+  private[async] inline def spawning(async: Async): Spawn = async
+
   /** Runs `body` inside a spawnable context where it is allowed to spawn concurrently runnable [[Future]]s. When the
     * body returns, all spawned futures are cancelled and waited for.
     */
   def group[T](body: Async.Spawn ?=> T)(using Async): T =
     withNewCompletionGroup(CompletionGroup().link())(body)
 
-  private def cancelAndWaitGroup(group: CompletionGroup)(using async: Async) =
+  private[async] def cancelAndWaitGroup(group: CompletionGroup)(using async: Async) =
     val completionAsync =
       if CompletionGroup.Unlinked == async.group
       then async

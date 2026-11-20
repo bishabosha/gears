@@ -343,7 +343,8 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
   }
 
   /** What was asked to run when this turn's work is done (`afterTurn`). The worker's thread's alone. */
-  private val turnEnd = new java.util.ArrayList[Runnable]()
+  private var turnEnd = new java.util.ArrayList[Runnable]()
+  private var turnEnding = new java.util.ArrayList[Runnable]()
 
   /** On the worker's own thread: `run` is run when what is ready this turn has been run, before the worker looks for
     * more.
@@ -354,14 +355,25 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
   private def endTurn(drive: Int): Boolean = {
     var passes = 4 // what it makes ready may ask again, but not without end
     while !turnEnd.isEmpty() && passes > 0 do {
-      val asked = turnEnd.toArray(Worker.NoRunnables)
-      turnEnd.clear()
+      // The two lists change places, so that what is run may ask again without the list it is run from changing,
+      // and nothing is copied.
+      val asked = turnEnd
+      turnEnd = turnEnding
+      turnEnding = asked
       var i = 0
-      while i < asked.length do {
-        guarded(asked(i).run())
-        if drives != drive then return false
+      val count = asked.size()
+      while i < count do {
+        val run = asked.get(i)
         i += 1
+        guarded(run.run())
+        if drives != drive then {
+          // Not this thread's any more: what was not run is left for whoever drives the worker now.
+          while i < count do { turnEnd.add(asked.get(i)): Unit; i += 1 }
+          asked.clear()
+          return false
+        }
       }
+      asked.clear()
       if !runReady(drive) then return false
       passes -= 1
     }
@@ -424,7 +436,6 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
 }
 
 object Worker {
-  private val NoRunnables = new Array[Runnable](0)
 
 
   /** How many futures a worker keeps to resume itself before it shares half of them with a worker that has nothing. */
