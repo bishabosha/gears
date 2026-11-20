@@ -391,6 +391,20 @@ the others, since the order of scenarios in one process turned out to move a fig
 So nearly all of a reactor's speed is had from futures on every backend, with two things: a connection's futures
 pinned to a shard where there are shards, and futures that hand work to one another waiting without a listener.
 
+With more connections, each of 16 streams, on four kqueue workers and on Node.js (5 runs, fewer at 1,024, where
+some did not finish in their time):
+
+| connections | kqueue: `ShardFutures` | kqueue: pinned reactors | Node.js: `Futures` | Node.js: queued reactor |
+|---:|---:|---:|---:|---:|
+| 16 | 1.02 | 0.96 | 4.97 | 4.75 |
+| 64 | 1.10 | 1.02 | 5.10 | 4.89 |
+| 256 | 1.67 (1.64-1.71) | 1.42 (1.38-1.43) | 6.76 | 6.40 |
+| 1,024 | 2.20 | 2.16 | 11.29 | 8.76 |
+
+Both cost more a request as connections grow, and the two do not keep one distance: on kqueue futures are 18% behind
+at 256 connections and level at 1,024; on Node.js they are 6% behind at 256 and 29% at 1,024, which is 16,000
+futures. Why was not looked for. So futures are near reactors, not a replacement measured at every size.
+
 Tried and not kept: an op's own wait by a park. It passed the contracts for cancelling and for time limits, a time
 limit being the op's own on its worker's heap and a cancel taking the performer from where it is parked, and it
 measured inside the ranges of the wait it replaced (kqueue: echo 7.10 against 7.25, realistic 9.48 against 9.67 with
