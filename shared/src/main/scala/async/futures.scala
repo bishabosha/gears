@@ -217,11 +217,37 @@ object Future:
 
       override def withGroup(group: CompletionGroup) = FutureAsync(group)
 
-      /** The future is set aside, and resumed by its scheduler as the runnable is run: nothing else. */
+      /** The future is set aside, and resumed by its scheduler as the runnable is run, or as the future is
+        * cancelled, whichever takes it from where it is parked first.
+        */
       override private[async] def park(register: Runnable => Unit): Unit =
-        ac.support.suspend[Unit, Unit](sus => register(() => ac.support.resumeAsync(sus)(())))
+        if group eq CompletionGroup.Unlinked then
+          // Not to be cancelled: nothing but the runnable resumes it.
+          ac.support.suspend[java.lang.Boolean, Unit](sus =>
+            register(() => ac.support.resumeAsync(sus)(java.lang.Boolean.FALSE))
+          ): Unit
+        else
+          if cancelRequest.get() then throw new CancellationException()
+          val cancelled = ac.support.suspend[java.lang.Boolean, Unit] { sus =>
+            parked.set(sus)
+            register(() => if parked.compareAndSet(sus, null) then ac.support.resumeAsync(sus)(java.lang.Boolean.FALSE))
+            // Cancelled between the look above and being parked: its cancel found nothing here.
+            if cancelRequest.get() && parked.compareAndSet(sus, null) then
+              ac.support.resumeAsync(sus)(java.lang.Boolean.TRUE)
+          }
+          if cancelled.booleanValue() then throw new CancellationException()
 
-    override def cancel(): Unit = if setCancelled() then this.innerGroup.cancel()
+    /** Where the future is parked (`Async.park`), if it is: the suspension, for whoever resumes it first. */
+    private val parked = java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+
+    override def cancel(): Unit =
+      if setCancelled() then
+        this.innerGroup.cancel()
+        val suspension = parked.getAndSet(null)
+        if suspension != null then
+          ac.support.resumeAsync(suspension.asInstanceOf[ac.support.Suspension[java.lang.Boolean, Unit]])(
+            java.lang.Boolean.TRUE
+          )
 
     link()
     ac.support.scheduleBoundary:

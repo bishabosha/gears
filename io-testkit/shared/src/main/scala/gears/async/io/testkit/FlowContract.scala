@@ -227,6 +227,33 @@ trait FlowContract extends ContractSuite {
     }
   }
 
+  test("futures parked on a stream's next element, and their dealer, are ended by a cancel") {
+    running { io ?=>
+      var streamsLeft = 0
+      val guard = new Semaphore(1)
+      val serving = Future {
+        // Two keys, an element each, and then nothing more for as long as anyone waits.
+        val slow = Flow[Int] {
+          emit(1)
+          emit(2)
+          io.perform(io.ops.timer(60_000))
+        }
+        slow.groupBy(_ % 2).foreachPar { (_, elements) =>
+          try elements.run()
+          finally {
+            val held = guard.acquire()(using summon[Async].withGroup(gears.async.CompletionGroup.Unlinked))
+            try streamsLeft += 1
+            finally held.release()
+          }
+        }
+      }
+      settle(io)
+      serving.cancel()
+      assert(failureOf(serving).isInstanceOf[java.util.concurrent.CancellationException], s"${failureOf(serving)}")
+      assertEquals(streamsLeft, 2)
+    }
+  }
+
   test("a flow that is left early is left through its producer's finally, and emits no more") {
     running {
       var emitted = 0
