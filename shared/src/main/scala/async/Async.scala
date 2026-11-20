@@ -42,8 +42,9 @@ trait Async private[async] (using val support: AsyncSupport, val scheduler: supp
   /** EXPERIMENT. Suspends the caller until the `Runnable` that `register` is handed has been run, by any thread,
     * once: the least a wait can be, for waits between futures that are made to be cheap, a queue's reader for its
     * writer. A cancel ends it, with `CancellationException`, as it ends an `await`; the runnable run afterwards does
-    * nothing. A future keeps the one place it is parked in, which its cancel looks at, so that it is no source's
-    * listener and in no group; any other `Async` parks by an `await`.
+    * nothing. A future, in its own group, keeps the one place it is parked in, which its cancel looks at, so that it
+    * is no source's listener and in no group; under a group made inside it, and for any other `Async`, a park is an
+    * `await`.
     */
   private[async] def park(register: Runnable => Unit): Unit =
     val gate = new ParkGate

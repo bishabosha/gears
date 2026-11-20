@@ -223,31 +223,29 @@ object Future:
       override private[async] def park(register: Runnable => Unit): Unit =
         if group eq CompletionGroup.Unlinked then
           // Not to be cancelled: nothing but the runnable resumes it.
-          ac.support.suspend[java.lang.Boolean, Unit](sus =>
-            register(() => ac.support.resumeAsync(sus)(java.lang.Boolean.FALSE))
-          ): Unit
+          ac.support.parkHere(wake => register(() => wake(false))): Unit
+        else if group ne innerGroup then
+          // Under a group of its own making, which something other than the future's cancel may cancel, a time
+          // limit say: parked as any `Async` parks, by an await in that group.
+          super.park(register)
         else
-          if cancelRequest.get() then throw new CancellationException()
-          val cancelled = ac.support.suspend[java.lang.Boolean, Unit] { sus =>
-            parked.set(sus)
-            register(() => if parked.compareAndSet(sus, null) then ac.support.resumeAsync(sus)(java.lang.Boolean.FALSE))
+          if group.isCancelled then throw new CancellationException()
+          val cancelled = ac.support.parkHere { wake =>
+            parked.set(wake)
+            register(() => if parked.compareAndSet(wake, null) then wake(false))
             // Cancelled between the look above and being parked: its cancel found nothing here.
-            if cancelRequest.get() && parked.compareAndSet(sus, null) then
-              ac.support.resumeAsync(sus)(java.lang.Boolean.TRUE)
+            if cancelRequest.get() && parked.compareAndSet(wake, null) then wake(true)
           }
-          if cancelled.booleanValue() then throw new CancellationException()
+          if cancelled then throw new CancellationException()
 
-    /** Where the future is parked (`Async.park`), if it is: the suspension, for whoever resumes it first. */
-    private val parked = java.util.concurrent.atomic.AtomicReference[AnyRef | Null](null)
+    /** Where the future is parked (`Async.park`), if it is: what wakes it, for whoever does so first. */
+    private val parked = java.util.concurrent.atomic.AtomicReference[(Boolean => Unit) | Null](null)
 
     override def cancel(): Unit =
       if setCancelled() then
         this.innerGroup.cancel()
-        val suspension = parked.getAndSet(null)
-        if suspension != null then
-          ac.support.resumeAsync(suspension.asInstanceOf[ac.support.Suspension[java.lang.Boolean, Unit]])(
-            java.lang.Boolean.TRUE
-          )
+        val wake = parked.getAndSet(null)
+        if wake != null then wake.asInstanceOf[Boolean => Unit](true)
 
     link()
     ac.support.scheduleBoundary:

@@ -72,6 +72,14 @@ trait WasmJSPISuspend(using AsyncToken) extends AsyncSupport:
     label.resolve(body(suspend))
     js.await(suspPromise)
 
+  /** Waits where it is, on a promise of its own: the stack that parks is the stack that is resumed, with no other
+    * begun to resume it.
+    */
+  override private[async] def parkHere(register: (Boolean => Unit) => Unit)(using Label[Unit], Scheduler): Boolean =
+    val (promise, resolve) = mkPromise[Boolean]
+    register(value => resolve(value): Unit)
+    js.await(promise)
+
   override private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
     val label = WasmLabel[Unit]()
     s.execute: () =>

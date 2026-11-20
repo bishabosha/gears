@@ -359,28 +359,42 @@ Two waits use it, both between futures that serve one connection: a stream's fut
 to do there, in place of a channel), and the future that writes what a connection sends, waiting to be told there is
 something.
 
-16 streams a connection, microseconds a request, medians (kqueue 7 runs, NIO 3), before and after for the futures:
+It is ended by a cancel, as an `await` is: a future keeps the one place it is parked in, and its cancel takes it
+from there and resumes it with `CancellationException`, as the runnable takes it to resume it, whichever is first, by
+one swap. Run alternately with a build in which a cancel did not end it, it measured the same (kqueue 3.48 against
+3.44 and 1.12 against 1.13). Under a group made inside the future, which something other than the future's cancel
+may cancel, a time limit say, a park is an ordinary await in that group.
 
-| | `Futures` | `PinnedFutures` | `ShardFutures` | `PinnedReactors` |
-|---|---:|---:|---:|---:|
-| kqueue, 1 worker | 4.09 → 3.54 | 3.66 → 3.19 | 3.55 → 3.13 (3.08-3.23) | 2.90 (2.85-2.94) |
-| kqueue, 4 workers | 1.60 → 1.33 | 1.16 → 1.02 | 1.12 → 0.99 (0.96-1.03) | 0.97 (0.93-1.01) |
-| NIO pool, 1 worker | 2.02 → 1.49 | 1.82 → 1.59 | 1.85 → 1.53 | 2.22 |
-| NIO pool, 4 workers | 0.58 → 0.44 | 0.51 → 0.42 | 0.50 → 0.41 | 0.58 |
+How a future parks is its platform's (`AsyncSupport.parkHere`). On the JVM and Scala Native it is a suspension that
+the scheduler resumes. On Scala.js it waits where it is, on a promise of its own: an `await` there begins another
+stack to resume the first, and that was most of what a future's wait cost on Node.js.
 
-- On four kqueue workers futures are now level with reactors, 0.99 against 0.97, inside each other's ranges. With one
-  worker they are 8% behind, where they were 21%.
-- On the JVM futures were ahead and are further ahead: 29% with four workers, 31% with one.
-- Every futures strategy gained 12 to 26%, the unpinned one too: the gain is the wait, not where it is made.
+16 streams a connection, microseconds a request, medians. Each strategy in a process of its own, run in turn with
+the others, since the order of scenarios in one process turned out to move a figure by a tenth:
 
-So most of a reactor's speed can be had from the scheduler: pin a connection's futures to a shard, and let futures
-that hand work to one another wait without a listener. What is left of the gap, with one worker, was not looked for:
-the lock on the buffer a connection's futures send into, the queue between a stream and its dealer, which is safe
-for two threads where a reactor's is for one, and a future's own cost to begin.
+| | `Futures`, channels | `Futures` | `PinnedFutures` | `ShardFutures` | reactors |
+|---|---:|---:|---:|---:|---:|
+| kqueue, 1 worker (9 runs) | 4.01 | 3.53 | 3.54 | 3.44 (3.37-3.67) | 3.15 (3.05-3.24) |
+| kqueue, 4 workers (9 runs) | 1.49 | 1.32 | 1.11 | 1.10 (1.07-1.15) | 1.02 (1.00-1.05) |
+| Node.js (5 runs) | 9.76 | 5.10 (5.08-5.18) | | | 4.89 (4.88-4.92) |
+| NIO pool, 1 worker (3 runs) | 2.02 | 1.49 | 1.59 | 1.53 | 2.22 |
+| NIO pool, 4 workers (3 runs) | 0.58 | 0.44 | 0.42 | 0.41 | 0.58 |
 
-What it costs: a parked future is not woken by its cancel. Here the dealer ends every stream's queue as it ends,
-however it ends, and a connection's writer is told to end in a `finally`; a handler that failed with its writer
-parked hung until that was done.
+(The NIO rows are of the earlier kind of run, scenarios together in one process.)
+
+- Futures are within 8 to 9% of reactors on kqueue, within 4% on Node.js, where they cost twice as much before, and
+  ahead by 30% on the JVM.
+- The park is worth 9 to 12% to futures on kqueue and 48% on Node.js. The hooks, over pinning, are worth 1 to 3%.
+- An earlier reading here, that futures had reached reactors on four kqueue workers (0.99 against 0.97), was of
+  scenarios run together, and is withdrawn for the row above.
+
+So nearly all of a reactor's speed is had from futures on every backend, with two things: a connection's futures
+pinned to a shard where there are shards, and futures that hand work to one another waiting without a listener.
+
+Tried and not kept: an op's own wait by a park. It passed the contracts for cancelling and for time limits, a time
+limit being the op's own on its worker's heap and a cancel taking the performer from where it is parked, and it
+measured inside the ranges of the wait it replaced (kqueue: echo 7.10 against 7.25, realistic 9.48 against 9.67 with
+one worker; 3.88 against 3.86 with four). An op's wait is a system call's worth; its listener is not what it costs.
 
 ## Locks
 
