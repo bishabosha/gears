@@ -302,21 +302,30 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     val count = workerGroup.length
     var task: Runnable | Null = null
     var looks = count // each look that finds nothing to take was beaten to it by another thief
+    var soonest = 0L // until the first of what is to spare but not yet a thief's becomes one
     while task == null && looks > 0 do
       var most = 0
       var from: PoolWorker | Null = null
+      val now = System.nanoTime()
+      soonest = 0L
       var i = 1
       while i < count do
         val worker = workerGroup((thief.id + i) % count)
         val spare = worker.spare
-        if spare > most then
-          most = spare
-          from = worker
+        if spare > 0 then
+          val wait = worker.stealableIn(now)
+          if wait > 0 then
+            if soonest == 0L || wait < soonest then soonest = wait
+          else if spare > most then
+            most = spare
+            from = worker
         i += 1
       if from == null then looks = 0
       else
         task = from.takeHalfFor(thief)
         looks -= 1
+    // With nothing to take yet, the thief looks again when there first is, rather than wait to be called.
+    thief.stealAgainIn = if task == null then soonest else 0L
     task
   }
 

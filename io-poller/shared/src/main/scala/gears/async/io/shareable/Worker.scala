@@ -45,8 +45,11 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     // One task, or a pair, which most often work with each other, the worker comes to as soon as what it is running
     // lets go. A third behind them is worth another worker's while, and is what gets a thief called if what is
     // running keeps the worker.
-    val behindOthers = inbox.add(task) > 1
-    if behindOthers then askForThief()
+    val ahead = inbox.add(task)
+    // A few are the worker's own for a moment, to keep together futures that work with each other. A burst is
+    // shared at once: where each first waits is where its handle is listened for from then on, so a burst the
+    // worker began on alone would stay its own load for good.
+    if ahead > 1 then askForThief(backlog = ahead >= Worker.SharedBacklog)
   }
 
   /** For `thief`, a worker with nothing to do, on its own thread: a task of this worker's for it to run now, with half
@@ -56,6 +59,28 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
 
   /** How many tasks this worker has for a thief to take half of, read from any thread. */
   private[shareable] def spare: Int = inbox.spare
+
+  /** How long from `now` until a thief may take them (see `Inbox.stealableIn`), read from any thread. */
+  private[shareable] def stealableIn(now: Long): Long = inbox.stealableIn(now)
+
+  /** Set by the scheduler as this worker, with nothing to do, looks for a task to take and finds only what is not yet a
+    * thief's: in how many nanoseconds the first of it is, for the worker to look again then, or zero. Worker thread
+    * only.
+    */
+  private[shareable] var stealAgainIn = 0L
+
+  /** The deadline to wait until with nothing to do: the next timer's, or when there is first something to take from
+    * another worker, whichever is sooner; negative for neither.
+    */
+  private def idleDeadline(): Long = {
+    val timer = peekNextDeadline()
+    val again = stealAgainIn
+    if again <= 0 then timer
+    else
+      stealAgainIn = 0
+      val retry = TimerHeap.deadlineAfter(again)
+      if timer < 0 || retry - timer < 0 then retry else timer
+  }
 
   /** How many turns the worker has begun. Read by the pool's starvation monitor, to tell a worker that is not coming to
     * its inbox: written by the worker's thread only, and read there a look at a time, so it is not volatile.
@@ -129,8 +154,9 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     */
   private var thiefAsked = false
 
-  private def askForThief(): Unit =
-    inbox.declareSurplus()
+  private def askForThief(backlog: Boolean = true): Unit =
+    // Tasks only just given to the worker are its own for a moment (see `Inbox.stealableIn`): a backlog is not.
+    if backlog then inbox.declareBacklog() else inbox.declareSurplus()
     if !thiefAsked then
       thiefAsked = true
       callThief()
@@ -371,7 +397,7 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
           finally pollOnly = false
         else
           parked = isEmpty()
-          try guarded(waitForDeadline(peekNextDeadline()))
+          try guarded(waitForDeadline(idleDeadline()))
           finally parked = false
       thiefAsked = false
       opsThisRun = 0
