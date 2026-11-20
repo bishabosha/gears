@@ -151,6 +151,82 @@ trait FlowContract extends ContractSuite {
     }
   }
 
+  test("more combinators: sources, groups, and what a flow comes to") {
+    running {
+      val numbers = Flow.from(1 to 10)
+      assertEquals(Flow.unfold(1)(n => if n > 4 then None else Some((n * n, n + 1))).toList, List(1, 4, 9, 16))
+      assertEquals(Flow.iterate(1)(_ * 2).take(5).toList, List(1, 2, 4, 8, 16))
+      assertEquals(Flow.repeat("x").take(3).toList, List("x", "x", "x"))
+      assertEquals(Flow.concat(List(Flow.of(1, 2), Flow.empty, Flow.of(3))).toList, List(1, 2, 3))
+      assertEquals(numbers.dropWhile(_ < 8).toList, List(8, 9, 10))
+      assertEquals(numbers.mapConcat(n => if n < 3 then List(n, n) else Nil).toList, List(1, 1, 2, 2))
+      assertEquals(numbers.grouped(4).toList, List(List(1, 2, 3, 4), List(5, 6, 7, 8), List(9, 10)))
+      assertEquals(Flow.of(1, 1, 2, 2, 2, 1).changes.toList, List(1, 2, 1))
+      assertEquals(Flow.of("a", "b", "c").intersperse(",").toList, List("a", ",", "b", ",", "c"))
+      assertEquals(numbers.toVector, (1 to 10).toVector)
+      assertEquals(numbers.count, 10L)
+      assertEquals(numbers.sum, 55)
+      assertEquals(numbers.reduceOption(_ max _), Some(10))
+      assertEquals((Flow.empty: Flow[Int]).reduceOption(_ + _), None)
+      assertEquals(numbers.lastOption, Some(10))
+      assertEquals(numbers.find(_ > 6), Some(7))
+      assert(numbers.exists(_ == 3) && !numbers.exists(_ > 10))
+      assert(numbers.forall(_ > 0) && !numbers.forall(_ < 10))
+      assert(numbers.contains(4) && !numbers.contains(11))
+      assert(Flow.empty.isEmpty && !numbers.isEmpty)
+      var ran = 0
+      numbers.tap(_ => ran += 1).run()
+      assertEquals(ran, 10)
+    }
+  }
+
+  test("zip steps another flow beside this one, an element for an element, and leaves it when either ends") {
+    running {
+      var left = false
+      val letters = Flow[String] {
+        try for letter <- List("a", "b", "c", "d") do emit(letter)
+        finally left = true
+      }
+      assertEquals(Flow.of(1, 2, 3).zip(letters).toList, List((1, "a"), (2, "b"), (3, "c")))
+      assert(left)
+      assertEquals(Flow.from(1 to 100).zip(Flow.of("x")).toList, List((1, "x")))
+      val failing = Flow[Int] { emit(1); throw new IllegalStateException("zipped failed") }
+      assertEquals(intercept[IllegalStateException](Flow.from(1 to 5).zip(failing).run()).getMessage, "zipped failed")
+    }
+  }
+
+  test("merge runs flows beside one another: every element of each, each flow's in its order") {
+    running {
+      val merged = Flow.merge(Flow.from(0 until 50).map(_ * 2), Flow.from(0 until 50).map(_ * 2 + 1)).toList
+      assertEquals(merged.sorted, (0 until 100).toList)
+      assertEquals(merged.filter(_ % 2 == 0), (0 until 100 by 2).toList)
+      assertEquals(merged.filter(_ % 2 == 1), (1 until 100 by 2).toList)
+      assertEquals(Flow.of(1).merge(Flow.of(2)).toList.sorted, List(1, 2))
+    }
+  }
+
+  test("mapPar runs up to so many at once, and no more, and emits every result") {
+    running { io ?=>
+      var running = 0
+      var most = 0
+      val guard = new Semaphore(1)
+      def counted[T](body: => T)(using Async): T = {
+        val held = guard.acquire()
+        try body
+        finally held.release()
+      }
+      val results = Flow.from(1 to 24).mapPar(4) { n =>
+        counted { running += 1; most = math.max(most, running) }
+        io.perform(io.ops.timer(5))
+        counted(running -= 1)
+        n * 10
+      }.toList
+      assertEquals(results.sorted, (1 to 24).map(_ * 10).toList)
+      assert(most <= 4, s"$most at once")
+      assert(most >= 2, s"only $most at once")
+    }
+  }
+
   test("a flow that is left early is left through its producer's finally, and emits no more") {
     running {
       var emitted = 0
@@ -373,6 +449,29 @@ trait FlowContract extends ContractSuite {
         val sent = Array.tabulate(48)(_.toByte)
         send(io, client, sent)
         assertEquals(receive(io, client, sent.length).toList, sent.toList.map(byte => (byte + stages).toByte))
+        close(io, client)
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: a handler zips, merges and maps in parallel, in flows of its own beside it") {
+      val failure = serving(strategy) { connection =>
+        val bytes = Flow[Int] {
+          for chunk <- connection.bytes do while chunk.hasRemaining() do emit(chunk.get() & 0xff)
+        }
+        // Each byte with its place, doubled beside the others, and a tick merged in for each.
+        val answers = bytes
+          .zip(Flow.iterate(0)(_ + 1))
+          .mapPar(3)((value, index) => (index, value * 2))
+          .merge(Flow.of((-1, 0)))
+        for (index, value) <- answers do connection.send(ByteBuffer.wrap(Array[Byte](index.toByte, value.toByte)))
+      } { (io, server) =>
+        val client = connect(io, server)
+        val sent = Array.tabulate(20)(i => (i + 1).toByte)
+        send(io, client, sent)
+        // The tick, and a pair for each byte, in no order.
+        val got = receive(io, client, 2 * (sent.length + 1)).grouped(2).map(pair => (pair(0).toInt, pair(1).toInt)).toSet
+        assertEquals(got, (0 until 20).map(i => (i, (i + 1) * 2)).toSet + ((-1, 0)))
         close(io, client)
       }
       assertServed(failure)

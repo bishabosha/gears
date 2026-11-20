@@ -100,48 +100,65 @@ object Flow {
   /** `flow`, or, if it is a segment deep, `flow` run on a stack of its own. */
   def shallow[A](flow: Flow[A]): Flow[A] = if flow.depth >= Segment then new OnItsOwnStack(flow) else flow
 
-  /** `upstream` run beside its consumer, not under it: each element is handed across, and the producer goes on only
-    * when the consumer has done with it, so that it is as if the one had called the other, lent elements and all. In
-    * a flow of a reactor's the producer is a flow of the reactor's, begun from its loop; elsewhere a future.
+  /** `upstream` run beside its consumer, not under it (`stepping`), so that it is as if the one had called the other
+    * with a stack of its own to do it on.
     */
   private final class OnItsOwnStack[A](upstream: Flow[A]) extends Flow[A] {
-    def foreach(each: A => Unit)(using async: Async): Unit = {
-      val reactor = Reactor.of(async)
-      if reactor == null then besideAFuture(each) else besideAFlow(each, reactor)
-    }
+    def foreach(each: A => Unit)(using Async): Unit =
+      stepping(upstream) { next =>
+        var element = next()
+        while element.asInstanceOf[AnyRef] ne End do {
+          each(element.asInstanceOf[A])
+          element = next()
+        }
+      }
+  }
 
-    private object Left extends RuntimeException(null, null, false, false)
+  /** What `stepping`'s `next` gives when there is no more. */
+  private object End extends RuntimeException(null, null, false, false)
 
-    private def besideAFuture(each: A => Unit)(using Async): Unit =
-      // Leaving the group, by the end or by a `break` or a failure of the consumer's, cancels the producer where it
-      // waits, which takes it out through its `finally` blocks.
+  /** Runs `flow` beside the caller, and gives `body` the way to take its elements one at a time: `next()` is the next
+    * element, or `End`, and the flow goes on only when `next` is called again, so that an element is its taker's until
+    * then, lent ones too. A failure of the flow's is thrown by `next`. When `body` is done, by its end or otherwise,
+    * a flow that has not ended is left where it is, through its `finally` blocks. In a flow of a reactor's the flow is
+    * another flow of the reactor's, begun from its loop; elsewhere a future.
+    */
+  private def stepping[A, R](flow: Flow[A])(body: (() => A | End.type) => R)(using async: Async): R = {
+    val reactor = Reactor.of(async)
+    if reactor == null then
+      // Leaving the group cancels the producer where it waits, which takes it out through its `finally` blocks.
       Async.group {
-        val elements = gears.async.SyncChannel[A | Left.type]()
+        val elements = gears.async.SyncChannel[A | End.type]()
         val taken = gears.async.SyncChannel[Unit]()
         val producing = gears.async.Future {
           var failure: Throwable | Null = null
           try
-            upstream.foreach { element =>
+            flow.foreach { element =>
               elements.send(element)
-              taken.read(): Unit // lent until the consumer has done with it
+              taken.read(): Unit
             }
           catch case thrown: Throwable => failure = thrown
-          // Cancelled, the consumer has left and waits for nothing; otherwise it is told that this is the end.
-          if !failure.isInstanceOf[java.util.concurrent.CancellationException] then elements.send(Left)
+          // Cancelled, the taker has left and waits for nothing; otherwise it is told that this is the end.
+          if !failure.isInstanceOf[java.util.concurrent.CancellationException] then elements.send(End)
           if failure != null then throw failure
         }
-        var going = true
-        while going do
-          elements.read() match {
-            case Right(element) if element.asInstanceOf[AnyRef] ne Left =>
-              each(element.asInstanceOf[A])
-              taken.send(())
-            case _ => going = false
+        var owed = false
+        body { () =>
+          if owed then {
+            owed = false
+            taken.send(())
           }
-        producing.await
+          elements.read() match {
+            case Right(element) if element.asInstanceOf[AnyRef] ne End =>
+              owed = true
+              element
+            case _ =>
+              producing.await
+              End
+          }
+        }
       }
-
-    private def besideAFlow(each: A => Unit, reactor: Reactor[?])(using async: Async): Unit = {
+    else {
       var slot: A | Null = null
       var full = false
       var ended = false
@@ -149,45 +166,241 @@ object Flow {
       var failure: Throwable | Null = null
       val filled = new reactor.Signal
       val emptied = new reactor.Signal
-      // Its own group, so that a consumer that leaves early can stop it where it waits.
+      // Its own group, so that a taker that leaves early can stop it where it waits.
       val group = new gears.async.CompletionGroup
       group.link(async.group)
       reactor.forkLater(group) {
         try
-          upstream.foreach { element =>
-            if left then throw Left
+          flow.foreach { element =>
+            if left then throw End
             slot = element
             full = true
             filled.wake()
             while full && !left do emptied.park()
-            if left then throw Left
+            if left then throw End
           }
-        catch case Left => ()
+        catch case End => ()
       } { thrown =>
         if thrown != null && !left then failure = thrown
         ended = true
         group.unlink()
         filled.wake()
       }
-      try {
-        var going = true
-        while going do {
-          while !full && !ended do filled.park()
-          if full then {
-            each(slot.asInstanceOf[A])
+      // Whether the taker has the element in the slot: only then is the slot emptied for the next. The producer may
+      // well have filled it before it was first asked.
+      var owed = false
+      try
+        body { () =>
+          if owed then {
+            owed = false
             slot = null
             full = false
             emptied.wake()
-          } else going = false
+          }
+          while !full && !ended do filled.park()
+          if full then {
+            owed = true
+            slot.asInstanceOf[A]
+          } else {
+            val thrown = failure
+            if thrown != null then throw thrown
+            End
+          }
         }
-      } finally
+      finally
         if !ended then {
           left = true
           emptied.wake()
           group.cancel()
         }
+    }
+  }
+
+  /** Runs `body`, which begins what it likes with `beside`, each beside the caller and one another, and returns when
+    * `body` has and all it began have ended, with the first failure there was thrown. In a flow of a reactor's they
+    * are flows of it, on its thread; elsewhere futures.
+    */
+  private def together(body: ((Async ?=> Unit) => Unit) => Unit)(using async: Async): Unit = {
+    val reactor = Reactor.of(async)
+    if reactor == null then
+      Async.group {
+        val running = scala.collection.mutable.ArrayBuffer[gears.async.Future[Unit]]()
+        body(work => running += gears.async.Future(work))
+        running.foreach(_.await)
+      }
+    else {
+      val over = new reactor.Signal
+      var running = 0
+      var failure: Throwable | Null = null
+      boundary {
+        body { work =>
+          if failure != null then break()
+          running += 1
+          reactor.fork(async.group)(work) { thrown =>
+            running -= 1
+            if thrown != null && failure == null then failure = thrown
+            over.wake()
+          }
+        }
+      }
+      while running > 0 do over.park()
       val thrown = failure
       if thrown != null then throw thrown
+    }
+  }
+
+  /** The flow that emits what `step` makes of a state, and goes on from the state it gives, until it gives none. */
+  def unfold[S, A](start: S)(step: S => Option[(A, S)]): Flow[A] = Flow {
+    var state = step(start)
+    while state.isDefined do {
+      val (element, next) = state.get
+      emit(element)
+      state = step(next)
+    }
+  }
+
+  /** `start`, `next` of it, `next` of that, without end. */
+  def iterate[A](start: A)(next: A => A): Flow[A] = Flow {
+    var element = start
+    while true do {
+      emit(element)
+      element = next(element)
+    }
+  }
+
+  /** `element`, without end. */
+  def repeat[A](element: A): Flow[A] = Flow { while true do emit(element) }
+
+  /** What the flows `gather` runs hand their elements over with, and begin more of themselves with. */
+  private abstract class Gather[A] {
+
+    /** Begins `work` beside the caller and the rest. */
+    def beside(work: Async ?=> Unit): Unit
+
+    /** Hands `element` to the gatherer, from a flow begun with `beside`: returns when it has done with it. */
+    def put(element: A)(using Async): Unit
+  }
+
+  /** Runs what `body` begins with `beside`, each beside the caller and one another, and calls `each`, in the caller,
+    * with every element they `put`, one at a time; the one that put it goes on when `each` has returned. Returns when
+    * all of them have ended, with the first failure there was thrown; left early, they are left where they are.
+    *
+    * An element is consumed by the flow that asked for it and no other: what consumes a flow was made with that
+    * flow's `Async`, and waits with it. So flows that run beside one another do not emit, they hand over.
+    */
+  private def gather[A](each: A => Unit)(body: Gather[A] => Unit)(using async: Async): Unit = {
+    val reactor = Reactor.of(async)
+    if reactor == null then
+      Async.group { spawn ?=>
+        val elements = gears.async.SyncChannel[A | End.type]()
+        val taken = gears.async.SyncChannel[Unit]()
+        val turn = new gears.async.Semaphore(1)
+        // One for `body`, so that the count is not nothing while it may still begin more.
+        val running = new java.util.concurrent.atomic.AtomicInteger(1)
+        val failure = new java.util.concurrent.atomic.AtomicReference[Throwable | Null](null)
+        val gatherer = new Gather[A] {
+          def beside(work: Async ?=> Unit): Unit = {
+            running.incrementAndGet(): Unit
+            gears.async.Future {
+              try work
+              catch {
+                case _: java.util.concurrent.CancellationException => ()
+                // The gatherer is told at once, and leaves, which stops the rest.
+                case thrown: Throwable => if failure.compareAndSet(null, thrown) then elements.send(End)
+              }
+              if running.decrementAndGet() == 0 then elements.send(End)
+            }(using spawn): Unit
+          }
+          def put(element: A)(using Async): Unit = {
+            val held = turn.acquire()
+            try {
+              elements.send(element)
+              taken.read(): Unit
+            } finally held.release()
+          }
+        }
+        body(gatherer)
+        var going = running.decrementAndGet() > 0
+        while going do
+          elements.read() match {
+            case Right(element) if element.asInstanceOf[AnyRef] ne End =>
+              each(element.asInstanceOf[A])
+              taken.send(())
+            case _ => going = false
+          }
+        val thrown = failure.get()
+        if thrown != null then throw thrown
+      }
+    else {
+      var slot: A | Null = null
+      var full = false
+      var puts = 0L
+      var done = 0L
+      var running = 1
+      var left = false
+      var failure: Throwable | Null = null
+      val filled = new reactor.Signal
+      val emptied = new reactor.Signal
+      val group = new gears.async.CompletionGroup
+      group.link(async.group)
+      val gatherer = new Gather[A] {
+        def beside(work: Async ?=> Unit): Unit = {
+          running += 1
+          reactor.fork(group) {
+            try work
+            catch case End => ()
+          } { thrown =>
+            running -= 1
+            if thrown != null && failure == null && !left then failure = thrown
+            filled.wake()
+          }
+        }
+        def put(element: A)(using Async): Unit = {
+          while full && !left do emptied.park()
+          if left then throw End
+          slot = element
+          full = true
+          val mine = puts
+          puts += 1
+          filled.wake()
+          while done <= mine && !left do emptied.park()
+          if left then throw End
+        }
+      }
+      try {
+        body(gatherer)
+        running -= 1
+        var going = true
+        while going do {
+          while !full && running > 0 && failure == null do filled.park()
+          if failure != null then going = false
+          else if full then {
+            each(slot.asInstanceOf[A])
+            slot = null
+            full = false
+            done += 1
+            emptied.wake()
+          } else going = false
+        }
+      } finally {
+        if running > 0 then {
+          left = true
+          emptied.wake()
+          group.cancel()
+        }
+        group.unlink()
+      }
+      val thrown = failure
+      if thrown != null then throw thrown
+    }
+  }
+
+  /** The flows' elements as they come from any of them, the flows run beside one another: each element whole, one at
+    * a time, in no order among the flows.
+    */
+  def merge[A](flows: Flow[A]*): Flow[A] = Flow {
+    gather[A](element => emit(element)) { gathered =>
+      flows.foreach(flow => gathered.beside(flow.foreach(element => gathered.put(element))))
     }
   }
 
@@ -254,6 +467,94 @@ object Flow {
       from.foreach(element => if left > 0 then left -= 1 else emit(element))
     }
 
+    def dropWhile(skip: A => Boolean): Flow[A] = over(flow) { from =>
+      var dropping = true
+      from.foreach { element =>
+        if dropping && !skip(element) then dropping = false
+        if !dropping then emit(element)
+      }
+    }
+
+    /** The elements `f` makes of each, in turn. */
+    inline def mapConcat[B](inline f: A => IterableOnce[B]): Flow[B] =
+      over(flow)(from => from.foreach(element => f(element).iterator.foreach(emit)))
+
+    /** The elements in lists of `size`, the last of what is left. */
+    def grouped(size: Int): Flow[List[A]] = over(flow) { from =>
+      require(size > 0, s"A group has at least one element, not $size")
+      var group = List.newBuilder[A]
+      var held = 0
+      from.foreach { element =>
+        group += element
+        held += 1
+        if held == size then {
+          emit(group.result())
+          group = List.newBuilder[A]
+          held = 0
+        }
+      }
+      if held > 0 then emit(group.result())
+    }
+
+    /** The elements, without one that is equal to the one before it. */
+    def changes: Flow[A] = over(flow) { from =>
+      var first = true
+      var last: Any = null
+      from.foreach { element =>
+        if first || element != last then {
+          first = false
+          last = element
+          emit(element)
+        }
+      }
+    }
+
+    /** The elements, with `between` between each two. */
+    def intersperse[B >: A](between: B): Flow[B] = over(flow) { from =>
+      var first = true
+      from.foreach { element =>
+        if first then first = false else emit(between)
+        emit(element)
+      }
+    }
+
+    /** Each element with the one `other` has for it, until either ends: `other` is run beside this one, a step at a
+      * time.
+      */
+    def zip[B](other: Flow[B]): Flow[(A, B)] = over(flow) { from =>
+      stepping(other) { next =>
+        boundary {
+          from.foreach { element =>
+            val beside = next()
+            if beside.asInstanceOf[AnyRef] eq End then break() else emit((element, beside.asInstanceOf[B]))
+          }
+        }
+      }
+    }
+
+    /** This flow's elements and `other`'s, as they come from either (`Flow.merge`). */
+    def merge[B >: A](other: Flow[B]): Flow[B] = Flow.merge[B](flow, other)
+
+    /** What `f` makes of each element, `f` run for up to `atOnce` of them at a time, each in a flow of its own: emitted
+      * as each is done, so in no order. An element goes to a flow that runs on after this one has, so must not be
+      * lent.
+      */
+    def mapPar[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = over(flow) { from =>
+      require(atOnce > 0, s"At least one at a time, not $atOnce")
+      val room = new gears.async.Semaphore(atOnce)
+      gather[B](made => emit(made)) { gathered =>
+        gathered.beside {
+          from.foreach { element =>
+            val place = room.acquire()
+            gathered.beside {
+              try gathered.put(f(element))
+              finally place.release()
+            }
+          }
+        }
+      }
+    }
+
     /** Each element, as it goes by. */
     inline def tap(inline see: A => Unit): Flow[A] = over(flow)(from => from.foreach { element => see(element); emit(element) })
 
@@ -291,6 +592,54 @@ object Flow {
       elements.result()
     }
 
+    def toVector(using Async): Vector[A] = {
+      val elements = Vector.newBuilder[A]
+      flow.foreach(elements += _)
+      elements.result()
+    }
+
+    /** Runs the flow for what it does, its elements dropped. */
+    def run()(using Async): Unit = flow.foreach(_ => ())
+
+    def count(using Async): Long = {
+      var seen = 0L
+      flow.foreach(_ => seen += 1)
+      seen
+    }
+
+    def sum[B >: A](using number: Numeric[B], async: Async): B = {
+      var total = number.zero
+      flow.foreach(element => total = number.plus(total, element))
+      total
+    }
+
+    /** The elements made one by `f`; none if there are none. */
+    def reduceOption[B >: A](f: (B, B) => B)(using Async): Option[B] = {
+      var result: Option[B] = None
+      flow.foreach(element => result = Some(if result.isEmpty then element else f(result.get, element)))
+      result
+    }
+
+    def lastOption(using Async): Option[A] = {
+      var last: Option[A] = None
+      flow.foreach(element => last = Some(element))
+      last
+    }
+
+    /** The first element `found` is true of, the flow left as soon as it has come. */
+    def find(found: A => Boolean)(using Async): Option[A] = boundary {
+      flow.foreach(element => if found(element) then break(Some(element)))
+      None
+    }
+
+    def exists(found: A => Boolean)(using Async): Boolean = find(found).isDefined
+
+    def forall(holds: A => Boolean)(using Async): Boolean = find(element => !holds(element)).isEmpty
+
+    def contains[B >: A](element: B)(using Async): Boolean = exists(_ == element)
+
+    def isEmpty(using Async): Boolean = headOption.isEmpty
+
     /** The first element, the flow left as soon as it has come; none if it ends without one. */
     def headOption(using Async): Option[A] = boundary {
       flow.foreach(element => break(Some(element)))
@@ -323,34 +672,8 @@ object Flow {
       * when this flow has ended and every one of them has, with the first failure there was thrown. In a flow of a
       * reactor's they are flows of it, on its thread; elsewhere futures.
       */
-    def foreachPar(f: A => Async ?=> Unit)(using async: Async): Unit = {
-      val reactor = Reactor.of(async)
-      if reactor == null then
-        Async.group {
-          val running = scala.collection.mutable.ArrayBuffer[gears.async.Future[Unit]]()
-          flow.foreach(element => running += gears.async.Future(f(element)))
-          running.foreach(_.await)
-        }
-      else {
-        val over = new reactor.Signal
-        var running = 0
-        var failure: Throwable | Null = null
-        boundary {
-          flow.foreach { element =>
-            if failure != null then break()
-            running += 1
-            reactor.fork(async.group)(f(element)) { thrown =>
-              running -= 1
-              if thrown != null && failure == null then failure = thrown
-              over.wake()
-            }
-          }
-        }
-        while running > 0 do over.park()
-        val thrown = failure
-        if thrown != null then throw thrown
-      }
-    }
+    def foreachPar(f: A => Async ?=> Unit)(using Async): Unit =
+      together(beside => flow.foreach(element => beside(f(element))))
   }
 
   /** `groupBy` in a flow of `reactor`'s: a key's flow is a queue and a signal, all on the reactor's thread. */
