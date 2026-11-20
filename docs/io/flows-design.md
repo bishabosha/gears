@@ -74,6 +74,17 @@ trait Sink[-A] { def send(a: A)(using Async): Unit; def flush()(using Async): Un
   flow that runs the one before it and emits. `for a <- flow if p(a) yield f(a)` is a flow. `through` takes a
   function from a flow to a flow, which is all a decoder is. None has a runtime of its own; all work under any
   `Async`.
+- The functions given to `map`, `filter`, `fold` and the like are inlined, as is the body of `Flow { ... }`: an
+  element costs one call for each stage it passes. Three stages and a fold over a thousand elements, nanoseconds an
+  element, not inlined and inlined: Scala Native 44 and 13, Node.js 42 and 19, the JVM 36 and 1; the same with the
+  library's iterators 37, 31 and 9.
+- The stack is as deep as the pipeline has stages, whatever the number of elements: a flow runs in a loop, not a
+  call inside a call. What does grow it is flows made of flows without end, a `map` in a loop, `++` folded over a
+  list. Measured, a chain of `map`s runs out of stack past some 1,000 stages on Node.js, 3,000 on the JVM and 10,000
+  on Scala Native, where it is not an exception but the end of the program. So a flow knows how many it is made of
+  (`depth`), and one made of more than `Flow.MaxDepth`, 512, is refused as it is made, with what to do instead:
+  `Flow.concat` joins any number, and a loop inside one `Flow { ... }` emits as many as it likes. A flow that runs
+  itself from its own body is not caught by this.
 - A flow left early (`take`, `headOption`) has its producer leave where it was, through its `finally` blocks, as a
   `break` does.
 - `groupBy` deals elements by key into a flow for each key; `foreachPar` runs a flow for each element and joins

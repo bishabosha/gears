@@ -18,9 +18,16 @@ import scala.util.boundary.break
   *
   * A flow does nothing until it is run, with `foreach` or what is made of it (`for ... do`, `fold`, `to`, ...); then
   * its code runs, on the caller's own stack, and each `emit` is a call of what consumes the element, which returns when
-  * that has done with it. So a slow consumer holds its producer back with nothing said, a consumer that waits for an
+  * that has done with it. The functions given to `map`, `filter` and the like are inlined into that call, so that an
+  * element costs one call for each stage it passes. So a slow consumer holds its producer back with nothing said, a consumer that waits for an
   * op or a future has the whole of the pipeline wait with it, and nothing runs between a flow and what it was made of:
   * `map`, `filter` and the rest are functions called in turn.
+  *
+  * The stack an element passes through is as deep as its pipeline has stages, whatever the number of elements: a
+  * flow of a million elements runs in a loop, not a call inside a call. What does grow it is flows made of flows
+  * without end, a `map` applied in a loop, `++` folded over a list (`Flow.concat` is for that), a flow that runs
+  * itself. One made of more than `Flow.MaxDepth` others is refused as it is made, since what would follow is not an
+  * exception everywhere: on Scala Native a stack that runs out ends the program.
   *
   * A flow run twice runs its code twice. One that ends early (`take`, `head`) has its producer leave where it was,
   * through its `finally` blocks, as a `break` does.
@@ -32,10 +39,13 @@ trait Flow[+A] {
 
   /** Runs the flow: `each` is called with every element, in order, and this returns when the flow has ended. */
   def foreach(each: A => Unit)(using Async): Unit
+
+  /** How many flows this one is made of, one of another: how deep the stack is as an element passes through it. */
+  def depth: Int = 1
 }
 
 /** What a flow's code emits with: given to the body of `Flow { ... }`. */
-final class Emit[-A] private[io] (private[io] val each: A => Unit)
+final class Emit[-A](val each: A => Unit)
 
 /** What takes elements, one caller's whole and in the order of its calls: `send` returns as soon as the element is
   * taken, which for a connection is before it is written, and waits only if too much is taken and unwritten.
@@ -61,12 +71,36 @@ object Sink {
 object Flow {
 
   /** The flow whose elements are what `body` emits, as it emits them. */
-  def apply[A](body: Emit[A] ?=> Async ?=> Unit): Flow[A] = new Flow[A] {
+  inline def apply[A](inline body: Emit[A] ?=> Async ?=> Unit): Flow[A] = new Flow[A] {
     def foreach(each: A => Unit)(using Async): Unit = body(using new Emit[A](each))
   }
 
+  /** A flow made of `upstream`, one stage more: `Flow { ... }` that counts how deep it is. */
+  private[io] inline def over[A](upstream: Flow[?])(inline body: Emit[A] ?=> Async ?=> Unit): Flow[A] = new Flow[A] {
+    override val depth: Int = deeper(upstream.depth)
+    def foreach(each: A => Unit)(using Async): Unit = body(using new Emit[A](each))
+  }
+
+  /** How many flows a flow may be made of, one of another. Each is two or three calls deep as an element passes; the
+    * least of the platforms' stacks, a WebAssembly stack on Node.js, has room for some thousands.
+    */
+  inline val MaxDepth = 512
+
+  def deeper(depth: Int): Int = {
+    if depth >= MaxDepth then
+      throw new IllegalStateException(
+        s"A flow made of more than $MaxDepth others, one of another, would run out of stack as it runs: " +
+          "is one being made in a loop? `Flow.concat` joins many, and a loop inside one `Flow { ... }` emits as many " +
+          "as it likes."
+      )
+    depth + 1
+  }
+
+  /** The flows' elements, one flow after another, however many there are. */
+  def concat[A](flows: IterableOnce[Flow[A]]): Flow[A] = Flow(flows.iterator.foreach(_.foreach(emit)))
+
   /** Emits `element` from the body of a `Flow { ... }`: returns when its consumer has done with it. */
-  def emit[A](element: A)(using to: Emit[A]): Unit = to.each(element)
+  inline def emit[A](element: A)(using to: Emit[A]): Unit = to.each(element)
 
   def of[A](elements: A*): Flow[A] = from(elements)
 
@@ -81,27 +115,27 @@ object Flow {
 
     // ---- one flow of another, nothing running between them
 
-    def map[B](f: A => B): Flow[B] = Flow(flow.foreach(element => emit(f(element))))
+    inline def map[B](inline f: A => B): Flow[B] = over(flow)(flow.foreach(element => emit(f(element))))
 
-    def filter(keep: A => Boolean): Flow[A] = Flow(flow.foreach(element => if keep(element) then emit(element)))
+    inline def filter(inline keep: A => Boolean): Flow[A] = over(flow)(flow.foreach(element => if keep(element) then emit(element)))
 
     /** For `for a <- flow if ... do`. */
-    def withFilter(keep: A => Boolean): Flow[A] = filter(keep)
+    inline def withFilter(inline keep: A => Boolean): Flow[A] = filter(keep)
 
     /** The elements of the flows `f` makes of this one's, one flow after another. */
-    def flatMap[B](f: A => Flow[B]): Flow[B] = Flow(flow.foreach(element => f(element).foreach(emit)))
+    inline def flatMap[B](inline f: A => Flow[B]): Flow[B] = over(flow)(flow.foreach(element => f(element).foreach(emit)))
 
     def collect[B](f: PartialFunction[A, B]): Flow[B] =
-      Flow(flow.foreach(element => if f.isDefinedAt(element) then emit(f(element))))
+      over(flow)(flow.foreach(element => if f.isDefinedAt(element) then emit(f(element))))
 
     /** This flow's elements, and then `next`'s. */
-    def ++[B >: A](next: Flow[B]): Flow[B] = Flow {
+    def ++[B >: A](next: Flow[B]): Flow[B] = over(if next.depth > flow.depth then next else flow) {
       flow.foreach(emit)
       next.foreach(emit)
     }
 
     /** The first `count` elements: the flow is left as the last of them has been consumed. */
-    def take(count: Long): Flow[A] = Flow {
+    def take(count: Long): Flow[A] = over(flow) {
       if count > 0 then
         boundary {
           var left = count
@@ -113,20 +147,20 @@ object Flow {
         }
     }
 
-    def takeWhile(keep: A => Boolean): Flow[A] = Flow {
+    inline def takeWhile(inline keep: A => Boolean): Flow[A] = over(flow) {
       boundary(flow.foreach(element => if keep(element) then emit(element) else break()))
     }
 
-    def drop(count: Long): Flow[A] = Flow {
+    def drop(count: Long): Flow[A] = over(flow) {
       var left = count
       flow.foreach(element => if left > 0 then left -= 1 else emit(element))
     }
 
     /** Each element, as it goes by. */
-    def tap(see: A => Unit): Flow[A] = Flow(flow.foreach { element => see(element); emit(element) })
+    inline def tap(inline see: A => Unit): Flow[A] = over(flow)(flow.foreach { element => see(element); emit(element) })
 
     /** What `f` has made of the elements so far, after each. */
-    def scan[B](zero: B)(f: (B, A) => B): Flow[B] = Flow {
+    inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] = over(flow) {
       var state = zero
       flow.foreach { element =>
         state = f(state, element)
@@ -134,7 +168,7 @@ object Flow {
       }
     }
 
-    def zipWithIndex: Flow[(A, Long)] = Flow {
+    def zipWithIndex: Flow[(A, Long)] = over(flow) {
       var index = 0L
       flow.foreach { element =>
         emit((element, index))
@@ -147,7 +181,7 @@ object Flow {
 
     // ---- running a flow
 
-    def fold[B](zero: B)(f: (B, A) => B)(using Async): B = {
+    inline def fold[B](zero: B)(inline f: (B, A) => B)(using Async): B = {
       var result = zero
       flow.foreach(element => result = f(result, element))
       result
@@ -182,7 +216,7 @@ object Flow {
       * In a flow of a reactor's, a `Server`'s handler say, the keys' flows are flows of that reactor, on its thread;
       * elsewhere each is a channel, for a future.
       */
-    def groupBy[K](key: A => K): Flow[(K, Flow[A])] = Flow {
+    def groupBy[K](key: A => K): Flow[(K, Flow[A])] = over(flow) {
       val reactor = Reactor.of(summon[Async])
       if reactor == null then dealToChannels(flow, key) else dealOnReactor(flow, key, reactor)
     }

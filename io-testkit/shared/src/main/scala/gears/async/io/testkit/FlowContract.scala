@@ -169,6 +169,40 @@ trait FlowContract extends ContractSuite {
     }
   }
 
+  test("a flow of a million elements runs in the stack its stages take, not its elements") {
+    running {
+      val count = 1_000_000
+      val sum = Flow.from(0 until count).map(_ + 1).filter(_ % 2 == 0).map(_.toLong).fold(0L)(_ + _)
+      assertEquals(sum, (1L to count).filter(_ % 2 == 0).sum)
+      var seen = 0
+      for element <- Flow[Int] { var i = 0; while i < count do { emit(i); i += 1 } } do seen += 1
+      assertEquals(seen, count)
+    }
+  }
+
+  test("many flows are joined with concat, and run one after another on a stack no deeper for it") {
+    running {
+      val flows = List.tabulate(20_000)(i => Flow.of(i))
+      assertEquals(Flow.concat(flows).fold(0L)(_ + _), (0L until 20_000).sum)
+      assertEquals(Flow.concat(flows).depth, 1)
+    }
+  }
+
+  test("a flow made of too many others, one of another, is refused as it is made") {
+    running {
+      var flow: Flow[Int] = Flow.of(1, 2, 3)
+      for _ <- 1 until Flow.MaxDepth do flow = flow.map(_ + 1)
+      assertEquals(flow.depth, Flow.MaxDepth)
+      assertEquals(flow.toList, List(1, 2, 3).map(_ + Flow.MaxDepth - 1))
+      val refused = intercept[IllegalStateException](flow.map(_ + 1))
+      assert(refused.getMessage.contains("Flow.concat"), refused.getMessage)
+      // And joined with `++` in a fold, which is the same.
+      intercept[IllegalStateException] {
+        List.tabulate(Flow.MaxDepth + 1)(i => Flow.of(i)).foldLeft(Flow.empty: Flow[Int])(_ ++ _)
+      }: Unit
+    }
+  }
+
   test("a flow's failure is thrown where the flow is run") {
     running {
       val failing = Flow[Int] {

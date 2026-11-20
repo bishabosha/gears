@@ -44,6 +44,8 @@ object CapBench {
     "reactor-await",
     "reactor-mux",
     "reactor-mux-batched",
+    "work-flow",
+    "work-iterator",
     "flow-mux",
     "flow-mux-futures",
     "flow-mux-pinned-futures",
@@ -1774,6 +1776,32 @@ object CapBench {
       case "tcp-stream"      => socketStream(tcp(io), count(20_000), "tcp-stream")
       case "tcp-connect"     => socketConnect(tcp(io), count(1_000), "tcp-connect")
       case "tcp-realistic"   => realistic(tcp(io), many, count(2_000), "tcp-realistic")
+      case "work-flow" =>
+        // A pipeline with no I/O in it: what an element costs to pass through three stages and a fold.
+        val each = 1_000
+        val times = count(20_000)
+        timed("work-flow", each.toLong * times)(List(Future {
+          var total = 0L
+          var i = 0
+          while i < times do {
+            total += Flow.from(0 until each).map(_ + i).filter(_ % 3 != 0).map(_ * 2L).fold(0L)(_ + _)
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case "work-iterator" =>
+        // The same with the library's iterators, to read `work-flow` against.
+        val each = 1_000
+        val times = count(20_000)
+        timed("work-iterator", each.toLong * times)(List(Future {
+          var total = 0L
+          var i = 0
+          while i < times do {
+            total += (0 until each).iterator.map(_ + i).filter(_ % 3 != 0).map(_ * 2L).foldLeft(0L)(_ + _)
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
       case "flow-mux" =>
         flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux", Server.Strategy.Auto)
       case "flow-mux-pinned" =>
