@@ -183,9 +183,11 @@ final class Server private (
           def send(element: ByteBuffer)(using Async): Unit = outbox.put(element)
           def flush()(using Async): Unit = outbox.drain()
         }
-        handler(new Connection(bytes, sink))
-        outbox.drain()
-        outbox.close()
+        // The writer is parked where no cancel reaches it: it is told to end, however the handler did.
+        try {
+          handler(new Connection(bytes, sink))
+          outbox.drain()
+        } finally outbox.close()
         writing.awaitResult: Unit
       }
     catch {
@@ -307,14 +309,21 @@ object Server {
     * was put since its last write, so what is put while it writes, or before it is run, goes with one op.
     */
   private[io] final class SharedOutbox(first: ByteBuffer, second: ByteBuffer, telling: Runnable => Unit) {
-    private val tellWriter: Runnable = () => dirty.sendImmediately(())
+    // The writer, parked until there is something to write (`Async.park`): woken by this, at once or at a turn's end.
+    private val parked = new java.util.concurrent.atomic.AtomicReference[Runnable | Null](null)
+    private val pending = new java.util.concurrent.atomic.AtomicBoolean(false)
+    @volatile private var closing = false
+    private val tellWriter: Runnable = () => {
+      pending.set(true)
+      val resume = parked.getAndSet(null)
+      if resume != null then resume.run()
+    }
     private val bufs = Array(first, second)
     private var filling = 0
     private var writing = false
     private var told = false
     private var failure: Throwable | Null = null
     private var changed: Future.Promise[Unit] | Null = null
-    private val dirty = gears.async.UnboundedChannel[Unit]()
     first.clear()
     second.clear()
 
@@ -363,15 +372,27 @@ object Server {
       }
     }
 
-    def close(): Unit = dirty.close()
+    def close(): Unit = {
+      closing = true
+      tellWriter.run()
+    }
 
     /** The writer: `write` writes the buffer of the number it is given, whole. Until `close`. */
-    def run(write: Int => Unit)(using Async): Unit = {
+    def run(write: Int => Unit)(using async: Async): Unit = {
       var open = true
-      while open do
-        dirty.read() match {
-          case Left(_)  => open = false
-          case Right(_) =>
+      while open do {
+        if !pending.get() then
+          async.park { resume =>
+            parked.set(resume)
+            // Told meanwhile: nobody was there to wake.
+            if pending.get() then {
+              val mine = parked.getAndSet(null)
+              if mine != null then mine.run()
+            }
+          }
+        pending.set(false)
+        if closing then open = false
+        {
             var which = -1
             synchronized {
               told = false
@@ -394,6 +415,7 @@ object Server {
             }
             if waiting != null then waiting.complete(scala.util.Success(()))
         }
+      }
     }
   }
 }

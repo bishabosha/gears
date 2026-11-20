@@ -717,30 +717,29 @@ object Flow {
     }
   }
 
-  /** `groupBy` under any other `Async`: a key's flow is a channel, which a future of its own reads. */
+  /** `groupBy` under any other `Async`: a key's flow is a queue that one future fills and another empties, each parked
+    * when it has nothing to do there (`Async.park`), with no lock and no listener: woken by the other, or not at all.
+    */
   private def dealToChannels[A, K](flow: Flow[A], key: A => K)(using Emit[(K, Flow[A])], Async): Unit = {
-    // A channel closed forgets what it holds: the end is sent, as an element is.
-    object End
-    val dealt = new java.util.HashMap[K, gears.async.BufferedChannel[A | End.type]]()
+    val dealt = new java.util.HashMap[K, Mailbox]()
     try
       flow.foreach { element =>
         val k = key(element)
         val known = dealt.get(k)
-        if known != null then known.send(element)
+        if known != null then known.put(element.asInstanceOf[AnyRef])
         else {
-          val made = gears.async.BufferedChannel[A | End.type](Lag)
+          val made = new Mailbox
           dealt.put(k, made): Unit
-          made.send(element)
+          made.put(element.asInstanceOf[AnyRef])
           emit(
             (
               k,
               Flow[A] {
-                var going = true
-                while going do
-                  made.read() match {
-                    case Right(next) if next.asInstanceOf[AnyRef] ne End => Flow.emit(next.asInstanceOf[A])
-                    case _                                              => going = false
-                  }
+                var next = made.take()
+                while next ne End do {
+                  Flow.emit(next.asInstanceOf[A])
+                  next = made.take()
+                }
               }
             )
           )
@@ -748,7 +747,47 @@ object Flow {
       }
     finally {
       val keys = dealt.values().iterator()
-      while keys.hasNext() do keys.next().send(End)
+      while keys.hasNext() do keys.next().put(End)
     }
   }
+
+  /** A queue from one future to another. */
+  private final class Mailbox {
+    private val elements = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
+    private val held = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val reader = new java.util.concurrent.atomic.AtomicReference[Runnable | Null](null)
+    private val writer = new java.util.concurrent.atomic.AtomicReference[Runnable | Null](null)
+
+    private def wake(parked: java.util.concurrent.atomic.AtomicReference[Runnable | Null]): Unit = {
+      val resume = parked.getAndSet(null)
+      if resume != null then resume.run()
+    }
+
+    /** Adds `element`, and waits if the reader is `Lag` behind. */
+    def put(element: AnyRef)(using async: Async): Unit = {
+      elements.add(element): Unit
+      val now = held.incrementAndGet()
+      wake(reader)
+      if now > Lag then
+        async.park { resume =>
+          writer.set(resume)
+          // Taken meanwhile: nobody was there to wake.
+          if held.get() <= Lag then wake(writer)
+        }
+    }
+
+    def take()(using async: Async): AnyRef = {
+      var element = elements.poll()
+      while element == null do {
+        async.park { resume =>
+          reader.set(resume)
+          if !elements.isEmpty() then wake(reader)
+        }
+        element = elements.poll()
+      }
+      if held.decrementAndGet() == Lag then wake(writer)
+      element
+    }
+  }
+
 }

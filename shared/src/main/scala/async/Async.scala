@@ -39,6 +39,16 @@ trait Async private[async] (using val support: AsyncSupport, val scheduler: supp
     */
   def await[T](src: Async.Source[T]): T
 
+  /** EXPERIMENT. Suspends the caller until the `Runnable` that `register` is handed has been run, by any thread,
+    * once: the least a wait can be. It is not a source's listener, takes no lock and is in no group, so a cancel does
+    * not end it: whoever parks so answers for being woken. For waits between futures that are made to be cheap, a
+    * queue's reader for its writer.
+    */
+  private[async] def park(register: Runnable => Unit): Unit =
+    val gate = new ParkGate
+    register(gate)
+    withGroup(CompletionGroup.Unlinked).await(gate)
+
   /** Returns the cancellation group for this [[Async]] context. */
   def group: CompletionGroup
 

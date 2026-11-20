@@ -217,6 +217,10 @@ object Future:
 
       override def withGroup(group: CompletionGroup) = FutureAsync(group)
 
+      /** The future is set aside, and resumed by its scheduler as the runnable is run: nothing else. */
+      override private[async] def park(register: Runnable => Unit): Unit =
+        ac.support.suspend[Unit, Unit](sus => register(() => ac.support.resumeAsync(sus)(())))
+
     override def cancel(): Unit = if setCancelled() then this.innerGroup.cancel()
 
     link()

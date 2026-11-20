@@ -347,6 +347,41 @@ So the reactor is not made unnecessary by hooks of this kind. To have its speed 
 scheduler would need what makes a reactor's wait cheap: futures that are never another worker's, and waits between
 them that need no lock for that reason. That is the reactor's inside, moved into the worker; it was not tried.
 
+### A cheaper wait for futures
+
+What was left, then, was what a wait costs a future. `Async.park(register)`, in the core: the caller is suspended
+until the `Runnable` that `register` is handed has been run, once, by any thread. For a future it is the bare
+suspension and its scheduler's resume: no listener, no lock, no link to its group. It is not ended by a cancel, as a
+reactor's `Signal.park` is not: whoever parks so answers for being woken. Any other `Async` has it by way of `await`.
+
+Two waits use it, both between futures that serve one connection: a stream's future waiting for its next frame
+(`groupBy` with no reactor is now a queue that one future fills and another empties, each parked when it has nothing
+to do there, in place of a channel), and the future that writes what a connection sends, waiting to be told there is
+something.
+
+16 streams a connection, microseconds a request, medians (kqueue 7 runs, NIO 3), before and after for the futures:
+
+| | `Futures` | `PinnedFutures` | `ShardFutures` | `PinnedReactors` |
+|---|---:|---:|---:|---:|
+| kqueue, 1 worker | 4.09 → 3.54 | 3.66 → 3.19 | 3.55 → 3.13 (3.08-3.23) | 2.90 (2.85-2.94) |
+| kqueue, 4 workers | 1.60 → 1.33 | 1.16 → 1.02 | 1.12 → 0.99 (0.96-1.03) | 0.97 (0.93-1.01) |
+| NIO pool, 1 worker | 2.02 → 1.49 | 1.82 → 1.59 | 1.85 → 1.53 | 2.22 |
+| NIO pool, 4 workers | 0.58 → 0.44 | 0.51 → 0.42 | 0.50 → 0.41 | 0.58 |
+
+- On four kqueue workers futures are now level with reactors, 0.99 against 0.97, inside each other's ranges. With one
+  worker they are 8% behind, where they were 21%.
+- On the JVM futures were ahead and are further ahead: 29% with four workers, 31% with one.
+- Every futures strategy gained 12 to 26%, the unpinned one too: the gain is the wait, not where it is made.
+
+So most of a reactor's speed can be had from the scheduler: pin a connection's futures to a shard, and let futures
+that hand work to one another wait without a listener. What is left of the gap, with one worker, was not looked for:
+the lock on the buffer a connection's futures send into, the queue between a stream and its dealer, which is safe
+for two threads where a reactor's is for one, and a future's own cost to begin.
+
+What it costs: a parked future is not woken by its cancel. Here the dealer ends every stream's queue as it ends,
+however it ends, and a connection's writer is told to end in a `finally`; a handler that failed with its writer
+parked hung until that was done.
+
 ## Locks
 
 A lock that belongs to a thread (`synchronized`, `ReentrantLock`) is wrong for state that flows or futures share
