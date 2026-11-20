@@ -78,13 +78,23 @@ trait Sink[-A] { def send(a: A)(using Async): Unit; def flush()(using Async): Un
   element costs one call for each stage it passes. Three stages and a fold over a thousand elements, nanoseconds an
   element, not inlined and inlined: Scala Native 44 and 13, Node.js 42 and 19, the JVM 36 and 1; the same with the
   library's iterators 37, 31 and 9.
+- What `Flow { ... }` and the combinators make is one class (`Flow.Made`) holding a function: a place where a flow
+  is made adds a function to the program, not a class.
 - The stack is as deep as the pipeline has stages, whatever the number of elements: a flow runs in a loop, not a
   call inside a call. What does grow it is flows made of flows without end, a `map` in a loop, `++` folded over a
   list. Measured, a chain of `map`s runs out of stack past some 1,000 stages on Node.js, 3,000 on the JVM and 10,000
-  on Scala Native, where it is not an exception but the end of the program. So a flow knows how many it is made of
-  (`depth`), and one made of more than `Flow.MaxDepth`, 512, is refused as it is made, with what to do instead:
-  `Flow.concat` joins any number, and a loop inside one `Flow { ... }` emits as many as it likes. A flow that runs
-  itself from its own body is not caught by this.
+  on Scala Native, where it is not an exception but the end of the program.
+- So a long pipeline is cut. A flow knows how many it is made of (`depth`), and every `Flow.Segment` of them, 128,
+  what is above runs beside its consumer, not under it: in a flow of a reactor's as another flow of the reactor's,
+  begun from its loop, and elsewhere as a future. Each element is handed across and the producer goes on only when
+  the consumer has done with it, so that order, lent elements, failures and leaving early are as they were. No stack
+  holds more than a segment. `Flow.concat` joins any number of flows with no cut at all.
+- A hand-over costs what waking a future does: a thousand stages, seven cuts, cost an element 28 microseconds on
+  Scala Native, 37 on Node.js and 16 on the JVM, some 2 to 5 for each cut. A pipeline under 128 stages pays nothing.
+- Not right yet: on Node.js a pipeline of 2,000 stages (15 cuts) runs, and one of 20,000 (156 cuts) runs too but
+  leaves Node unable to suspend afterwards (`SuspendError: trying to suspend JS frames` in whatever runs next). Each
+  cut there is a stack of its own inside the last, and somewhere between the two is more than it has. The cause was
+  not found. And a flow that runs itself from its own body is not cut at all.
 - A flow left early (`take`, `headOption`) has its producer leave where it was, through its `finally` blocks, as a
   `break` does.
 - `groupBy` deals elements by key into a flow for each key; `foreachPar` runs a flow for each element and joins

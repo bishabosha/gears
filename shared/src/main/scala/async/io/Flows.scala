@@ -24,10 +24,11 @@ import scala.util.boundary.break
   * `map`, `filter` and the rest are functions called in turn.
   *
   * The stack an element passes through is as deep as its pipeline has stages, whatever the number of elements: a
-  * flow of a million elements runs in a loop, not a call inside a call. What does grow it is flows made of flows
-  * without end, a `map` applied in a loop, `++` folded over a list (`Flow.concat` is for that), a flow that runs
-  * itself. One made of more than `Flow.MaxDepth` others is refused as it is made, since what would follow is not an
-  * exception everywhere: on Scala Native a stack that runs out ends the program.
+  * flow of a million elements runs in a loop, not a call inside a call. A pipeline of very many stages, a `map`
+  * applied in a loop, `++` folded over a list, is cut every `Flow.Segment` of them: what is above the cut runs on a
+  * stack of its own and hands each element across, so that no stack holds more than a segment, however long the
+  * pipeline. A hand-over costs what waking a future does, and is paid only by pipelines that long. (A flow that runs
+  * itself from its own body is not cut: write the loop.)
   *
   * A flow run twice runs its code twice. One that ends early (`take`, `head`) has its producer leave where it was,
   * through its `finally` blocks, as a `break` does.
@@ -71,29 +72,123 @@ object Sink {
 object Flow {
 
   /** The flow whose elements are what `body` emits, as it emits them. */
-  inline def apply[A](inline body: Emit[A] ?=> Async ?=> Unit): Flow[A] = new Flow[A] {
-    def foreach(each: A => Unit)(using Async): Unit = body(using new Emit[A](each))
-  }
+  inline def apply[A](inline body: Emit[A] ?=> Async ?=> Unit): Flow[A] =
+    new Made[Any, A](null, 1, (_, each, async) => body(using new Emit[A](each))(using async))
 
-  /** A flow made of `upstream`, one stage more: `Flow { ... }` that counts how deep it is. */
-  private[io] inline def over[A](upstream: Flow[?])(inline body: Emit[A] ?=> Async ?=> Unit): Flow[A] = new Flow[A] {
-    override val depth: Int = deeper(upstream.depth)
-    def foreach(each: A => Unit)(using Async): Unit = body(using new Emit[A](each))
-  }
-
-  /** How many flows a flow may be made of, one of another. Each is two or three calls deep as an element passes; the
-    * least of the platforms' stacks, a WebAssembly stack on Node.js, has room for some thousands.
+  /** What `Flow { ... }` and the combinators make: one class for all of them, each a function of its own, so that a
+    * place where a flow is made adds a function to the program and not a class.
     */
-  inline val MaxDepth = 512
+  final class Made[U, A](from: Flow[U] | Null, override val depth: Int, run: (Flow[U], A => Unit, Async) => Unit)
+      extends Flow[A] {
+    def foreach(each: A => Unit)(using async: Async): Unit = run(from.asInstanceOf[Flow[U]], each, async)
+  }
 
-  def deeper(depth: Int): Int = {
-    if depth >= MaxDepth then
-      throw new IllegalStateException(
-        s"A flow made of more than $MaxDepth others, one of another, would run out of stack as it runs: " +
-          "is one being made in a loop? `Flow.concat` joins many, and a loop inside one `Flow { ... }` emits as many " +
-          "as it likes."
-      )
-    depth + 1
+  /** A flow made of `upstream`, one stage more: `body` is given what to run in its place, which is `upstream`, or,
+    * where that is a segment deep already, `upstream` on a stack of its own.
+    */
+  private[io] inline def over[U, A](upstream: Flow[U])(inline body: Flow[U] => Emit[A] ?=> Async ?=> Unit): Flow[A] = {
+    val from = shallow(upstream)
+    new Made[U, A](from, from.depth + 1, (from, each, async) => body(from)(using new Emit[A](each))(using async))
+  }
+
+  /** How many flows are made one of another before the next is cut off onto a stack of its own. A stage is two or
+    * three calls deep as an element passes, and the least of the platforms' stacks, a WebAssembly stack on Node.js,
+    * has room for some thousand stages.
+    */
+  inline val Segment = 128
+
+  /** `flow`, or, if it is a segment deep, `flow` run on a stack of its own. */
+  def shallow[A](flow: Flow[A]): Flow[A] = if flow.depth >= Segment then new OnItsOwnStack(flow) else flow
+
+  /** `upstream` run beside its consumer, not under it: each element is handed across, and the producer goes on only
+    * when the consumer has done with it, so that it is as if the one had called the other, lent elements and all. In
+    * a flow of a reactor's the producer is a flow of the reactor's, begun from its loop; elsewhere a future.
+    */
+  private final class OnItsOwnStack[A](upstream: Flow[A]) extends Flow[A] {
+    def foreach(each: A => Unit)(using async: Async): Unit = {
+      val reactor = Reactor.of(async)
+      if reactor == null then besideAFuture(each) else besideAFlow(each, reactor)
+    }
+
+    private object Left extends RuntimeException(null, null, false, false)
+
+    private def besideAFuture(each: A => Unit)(using Async): Unit =
+      // Leaving the group, by the end or by a `break` or a failure of the consumer's, cancels the producer where it
+      // waits, which takes it out through its `finally` blocks.
+      Async.group {
+        val elements = gears.async.SyncChannel[A | Left.type]()
+        val taken = gears.async.SyncChannel[Unit]()
+        val producing = gears.async.Future {
+          var failure: Throwable | Null = null
+          try
+            upstream.foreach { element =>
+              elements.send(element)
+              taken.read(): Unit // lent until the consumer has done with it
+            }
+          catch case thrown: Throwable => failure = thrown
+          // Cancelled, the consumer has left and waits for nothing; otherwise it is told that this is the end.
+          if !failure.isInstanceOf[java.util.concurrent.CancellationException] then elements.send(Left)
+          if failure != null then throw failure
+        }
+        var going = true
+        while going do
+          elements.read() match {
+            case Right(element) if element.asInstanceOf[AnyRef] ne Left =>
+              each(element.asInstanceOf[A])
+              taken.send(())
+            case _ => going = false
+          }
+        producing.await
+      }
+
+    private def besideAFlow(each: A => Unit, reactor: Reactor[?])(using async: Async): Unit = {
+      var slot: A | Null = null
+      var full = false
+      var ended = false
+      var left = false
+      var failure: Throwable | Null = null
+      val filled = new reactor.Signal
+      val emptied = new reactor.Signal
+      // Its own group, so that a consumer that leaves early can stop it where it waits.
+      val group = new gears.async.CompletionGroup
+      group.link(async.group)
+      reactor.forkLater(group) {
+        try
+          upstream.foreach { element =>
+            if left then throw Left
+            slot = element
+            full = true
+            filled.wake()
+            while full && !left do emptied.park()
+            if left then throw Left
+          }
+        catch case Left => ()
+      } { thrown =>
+        if thrown != null && !left then failure = thrown
+        ended = true
+        group.unlink()
+        filled.wake()
+      }
+      try {
+        var going = true
+        while going do {
+          while !full && !ended do filled.park()
+          if full then {
+            each(slot.asInstanceOf[A])
+            slot = null
+            full = false
+            emptied.wake()
+          } else going = false
+        }
+      } finally
+        if !ended then {
+          left = true
+          emptied.wake()
+          group.cancel()
+        }
+      val thrown = failure
+      if thrown != null then throw thrown
+    }
   }
 
   /** The flows' elements, one flow after another, however many there are. */
@@ -115,31 +210,34 @@ object Flow {
 
     // ---- one flow of another, nothing running between them
 
-    inline def map[B](inline f: A => B): Flow[B] = over(flow)(flow.foreach(element => emit(f(element))))
+    inline def map[B](inline f: A => B): Flow[B] = over(flow)(from => from.foreach(element => emit(f(element))))
 
-    inline def filter(inline keep: A => Boolean): Flow[A] = over(flow)(flow.foreach(element => if keep(element) then emit(element)))
+    inline def filter(inline keep: A => Boolean): Flow[A] = over(flow)(from => from.foreach(element => if keep(element) then emit(element)))
 
     /** For `for a <- flow if ... do`. */
     inline def withFilter(inline keep: A => Boolean): Flow[A] = filter(keep)
 
     /** The elements of the flows `f` makes of this one's, one flow after another. */
-    inline def flatMap[B](inline f: A => Flow[B]): Flow[B] = over(flow)(flow.foreach(element => f(element).foreach(emit)))
+    inline def flatMap[B](inline f: A => Flow[B]): Flow[B] = over(flow)(from => from.foreach(element => f(element).foreach(emit)))
 
     def collect[B](f: PartialFunction[A, B]): Flow[B] =
-      over(flow)(flow.foreach(element => if f.isDefinedAt(element) then emit(f(element))))
+      over(flow)(from => from.foreach(element => if f.isDefinedAt(element) then emit(f(element))))
 
     /** This flow's elements, and then `next`'s. */
-    def ++[B >: A](next: Flow[B]): Flow[B] = over(if next.depth > flow.depth then next else flow) {
-      flow.foreach(emit)
-      next.foreach(emit)
+    def ++[B >: A](next: Flow[B]): Flow[B] = {
+      val after = shallow(next)
+      over(flow) { from =>
+        from.foreach(emit)
+        after.foreach(emit)
+      }
     }
 
     /** The first `count` elements: the flow is left as the last of them has been consumed. */
-    def take(count: Long): Flow[A] = over(flow) {
+    def take(count: Long): Flow[A] = over(flow) { from =>
       if count > 0 then
         boundary {
           var left = count
-          flow.foreach { element =>
+          from.foreach { element =>
             emit(element)
             left -= 1
             if left == 0 then break()
@@ -147,30 +245,30 @@ object Flow {
         }
     }
 
-    inline def takeWhile(inline keep: A => Boolean): Flow[A] = over(flow) {
-      boundary(flow.foreach(element => if keep(element) then emit(element) else break()))
+    inline def takeWhile(inline keep: A => Boolean): Flow[A] = over(flow) { from =>
+      boundary(from.foreach(element => if keep(element) then emit(element) else break()))
     }
 
-    def drop(count: Long): Flow[A] = over(flow) {
+    def drop(count: Long): Flow[A] = over(flow) { from =>
       var left = count
-      flow.foreach(element => if left > 0 then left -= 1 else emit(element))
+      from.foreach(element => if left > 0 then left -= 1 else emit(element))
     }
 
     /** Each element, as it goes by. */
-    inline def tap(inline see: A => Unit): Flow[A] = over(flow)(flow.foreach { element => see(element); emit(element) })
+    inline def tap(inline see: A => Unit): Flow[A] = over(flow)(from => from.foreach { element => see(element); emit(element) })
 
     /** What `f` has made of the elements so far, after each. */
-    inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] = over(flow) {
+    inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] = over(flow) { from =>
       var state = zero
-      flow.foreach { element =>
+      from.foreach { element =>
         state = f(state, element)
         emit(state)
       }
     }
 
-    def zipWithIndex: Flow[(A, Long)] = over(flow) {
+    def zipWithIndex: Flow[(A, Long)] = over(flow) { from =>
       var index = 0L
-      flow.foreach { element =>
+      from.foreach { element =>
         emit((element, index))
         index += 1
       }
@@ -216,9 +314,9 @@ object Flow {
       * In a flow of a reactor's, a `Server`'s handler say, the keys' flows are flows of that reactor, on its thread;
       * elsewhere each is a channel, for a future.
       */
-    def groupBy[K](key: A => K): Flow[(K, Flow[A])] = over(flow) {
+    def groupBy[K](key: A => K): Flow[(K, Flow[A])] = over(flow) { from =>
       val reactor = Reactor.of(summon[Async])
-      if reactor == null then dealToChannels(flow, key) else dealOnReactor(flow, key, reactor)
+      if reactor == null then dealToChannels(from, key) else dealOnReactor(from, key, reactor)
     }
 
     /** `f` of every element, each in a flow of its own beside the caller's, which goes on running this one; returns

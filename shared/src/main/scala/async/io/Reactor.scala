@@ -337,7 +337,7 @@ private[io] final class Reactor[U <: Io[Interface] & Singleton] private (
 
   // ---- from other threads: flows handed to this reactor, and its end
 
-  private final class Handed(val body: Async ?=> Unit)
+  private final class Handed(val begin: () => Unit)
   private val handed = new ConcurrentLinkedQueue[Handed]()
   @volatile private var open = false
 
@@ -346,7 +346,15 @@ private[io] final class Reactor[U <: Io[Interface] & Singleton] private (
 
   /** Hands the reactor a flow to run, from any thread: it begins at the reactor's next turn. */
   def submit(body: Async ?=> Unit): Unit = {
-    handed.add(new Handed(body)): Unit
+    handed.add(new Handed(() => spawn(body))): Unit
+    signal()
+  }
+
+  /** `fork`, begun not where the caller is but at the reactor's next turn, from its own loop: on a stack that is not
+    * the caller's with more on top.
+    */
+  private[io] def forkLater(group: CompletionGroup)(body: Async ?=> Unit)(ended: Throwable | Null => Unit): Unit = {
+    handed.add(new Handed(() => fork(group)(body)(ended))): Unit
     signal()
   }
 
@@ -398,7 +406,7 @@ private[io] final class Reactor[U <: Io[Interface] & Singleton] private (
       }
       var arrival = handed.poll()
       while arrival != null do {
-        spawn(arrival.body)
+        arrival.begin()
         arrival = handed.poll()
       }
       settle()

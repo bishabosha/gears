@@ -46,6 +46,7 @@ object CapBench {
     "reactor-mux-batched",
     "work-flow",
     "work-iterator",
+    "work-flow-long",
     "flow-mux",
     "flow-mux-futures",
     "flow-mux-pinned-futures",
@@ -1787,6 +1788,20 @@ object CapBench {
             total += Flow.from(0 until each).map(_ + i).filter(_ % 3 != 0).map(_ * 2L).fold(0L)(_ + _)
             i += 1
           }
+          if total == 42 then println(total)
+        }))
+      case "work-flow-long" =>
+        // A pipeline of a thousand stages, which is cut onto stacks of its own: what a hand-over costs an element.
+        val stages = 1_000
+        val elements = count(20_000)
+        timed("work-flow-long", elements.toLong)(List(Future {
+          var flow: Flow[Int] = Flow.from(0 until elements)
+          var i = 0
+          while i < stages do {
+            flow = flow.map(_ + 1)
+            i += 1
+          }
+          val total = flow.fold(0L)(_ + _)
           if total == 42 then println(total)
         }))
       case "work-iterator" =>

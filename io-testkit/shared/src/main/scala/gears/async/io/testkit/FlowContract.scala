@@ -188,18 +188,47 @@ trait FlowContract extends ContractSuite {
     }
   }
 
-  test("a flow made of too many others, one of another, is refused as it is made") {
+  test("a pipeline of very many stages runs, cut onto stacks of its own, in order") {
     running {
-      var flow: Flow[Int] = Flow.of(1, 2, 3)
-      for _ <- 1 until Flow.MaxDepth do flow = flow.map(_ + 1)
-      assertEquals(flow.depth, Flow.MaxDepth)
-      assertEquals(flow.toList, List(1, 2, 3).map(_ + Flow.MaxDepth - 1))
-      val refused = intercept[IllegalStateException](flow.map(_ + 1))
-      assert(refused.getMessage.contains("Flow.concat"), refused.getMessage)
-      // And joined with `++` in a fold, which is the same.
-      intercept[IllegalStateException] {
-        List.tabulate(Flow.MaxDepth + 1)(i => Flow.of(i)).foldLeft(Flow.empty: Flow[Int])(_ ++ _)
-      }: Unit
+      // Fifteen cuts. Ten times as many run too, but on Node.js leave it unable to suspend afterwards: see the
+      // design document.
+      val stages = 2_000
+      var flow: Flow[Int] = Flow.from(1 to 50)
+      for _ <- 1 to stages do flow = flow.map(_ + 1)
+      assert(flow.depth <= Flow.Segment + 1, s"depth ${flow.depth}")
+      assertEquals(flow.toList, (1 to 50).map(_ + stages).toList)
+      // Joined with `++` in a fold, which is as deep.
+      val joined = List.tabulate(600)(i => Flow.of(i)).foldLeft(Flow.empty: Flow[Int])(_ ++ _)
+      assertEquals(joined.toList, List.tabulate(600)(identity))
+    }
+  }
+
+  test("a long pipeline left early has its producer leave through its finally, and its failure is its consumer's") {
+    running {
+      var left = false
+      var emitted = 0
+      var flow: Flow[Int] = Flow[Int] {
+        try
+          while true do {
+            emitted += 1
+            emit(emitted)
+          }
+        finally left = true
+      }
+      for _ <- 1 to 1_000 do flow = flow.map(_ + 1)
+      assertEquals(flow.take(3).toList, List(1001, 1002, 1003))
+      assert(left)
+      assert(emitted <= 4, s"emitted $emitted")
+
+      var failing: Flow[Int] = Flow[Int] {
+        emit(1)
+        throw new IllegalStateException("deep producer failed")
+      }
+      for _ <- 1 to 1_000 do failing = failing.map(_ + 1)
+      val seen = List.newBuilder[Int]
+      val thrown = intercept[IllegalStateException](failing.foreach(seen += _))
+      assertEquals(thrown.getMessage, "deep producer failed")
+      assertEquals(seen.result(), List(1001))
     }
   }
 
@@ -327,6 +356,24 @@ trait FlowContract extends ContractSuite {
         }
         asking.foreach(_.await)
         clients.foreach(close(io, _))
+      }
+      assertServed(failure)
+    }
+
+    test(s"$strategy: a handler's pipeline of very many stages runs, cut onto stacks of its own") {
+      val stages = 1_000
+      val failure = serving(strategy) { connection =>
+        var numbers: Flow[Int] = Flow[Int] {
+          for chunk <- connection.bytes do while chunk.hasRemaining() do emit(chunk.get() & 0xff)
+        }
+        for _ <- 1 to stages do numbers = numbers.map(_ + 1)
+        for number <- numbers do connection.send(ByteBuffer.wrap(Array[Byte](number.toByte)))
+      } { (io, server) =>
+        val client = connect(io, server)
+        val sent = Array.tabulate(48)(_.toByte)
+        send(io, client, sent)
+        assertEquals(receive(io, client, sent.length).toList, sent.toList.map(byte => (byte + stages).toByte))
+        close(io, client)
       }
       assertServed(failure)
     }
