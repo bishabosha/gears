@@ -473,6 +473,99 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"stages that keep something and a stage that wants no more, served $how: the connection is closed at it") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .drop(2)
+                .takeWhile(_ < 100)
+                .scan(0)(_ + _)
+                .zipWithIndex
+                .take(14)
+                // The last group is of what is left when `take` ends the pipeline.
+                .grouped(4)
+                .map { group =>
+                  val out = ByteBuffer.allocate(group.length * 2)
+                  for (sum, index) <- group do out.put(sum.toByte).put(index.toByte)
+                  out.flip()
+                  out
+                },
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(20)(i => (i + 1).toByte))
+          // Fourteen answers and then the end, with the client's own end not yet sent.
+          val got = receive(io, client, 64).grouped(2).map(pair => (pair(0) & 0xff, pair(1).toInt)).toList
+          val sums = (3 to 16).scanLeft(0)(_ + _).tail.map(_ & 0xff)
+          assertEquals(got, sums.zipWithIndex.toList)
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"a key's pipeline that wants no more, served $how, ends its key and leaves the others") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .groupThrough(_ & 1)((key, values) => if key == 0 then values.take(2) else values)
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(10)(_.toByte))
+          assertEquals(receive(io, client, 7).toList, List[Byte](0, 1, 2, 3, 5, 7, 9))
+          send(io, client, Array[Byte](10, 11))
+          assertEquals(receive(io, client, 1).toList, List[Byte](11))
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"a pipeline that is not of stages alone, served $how, is run instead, and served the same") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              Flow[ByteBuffer] {
+                connection.bytes.foreach { chunk =>
+                  val doubled = ByteBuffer.allocate(chunk.remaining())
+                  while chunk.hasRemaining() do doubled.put((chunk.get() * 2).toByte)
+                  doubled.flip()
+                  emit(doubled)
+                }
+              },
+            machine
+          )
+        }
+        try {
+          val first = connect(io, server)
+          val second = connect(io, server)
+          send(io, first, Array[Byte](1, 2, 3))
+          send(io, second, Array[Byte](10, 20))
+          assertEquals(receive(io, second, 2).toList, List[Byte](20, 40))
+          assertEquals(receive(io, first, 3).toList, List[Byte](2, 4, 6))
+          close(io, first)
+          close(io, second)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
     test(s"a stage that waits, served $how: its work under way beside the pipeline, no more of it than asked") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())
@@ -603,6 +696,37 @@ trait FlowContract extends ContractSuite {
         .toList
       assertEquals(seen.count(_.startsWith("0:")), 6)
       assertEquals(seen.filter(_.startsWith("1:")), List("1:1", "1:4", "1:7", "1:10"))
+    }
+  }
+
+  test("every stage does the same stepped as run") {
+    running {
+      val pipes = List[(String, Flow[Int] => Flow[Any])](
+        "take" -> (_.take(5)),
+        "take none" -> (_.take(0)),
+        "take more than there are" -> (_.take(500)),
+        "takeWhile" -> (_.takeWhile(_ < 7)),
+        "drop" -> (_.drop(3)),
+        "dropWhile" -> (_.dropWhile(_ < 4)),
+        "scan" -> (_.scan(0)(_ + _)),
+        "zipWithIndex" -> (_.zipWithIndex),
+        "grouped" -> (_.grouped(4)),
+        "grouped, exactly" -> (_.grouped(5)),
+        "changes" -> (_.map(_ / 3).changes),
+        "intersperse" -> (_.intersperse(-1)),
+        "mapStateful" -> (_.mapStateful(1)((product, n) => (product * n % 1000, product))),
+        "mapConcat, filter, collect" -> (_.mapConcat(n => List(n, n)).filter(_ % 2 == 0).collect { case n if n > 4 => n.toString }),
+        "many together" -> (_.drop(1).scan(0)(_ + _).takeWhile(_ < 60).zipWithIndex.grouped(3).intersperse(Nil).take(4))
+      )
+      for (name, pipe) <- pipes do {
+        val run = pipe(Flow.from(1 to 20)).toList
+        // One key, so one pipeline of steps for all of it.
+        val stepped = Flow.from(1 to 20).groupThrough(_ => 0)((_, values) => pipe(values)).toList
+        assertEquals(stepped, run, name)
+      }
+      // A key that wants no more is ended; the others go on.
+      val dealt = Flow.from(0 until 10).groupThrough(_ & 1)((key, values) => if key == 0 then values.take(2) else values)
+      assertEquals(dealt.toList, List(0, 1, 2, 3, 5, 7, 9))
     }
   }
 

@@ -25,6 +25,23 @@ through `Async`. `Io.startSubmitted` and what implements it are left, unused.
 
 Its measurements below are of code that is no longer there.
 
+## Which stages are stepped
+
+A stage is stepped if it never waits. Those are `map`, `filter`, `withFilter`, `collect`, `mapConcat`, `tap`,
+`process`, `mapStateful`, `mapUsingEmit`, `groupThrough`/`groupBy`, and, since they were given a step each, the ones
+that keep something between elements (`drop`, `dropWhile`, `scan`, `zipWithIndex`, `changes`, `intersperse`,
+`grouped`, which pushes what it has left at the end) and the ones that want no more (`take`, `takeWhile`). `mapAsync`
+is the one that waits and is stepped all the same.
+
+A stage that wants no more ends the step after it, drops what still comes, and tells what steps the pipeline
+(`Drive.stop`): the machine reads no more of that connection and closes it when what was made has been written. In a
+key's pipeline under `groupThrough` it ends the key, whose later elements are dropped, and leaves the rest.
+
+What is not stepped is what runs something beside something else (`zip`, `merge`, `mapPar`, `++`, `flatMap`) and a
+`Flow { ... }` of code. One type is kept for both, as Ox has one: `serveFlow` no longer refuses a pipeline that is
+not of stages alone but runs that connection in a future, as `serve` would, so that which a pipeline is decides how
+fast it is served and not whether. A test runs every stage both ways and compares.
+
 ## Ox's flows
 
 Ox's `Flow` (SoftwareMill, 1.0.3) is the same thing made independently: a stage that is run with what to call for

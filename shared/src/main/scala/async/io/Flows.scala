@@ -104,6 +104,33 @@ object Flow {
     def end(): Unit = next.end()
   }
 
+  /** `Pushing`, with something to do at the end before the step after it is ended: what it kept, pushed on. */
+  final class Finishing[A](each: A => Unit, atEnd: () => Unit, next: Step[?]) extends Step[A] {
+    def push(element: A): Unit = each(element)
+    def end(): Unit = {
+      atEnd()
+      next.end()
+    }
+  }
+
+  /** A step that may want no more: `each` gives whether it is done, and then the step after it is ended, what
+    * steps the pipeline is told to stop, and whatever still comes is dropped.
+    */
+  final class Until[A](each: A => Boolean, next: Step[?], drive: Drive) extends Step[A] {
+    private var over = false
+    def push(element: A): Unit =
+      if !over && each(element) then {
+        over = true
+        next.end()
+        drive.stop()
+      }
+    def end(): Unit =
+      if !over then {
+        over = true
+        next.end()
+      }
+  }
+
   /** A flow that elements are pushed into by whoever drives a pipeline: the beginning of one that is not run but
     * stepped. It cannot be run.
     */
@@ -126,6 +153,9 @@ object Flow {
     /** Where the stages are called: no more is taken from the source until `release`. */
     def hold(): Unit
     def release(): Unit
+
+    /** Where the stages are called, by a stage that wants no more (`take`): nothing more need come from the source. */
+    def stop(): Unit
   }
 
   /** A pipeline that is run, not stepped, driven by the future or flow that runs it: its work is done where it is,
@@ -136,6 +166,7 @@ object Flow {
     def later(run: Runnable): Unit = run.run()
     def hold(): Unit = ()
     def release(): Unit = ()
+    def stop(): Unit = ()
   }
 
   /** `flow` as a step: what to push `root`'s elements to so that `flow`'s reach `last`. Null if `flow` is not made of
@@ -379,7 +410,15 @@ object Flow {
       var step = keys.get(k)
       if step == null then {
         val port = new Port[A]
-        val made = compile(sub(k, port), port, shared, drive)
+        // A key's pipeline that wants no more stops its key, not the source: the rest of the key's are dropped.
+        val own = new Drive {
+          def spawn(work: Async ?=> Unit): Unit = drive.spawn(work)
+          def later(run: Runnable): Unit = drive.later(run)
+          def hold(): Unit = drive.hold()
+          def release(): Unit = drive.release()
+          def stop(): Unit = keys.put(k, Ended): Unit
+        }
+        val made = compile(sub(k, port), port, shared, own)
         if made == null then throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages")
         step = made
         open += 1
@@ -508,34 +547,64 @@ object Flow {
     }
 
     /** The first `count` elements: the flow is left as the last of them has been consumed. */
-    def take(count: Long): Flow[A] = over(flow) { from =>
-      if count > 0 then
-        boundary {
-          var left = count
-          from.foreach { element =>
-            emit(element)
-            left -= 1
-            if left == 0 then break()
+    def take(count: Long): Flow[A] =
+      stagedWith[A, A](flow) { from =>
+        if count > 0 then
+          boundary {
+            var left = count
+            from.foreach { element =>
+              emit(element)
+              left -= 1
+              if left == 0 then break()
+            }
           }
-        }
-    }
-
-    inline def takeWhile(inline keep: A => Boolean): Flow[A] = over(flow) { from =>
-      boundary(from.foreach(element => if keep(element) then emit(element) else break()))
-    }
-
-    def drop(count: Long): Flow[A] = over(flow) { from =>
-      var left = count
-      from.foreach(element => if left > 0 then left -= 1 else emit(element))
-    }
-
-    def dropWhile(skip: A => Boolean): Flow[A] = over(flow) { from =>
-      var dropping = true
-      from.foreach { element =>
-        if dropping && !skip(element) then dropping = false
-        if !dropping then emit(element)
+      } { (next, drive) =>
+        var left = count
+        new Until[A](
+          element =>
+            left <= 0 || {
+              next.push(element)
+              left -= 1
+              left == 0
+            },
+          next,
+          drive
+        )
       }
-    }
+
+    inline def takeWhile(inline keep: A => Boolean): Flow[A] =
+      stagedWith[A, A](flow) { from =>
+        boundary(from.foreach(element => if keep(element) then emit(element) else break()))
+      } { (next, drive) =>
+        new Until[A](element => if keep(element) then { next.push(element); false } else true, next, drive)
+      }
+
+    def drop(count: Long): Flow[A] =
+      staged[A, A](flow) { from =>
+        var left = count
+        from.foreach(element => if left > 0 then left -= 1 else emit(element))
+      } { next =>
+        var left = count
+        new Pushing[A](element => if left > 0 then left -= 1 else next.push(element), next)
+      }
+
+    def dropWhile(skip: A => Boolean): Flow[A] =
+      staged[A, A](flow) { from =>
+        var dropping = true
+        from.foreach { element =>
+          if dropping && !skip(element) then dropping = false
+          if !dropping then emit(element)
+        }
+      } { next =>
+        var dropping = true
+        new Pushing[A](
+          element => {
+            if dropping && !skip(element) then dropping = false
+            if !dropping then next.push(element)
+          },
+          next
+        )
+      }
 
     /** The elements `f` makes of each, in turn. */
     inline def mapConcat[B](inline f: A => IterableOnce[B]): Flow[B] =
@@ -586,43 +655,85 @@ object Flow {
     }
 
     /** The elements in lists of `size`, the last of what is left. */
-    def grouped(size: Int): Flow[List[A]] = over(flow) { from =>
+    def grouped(size: Int): Flow[List[A]] = {
       require(size > 0, s"A group has at least one element, not $size")
-      var group = List.newBuilder[A]
-      var held = 0
-      from.foreach { element =>
-        group += element
-        held += 1
-        if held == size then {
-          emit(group.result())
-          group = List.newBuilder[A]
-          held = 0
+      staged[A, List[A]](flow) { from =>
+        var group = List.newBuilder[A]
+        var held = 0
+        from.foreach { element =>
+          group += element
+          held += 1
+          if held == size then {
+            emit(group.result())
+            group = List.newBuilder[A]
+            held = 0
+          }
         }
+        if held > 0 then emit(group.result())
+      } { next =>
+        var group = List.newBuilder[A]
+        var held = 0
+        new Finishing[A](
+          element => {
+            group += element
+            held += 1
+            if held == size then {
+              val full = group.result()
+              group = List.newBuilder[A]
+              held = 0
+              next.push(full)
+            }
+          },
+          () => if held > 0 then next.push(group.result()),
+          next
+        )
       }
-      if held > 0 then emit(group.result())
     }
 
     /** The elements, without one that is equal to the one before it. */
-    def changes: Flow[A] = over(flow) { from =>
-      var first = true
-      var last: Any = null
-      from.foreach { element =>
-        if first || element != last then {
-          first = false
-          last = element
-          emit(element)
+    def changes: Flow[A] =
+      staged[A, A](flow) { from =>
+        var first = true
+        var last: Any = null
+        from.foreach { element =>
+          if first || element != last then {
+            first = false
+            last = element
+            emit(element)
+          }
         }
+      } { next =>
+        var first = true
+        var last: Any = null
+        new Pushing[A](
+          element =>
+            if first || element != last then {
+              first = false
+              last = element
+              next.push(element)
+            },
+          next
+        )
       }
-    }
 
     /** The elements, with `between` between each two. */
-    def intersperse[B >: A](between: B): Flow[B] = over(flow) { from =>
-      var first = true
-      from.foreach { element =>
-        if first then first = false else emit(between)
-        emit(element)
+    def intersperse[B >: A](between: B): Flow[B] =
+      staged[A, B](flow) { from =>
+        var first = true
+        from.foreach { element =>
+          if first then first = false else emit(between)
+          emit(element)
+        }
+      } { next =>
+        var first = true
+        new Pushing[A](
+          element => {
+            if first then first = false else next.push(between)
+            next.push(element)
+          },
+          next
+        )
       }
-    }
 
     /** Each element with the one `other` has for it, until either ends: `other` is run beside this one, a step at a
       * time.
@@ -733,21 +844,42 @@ object Flow {
       )
 
     /** What `f` has made of the elements so far, after each. */
-    inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] = over(flow) { from =>
-      var state = zero
-      from.foreach { element =>
-        state = f(state, element)
-        emit(state)
+    inline def scan[B](zero: B)(inline f: (B, A) => B): Flow[B] =
+      staged[A, B](flow) { from =>
+        var state = zero
+        from.foreach { element =>
+          state = f(state, element)
+          emit(state)
+        }
+      } { next =>
+        var state = zero
+        new Pushing[A](
+          element => {
+            state = f(state, element)
+            next.push(state)
+          },
+          next
+        )
       }
-    }
 
-    def zipWithIndex: Flow[(A, Long)] = over(flow) { from =>
-      var index = 0L
-      from.foreach { element =>
-        emit((element, index))
-        index += 1
+    def zipWithIndex: Flow[(A, Long)] =
+      staged[A, (A, Long)](flow) { from =>
+        var index = 0L
+        from.foreach { element =>
+          emit((element, index))
+          index += 1
+        }
+      } { next =>
+        var index = 0L
+        new Pushing[A](
+          element => {
+            val at = index
+            index += 1
+            next.push((element, at))
+          },
+          next
+        )
       }
-    }
 
     /** What `pipe` makes of this flow: `bytes.through(frames).through(requests)`. */
     def through[B](pipe: Flow[A] => Flow[B]): Flow[B] = pipe(flow)

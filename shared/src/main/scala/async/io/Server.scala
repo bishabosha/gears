@@ -63,12 +63,15 @@ final class Server private (
     */
   /** Serves every connection that comes by a pipeline: `pipeline` is called once for a connection, and gives the flow
     * of what is to be sent on it, made of the connection's `bytes` by stages (`map`, `filter`, `collect`,
-    * `mapConcat`, `process`, `groupThrough`, `tap`, and `mapAsync`, the one that waits). Nothing of a connection is then run: as its bytes come
+    * `mapConcat`, `process`, `groupThrough`, `take`, `scan`, `grouped` and the like, and `mapAsync`, the one that
+    * waits). Nothing of a connection is then run: as its bytes come
     * they are pushed through its stages, on one thread, one chunk after another, and what comes out is written.
     *
     * Where the backend has submission queues that is done by a machine, one for each shard, with no future, flow or
     * stack for a connection at all. Elsewhere, or with `machine` false, the same pipeline is run by a future for each
-    * connection, as `serve` would run `pipeline(connection).to(connection.sink)`.
+    * connection, as `serve` would run `pipeline(connection).to(connection.sink)`. So is a connection whose pipeline
+    * turns out not to be of stages alone, whatever the rest are: how it is served is a matter of speed, not of what
+    * it does. `pipeline` only makes a flow, and may be called more than once for a connection.
     */
   def serveFlow(pipeline: Connection => Flow[ByteBuffer], machine: Boolean = true)(using Async): Unit =
     if machine && io.ops.isInstanceOf[SubmissionQueues] then serveByMachine(pipeline)
@@ -199,6 +202,9 @@ final class Server private (
 
       def hold(): Unit = held += 1
 
+      /** A stage wants no more: no more is read, and the connection is closed when what was made has been written. */
+      def stop(): Unit = ended = true
+
       def release(): Unit = {
         held -= 1
         rearm()
@@ -239,13 +245,32 @@ final class Server private (
             def end(): Unit = finished = true
           }
           val made = Flow.compile(pipeline(new Connection(port, sink)), port, out, this)
-          if made == null then
-            throw new IllegalArgumentException(
-              "serveFlow's pipeline must be made of the connection's bytes by stages; `serve` runs any flow"
-            )
-          step = made
-          arm()
+          if made == null then alone()
+          else {
+            step = made
+            rearm()
+          }
         } catch case thrown: Throwable => fail(thrown)
+
+      /** The pipeline is not one of stages alone, so cannot be stepped: this connection is run, by a future of its
+        * own, its ops performed on this shard, and the machine has only to hear that it is done.
+        */
+      private def alone(): Unit = {
+        closing = true
+        working.incrementAndGet(): Unit
+        val on: Io[io.ops.type] =
+          if io.ops.isInstanceOf[Shards] then
+            Shards.onShard(io.asInstanceOf[Io[Shards]])(shard).asInstanceOf[Io[io.ops.type]]
+          else io.asInstanceOf[Io[io.ops.type]]
+        Future {
+          try serveAlone(on, connection, served => Flow.to(pipeline(served))(served.sink), -1)
+          finally {
+            returned.add(() => live -= 1): Unit
+            working.decrementAndGet(): Unit
+            ops.signal()
+          }
+        }(using spawning): Unit
+      }
 
       private def arm(): Unit = {
         in.clear()
@@ -276,7 +301,8 @@ final class Server private (
 
       /** The connection is closed once it has ended and what it sent is written; `now`, whatever is in flight. */
       private def leave(now: Boolean): Unit =
-        if !closing && finished && (now || (!writing && !reading && filling.position() == 0)) then {
+        // A read still in flight when a stage stopped the pipeline is left to the close.
+        if !closing && finished && (now || (!writing && (!reading || ended) && filling.position() == 0)) then {
           closing = true
           ops.submit(io.ops.close(connection), this)
         }
@@ -288,6 +314,7 @@ final class Server private (
         } else if same(op, read) then {
           reading = false
           if thrown != null then fail(thrown)
+          else if ended then leave(now = false)
           else
             try {
               in.flip()
