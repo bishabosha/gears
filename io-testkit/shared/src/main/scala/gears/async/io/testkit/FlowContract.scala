@@ -745,6 +745,89 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"a stage that is code, served $how: it waits, keeps what it likes, and its try is its error handling") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val closed = new java.util.concurrent.atomic.AtomicInteger(0)
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .map(value => if value == 'X' then throw new IllegalStateException("bad byte") else value)
+                .direct[Int] { values =>
+                  var count = 0
+                  try
+                    for value <- values do {
+                      // An op for each, as a call elsewhere would be.
+                      io.perform(io.ops.timer(1))
+                      count += 1
+                      emit(value + count)
+                    }
+                  catch case _: IllegalStateException => emit('!'.toInt)
+                  finally closed.incrementAndGet(): Unit
+                }
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array[Byte](10, 20, 30))
+          assertEquals(receive(io, client, 3).toList, List[Byte](11, 22, 33))
+          // What failed before the stage is caught in it, answered, and the connection ended as if it had ended.
+          send(io, client, Array[Byte](40, 'X', 50))
+          assertEquals(receive(io, client, 4).toList, List[Byte](44, '!'))
+          close(io, client)
+          // And a connection cancelled with the stage waiting: its finally is run.
+          val idle = connect(io, server)
+          send(io, idle, Array[Byte](1))
+          assertEquals(receive(io, idle, 1).toList, List[Byte](2))
+          served.cancel()
+          served.awaitResult: Unit
+          assertEquals(receive(io, idle, 1).length, 0)
+          close(io, idle)
+          // Scala Native skips a `finally` whose `catch` threw after the future had waited in the `try`
+          // (`DirectStageFinallyBehavior`): the cancel is caught as the `IllegalStateException` it is, and its emit throws.
+          if machine && System.getProperty("java.vm.name") == "Scala Native" then assert(closed.get() >= 1)
+          else assertEquals(closed.get(), 2)
+        } finally server.close()
+      }
+    }
+
+    test(s"a failure in one key's pipeline, served $how, recovered there, ends that key and leaves the others") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .groupThrough(_ & 1) { (key, values) =>
+                  values
+                    .mapAsync(1) { value =>
+                      io.perform(io.ops.timer(1))
+                      if value == 4 then throw new IllegalStateException("four") else value
+                    }
+                    .recover { case _: IllegalStateException => 100 + key }
+                }
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(10)(_.toByte))
+          // Key 0: 0, 2, then its failure's answer and no more; key 1: all of its own.
+          val got = receive(io, client, 8).map(_.toInt).toList
+          assertEquals(got.filter(v => v % 2 == 0), List(0, 2, 100))
+          assertEquals(got.filter(v => v % 2 == 1), List(1, 3, 5, 7, 9))
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
     test(s"a stage that waits in each key's pipeline, served $how, answers every element, a key's in order") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())
@@ -861,6 +944,46 @@ trait FlowContract extends ContractSuite {
         "intersperse" -> (_.intersperse(-1)),
         "mapStateful" -> (_.mapStateful(1)((product, n) => (product * n % 1000, product))),
         "mapConcat, filter, collect" -> (_.mapConcat(n => List(n, n)).filter(_ % 2 == 0).collect { case n if n > 4 => n.toString }),
+        "a stage that is code" -> (_.direct[Int] { elements =>
+          var sum = 0
+          for element <- elements do {
+            sum += element
+            if element % 2 == 0 then emit(sum)
+          }
+          emit(-sum)
+        }),
+        "a stage that is code, and leaves early" -> (_.direct[Int] { elements =>
+          scala.util.boundary {
+            for element <- elements do {
+              if element > 6 then scala.util.boundary.break()
+              emit(element * 2)
+              emit(element * 2 + 1)
+            }
+          }
+        }),
+        "a stage that is code, between stages that are not" -> (_.scan(0)(_ + _).direct[String] { sums =>
+          for sum <- sums do if sum % 3 == 0 then emit(s"<$sum>")
+        }.intersperse(",").take(9)),
+        "a failure recovered" -> (_.map(n => if n == 7 then throw new IllegalStateException("seven") else n).recover {
+          case failed: IllegalStateException => -7
+        }),
+        "a failure recovered by a stage that is code" -> (_.map(n => if n == 5 then throw new IllegalStateException("five") else n)
+          .direct[Int] { elements =>
+            try for element <- elements do emit(element)
+            catch case _: IllegalStateException => emit(-5)
+            emit(0)
+          }),
+        "a failure of a stage that is code, recovered after it" -> (_.direct[Int] { elements =>
+          for element <- elements do if element == 4 then throw new IllegalStateException("four") else emit(element)
+        }.map(_ * 10).recover { case _: IllegalStateException => -4 }),
+        "a failure of one key recovered in it" -> (_.groupThrough(_ % 2) { (key, values) =>
+          values.map(n => if n == 6 then throw new IllegalStateException("six") else n).recover {
+            case _: IllegalStateException => -100 - key
+          }
+        }),
+        "a failure before the keys, recovered in each" -> (_.map(n => if n == 9 then throw new IllegalStateException("nine") else n)
+          .groupThrough(_ % 3)((key, values) => values.recover { case _: IllegalStateException => -key })
+          .recover { case _: IllegalStateException => -99 }),
         "many together" -> (_.drop(1).scan(0)(_ + _).takeWhile(_ < 60).zipWithIndex.grouped(3).intersperse(Nil).take(4))
       )
       for (name, pipe) <- pipes do {
@@ -868,6 +991,48 @@ trait FlowContract extends ContractSuite {
         // One key, so one pipeline of steps for all of it.
         val stepped = Flow.from(1 to 20).groupThrough(_ => 0)((_, values) => pipe(values)).toList
         assertEquals(stepped, run, name)
+      }
+      // What is not recovered is thrown, the same either way: a failure after `recover`, which is not its to
+      // recover; one that no handler has anything for; one of a stage that is code.
+      val failing = List[(String, Flow[Int] => Flow[Any])](
+        "after recover" -> (_.recover { case _: Throwable => -1 }.map(n => if n == 3 then throw new IllegalStateException("after") else n)),
+        "after a stage that is code" -> (_.direct[Int] { elements =>
+          try for element <- elements do emit(element)
+          catch case _: IllegalStateException => emit(-1)
+        }.map(n => if n == 3 then throw new IllegalStateException("after") else n)),
+        "not handled" -> (_.map(n => if n == 3 then throw new IllegalStateException("after") else n).recover {
+          case _: java.io.IOException => -1
+        }),
+        "of a stage that is code" -> (_.direct[Int] { elements =>
+          for element <- elements do if element == 3 then throw new IllegalStateException("after") else emit(element)
+        }),
+        "of a key, not recovered" -> (_.groupThrough(_ % 2)((_, values) =>
+          values.map(n => if n == 3 then throw new IllegalStateException("after") else n)
+        ))
+      )
+      for (name, pipe) <- failing do {
+        val seenRun = new java.util.ArrayList[Any]()
+        val run = intercept[IllegalStateException](pipe(Flow.from(1 to 20)).foreach(seenRun.add(_): Unit))
+        val seenStepped = new java.util.ArrayList[Any]()
+        val stepped = intercept[IllegalStateException] {
+          Flow.from(1 to 20).groupThrough(_ => 0)((_, values) => pipe(values)).foreach(seenStepped.add(_): Unit)
+        }
+        assertEquals(run.getMessage, "after", name)
+        assertEquals(stepped.getMessage, "after", name)
+        assertEquals(seenStepped, seenRun, name)
+      }
+      // `onError` is shown a failure of what comes before it, once, and not one of what comes after.
+      for stepped <- List(false, true) do {
+        val shown = new java.util.ArrayList[String]()
+        val pipe: Flow[Int] => Flow[Int] =
+          _.map(n => if n == 2 then throw new IllegalStateException("before") else n)
+            .onError(thrown => shown.add(s"first: ${thrown.getMessage}"): Unit)
+            .recover { case _: IllegalStateException => 50 }
+            .onError(thrown => shown.add(s"second: ${thrown.getMessage}"): Unit)
+            .map(n => if n == 50 then throw new IllegalStateException("later") else n)
+        val flow = if stepped then Flow.from(1 to 5).groupThrough(_ => 0)((_, values) => pipe(values)) else pipe(Flow.from(1 to 5))
+        assertEquals(intercept[IllegalStateException](flow.run()).getMessage, "later")
+        assertEquals(shown.toString, "[first: before]", s"stepped: $stepped")
       }
       // A key that wants no more is ended; the others go on.
       val dealt = Flow.from(0 until 10).groupThrough(_ & 1)((key, values) => if key == 0 then values.take(2) else values)

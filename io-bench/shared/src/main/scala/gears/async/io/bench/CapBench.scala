@@ -1660,6 +1660,9 @@ object CapBench {
     def hold(): Unit = ()
     def release(): Unit = ()
     def stop(): Unit = ()
+    def start(body: Async ?=> Unit): Runnable = () => ()
+    def waits: Boolean = false
+    def pause(register: Runnable => Unit): Unit = ()
   }
 
   private def timed(name: String, operations: Long)(body: => List[Future[Unit]])(using Async): Unit = {
@@ -1774,6 +1777,7 @@ object CapBench {
             def push(element: Long): Unit = total += element
             def end(): Unit = ()
             def abandon(): Unit = ()
+            def fail(thrown: Throwable): Unit = throw thrown
           }
           var bias = 0
           val step: Flow.Step[Int] =
@@ -1804,6 +1808,7 @@ object CapBench {
             def push(element: Int): Unit = total += element
             def end(): Unit = ()
             def abandon(): Unit = ()
+            def fail(thrown: Throwable): Unit = throw thrown
           }
           val program =
             Pipe.from[Int].process[Int](emit => element => emit(element)).groupThrough(_ & 15)(_.mapWith[Any, Int](_ => {

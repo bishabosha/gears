@@ -86,6 +86,71 @@ Not guaranteed, and to be decided: there is no time limit on the gentle close; `
 resource whose release is itself an op has nowhere to do it; and elements lent to a stage (a read's buffer) are
 still lent by convention.
 
+## Failures
+
+One failure ends the flow unless something recovers it, as in ZIO's streams, fs2 and Ox: after a stage has thrown,
+what the stages around it keep is in no known state. A failure is an exception; what is to be handled element by
+element is made a value by the stage's own function.
+
+A failure is a third thing a step is told, beside an element and the end: `Step.fail(thrown)`, in place of the end,
+passed on by every step that makes nothing else of it. The step with nothing after it throws it on as `Unrecovered`
+to whatever steps the pipeline, which fails what the pipeline was for. A stage that throws as it is pushed an
+element throws *up*, through the stages before it; what steps the pipeline catches that and tells the first step, so
+every step hears of it, and a step that must tell the stages before it from those after notes what the step after
+it threw.
+
+- `recover(handler)`: a failure of the stages before it becomes one last element and the end. Not one of a stage
+  after it, and not a cancel.
+- `onError(see)`: shown such a failure, which goes on as it was.
+- `onComplete(atLast)`: as before, run at a failure too.
+
+**Scope.** What fails is the nearest pipeline: a key's under `groupThrough`, then the connection's. A key's failure
+that its own pipeline recovers ends that key and leaves the others; one that it does not is the whole flow's, where
+a `recover` after the `groupThrough` may still take it. A failure before the keys is told to each key's pipeline and
+then to what follows them. Work of `mapAsync` that throws is its stage's failure, in its key. A connection's
+failure is not its server's other connections'.
+
+**A stage that is code: `direct`.**
+
+```scala
+requests.direct[Response] { requests =>
+  val session = open()
+  try for request <- requests do emit(session.answer(request))
+  catch case _: Malformed => emit(Response.BadRequest)
+  finally session.close()
+}
+```
+
+The body is written as a `Flow { ... }` is, and its `try` is the stage's error handling: a failure of the flow it is
+given is thrown from its loop over that flow; what it throws is the stage's failure, for the stages after; what a
+stage after it throws is kept from its `catch` (its `finally` is still run). It may wait, perform ops, keep what it
+likes and leave early.
+
+It is a stage, so a pipeline with it in is still stepped. Stepped, the body is a future beside the pipeline
+(`Drive.start`): pushed elements go to it through a queue, with the source held when it is sixty-four behind; each
+`emit` hands the element back to be pushed on where the stages are called, and the body goes on when it has been;
+it is cancelled with its connection, or its key. Under a pipeline that is itself run (a key's, in a flow that is
+run) what runs the pipeline waits for the body instead (`Drive.waits`), so nothing is beside anything. That is a
+hand-over an element each way, which the stages that are functions have not: those for what must be quick, this
+for what is easier said as code.
+
+Tests: every stage, these among them, run and stepped and compared, what is thrown as well as what is emitted; on
+each backend, served both ways, a `direct` stage that performs an op for each element, recovers a failure of the
+stage before it in its own `catch`, and has its `finally` run when the server is cancelled; and a failure of one
+key's `mapAsync` recovered in that key while the other key goes on.
+
+Not done: the server still throws the first connection's failure when it returns, where it should hand each to
+something that reports it and keep its own failures for itself; `orElse` and `retry`.
+
+**Scala Native skips a `finally`** in one case this met: in a future resumed after waiting inside a `try`, whose
+`catch` then calls something that throws (here, the cancel is caught as the `IllegalStateException` it is, and the
+handler's `emit` throws it again). On 0.5.12 and the nightly; the JVM and Scala.js run it. A `try` of its own around
+the handler's call makes it run. `DirectStageFinallyBehavior` is the least of it found, not yet without gears in it.
+
+The machine's figure with all of this in is two hundredths behind what it was (kqueue, six rounds: 2.57-2.73
+against 2.52-2.65 on one worker, 0.81-0.84 against 0.79-0.84 on four), the cost being the `try` each element of a
+key now passes.
+
 ## Against the same server written by hand
 
 The multiplexed server with no flow in it, over `perform` (`flow-mux-hand-*`): `loop`, a future for each

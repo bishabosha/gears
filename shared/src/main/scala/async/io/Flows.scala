@@ -102,13 +102,32 @@ object Flow {
       * after `end`, and more than once: a step that does something for it does it once.
       */
     def abandon(): Unit
+
+    /** What comes before this step has failed with `thrown`: it comes in place of the end, to this step from the one
+      * before, and is passed on to the one after unless this step makes something else of it (`recover`). The step
+      * with nothing after it throws it, as `Unrecovered`, to whatever steps the pipeline.
+      *
+      * A stage that throws as it is pushed an element throws up through the stages before it, to what steps the
+      * pipeline, which then tells the first step, so every step is told. A step that must know the stages before it
+      * from those after (`recover` recovers only the first) notes what the step after it threw.
+      */
+    def fail(thrown: Throwable): Unit
   }
+
+  /** A failure that nothing in its pipeline made anything else of: for whatever steps the pipeline. */
+  final class Unrecovered(val thrown: Throwable) extends RuntimeException(null, thrown, false, false)
+
+  /** Whether `recover` and `onError` are for `thrown`: not a cancel, and nothing fatal. */
+  private[io] def recoverable(thrown: Throwable): Boolean =
+    scala.util.control.NonFatal(thrown) && !thrown.isInstanceOf[java.util.concurrent.CancellationException] &&
+      !thrown.isInstanceOf[Unrecovered]
 
   /** A step that is a function of an element, and ends the step after it. */
   final class Pushing[A](each: A => Unit, next: Step[?]) extends Step[A] {
     def push(element: A): Unit = each(element)
     def end(): Unit = next.end()
     def abandon(): Unit = next.abandon()
+    def fail(thrown: Throwable): Unit = next.fail(thrown)
   }
 
   /** `Pushing`, with something to do at the end before the step after it is ended: what it kept, pushed on. */
@@ -119,6 +138,59 @@ object Flow {
       next.end()
     }
     def abandon(): Unit = next.abandon()
+    // What it kept is dropped: the pipeline has failed, not ended.
+    def fail(thrown: Throwable): Unit = next.fail(thrown)
+  }
+
+  /** `recover`'s step: a failure of what comes before it becomes one last element and the end. What the step after
+    * it threw is not what came before it, and is passed on.
+    */
+  final class Recovering[A](handler: PartialFunction[Throwable, A], next: Step[A], drive: Drive) extends Step[A] {
+    private var below = false
+    private var over = false
+    def push(element: A): Unit =
+      if !over then
+        try next.push(element)
+        catch {
+          case thrown: Throwable =>
+            below = true
+            throw thrown
+        }
+    def end(): Unit =
+      if !over then {
+        over = true
+        next.end()
+      }
+    def abandon(): Unit = next.abandon()
+    def fail(thrown: Throwable): Unit =
+      if !over then {
+        over = true
+        if below || !recoverable(thrown) || !handler.isDefinedAt(thrown) then next.fail(thrown)
+        else {
+          next.push(handler(thrown))
+          next.end()
+          // Nothing more is wanted of what failed.
+          drive.stop()
+        }
+      }
+  }
+
+  /** `onError`'s step: `see` is shown a failure of what comes before it, which goes on as it was. */
+  final class Erroring[A](see: Throwable => Unit, next: Step[A]) extends Step[A] {
+    private var below = false
+    def push(element: A): Unit =
+      try next.push(element)
+      catch {
+        case thrown: Throwable =>
+          below = true
+          throw thrown
+      }
+    def end(): Unit = next.end()
+    def abandon(): Unit = next.abandon()
+    def fail(thrown: Throwable): Unit = {
+      try if !below && recoverable(thrown) then see(thrown)
+      finally next.fail(thrown)
+    }
   }
 
   /** `onComplete`'s step: `atLast` once, as the pipeline ends here or is given up, whichever is first. */
@@ -141,6 +213,14 @@ object Flow {
         }
       finally next.abandon()
     }
+    def fail(thrown: Throwable): Unit = {
+      try
+        if !done then {
+          done = true
+          atLast()
+        }
+      finally next.fail(thrown)
+    }
   }
 
   /** A step that may want no more: `each` gives whether it is done, and then the step after it is ended, what
@@ -160,6 +240,12 @@ object Flow {
         next.end()
       }
     def abandon(): Unit = next.abandon()
+    // After it wanted no more, what failed is nothing to the steps after it, which have ended.
+    def fail(thrown: Throwable): Unit =
+      if !over then {
+        over = true
+        next.fail(thrown)
+      }
   }
 
   /** A flow that elements are pushed into by whoever drives a pipeline: the beginning of one that is not run but
@@ -187,17 +273,37 @@ object Flow {
 
     /** Where the stages are called, by a stage that wants no more (`take`): nothing more need come from the source. */
     def stop(): Unit
+
+    /** Begins `body` beside the pipeline, a future of its own whatever steps the pipeline (`spawn` may do its work in
+      * place): for a stage that is code of its own (`direct`). What cancels it.
+      */
+    def start(body: Async ?=> Unit): Runnable
+
+    /** Whether what steps the pipeline is itself run, by a future that may wait: it then waits (`pause`) for a
+      * stage's body to have done with what it was pushed, and `later` runs where it is called. Otherwise the stages
+      * are called by something that must not wait, and a body goes on beside it.
+      */
+    def waits: Boolean
+
+    /** Where `waits`: until the runnable that `register` is given is run. */
+    def pause(register: Runnable => Unit): Unit
   }
 
   /** A pipeline that is run, not stepped, driven by the future or flow that runs it: its work is done where it is,
     * waited for there, one piece after another.
     */
-  private final class InPlace(using async: Async) extends Drive {
+  private final class InPlace(using async: Async.Spawn) extends Drive {
     def spawn(work: Async ?=> Unit): Unit = work(using async)
     def later(run: Runnable): Unit = run.run()
     def hold(): Unit = ()
     def release(): Unit = ()
     def stop(): Unit = ()
+    def start(body: Async ?=> Unit): Runnable = {
+      val running = gears.async.Future(body)
+      () => running.cancel()
+    }
+    def waits: Boolean = true
+    def pause(register: Runnable => Unit): Unit = async.park(register)
   }
 
   /** `flow` as a step: what to push `root`'s elements to so that `flow`'s reach `last`. Null if `flow` is not made of
@@ -419,6 +525,15 @@ object Flow {
     def push(element: Any): Unit = ()
     def end(): Unit = ()
     def abandon(): Unit = ()
+    def fail(thrown: Throwable): Unit = throw new Unrecovered(thrown)
+  }
+
+  /** A key's pipeline that has wanted no more: what still comes for it is dropped. */
+  private object Stopped extends Step[Any] {
+    def push(element: Any): Unit = ()
+    def end(): Unit = ()
+    def abandon(): Unit = ()
+    def fail(thrown: Throwable): Unit = ()
   }
 
   /** `groupThrough`'s step: a step for each key, made as the key is first met, all of them into `next`. */
@@ -429,14 +544,30 @@ object Flow {
     private var ended = false
     // A key's pipeline ends into this: what all of them share ends when the last of them has, which with a stage
     // that waits may be after this has been told the end.
+    // What the step after all the keys' threw, which is no key's failure; and whether that step has been told of one.
+    private var below: Throwable | Null = null
+    private var failed = false
     private val shared = new Step[B] {
-      def push(element: B): Unit = next.push(element)
+      def push(element: B): Unit =
+        if !failed then
+          try next.push(element)
+          catch {
+            case thrown: Throwable =>
+              below = thrown
+              throw thrown
+          }
       def end(): Unit = {
         open -= 1
-        if ended && open == 0 then next.end()
+        if ended && open == 0 && !failed then next.end()
       }
       // The one step after all the keys' is told once, by `abandon` below.
       def abandon(): Unit = ()
+      // A key's failure that the key's pipeline made nothing else of is the whole's.
+      def fail(thrown: Throwable): Unit =
+        if !failed then {
+          failed = true
+          next.fail(thrown)
+        }
     }
 
     def push(element: A): Unit = {
@@ -453,10 +584,13 @@ object Flow {
           def hold(): Unit = drive.hold()
           def release(): Unit = drive.release()
           def stop(): Unit = {
-            keys.put(k, Ended): Unit
+            keys.put(k, Stopped): Unit
             val step = mine(0)
             if step != null then step.abandon()
           }
+          def start(body: Async ?=> Unit): Runnable = drive.start(body)
+          def waits: Boolean = drive.waits
+          def pause(register: Runnable => Unit): Unit = drive.pause(register)
         }
         val made = compile(sub(k, port), port, shared, own)
         if made == null then throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages")
@@ -465,12 +599,35 @@ object Flow {
         open += 1
         keys.put(k, step): Unit
       }
-      step.push(element)
+      // A stage of the key's that throws has failed the key's pipeline, which may make something else of it
+      // (`recover`): the other keys go on.
+      try step.push(element)
+      catch {
+        case unrecovered: Unrecovered => throw unrecovered
+        case thrown: Throwable        => if below eq thrown then throw thrown else step.fail(thrown)
+      }
+    }
+
+    /** What comes before the keys has failed: each key's pipeline is told, and then the step after them all. */
+    def fail(thrown: Throwable): Unit = {
+      if below ne thrown then {
+        val each = keys.values().toArray()
+        var i = 0
+        while i < each.length do {
+          each(i).asInstanceOf[Step[Any]].fail(thrown)
+          i += 1
+        }
+      }
+      if !failed then {
+        failed = true
+        next.fail(thrown)
+      }
     }
 
     def end(): Unit = {
       ended = true
-      if open == 0 then next.end()
+      if failed then ()
+      else if open == 0 then next.end()
       else {
         val each = keys.values().iterator()
         while each.hasNext() do each.next().end()
@@ -510,22 +667,29 @@ object Flow {
       }
     }
 
+    // Its work has failed, or what came before it: the steps after have been told, and are told nothing more.
+    private var dead = false
+
     private def landed(made: Any): Unit = {
       flying -= 1
-      made match {
-        case failed: Failed @unchecked => throw failed.thrown
-        case _                         => next.push(made.asInstanceOf[B])
-      }
-      if !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
-      if holding && waiting.isEmpty then {
+      if !dead then
+        made match {
+          case failed: Failed @unchecked =>
+            dead = true
+            next.fail(failed.thrown)
+          case _ => next.push(made.asInstanceOf[B])
+        }
+      if !dead && !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
+      if holding && (dead || waiting.isEmpty) then {
         holding = false
         drive.release()
       }
-      if ended && flying == 0 then next.end()
+      if ended && flying == 0 && !dead then next.end()
     }
 
     def push(element: A): Unit =
-      if flying < atOnce then begin(element)
+      if dead then ()
+      else if flying < atOnce then begin(element)
       else {
         waiting.add(element.asInstanceOf[AnyRef])
         if !holding then {
@@ -536,11 +700,17 @@ object Flow {
 
     def end(): Unit = {
       ended = true
-      if flying == 0 then next.end()
+      if flying == 0 && !dead then next.end()
     }
 
     // Its work under way is what steps the pipeline's to cancel (`Drive`), which knows whose it is.
     def abandon(): Unit = next.abandon()
+
+    def fail(thrown: Throwable): Unit =
+      if !dead then {
+        dead = true
+        next.fail(thrown)
+      }
   }
 
   /** `Waiting`, with what the work makes pushed on in the order the work was begun (`ordered`). */
@@ -571,11 +741,16 @@ object Flow {
       }
     }
 
+    private var dead = false
+
     private def pass(made: Any): Unit =
-      made match {
-        case failed: Failed @unchecked => throw failed.thrown
-        case _                         => next.push(made.asInstanceOf[B])
-      }
+      if !dead then
+        made match {
+          case failed: Failed @unchecked =>
+            dead = true
+            next.fail(failed.thrown)
+          case _ => next.push(made.asInstanceOf[B])
+        }
 
     private def landed(made: Any, place: Place | Null): Unit = {
       flying -= 1
@@ -586,16 +761,17 @@ object Flow {
         val order = places.nn
         while !order.isEmpty && order.peek().nn.done do pass(order.poll().nn.made)
       }
-      if !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
-      if holding && waiting.isEmpty then {
+      if !dead && !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
+      if holding && (dead || waiting.isEmpty) then {
         holding = false
         drive.release()
       }
-      if ended && flying == 0 then next.end()
+      if ended && flying == 0 && !dead then next.end()
     }
 
     def push(element: A): Unit =
-      if flying < atOnce then begin(element)
+      if dead then ()
+      else if flying < atOnce then begin(element)
       else {
         waiting.add(element.asInstanceOf[AnyRef])
         if !holding then {
@@ -606,11 +782,17 @@ object Flow {
 
     def end(): Unit = {
       ended = true
-      if flying == 0 then next.end()
+      if flying == 0 && !dead then next.end()
     }
 
     // Its work under way is what steps the pipeline's to cancel (`Drive`), which knows whose it is.
     def abandon(): Unit = next.abandon()
+
+    def fail(thrown: Throwable): Unit =
+      if !dead then {
+        dead = true
+        next.fail(thrown)
+      }
   }
 
   /** `mapPar`, run: its work in futures, awaited in the order it was begun. */
@@ -788,16 +970,36 @@ object Flow {
       */
     def groupThrough[K, B](key: A => K)(sub: (K, Flow[A]) => Flow[B]): Flow[B] =
       stagedWith[A, B](flow) { from =>
-        val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended), new InPlace)
-        try from.foreach(dealing.push)
-        catch {
-          // A failure, a cancel, or a consumer that has left: the keys' pipelines are given up.
-          case thrown: Throwable =>
+        // A group, for a key's stage that is code of its own (`direct`), which is a future beside this one.
+        Async.group {
+          val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended), new InPlace)
+          def givenUp(thrown: Throwable): Nothing = {
             try dealing.abandon()
             catch case _: Throwable => ()
-            throw thrown
+            throw (thrown match {
+              case unrecovered: Unrecovered => unrecovered.thrown
+              case _                        => thrown
+            })
+          }
+          var upstream = true
+          try {
+            try from.foreach { element =>
+              // Left false by a push that throws: that is no failure of what comes before the keys.
+              upstream = false
+              dealing.push(element)
+              upstream = true
+            }
+            catch {
+              // What comes before the keys has failed: the keys' pipelines are told, and may make something of it.
+              case thrown: Throwable if upstream && recoverable(thrown) => dealing.fail(thrown)
+            }
+            dealing.end()
+          } catch {
+            // A failure nothing made anything else of, a cancel, or a consumer that has left: the keys' pipelines are
+            // given up.
+            case thrown: Throwable => givenUp(thrown)
+          }
         }
-        dealing.end()
       }((next, drive) => new Dealing[A, K, B](key, sub, next, drive))
 
     /** A stage that waits: `f` of each element, which may perform ops and await, up to `atOnce` of them under way at
@@ -986,6 +1188,76 @@ object Flow {
         finally atLast
       }(next => new Completing[A](() => atLast, next))
 
+    /** A failure of this flow, where `handler` has something for it, becomes one last element, and the flow ends
+      * there as if it had ended: Ox's name, and what ZIO calls catching. It is this flow's failures only, those of
+      * the stages before `recover`; what a stage after it throws is not recovered by it. A cancel is no failure.
+      *
+      * In a key's pipeline (`groupThrough`) it ends that key and leaves the others; with nothing to recover it, a
+      * key's failure is the whole flow's, and a connection's pipeline's is its connection's.
+      */
+    def recover[B >: A](handler: PartialFunction[Throwable, B]): Flow[B] =
+      stagedWith[A, B](flow) { from =>
+        var below = false
+        try
+          from.foreach { element =>
+            try emit(element)
+            catch {
+              case thrown: Throwable =>
+                below = true
+                throw thrown
+            }
+          }
+        catch {
+          case thrown: Throwable if !below && recoverable(thrown) && handler.isDefinedAt(thrown) => emit(handler(thrown))
+        }
+      }((next, drive) => new Recovering[B](handler, next, drive).asInstanceOf[Step[A]])
+
+    /** `see`, shown a failure of this flow, which fails all the same: Ox's name. As `recover`, not what a stage
+      * after it throws, and not a cancel.
+      */
+    def onError(see: Throwable => Unit): Flow[A] =
+      staged[A, A](flow) { from =>
+        var below = false
+        try
+          from.foreach { element =>
+            try emit(element)
+            catch {
+              case thrown: Throwable =>
+                below = true
+                throw thrown
+            }
+          }
+        catch {
+          case thrown: Throwable if !below && recoverable(thrown) =>
+            see(thrown)
+            throw thrown
+        }
+      }(next => new Erroring[A](see, next))
+
+    /** A stage that is code: `body` is given this flow, and what it emits is the stage's. It is written as a
+      * `Flow { ... }` is, a loop over the flow that may keep what it likes between elements, wait, perform ops, and
+      * leave early, and its `try` is the stage's error handling: a failure of this flow is thrown from the loop over
+      * it, where `catch` and `finally` are as anywhere. What `body` throws is the stage's failure, for the stages
+      * after it; what a stage after it throws does not come back to it.
+      *
+      * {{{
+      * requests.direct[Response] { requests =>
+      *   val session = open()
+      *   try for request <- requests do emit(session.answer(request))
+      *   catch case _: Malformed => emit(Response.BadRequest)
+      *   finally session.close()
+      * }
+      * }}}
+      *
+      * Unlike `Flow { ... }` it is a stage, so a pipeline with it in is still stepped (`Server.serveFlow`): the body
+      * is then a future beside the pipeline, handed each element and waited for at each `emit` by nothing but
+      * itself, and cancelled with its connection. That is a hand-over an element each way, which the stages that
+      * are functions (`map`, `process`) have not: they are for what must be quick, and this for what is easier said
+      * as code. An element is handed to code that runs on, so must not be lent.
+      */
+    def direct[B](body: Flow[A] => Emit[B] ?=> Async ?=> Unit): Flow[B] =
+      stagedWith[A, B](flow)(from => runDirect(from, body))((next, drive) => new Direct[A, B](body, next, drive))
+
     /** Each element, as it goes by. */
     inline def tap(inline see: A => Unit): Flow[A] =
       staged[A, A](flow)(from => from.foreach { element => see(element); emit(element) })(next =>
@@ -1157,6 +1429,206 @@ object Flow {
         each(next.asInstanceOf[A])
         next = mailbox.take()
       }
+    }
+  }
+
+  /** Thrown into a `direct` stage's body from its `emit` when what consumes the stage has thrown, or left: not the
+    * body's failure to catch, though its `finally` is run. What was thrown is thrown on when the body has ended.
+    */
+  private object Gone extends scala.util.control.ControlThrowable
+
+  /** `direct`, run: the body where the flow is run, but that what the stages after it throw is kept from its `catch`. */
+  private def runDirect[A, B](from: Flow[A], body: Flow[A] => Emit[B] ?=> Async ?=> Unit)(using to: Emit[B], async: Async): Unit = {
+    var below: Throwable | Null = null
+    val guarded = new Emit[B](element => {
+      if below != null then throw Gone
+      try to.each(element)
+      catch {
+        case thrown: Throwable =>
+          below = thrown
+          throw Gone
+      }
+    })
+    try body(from)(using guarded)(using async)
+    catch case thrown: Throwable => if below == null then throw thrown
+    val thrown = below
+    if thrown != null then throw thrown
+  }
+
+  /** `direct`'s step: the stage's body is a future beside the pipeline, which is handed what the step is pushed and
+    * hands back what it emits, to be pushed on where the pipeline's stages are called.
+    */
+  private final class Direct[A, B](body: Flow[A] => Emit[B] ?=> Async ?=> Unit, next: Step[B], drive: Drive)
+      extends Step[A] {
+    import java.util.concurrent.atomic.AtomicReference
+    private inline val Most = 64
+
+    private object End
+    private final class Failed(val thrown: Throwable)
+
+    // From the pipeline's thread to the body: elements, the end, a failure of what came before.
+    private val inbox = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
+    private val pending = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val reader = new AtomicReference[Runnable | Null](null)
+    // What steps the pipeline, waiting for the body to have done with what it was handed (`Drive.waits`).
+    private val watcher = new AtomicReference[Runnable | Null](null)
+    @volatile private var idle = false
+    @volatile private var holding = false
+    @volatile private var upstreamEnded = false
+    // What a step after this one threw as the body's element was pushed to it: not the body's to see.
+    @volatile private var below: Throwable | Null = null
+    // The pipeline's thread's: the steps after have been told the end, or a failure, or the stage is given up.
+    @volatile private var over = false
+    private var cancel: Runnable | Null = null
+
+    private def wake(parked: AtomicReference[Runnable | Null]): Unit =
+      if parked.get() != null then {
+        val resume = parked.getAndSet(null)
+        if resume != null then resume.run()
+      }
+
+    // ---- the body's side
+
+    private def take()(using async: Async): AnyRef = {
+      var got = inbox.poll()
+      while got == null do {
+        idle = true
+        wake(watcher)
+        async.park { resume =>
+          reader.set(resume)
+          if !inbox.isEmpty() then wake(reader)
+        }
+        idle = false
+        got = inbox.poll()
+      }
+      if pending.decrementAndGet() == 0 && holding then
+        drive.later { () =>
+          if holding then {
+            holding = false
+            drive.release()
+          }
+        }
+      got
+    }
+
+    private val source = new Flow[A] {
+      def foreach(each: A => Unit)(using Async): Unit = {
+        var going = true
+        while going do
+          take() match {
+            case End                       => going = false
+            case failed: Failed @unchecked => throw failed.thrown
+            case element                   => each(element.asInstanceOf[A])
+          }
+      }
+    }
+
+    /** `run` where the pipeline's stages are called, and the body goes on when it has been. */
+    private def hand(run: () => Unit)(using async: Async): Unit =
+      if drive.waits then {
+        // What steps the pipeline is waiting for this body, so it is run here; what it throws is that one's.
+        try run()
+        catch {
+          case thrown: Throwable =>
+            below = thrown
+            throw Gone
+        }
+      } else {
+        val gate = new AtomicReference[AnyRef | Null](null)
+        drive.later { () =>
+          try run()
+          catch {
+            case thrown: Throwable =>
+              below = thrown
+              throw thrown
+          } finally {
+            val parked = gate.getAndSet(gate)
+            if parked != null then parked.asInstanceOf[Runnable].run()
+          }
+        }
+        if gate.get() == null then async.park(resume => if !gate.compareAndSet(null, resume) then resume.run())
+      }
+
+    private def run()(using Async): Unit = {
+      var thrown: Throwable | Null = null
+      try body(source)(using new Emit[B](element => hand(() => if !over then next.push(element))))
+      catch case failed: Throwable => thrown = failed
+      val failure = thrown
+      try
+        if below == null && !failure.isInstanceOf[java.util.concurrent.CancellationException] && (failure ne Gone) then
+          hand { () =>
+            if !over then {
+              over = true
+              if failure != null then next.fail(failure)
+              else {
+                next.end()
+                // It left before the flow it was given had ended: nothing more is wanted of that.
+                if !upstreamEnded then drive.stop()
+              }
+            }
+          }
+      catch {
+        case _: java.util.concurrent.CancellationException => ()
+        case Gone                                          => ()
+      } finally {
+        idle = true
+        wake(watcher)
+      }
+    }
+
+    // ---- the pipeline's side
+
+    private def give(what: AnyRef): Unit = {
+      if cancel == null then cancel = drive.start(run())
+      inbox.add(what): Unit
+      if pending.incrementAndGet() > Most && !holding && !drive.waits then {
+        holding = true
+        drive.hold()
+      }
+      wake(reader)
+      if drive.waits then {
+        drive.pause { resume =>
+          watcher.set(resume)
+          if idle && inbox.isEmpty() then wake(watcher)
+        }
+        val thrown = below
+        if thrown != null then {
+          over = true
+          throw thrown
+        }
+      }
+    }
+
+    // The pipeline's thread's: the body has been handed the end, or a failure, and is handed nothing after it.
+    private var closed = false
+
+    def push(element: A): Unit = if !over && !closed then give(element.asInstanceOf[AnyRef])
+
+    def end(): Unit =
+      if !over && !closed then {
+        closed = true
+        upstreamEnded = true
+        give(End)
+      }
+
+    def fail(thrown: Throwable): Unit =
+      if below != null then {
+        // A step after this one threw it: it is theirs, and the body is done with.
+        over = true
+        val stop = cancel
+        if stop != null then stop.run()
+        next.fail(thrown)
+      } else if !over && !closed then {
+        // Not `upstreamEnded`: if the body makes an end of it, what failed is told that no more is wanted.
+        closed = true
+        give(new Failed(thrown))
+      }
+
+    def abandon(): Unit = {
+      over = true
+      val stop = cancel
+      if stop != null then stop.run()
+      next.abandon()
     }
   }
 

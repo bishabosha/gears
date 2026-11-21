@@ -122,6 +122,7 @@ object Pipe {
               def push(element: Any): Unit = run(after, element)
               def end(): Unit = ()
               def abandon(): Unit = ()
+              def fail(thrown: Throwable): Unit = throw thrown
             }
             registers(slots(pc)) = new Keys(new java.util.HashMap[Any, Running](), on)
           case _ => ()
@@ -190,5 +191,7 @@ object Pipe {
       groups(_.abandon())
       out.abandon()
     }
+
+    def fail(thrown: Throwable): Unit = out.fail(thrown)
   }
 }

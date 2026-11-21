@@ -236,7 +236,9 @@ final class Server private (
       private var work: CompletionGroup | Null = null
       private var workSpawn: Async.Spawn | Null = null
 
-      def spawn(body: Async ?=> Unit): Unit = {
+      def spawn(body: Async ?=> Unit): Unit = beginWork(body): Unit
+
+      private def beginWork(body: Async ?=> Unit): Future[Unit] = {
         if work == null then {
           val group = new CompletionGroup
           group.link(spawning.group)
@@ -247,14 +249,14 @@ final class Server private (
         startWork(body)(using workSpawn.nn)
       }
 
-      private def startWork(body: Async ?=> Unit)(using Async.Spawn): Unit =
+      private def startWork(body: Async ?=> Unit)(using Async.Spawn): Future[Unit] =
         Future {
           try body
           finally {
             working.decrementAndGet(): Unit
             ops.signal()
           }
-        }: Unit
+        }
 
       private def cancelWork(): Unit = {
         val group = work
@@ -272,10 +274,18 @@ final class Server private (
               flush()
               rearm()
               leave(now = false)
-            } catch case thrown: Throwable => fail(thrown)
+            } catch case thrown: Throwable => raised(thrown)
         }: Unit
         ops.signal()
       }
+
+      def start(body: Async ?=> Unit): Runnable = {
+        val begun = beginWork(body)
+        () => begun.cancel()
+      }
+      def waits: Boolean = false
+      def pause(register: Runnable => Unit): Unit =
+        throw new UnsupportedOperationException("The machine does not wait for a stage")
 
       def hold(): Unit = held += 1
 
@@ -321,6 +331,8 @@ final class Server private (
             def push(element: ByteBuffer): Unit = take(element)
             def end(): Unit = finished = true
             def abandon(): Unit = ()
+            // Nothing in the pipeline made anything else of it: it is the connection's.
+            def fail(thrown: Throwable): Unit = throw new Flow.Unrecovered(thrown)
           }
           val made =
             if program != null then program.start(out).asInstanceOf[Flow.Step[Any]]
@@ -372,6 +384,27 @@ final class Server private (
           ops.submit(sendWrite, this)
           writing = true
         }
+
+      /** A stage has thrown, as it was pushed an element or as what its work made came back: the pipeline is told,
+        * from its first step, and if a stage makes something else of it (`recover`) the connection goes on to its
+        * end; if none does it is the connection's failure.
+        */
+      private def raised(thrown: Throwable): Unit = thrown match {
+        case unrecovered: Flow.Unrecovered => fail(unrecovered.thrown)
+        case _ =>
+          val pipeline = step
+          if pipeline == null || closing then fail(thrown)
+          else
+            try {
+              pipeline.fail(thrown)
+              flush()
+              rearm()
+              leave(now = false)
+            } catch {
+              case unrecovered: Flow.Unrecovered => fail(unrecovered.thrown)
+              case other: Throwable              => fail(other)
+            }
+      }
 
       private def fail(thrown: Throwable): Unit = {
         if failure == null then failure = thrown
@@ -426,7 +459,7 @@ final class Server private (
               flush()
               rearm()
               leave(now = false)
-            } catch case failed: Throwable => fail(failed)
+            } catch case failed: Throwable => raised(failed)
         } else {
           if thrown != null then {
             writing = false
