@@ -787,8 +787,8 @@ trait FlowContract extends ContractSuite {
           served.awaitResult: Unit
           assertEquals(receive(io, idle, 1).length, 0)
           close(io, idle)
-          // Scala Native skips a `finally` whose `catch` threw after the future had waited in the `try`
-          // (`DirectStageFinallyBehavior`): the cancel is caught as the `IllegalStateException` it is, and its emit throws.
+          // Scala Native skips a `finally` whose `catch` calls a method that throws (`DirectStageFinallyBehavior`): the
+          // cancel is caught as the `IllegalStateException` it is, and the handler's emit throws it again.
           if machine && System.getProperty("java.vm.name") == "Scala Native" then assert(closed.get() >= 1)
           else assertEquals(closed.get(), 2)
         } finally server.close()

@@ -5,9 +5,10 @@ import gears.async.default.given
 
 /** A `direct` stage's body, cancelled as it waits for an element, catches that and emits: its `finally` is run.
   *
-  * On Scala Native (0.5.12 and the nightly of 2026-11-14) it is not: a `finally` is skipped when the `catch` beside it
-  * calls something that throws, in a future that was resumed after waiting inside the `try`, unless the call is in a
-  * `try` of its own. The JVM and Scala.js run it. This is the least of it found so far, kept to be made into a report.
+  * On Scala Native it is not, and for a reason that is none of gears': there a `finally` is skipped when the `catch`
+  * beside it calls a method that throws (0.4.17 to 0.5.12 and the nightly of 2026-11-14, Scala 2.13 and 3; the JVM and
+  * Scala.js run it). Here the cancel is caught as the `IllegalStateException` it is and the handler's `emit` throws
+  * it again. The call in a `try` of its own, or the `try`/`catch` written inside a `try`/`finally`, runs it.
   */
 class DirectStageFinallyBehavior extends munit.FunSuite {
 
@@ -62,7 +63,7 @@ class DirectStageFinallyBehavior extends munit.FunSuite {
   }
 
   test("its finally is run") {
-    assume(System.getProperty("java.vm.name") != "Scala Native", "Scala Native skips the finally: see above")
+    assume(System.getProperty("java.vm.name") != "Scala Native", "Scala Native skips a finally whose catch calls a thrower")
     val (ran, what) = cancelled(wrapped = false)
     assert(ran, what)
   }

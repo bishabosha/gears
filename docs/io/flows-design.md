@@ -142,10 +142,12 @@ key's `mapAsync` recovered in that key while the other key goes on.
 Not done: the server still throws the first connection's failure when it returns, where it should hand each to
 something that reports it and keep its own failures for itself; `orElse` and `retry`.
 
-**Scala Native skips a `finally`** in one case this met: in a future resumed after waiting inside a `try`, whose
-`catch` then calls something that throws (here, the cancel is caught as the `IllegalStateException` it is, and the
-handler's `emit` throws it again). On 0.5.12 and the nightly; the JVM and Scala.js run it. A `try` of its own around
-the handler's call makes it run. `DirectStageFinallyBehavior` is the least of it found, not yet without gears in it.
+**Scala Native skips a `finally`** whose `catch` calls a method that throws: `try A catch { case _ => f() }
+finally C`, with `f` throwing, does not run `C`. It is the platform's, with no gears in it, from 0.4.17 to 0.5.12 and
+the nightly, on Scala 2.13 and 3; the JVM and Scala.js run it. A handler that throws by itself, the call in a `try`
+of its own, and the `try`/`catch` written inside a `try`/`finally` all run it. It was met here because a cancel is
+an `IllegalStateException`, which the test's handler caught, and its `emit` threw again. A twelve-line program and
+what does and does not set it off are in `scala-native-finally-repro`, beside this repository.
 
 The machine's figure with all of this in is two hundredths behind what it was (kqueue, six rounds: 2.57-2.73
 against 2.52-2.65 on one worker, 0.81-0.84 against 0.79-0.84 on four), the cost being the `try` each element of a
