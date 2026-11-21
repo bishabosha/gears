@@ -9,6 +9,12 @@ import java.nio.channels.ClosedChannelException
   */
 trait FilePosition extends BaseHandle {
   @volatile var streamPosition: Long = 0L
+
+  /** How many of the file's next reads and writes are done off the workers without being tried on the performer's
+    * thread first: set when one that was tried there turned out slow (see `AbstractFileOp`). Counted down by whoever
+    * performs them; a count that two performers both take one from loses nothing that matters.
+    */
+  @volatile var offThreadNext: Int = 0
 }
 
 /** An op on an open file, which the operating system does by blocking for the disk, and so is done off the workers
@@ -22,6 +28,33 @@ abstract class AbstractFileOp[F <: BaseHandle](file: F) extends RepeatableAbstra
   /** The op's system call, which may block, the file's work claimed. */
   protected def call(): Unit
 
+  /** The file whose reads and writes this is one of, which are tried where they are performed; null for an op that
+    * is always done off the workers, a sync say.
+    */
+  protected def paced: FilePosition | Null = null
+
+  /** A read or a write of a file whose pages the system has is done in the time of a copy, and handing it to another
+    * thread and back costs twenty times that. So it is made on the performer's own thread, and timed: one that took
+    * long, the disk having been waited for, has the file's next `OffThreadAfterSlow` done off the workers, after
+    * which one is tried again. A worker is so kept by a file's disk once in a while, not for every call.
+    */
+  override protected final def workWithoutBlocking(): Boolean = {
+    val pace = paced
+    if pace == null then false
+    else {
+      val left = pace.offThreadNext
+      if left > 0 then {
+        pace.offThreadNext = left - 1
+        false
+      } else {
+        val began = System.nanoTime()
+        work()
+        if System.nanoTime() - began > AbstractFileOp.SlowNanos then pace.offThreadNext = AbstractFileOp.OffThreadAfterSlow
+        true
+      }
+    }
+  }
+
   protected final def interruptible: Boolean = false
   protected final def waits: Boolean = true
   override protected final def worksOn: BaseHandle = file
@@ -32,6 +65,14 @@ abstract class AbstractFileOp[F <: BaseHandle](file: F) extends RepeatableAbstra
       call()
       if file.getState != HandleState.OpenState then throw new ClosedChannelException()
     finally file.releaseWork()
+}
+
+object AbstractFileOp {
+
+  /** Longer than a copy of what a read holds, and shorter than a disk takes. */
+  inline val SlowNanos = 100_000L
+
+  inline val OffThreadAfterSlow = 64
 }
 
 /** Fills the first of `bufs` that has room from a file: at `start`, going on from where it left off when performed
@@ -54,6 +95,8 @@ abstract class AbstractFileReadOp[F <: FilePosition](file: F, bufs: Array[ByteBu
     super.onEntry()
     if !Checks.anyRemaining(bufs) then
       throw (if bufs.length == 1 then Checks.bufferFull(bufs(0)) else Checks.buffersFull(bufs))
+
+  override protected final def paced: FilePosition = file
 
   protected final def call(): Unit =
     val buf = bufs.find(_.hasRemaining()).get
@@ -81,6 +124,8 @@ abstract class AbstractFileWriteOp[F <: FilePosition](file: F, bufs: Array[ByteB
   private var draining: ByteBuffer | Null = null
   private var written = 0
 
+  override protected final def paced: FilePosition = file
+
   protected final def call(): Unit =
     draining = bufs.find(_.hasRemaining()).orNull
     written = 0
@@ -107,6 +152,8 @@ abstract class AbstractFilePooledReadOp[F <: FilePosition](file: F, pool: Lendin
   override def onEntry(): Unit =
     super.onEntry()
     Checks.checkEmpty(into)
+
+  override protected final def paced: FilePosition = file
 
   protected final def call(): Unit =
     val buf = pool.take()
