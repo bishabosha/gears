@@ -25,6 +25,36 @@ through `Async`. `Io.startSubmitted` and what implements it are left, unused.
 
 Its measurements below are of code that is no longer there.
 
+## Ox's flows
+
+Ox's `Flow` (SoftwareMill, 1.0.3) is the same thing made independently: a stage that is run with what to call for
+each element (`FlowStage.run(emit: FlowEmit[T])`), made with `Flow.usingEmit`, run with `runForeach`, its `groupBy`
+taking what makes a key's flow of the flow it is given. Ours is `foreach(each)`, `Flow { ... emit ... }`,
+`groupThrough`. So the two are kept compatible in two ways.
+
+**Names.** Where both have an operator ours has Ox's name and shape, beside its own: `usingEmit`, `fromValues`,
+`fromIterable`, `fromIterator`, `mapPar` (in order, as Ox's is), `mapParUnordered`, `mapStateful`, `mapUsingEmit`,
+`groupBy(parallelism, key)(child)`, `concat`, `runForeach`, `runToList`, `runDrain`, `runFold`, `runLastOption`,
+with `map`, `filter`, `collect`, `mapConcat`, `take`, `takeWhile`, `drop`, `scan`, `grouped`, `intersperse`, `tap`,
+`zip`, `zipWithIndex`, `merge`, `flatMap` already the same. A pipeline written with these reads the same for either,
+and a test runs one such against both and compares what comes out. What differs: ours take `using Async` to run, and
+`f` in `mapPar` may itself wait; `groupBy`'s `parallelism` is not a bound here, a key's pipeline being a step and not
+a thread; Ox has many more operators (time, retries, I/O, reactive streams) that ours has not.
+
+**Each as the other** (`io-ox`, package `gears.async.io.oxflow`, JVM): `oxFlow.toGears`, `gearsFlow.toOx` and
+`gearsFlow.toOxOnAnyThread`. Nothing is between them but the call for each element: an Ox flow blocks the thread it
+is run on, a gears flow suspends the future it is run in, and on the JVM a future is a virtual thread, for which
+those are one. `toOx` runs with the `Async` of the future that asked, for an Ox flow run in that future; an Ox
+operator that runs its upstream in a fork of its own needs `toOxOnAnyThread`, which takes an `Async` of whatever
+thread it is on.
+
+Limits: an Ox flow is opaque, so a pipeline with one in it is run, not stepped, and `serveFlow`'s machine refuses
+it; and a gears flow run on Ox's threads cannot perform an op of a pool backend, which is performed on the pool's
+own.
+
+**Other platforms.** Ox is published for the JVM only: there is no `core` for Scala Native or Scala.js at 1.0.3. On
+those the names are what is kept, so that code written against the shared operators moves when Ox does.
+
 ## What it is for
 
 A server that multiplexes many streams over one connection (HTTP/2 is the model) wants three things that a future

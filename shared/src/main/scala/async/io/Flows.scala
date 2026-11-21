@@ -457,6 +457,15 @@ object Flow {
 
   def of[A](elements: A*): Flow[A] = from(elements)
 
+  // Named as Ox's `Flow` names them, so that what is written for one reads as the other (see `docs/io`).
+
+  /** The flow of what `withEmit` emits: `Flow { ... }` with the emitter handed over, as Ox has it. */
+  inline def usingEmit[A](inline withEmit: (A => Unit) => Async ?=> Unit): Flow[A] = Flow[A](withEmit(emit))
+
+  def fromValues[A](elements: A*): Flow[A] = from(elements)
+  def fromIterable[A](elements: Iterable[A]): Flow[A] = from(elements)
+  def fromIterator[A](elements: => Iterator[A]): Flow[A] = Flow(elements.foreach(emit))
+
   def from[A](elements: IterableOnce[A]): Flow[A] = Flow(elements.iterator.foreach(emit))
 
   val empty: Flow[Nothing] = Flow(())
@@ -571,7 +580,7 @@ object Flow {
       */
     def mapAsync[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = {
       require(atOnce > 0, s"At least one at a time, not $atOnce")
-      stagedWith[A, B](flow)(from => from.mapPar(atOnce)(f).foreach(emit))((next, drive) =>
+      stagedWith[A, B](flow)(from => from.mapParUnordered(atOnce)(f).foreach(emit))((next, drive) =>
         new Waiting[A, B](atOnce, f, next, drive)
       )
     }
@@ -636,7 +645,7 @@ object Flow {
       * as each is done, so in no order. An element goes to a flow that runs on after this one has, so must not be
       * lent.
       */
-    def mapPar[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = over(flow) { from =>
+    def mapParUnordered[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = over(flow) { from =>
       require(atOnce > 0, s"At least one at a time, not $atOnce")
       val room = new gears.async.Semaphore(atOnce)
       gather[B](made => emit(made)) { gathered =>
@@ -651,6 +660,71 @@ object Flow {
         }
       }
     }
+
+    /** What `f` makes of each element, `f` run for up to `parallelism` of them at a time, each in a future of its
+      * own, and emitted in the order the elements came, as Ox's `mapPar` does. An element goes to work that runs on
+      * after this has, so must not be lent.
+      */
+    def mapPar[B](parallelism: Int)(f: A => Async ?=> B): Flow[B] = over(flow) { from =>
+      require(parallelism > 0, s"At least one at a time, not $parallelism")
+      Async.group { outer ?=>
+        // The work under way, in the order its elements came: begun by a future that runs this flow, and awaited
+        // here, each as it comes to the head, so that what is done is emitted without waiting for what follows it.
+        val under = gears.async.BufferedChannel[Option[gears.async.Future[B]]](parallelism)
+        val room = new gears.async.Semaphore(parallelism)
+        val driving = gears.async.Future {
+          try
+            from.foreach { element =>
+              val place = room.acquire()
+              // The group's, not this future's: its work goes on when this flow has ended.
+              val work = gears.async.Future {
+                try f(element)
+                finally place.release()
+              }(using outer)
+              under.send(Some(work))
+            }
+          finally under.send(None)
+        }
+        var going = true
+        while going do
+          under.read() match {
+            case Right(Some(work)) => emit(work.await)
+            case _                 => going = false
+          }
+        driving.await
+      }
+    }
+
+    /** A stage with something to keep between elements, which is given and gives back with each: as Ox's. */
+    def mapStateful[S, B](initial: => S)(f: (S, A) => (S, B)): Flow[B] =
+      flow.process[B] { emit =>
+        var state = initial
+        element => {
+          val (next, made) = f(state, element)
+          state = next
+          emit(made)
+        }
+      }
+
+    /** What `f` emits for each element: Ox's name for a stage that may make none or many. */
+    def mapUsingEmit[B](f: A => (B => Unit) => Unit): Flow[B] = flow.process[B](emit => element => f(element)(emit))
+
+    /** The elements dealt by `key`, each key's through `child` of it, as Ox's `groupBy`: `groupThrough` under its
+      * name there. `parallelism` is Ox's bound on the keys there are at once, which here is not kept: a key's
+      * pipeline is a step, not a thread, and there may be any number.
+      */
+    def groupBy[K, B](parallelism: Int, key: A => K)(child: K => Flow[A] => Flow[B]): Flow[B] =
+      flow.groupThrough(key)((k, elements) => child(k)(elements))
+
+    /** `next` after this flow. */
+    def concat[B >: A](next: Flow[B]): Flow[B] = flow ++ next
+
+    // Running a flow, under Ox's names.
+    def runForeach(sink: A => Unit)(using Async): Unit = flow.foreach(sink)
+    def runToList()(using Async): List[A] = flow.toList
+    def runDrain()(using Async): Unit = flow.run()
+    def runFold[B](zero: B)(f: (B, A) => B)(using Async): B = flow.fold(zero)(f)
+    def runLastOption()(using Async): Option[A] = flow.lastOption
 
     /** Each element, as it goes by. */
     inline def tap(inline see: A => Unit): Flow[A] =

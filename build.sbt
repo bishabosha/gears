@@ -131,6 +131,19 @@ lazy val ioReference =
     )
     .dependsOn(root.jvm, ioTestkit.jvm % Test)
 
+// Ox's flows and ours, each as the other (JVM only, as Ox is): `gears.async.io.oxflow`.
+lazy val ioOx =
+  (project in file("io-ox"))
+    .settings(
+      publish / skip := true,
+      scalacOptions += "-release:21",
+      libraryDependencies ++= Seq("com.softwaremill.ox" %% "core" % "1.0.3", munit % Test),
+      testFrameworks += MUnitFramework,
+      Test / fork := true,
+      Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    )
+    .dependsOn(root.jvm, ioPoller.jvm % Test)
+
 // The reference backend's demo application: the testkit's gears demos over it, as `ioReferenceDemos/run <command>`.
 lazy val ioReferenceDemos =
   (project in file("io-reference/demos"))

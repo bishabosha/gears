@@ -180,6 +180,20 @@ trait FlowContract extends ContractSuite {
     }
   }
 
+  test("mapPar gives what is done in the order it came, without waiting for more to come") {
+    running { io ?=>
+      // The second is done first, and the first is still emitted first.
+      val ordered = Flow.from(List(30, 1, 1)).mapPar(3) { millis => io.perform(io.ops.timer(millis)); millis }.toList
+      assertEquals(ordered, List(30, 1, 1))
+      // One element and then nothing for a long while: what it made does not wait for a second.
+      val slow = Flow[Int] {
+        emit(1)
+        io.perform(io.ops.timer(60_000))
+      }
+      assertEquals(slow.mapPar(3)(_ * 2).headOption, Some(2))
+    }
+  }
+
   test("zip steps another flow beside this one, an element for an element, and leaves it when either ends") {
     running {
       var left = false
