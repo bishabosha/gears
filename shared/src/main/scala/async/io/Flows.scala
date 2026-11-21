@@ -85,7 +85,7 @@ object Flow {
       /** For a flow that is one of another by a stage that never waits: what that stage does to the step after it.
         * Null for a flow that is code of its own.
         */
-      val stage: (Step[A] => Step[U]) | Null = null
+      val stage: ((Step[A], Drive) => Step[U]) | Null = null
   ) extends Flow[A] {
     def foreach(each: A => Unit)(using async: Async): Unit = run(from.asInstanceOf[Flow[U]], each, async)
   }
@@ -112,15 +112,41 @@ object Flow {
       throw new UnsupportedOperationException("This flow is driven, an element at a time: it is not run")
   }
 
+  /** What steps a pipeline, as a stage that waits knows it: where its work is begun, how what the work made comes
+    * back among the pipeline's elements, and how the source is held while there is too much under way.
+    */
+  abstract class Drive {
+
+    /** Begins `work`, which may wait, beside the pipeline. */
+    def spawn(work: Async ?=> Unit): Unit
+
+    /** From wherever `work` is: runs `run` where the pipeline's stages are called, between its elements. */
+    def later(run: Runnable): Unit
+
+    /** Where the stages are called: no more is taken from the source until `release`. */
+    def hold(): Unit
+    def release(): Unit
+  }
+
+  /** A pipeline that is run, not stepped, driven by the future or flow that runs it: its work is done where it is,
+    * waited for there, one piece after another.
+    */
+  private final class InPlace(using async: Async) extends Drive {
+    def spawn(work: Async ?=> Unit): Unit = work(using async)
+    def later(run: Runnable): Unit = run.run()
+    def hold(): Unit = ()
+    def release(): Unit = ()
+  }
+
   /** `flow` as a step: what to push `root`'s elements to so that `flow`'s reach `last`. Null if `flow` is not made of
     * `root` by stages alone.
     */
-  private[io] def compile[A](flow: Flow[A], root: Flow[?], last: Step[A]): Step[Any] | Null =
+  private[io] def compile[A](flow: Flow[A], root: Flow[?], last: Step[A], drive: Drive): Step[Any] | Null =
     if flow eq root then last.asInstanceOf[Step[Any]]
     else
       flow match {
         case made: Made[u, A] @unchecked if made.stage != null && made.from != null =>
-          compile(made.from.nn, root, made.stage.nn(last))
+          compile(made.from.nn, root, made.stage.nn(last, drive), drive)
         case _ => null
       }
 
@@ -133,7 +159,20 @@ object Flow {
       from,
       from.depth + 1,
       (from, each, async) => body(from)(using new Emit[A](each))(using async),
-      next => make(next)
+      (next, _) => make(next)
+    )
+  }
+
+  /** `staged`, for a stage that needs what steps it: one that waits, or that steps pipelines of its own. */
+  private[io] inline def stagedWith[U, A](upstream: Flow[U])(inline body: Flow[U] => Emit[A] ?=> Async ?=> Unit)(
+      inline make: (Step[A], Drive) => Step[U]
+  ): Flow[A] = {
+    val from = shallow(upstream)
+    new Made[U, A](
+      from,
+      from.depth + 1,
+      (from, each, async) => body(from)(using new Emit[A](each))(using async),
+      (next, drive) => make(next, drive)
     )
   }
 
@@ -465,28 +504,93 @@ object Flow {
   }
 
   /** `groupThrough`'s step: a step for each key, made as the key is first met, all of them into `next`. */
-  private final class Dealing[A, K, B](key: A => K, sub: (K, Flow[A]) => Flow[B], next: Step[B]) extends Step[A] {
+  private final class Dealing[A, K, B](key: A => K, sub: (K, Flow[A]) => Flow[B], next: Step[B], drive: Drive)
+      extends Step[A] {
     private val keys = new java.util.HashMap[K, Step[Any]]()
-    // A key's pipeline ends into this, which does not end what all of them share.
-    private val shared = new Pushing[B](next.push, Ended)
+    private var open = 0
+    private var ended = false
+    // A key's pipeline ends into this: what all of them share ends when the last of them has, which with a stage
+    // that waits may be after this has been told the end.
+    private val shared = new Step[B] {
+      def push(element: B): Unit = next.push(element)
+      def end(): Unit = {
+        open -= 1
+        if ended && open == 0 then next.end()
+      }
+    }
 
     def push(element: A): Unit = {
       val k = key(element)
       var step = keys.get(k)
       if step == null then {
         val port = new Port[A]
-        val made = compile(sub(k, port), port, shared)
-        if made == null then
-          throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages that do not wait")
+        val made = compile(sub(k, port), port, shared, drive)
+        if made == null then throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages")
         step = made
+        open += 1
         keys.put(k, step): Unit
       }
       step.push(element)
     }
 
     def end(): Unit = {
-      keys.values().forEach(_.end())
-      next.end()
+      ended = true
+      if open == 0 then next.end()
+      else {
+        val each = keys.values().iterator()
+        while each.hasNext() do each.next().end()
+      }
+    }
+  }
+
+  /** `mapAsync`'s step: work begun for an element, what it made pushed on when it is done, the rest waiting their
+    * turn. All of it where the pipeline's stages are called, but the work itself.
+    */
+  private final class Waiting[A, B](atOnce: Int, f: A => Async ?=> B, next: Step[B], drive: Drive) extends Step[A] {
+    private val waiting = new Ring[AnyRef]()
+    private var flying = 0
+    private var holding = false
+    private var ended = false
+
+    private final class Failed(val thrown: Throwable)
+
+    private def begin(element: A): Unit = {
+      flying += 1
+      drive.spawn {
+        val made: Any =
+          try f(element)
+          catch case thrown: Throwable => new Failed(thrown)
+        drive.later(() => landed(made))
+      }
+    }
+
+    private def landed(made: Any): Unit = {
+      flying -= 1
+      made match {
+        case failed: Failed @unchecked => throw failed.thrown
+        case _                         => next.push(made.asInstanceOf[B])
+      }
+      if !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
+      if holding && waiting.isEmpty then {
+        holding = false
+        drive.release()
+      }
+      if ended && flying == 0 then next.end()
+    }
+
+    def push(element: A): Unit =
+      if flying < atOnce then begin(element)
+      else {
+        waiting.add(element.asInstanceOf[AnyRef])
+        if !holding then {
+          holding = true
+          drive.hold()
+        }
+      }
+
+    def end(): Unit = {
+      ended = true
+      if flying == 0 then next.end()
     }
   }
 
@@ -595,11 +699,27 @@ object Flow {
       * called with each of its elements as it comes. `sub`'s flow must be made of the one it is given by stages.
       */
     def groupThrough[K, B](key: A => K)(sub: (K, Flow[A]) => Flow[B]): Flow[B] =
-      staged[A, B](flow) { from =>
-        val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended))
+      stagedWith[A, B](flow) { from =>
+        val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended), new InPlace)
         from.foreach(dealing.push)
         dealing.end()
-      }(next => new Dealing[A, K, B](key, sub, next))
+      }((next, drive) => new Dealing[A, K, B](key, sub, next, drive))
+
+    /** A stage that waits: `f` of each element, which may perform ops and await, up to `atOnce` of them under way at
+      * a time, and what each made as it is done, so in no order among those under way together. With more elements
+      * than that, the source is held: nothing more is read until one is done.
+      *
+      * In a pipeline that is stepped (`Server.serveFlow`) each `f` is a future beside it, and what it made comes back
+      * among the pipeline's elements, on the pipeline's thread. In one that is run it is `mapPar`. An element goes to
+      * work that goes on after the stage has returned, so must not be lent; and `f` runs beside its like, so what
+      * they share is locked.
+      */
+    def mapAsync[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = {
+      require(atOnce > 0, s"At least one at a time, not $atOnce")
+      stagedWith[A, B](flow)(from => from.mapPar(atOnce)(f).foreach(emit))((next, drive) =>
+        new Waiting[A, B](atOnce, f, next, drive)
+      )
+    }
 
     /** The elements in lists of `size`, the last of what is left. */
     def grouped(size: Int): Flow[List[A]] = over(flow) { from =>

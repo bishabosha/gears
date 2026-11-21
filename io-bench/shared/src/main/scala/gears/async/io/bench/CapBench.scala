@@ -54,6 +54,9 @@ object CapBench {
     "flow-mux-reactor",
     "flow-mux-machine",
     "flow-mux-staged",
+    "flow-mux-await",
+    "flow-mux-machine-await",
+    "flow-mux-staged-await",
     "flow-mux-queued",
     "flow-mux-pinned",
     "reactor-concurrent-pinned",
@@ -1141,7 +1144,9 @@ object CapBench {
       name: String,
       strategy: Server.Strategy,
       /** None for a handler that is run; else a pipeline of stages, served by the machine or, false, by futures. */
-      staged: Option[Boolean] = None
+      staged: Option[Boolean] = None,
+      /** Whether each request is answered by work that waits: a future of its own, as a call elsewhere would be. */
+      waits: Boolean = false
   )(using Async.Spawn): Unit = {
     // A strategy the backend has not is no scenario of its.
     if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then return
@@ -1213,11 +1218,20 @@ object CapBench {
             connection.bytes.process[MuxFrame](decoding).groupThrough(_.stream) { (stream, requests) =>
               val response = new Array[Byte](LargestValue + Frame)
               val out = ByteBuffer.wrap(response)
-              requests.map { request =>
-                val end = cache.handle(request.bytes, 0, response, Frame)
-                head(response, 0, stream, end - Frame)
-                out.clear().limit(end)
-              }
+              if waits then
+                // One at a time for a stream, so its buffer is its own; beside the other streams', so the cache they
+                // share is locked.
+                requests.mapAsync(1) { request =>
+                  val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                  head(response, 0, stream, end - Frame)
+                  out.clear().limit(end)
+                }
+              else
+                requests.map { request =>
+                  val end = cache.handle(request.bytes, 0, response, Frame)
+                  head(response, 0, stream, end - Frame)
+                  out.clear().limit(end)
+                }
             }
           },
           machine = staged.get
@@ -1231,10 +1245,12 @@ object CapBench {
           for request <- requests do {
             // The handler does not know how it is served: made of futures, a connection's streams are on any
             // thread, so the cache they share is locked, with a lock that awaits and is no thread's.
-            val held = guard.acquire()
-            val end =
+            def answer()(using Async): Int = {
+              val held = guard.acquire()
               try cache.handle(request.bytes, 0, response, Frame)
               finally held.release()
+            }
+            val end = if waits then Async.group(Future(answer()).await) else answer()
             head(response, 0, stream, end - Frame)
             connection.send(out.clear().limit(end))
           }
@@ -1882,6 +1898,12 @@ object CapBench {
           "reactor-realistic-pinned",
           new Servers(true, Reactor.Pinned)
         )
+      case "flow-mux-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-await", Server.Strategy.Auto, None, true)
+      case "flow-mux-machine-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-await", Server.Strategy.Auto, Some(true), true)
+      case "flow-mux-staged-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged-await", Server.Strategy.Auto, Some(false), true)
       case "flow-mux-machine" =>
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine", Server.Strategy.Auto, Some(true))
       case "flow-mux-staged" =>

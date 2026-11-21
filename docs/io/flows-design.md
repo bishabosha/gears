@@ -477,8 +477,36 @@ share needs no lock, which a handler that is run cannot count on.
   pipeline on kqueue and Node.js, 13% ahead on one NIO worker, and behind on four.
 - It is one design on every backend, the JVM among them, which reactors never were.
 
-What a pipeline of stages cannot do is wait inside a stage: ask another service, read a file. That needs a stage that
-waits, not built, or a handler that is run. A send larger than a connection's write buffer is refused by a handler's
+### The stage that waits
+
+`mapAsync(atOnce)(f)`: `f` of each element, which may perform ops and await, up to `atOnce` of them under way at a
+time, what each made pushed on as it is done. With more elements than that the source is held, and nothing more is
+read. It is how a pipeline asks another service or reads a file and stays a pipeline.
+
+Stepped by the machine, each `f` is a future beside the pipeline. What it made comes back through the machine, which
+is signalled, and is pushed on where every other stage is called, on the pipeline's thread: so the stages after it
+are still called one at a time, and only `f` itself runs beside its like. A stage that steps a pipeline knows what
+drives it by three things (`Flow.Drive`): where work is begun, how what it made comes back, and how the source is
+held. A pipeline that has ended with work under way is closed when the last of it is done. Run, not stepped, it is
+`mapPar`, or inside a key's pipeline done in place, one after another.
+
+Every request answered by work in a future of its own, which is what a wait costs with nothing to wait for;
+microseconds a request, medians, each in a process of its own:
+
+| | a handler that awaits a future | the machine, `mapAsync` | the machine, no wait |
+|---|---:|---:|---:|
+| kqueue, 1 worker (5 runs) | 8.09 | 3.69 | 2.59 |
+| kqueue, 4 workers (5 runs) | 2.65 | 1.44 | 0.84 |
+| Node.js (4 runs) | 6.80 | 5.53 | 4.08 |
+| NIO pool, 1 worker | 3.31 | 1.90 | 0.78 |
+| NIO pool, 4 workers | 0.90 | 0.53 | 0.34 |
+
+- A wait in a stage costs a request 0.6 to 1.5 microseconds over none: a future begun, and its result handed back.
+- It is 19 to 54% less than a handler that spawns a future and awaits it for the same work.
+
+Not right yet: run by a reactor's flow on Node.js, an op that `f` performs on the program's own `Io` is waited for by
+the whole reactor, so its work is one at a time whatever was asked. The machine is what serves a pipeline there
+unless told otherwise. And a send larger than a connection's write buffer is refused by a handler's
 sink and grown for by the machine; the two should agree.
 
 ## Locks

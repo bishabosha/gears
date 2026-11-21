@@ -76,8 +76,8 @@ final class Server private (
     * closed as its handler ends, what it sent written first.
     */
   /** Serves every connection that comes by a pipeline: `pipeline` is called once for a connection, and gives the flow
-    * of what is to be sent on it, made of the connection's `bytes` by stages that do not wait (`map`, `filter`,
-    * `collect`, `mapConcat`, `process`, `groupThrough`, `tap`). Nothing of a connection is then run: as its bytes come
+    * of what is to be sent on it, made of the connection's `bytes` by stages (`map`, `filter`, `collect`,
+    * `mapConcat`, `process`, `groupThrough`, `tap`, and `mapAsync`, the one that waits). Nothing of a connection is then run: as its bytes come
     * they are pushed through its stages, on one thread, one chunk after another, and what comes out is written.
     *
     * Where the backend has submission queues that is done by a machine, one for each shard, with no future, flow or
@@ -124,6 +124,9 @@ final class Server private (
     private val handed = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
     @volatile private var open = true
     private var live = 0
+    // What a stage that waits has begun and not been given back, and what it has made, to be run here.
+    private val working = new java.util.concurrent.atomic.AtomicInteger(0)
+    private val returned = new java.util.concurrent.ConcurrentLinkedQueue[Runnable]()
 
     /** From any thread. */
     def hand(connection: io.ops.Connection): Unit = {
@@ -136,7 +139,7 @@ final class Server private (
       ops.signal()
     }
 
-    def run()(using Async): Unit =
+    def run()(using spawning: Async.Spawn): Unit =
       while open || live > 0 || !handed.isEmpty() do {
         var next = handed.poll()
         while next != null do {
@@ -145,21 +148,27 @@ final class Server private (
           served.begin()
           next = handed.poll()
         }
-        // With no connection yet, or none with anything in flight, it waits to be handed one, or closed.
-        ops.lingers = open
-        io.performSubmitted(ops, completed)
+        // With no connection yet, or none with anything in flight, it waits to be handed one, or closed, or for
+        // what a stage's work has made.
+        ops.lingers = open || working.get() > 0
+        if returned.isEmpty() then io.performSubmitted(ops, completed)
         var i = 0
         while i < completed.count do {
           completed.tag(i).asInstanceOf[Served].done(completed.op(i), completed.failure(i))
           i += 1
         }
         completed.clear()
+        var back = returned.poll()
+        while back != null do {
+          back.run()
+          back = returned.poll()
+        }
       }
 
     /** A connection: what is read into, what is written from, the read and the write of them, and the step its bytes
       * are pushed to.
       */
-    private final class Served(connection: io.ops.Connection) {
+    private final class Served(connection: io.ops.Connection)(using spawning: Async.Spawn) extends Flow.Drive {
       private val in = sizes.buffers(sizes.read)
       private val read = io.ops.read(connection, in)
       // One fills while the other is written.
@@ -169,9 +178,51 @@ final class Server private (
       private var sendWrite = io.ops.write(connection, sending)
       private var reading = false
       private var writing = false
+      // No more will be read; and the pipeline has ended, which with a stage that waits may be later.
       private var ended = false
+      private var finished = false
       private var closing = false
+      private var held = 0
       private var step: Flow.Step[Any] | Null = null
+
+      // ---- for a stage that waits
+
+      def spawn(work: Async ?=> Unit): Unit = {
+        working.incrementAndGet(): Unit
+        Future {
+          try work
+          finally {
+            working.decrementAndGet(): Unit
+            ops.signal()
+          }
+        }(using spawning): Unit
+      }
+
+      def later(run: Runnable): Unit = {
+        returned.add { () =>
+          if !closing then
+            try {
+              run.run()
+              flush()
+              rearm()
+              leave(now = false)
+            } catch case thrown: Throwable => fail(thrown)
+        }: Unit
+        ops.signal()
+      }
+
+      def hold(): Unit = held += 1
+
+      def release(): Unit = {
+        held -= 1
+        rearm()
+      }
+
+      /** Reads again, unless a read is under way, there is no more to read, a stage holds the source, or more waits
+        * to be written than a write's worth: its peer is not taking it.
+        */
+      private def rearm(): Unit =
+        if !reading && !ended && !closing && held == 0 && !(writing && filling.position() >= sizes.write) then arm()
 
       private def same(a: Any, b: Any): Boolean = a.asInstanceOf[AnyRef] eq b.asInstanceOf[AnyRef]
 
@@ -199,12 +250,12 @@ final class Server private (
           }
           val out = new Flow.Step[ByteBuffer] {
             def push(element: ByteBuffer): Unit = take(element)
-            def end(): Unit = ()
+            def end(): Unit = finished = true
           }
-          val made = Flow.compile(pipeline(new Connection(port, sink)), port, out)
+          val made = Flow.compile(pipeline(new Connection(port, sink)), port, out, this)
           if made == null then
             throw new IllegalArgumentException(
-              "serveFlow's pipeline must be made of the connection's bytes by stages that do not wait; `serve` runs any"
+              "serveFlow's pipeline must be made of the connection's bytes by stages; `serve` runs any flow"
             )
           step = made
           arm()
@@ -233,12 +284,13 @@ final class Server private (
       private def fail(thrown: Throwable): Unit = {
         if failure == null then failure = thrown
         ended = true
+        finished = true
         leave(now = true)
       }
 
       /** The connection is closed once it has ended and what it sent is written; `now`, whatever is in flight. */
       private def leave(now: Boolean): Unit =
-        if !closing && ended && (now || (!writing && !reading && filling.position() == 0)) then {
+        if !closing && finished && (now || (!writing && !reading && filling.position() == 0)) then {
           closing = true
           ops.submit(io.ops.close(connection), this)
         }
@@ -259,8 +311,7 @@ final class Server private (
                 step.nn.end()
               }
               flush()
-              // Not read again while more waits to be written than a write's worth: its peer is not taking it.
-              if !ended && !(writing && filling.position() >= sizes.write) then arm()
+              rearm()
               leave(now = false)
             } catch case failed: Throwable => fail(failed)
         } else {
@@ -271,7 +322,7 @@ final class Server private (
           else {
             writing = false
             flush()
-            if !reading && !ended then arm()
+            rearm()
             leave(now = false)
           }
         }

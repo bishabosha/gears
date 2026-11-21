@@ -459,6 +459,100 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"a stage that waits, served $how: its work under way beside the pipeline, no more of it than asked") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val under = new java.util.concurrent.atomic.AtomicInteger(0)
+        val most = new java.util.concurrent.atomic.AtomicInteger(0)
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .mapAsync(3) { value =>
+                  val now = under.incrementAndGet()
+                  most.accumulateAndGet(now, math.max(_, _)): Unit
+                  io.perform(io.ops.timer(5))
+                  under.decrementAndGet(): Unit
+                  value * 2
+                }
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          val sent = Array.tabulate(30)(i => (i + 1).toByte)
+          send(io, client, sent)
+          assertEquals(receive(io, client, sent.length).map(_.toInt).sorted.toList, sent.map(_ * 2).toList)
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+        assert(most.get() <= 3, s"${most.get()} at once")
+        // Run by a reactor's flow on Node.js, an op of the program's own `Io` is waited for by the whole reactor, so
+        // one at a time is all there is: right, and no faster for the stage.
+        if machine then assert(most.get() >= 2, s"only ${most.get()} at once")
+      }
+    }
+
+    test(s"a stage that waits in each key's pipeline, served $how, answers every element, a key's in order") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .groupThrough(_ & 3) { (key, values) =>
+                  values.mapAsync(1) { value =>
+                    // The slower the lower, so that a key's order is the stage's doing, not the clock's.
+                    io.perform(io.ops.timer(if value < 32 then 2 else 0))
+                    ByteBuffer.wrap(Array[Byte](key.toByte, value.toByte))
+                  }
+                },
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array.tabulate(64)(_.toByte))
+          val answers = receive(io, client, 64 * 2).grouped(2).map(pair => (pair(0).toInt, pair(1) & 0xff)).toList
+          assertEquals(answers.length, 64)
+          for key <- 0 until 4 do
+            assertEquals(answers.filter(_._1 == key).map(_._2), (0 until 64).filter(_ % 4 == key).toList)
+          // And the connection is closed when the last of it is done, the client having ended first.
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"a stage that waits and fails, served $how, fails its connection") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .mapAsync(2) { value =>
+                  io.perform(io.ops.timer(1))
+                  if value == 'X' then throw new IllegalStateException("work failed")
+                  ByteBuffer.wrap(Array[Byte](value.toByte))
+                },
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array[Byte]('X'))
+          assertEquals(receive(io, client, 1).length, 0)
+          close(io, client)
+        } finally server.close()
+        assert(failureOf(served).isInstanceOf[IllegalStateException], s"${failureOf(served)}")
+      }
+    }
+
     test(s"a stage that fails, served $how, closes its connection, leaves the others, and is thrown") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())
