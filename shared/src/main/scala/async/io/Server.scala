@@ -176,15 +176,33 @@ final class Server private (
 
       // ---- for a stage that waits
 
+      // The work of stages that wait, under way: cancelled when the connection is closed with any of it left.
+      private var under: java.util.Set[Future[Unit]] | Null = null
+
       def spawn(work: Async ?=> Unit): Unit = {
         working.incrementAndGet(): Unit
-        Future {
+        if under == null then under = java.util.concurrent.ConcurrentHashMap.newKeySet[Future[Unit]]()
+        val all = under.nn
+        // Null, then the future, then `all` itself for done: so that it is not left there, whichever is first.
+        val begun = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
+        val future = Future {
           try work
           finally {
+            val self = begun.getAndSet(all)
+            if self != null then all.remove(self): Unit
             working.decrementAndGet(): Unit
             ops.signal()
           }
-        }(using spawning): Unit
+        }(using spawning)
+        if begun.compareAndSet(null, future) then {
+          all.add(future): Unit
+          if begun.get() ne future then all.remove(future): Unit
+        }
+      }
+
+      private def cancelWork(): Unit = {
+        val all = under
+        if all != null then all.forEach(_.cancel())
       }
 
       def later(run: Runnable): Unit = {
@@ -304,6 +322,7 @@ final class Server private (
         // A read still in flight when a stage stopped the pipeline is left to the close.
         if !closing && finished && (now || (!writing && (!reading || ended) && filling.position() == 0)) then {
           closing = true
+          cancelWork()
           ops.submit(io.ops.close(connection), this)
         }
 

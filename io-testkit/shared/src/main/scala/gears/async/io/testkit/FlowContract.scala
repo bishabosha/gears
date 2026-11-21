@@ -600,6 +600,67 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"a stage that waits and keeps the order, served $how: what is done first still waits its turn") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .mapPar(4) { value =>
+                  // The earlier the slower.
+                  io.perform(io.ops.timer(if value % 4 == 0 then 12 else 1))
+                  value + 1
+                }
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          val sent = Array.tabulate(24)(_.toByte)
+          send(io, client, sent)
+          assertEquals(receive(io, client, sent.length).toList, sent.map(value => (value + 1).toByte).toList)
+          close(io, client)
+        } finally server.close()
+        assertEquals(failureOf(served), null)
+      }
+    }
+
+    test(s"work still under way when its pipeline wants no more, served $how, is cancelled") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val cancelled = new java.util.concurrent.atomic.AtomicInteger(0)
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .mapAsync(4) { value =>
+                  // One is quick; the rest would be a minute.
+                  try io.perform(io.ops.timer(if value == 1 then 1 else 60_000))
+                  catch { case thrown: Throwable => cancelled.incrementAndGet(); throw thrown }
+                  value
+                }
+                .take(1)
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array[Byte](0, 1, 2, 3))
+          // The one answer and then the end.
+          assertEquals(receive(io, client, 4).toList, List[Byte](1))
+          close(io, client)
+        } finally server.close()
+        // And the server ends, which it would not for a minute with that work left to itself.
+        assertEquals(failureOf(served), null)
+        assertEquals(cancelled.get(), 3)
+      }
+    }
+
     test(s"a stage that waits in each key's pipeline, served $how, answers every element, a key's in order") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())

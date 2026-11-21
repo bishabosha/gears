@@ -26,6 +26,9 @@ private[io] final class Ring[A <: AnyRef] {
     count += 1
   }
 
+  /** The first element, left where it is; null if there is none. */
+  def peek(): A | Null = if count == 0 then null else slots(head).asInstanceOf[A]
+
   /** The first element, taken; null if there is none. */
   def poll(): A | Null =
     if count == 0 then null

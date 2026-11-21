@@ -440,29 +440,47 @@ object Flow {
   /** `mapAsync`'s step: work begun for an element, what it made pushed on when it is done, the rest waiting their
     * turn. All of it where the pipeline's stages are called, but the work itself.
     */
-  private final class Waiting[A, B](atOnce: Int, f: A => Async ?=> B, next: Step[B], drive: Drive) extends Step[A] {
+  private final class Waiting[A, B](atOnce: Int, ordered: Boolean, f: A => Async ?=> B, next: Step[B], drive: Drive)
+      extends Step[A] {
     private val waiting = new Ring[AnyRef]()
+    // In order: a place for what each piece of work makes, in the order the work was begun.
+    private val places = if ordered then new Ring[Place]() else null
     private var flying = 0
     private var holding = false
     private var ended = false
 
     private final class Failed(val thrown: Throwable)
+    private final class Place {
+      var made: Any = null
+      var done = false
+    }
 
     private def begin(element: A): Unit = {
       flying += 1
+      val place = if ordered then new Place else null
+      if ordered then places.nn.add(place.nn)
       drive.spawn {
         val made: Any =
           try f(element)
           catch case thrown: Throwable => new Failed(thrown)
-        drive.later(() => landed(made))
+        drive.later(() => landed(made, place))
       }
     }
 
-    private def landed(made: Any): Unit = {
-      flying -= 1
+    private def pass(made: Any): Unit =
       made match {
         case failed: Failed @unchecked => throw failed.thrown
         case _                         => next.push(made.asInstanceOf[B])
+      }
+
+    private def landed(made: Any, place: Place | Null): Unit = {
+      flying -= 1
+      if place == null then pass(made)
+      else {
+        place.made = made
+        place.done = true
+        val order = places.nn
+        while !order.isEmpty && order.peek().nn.done do pass(order.poll().nn.made)
       }
       if !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
       if holding && waiting.isEmpty then {
@@ -487,6 +505,36 @@ object Flow {
       if flying == 0 then next.end()
     }
   }
+
+  /** `mapPar`, run: its work in futures, awaited in the order it was begun. */
+  private def mapParRun[A, B](from: Flow[A], parallelism: Int, f: A => Async ?=> B)(using Emit[B], Async): Unit = {
+      Async.group { outer ?=>
+        // The work under way, in the order its elements came: begun by a future that runs this flow, and awaited
+        // here, each as it comes to the head, so that what is done is emitted without waiting for what follows it.
+        val under = gears.async.BufferedChannel[Option[gears.async.Future[B]]](parallelism)
+        val room = new gears.async.Semaphore(parallelism)
+        val driving = gears.async.Future {
+          try
+            from.foreach { element =>
+              val place = room.acquire()
+              // The group's, not this future's: its work goes on when this flow has ended.
+              val work = gears.async.Future {
+                try f(element)
+                finally place.release()
+              }(using outer)
+              under.send(Some(work))
+            }
+          finally under.send(None)
+        }
+        var going = true
+        while going do
+          under.read() match {
+            case Right(Some(work)) => emit(work.await)
+            case _                 => going = false
+          }
+        driving.await
+      }
+    }
 
   /** The flows' elements, one flow after another, however many there are. */
   def concat[A](flows: IterableOnce[Flow[A]]): Flow[A] = Flow(flows.iterator.foreach(_.foreach(emit)))
@@ -643,14 +691,14 @@ object Flow {
       * than that, the source is held: nothing more is read until one is done.
       *
       * In a pipeline that is stepped (`Server.serveFlow`) each `f` is a future beside it, and what it made comes back
-      * among the pipeline's elements, on the pipeline's thread. In one that is run it is `mapPar`. An element goes to
+      * among the pipeline's elements, on the pipeline's thread. In one that is run it is `mapParUnordered`. An element goes to
       * work that goes on after the stage has returned, so must not be lent; and `f` runs beside its like, so what
       * they share is locked.
       */
     def mapAsync[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = {
       require(atOnce > 0, s"At least one at a time, not $atOnce")
       stagedWith[A, B](flow)(from => from.mapParUnordered(atOnce)(f).foreach(emit))((next, drive) =>
-        new Waiting[A, B](atOnce, f, next, drive)
+        new Waiting[A, B](atOnce, false, f, next, drive)
       )
     }
 
@@ -773,37 +821,14 @@ object Flow {
     }
 
     /** What `f` makes of each element, `f` run for up to `parallelism` of them at a time, each in a future of its
-      * own, and emitted in the order the elements came, as Ox's `mapPar` does. An element goes to work that runs on
-      * after this has, so must not be lent.
+      * own, and emitted in the order the elements came, as Ox's `mapPar` does: `mapAsync` in order, and stepped as
+      * it is. An element goes to work that runs on after this has, so must not be lent.
       */
-    def mapPar[B](parallelism: Int)(f: A => Async ?=> B): Flow[B] = over(flow) { from =>
+    def mapPar[B](parallelism: Int)(f: A => Async ?=> B): Flow[B] = {
       require(parallelism > 0, s"At least one at a time, not $parallelism")
-      Async.group { outer ?=>
-        // The work under way, in the order its elements came: begun by a future that runs this flow, and awaited
-        // here, each as it comes to the head, so that what is done is emitted without waiting for what follows it.
-        val under = gears.async.BufferedChannel[Option[gears.async.Future[B]]](parallelism)
-        val room = new gears.async.Semaphore(parallelism)
-        val driving = gears.async.Future {
-          try
-            from.foreach { element =>
-              val place = room.acquire()
-              // The group's, not this future's: its work goes on when this flow has ended.
-              val work = gears.async.Future {
-                try f(element)
-                finally place.release()
-              }(using outer)
-              under.send(Some(work))
-            }
-          finally under.send(None)
-        }
-        var going = true
-        while going do
-          under.read() match {
-            case Right(Some(work)) => emit(work.await)
-            case _                 => going = false
-          }
-        driving.await
-      }
+      stagedWith[A, B](flow)(from => mapParRun(from, parallelism, f))((next, drive) =>
+        new Waiting[A, B](parallelism, true, f, next, drive)
+      )
     }
 
     /** A stage with something to keep between elements, which is given and gives back with each: as Ox's. */
