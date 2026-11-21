@@ -32,8 +32,6 @@ object Shards {
         override private[io] def submissionShards: Int = io.submissionShards
         override private[io] def afterTurn(shard: Int)(run: Runnable): Unit = io.afterTurn(shard)(run)
         override private[io] def moveTo(shard: Int)(using Async): Unit = io.moveTo(shard)
-        override private[io] def flowsAreContinuations: Boolean = io.flowsAreContinuations
-        override private[io] def opsAwaitThroughAsync: Boolean = io.opsAwaitThroughAsync
       }
     }
   }

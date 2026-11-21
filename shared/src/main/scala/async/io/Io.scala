@@ -72,17 +72,6 @@ trait Io[+I <: Interface] extends AsyncOperations {
     */
   private[io] def moveTo(shard: Int)(using Async): Unit = ()
 
-  /** Whether a flow of a reactor's is resumed where it is, as a continuation, and not by way of a thread of its own:
-    * a fact of the platform's suspension, which `Server` reads to tell whether a reactor is worth having.
-    */
-  private[io] def flowsAreContinuations: Boolean = false
-
-  /** Whether an op that waits does so with its performer's `Async`, as `Async.await` does: what lets a reactor with no
-    * queue set a flow aside for its op. Not where a backend suspends its performer by a way of its own, or parks its
-    * thread: there the whole reactor would wait for one flow's op. A backend says so if it is so.
-    */
-  private[io] def opsAwaitThroughAsync: Boolean = false
-
   /** Performs `op` as `performWithin` does, but begun on the thread of `shard`'s, one of `submissionShards`, whichever
     * thread the caller is on: so listened for there if it waits, and settled there. A backend with one thread, or
     * none of its own, performs it as ever.

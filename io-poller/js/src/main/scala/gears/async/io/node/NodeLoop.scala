@@ -24,12 +24,6 @@ private[node] final class NodeRun extends Io[NodeOps.type] {
   private[io] def performWithin(op: NodeOp, timeoutMillis: Long)(using Async): Unit =
     NodeLoop.perform(op, timeoutMillis, owner)
 
-  /** A flow is a stack of its own, switched to where the reactor is. */
-  override private[io] def flowsAreContinuations: Boolean = true
-
-  /** An op's wait is a promise awaited in place (`Parking`), not `Async.await`. */
-  override private[io] def opsAwaitThroughAsync: Boolean = false
-
   /** Many ops, with one wait for all of them (see `Pipeline`). */
   override private[io] def performSubmitted(ops: SubmissionQueue[NodeOp], completed: CompletionQueue[NodeOp])(using
       Async

@@ -22,8 +22,8 @@ final class Connection private[io] (
   def send(bytes: ByteBuffer)(using Async): Unit = sink.send(bytes)
 }
 
-/** EXPERIMENT. A listener and the reactors that serve what it accepts, one for each shard of the backend's queues:
-  * a connection is accepted by a future of its own and handed to a shard's reactor, in turn, where the handler runs
+/** EXPERIMENT. A listener and what serves the connections it accepts: a handler that is run, a future for each
+  * connection (`serve`), or a pipeline of stages that is stepped (`serveFlow`). Where the backend has shards, the
   * as a flow, and with it whatever flows it begins.
   */
 final class Server private (
@@ -39,30 +39,16 @@ final class Server private (
     */
   val strategy: Strategy = {
     val sharded = io.ops.isInstanceOf[Shards]
-    val queued = io.ops.isInstanceOf[SubmissionQueues]
     asked match {
       case Strategy.Auto =>
-        // A reactor is worth having where its flows are continuations; where each is a thread, futures do as well.
-        // Futures gain by a connection's ops being on one shard, as reactors do.
-        if !io.flowsAreContinuations then (if sharded then Strategy.PinnedFutures else Strategy.Futures)
-        // Pinned, a reactor gains nothing more by a queue, as far as has been measured.
-        else if sharded then Strategy.PinnedReactors
-        else if queued then Strategy.QueuedReactors
-        else Strategy.Reactor
+        // A connection's futures gain by its ops being on one shard, where the backend has shards.
+        if sharded then Strategy.ShardFutures else Strategy.Futures
       case other =>
         if !Server.strategies(io).contains(other) then
           throw new IllegalArgumentException(s"The backend cannot serve by $other: ${Server.strategies(io).mkString(", ")}")
         other
     }
   }
-  private val reactors =
-    strategy != Strategy.Futures && strategy != Strategy.PinnedFutures && strategy != Strategy.ShardFutures
-  private val mode = strategy match {
-    case Strategy.PinnedReactors => Reactor.Pinned
-    case Strategy.QueuedReactors => Reactor.Queued
-    case _                       => Reactor.Unqueued
-  }
-
   private val listener = listening.asInstanceOf[io.ops.Listener]
   private val stopping = new AtomicReference[() => Unit | Null](null)
   @volatile private var closed = false
@@ -71,7 +57,7 @@ final class Server private (
   /** Where it listens. */
   def address: IpSocketAddress = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress]
 
-  /** Serves every connection that comes with `handler`, each in a flow of a reactor's, until `close`: then returns
+  /** Serves every connection that comes with `handler`, each in a future of its own, until `close`: then returns
     * once the connections there are have been served, with the first failure a handler had thrown. A connection is
     * closed as its handler ends, what it sent written first.
     */
@@ -330,46 +316,12 @@ final class Server private (
   }
 
   def serve(handler: Connection => Async ?=> Unit)(using Async): Unit = {
-    if !reactors then serveWithFutures(handler)
-    else Async.group {
-      // One reactor where there is nothing to pin one to.
-      val shards = if strategy == Strategy.Reactor then 1 else io.submissionShards
-      val made = Array.fill(shards)(Future.Promise[Reactor[io.type]]())
-      val running = (0 until shards).toList.map { shard =>
-        Future {
-          val reactor = Reactor(io, shard, mode)
-          reactor.keepOpen()
-          made(shard).complete(scala.util.Success(reactor))
-          reactor.run()
-        }
-      }
-      val reactors = made.map(_.asFuture.await)
-      val accepting = Future {
-        val accepted = Slot[io.ops.Connection]()
-        val accept = io.ops.accept(listener, accepted)
-        var next = 0
-        while true do {
-          io.perform(accept)
-          val connection = accepted.clear()
-          val reactor = reactors(next % shards)
-          next += 1
-          // From this future's thread to the reactor's: the handler begins there, at its next turn.
-          reactor.submit(serveOne(reactor, connection, handler))
-        }
-      }
-      stopping.set { () =>
-        accepting.cancel()
-        reactors.foreach(_.close())
-      }
-      if closed then stopping.get().nn.apply()
-      running.foreach(_.await)
-      io.perform(io.ops.close(listener))
-    }
+    serveWithFutures(handler)
     val thrown = failure
     if thrown != null then throw thrown
   }
 
-  /** The same with no reactor and no queue: a future for each connection, and one that writes what it sends. */
+  /** A future for each connection, and one that writes what it sends. */
   private def serveWithFutures(handler: Connection => Async ?=> Unit)(using Async): Unit =
     Async.group { outer ?=>
       val serving = new java.util.concurrent.ConcurrentLinkedQueue[Future[Unit]]()
@@ -450,30 +402,6 @@ final class Server private (
       try on.perform(on.ops.close(connection))
       catch case _: java.io.IOException => ()
 
-  private def serveOne(reactor: Reactor[io.type], connection: io.ops.Connection, handler: Connection => Async ?=> Unit)(
-      using Async
-  ): Unit = {
-    val on = reactor.io
-    try {
-      val buf = sizes.buffers(sizes.read)
-      val read = on.ops.read(connection, buf)
-      val outbox = reactor.outbox(sizes.buffers(sizes.write), sizes.buffers(sizes.write))(out =>
-        on.ops.write(connection, out)
-      )
-      val bytes = Server.reading(buf)(on.perform(read))
-      val sink = new Sink[ByteBuffer] {
-        def send(element: ByteBuffer)(using Async): Unit = outbox.put(element)
-        def flush()(using Async): Unit = outbox.drain()
-      }
-      handler(new Connection(bytes, sink))
-      outbox.drain()
-    } catch {
-      case thrown: Throwable => if failure == null then failure = thrown
-    } finally
-      try on.perform(on.ops.close(connection))
-      catch case _: java.io.IOException => ()
-  }
-
   /** From any thread: no more connections are accepted, and `serve` returns once those there are have been served. */
   def close(): Unit = {
     closed = true
@@ -493,7 +421,7 @@ object Server {
 
   /** How a server serves. A handler is the same under each, and must not count on what only some give: under
     * `Futures` a connection's flows run on any thread and in no order among themselves, so what they share is locked
-    * (with a lock that awaits, `gears.async.Semaphore`), which costs a flow of a reactor's nothing to speak of.
+    * (with a lock that awaits, `gears.async.Semaphore`), which costs little when nothing else holds it.
     */
   enum Strategy {
 
@@ -507,19 +435,9 @@ object Server {
     case PinnedFutures
 
     /** `PinnedFutures`, with the scheduler's hooks: a connection's future begins on its shard, and what its flows
-      * send in a turn of that shard's thread is written when the turn's work is done. A reactor's two gains,
-      * affinity and one write a turn, with futures for its flows.
+      * send in a turn of that shard's thread is written when the turn's work is done.
       */
     case ShardFutures
-
-    /** One reactor: a connection's flows on one thread, their writes gathered. For a backend with no capability. */
-    case Reactor
-
-    /** A reactor for each shard, a connection's ops performed on its reactor's (`Shards`). */
-    case PinnedReactors
-
-    /** A reactor for each shard, its flows' ops on a submission queue (`SubmissionQueues`). */
-    case QueuedReactors
   }
 
   /** A connection's bytes: `read` fills `buf`, which is lent to the consumer until it returns, until a read brings
@@ -538,14 +456,7 @@ object Server {
   /** The strategies `io`'s backend can serve by. */
   def strategies(io: Io[IpStreams]): List[Strategy] = {
     val sharded = io.ops.isInstanceOf[Shards]
-    val queued = io.ops.isInstanceOf[SubmissionQueues]
-    // A reactor with no queue has its flows wait for their ops as futures do, with their `Async`.
-    val unqueued = io.opsAwaitThroughAsync
-    List(Strategy.Futures) ++
-      (if sharded then List(Strategy.PinnedFutures, Strategy.ShardFutures) else Nil) ++
-      (if unqueued then List(Strategy.Reactor) else Nil) ++
-      (if unqueued && sharded then List(Strategy.PinnedReactors) else Nil) ++
-      (if queued then List(Strategy.QueuedReactors) else Nil)
+    List(Strategy.Futures) ++ (if sharded then List(Strategy.PinnedFutures, Strategy.ShardFutures) else Nil)
   }
 
   /** A server listening at `address`, a port of 0 for any. It serves by `strategy`.

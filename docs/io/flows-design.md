@@ -4,6 +4,27 @@ Status: experiment, on the branch `experiment/reactor`. Nothing here is on the m
 its own yet. Measurements are of 2026-11-19, on one macOS machine, Scala Native
 `0.5.13-20261114-143517b-SNAPSHOT`.
 
+## Where it stands
+
+This document was written as the experiment went, and much of it is of things since taken out. What is on the branch
+now:
+
+- `Shards` (`io.shards`, `io.onShard(n)`) and `SubmissionQueues` (`io.performQueue`), each a capability of its own.
+- `Flow`, written as a generator (`Flow { ... emit(x) ... }`) or made of stages, with its combinators; `Sink`.
+- `Server.serve(handler)`, a handler that is run in a future for each connection, pinned to a shard where there are
+  shards, what it sends written once a turn; and `Server.serveFlow(pipeline)`, a pipeline of stages that is stepped,
+  by a machine over the submission queue where there is one. `mapAsync` is the stage that waits.
+- In the core, `Async.park`, a wait with no listener that a cancel still ends, and a future begun with fewer frames
+  under it.
+
+Taken out, with the sections on them left below as the record of why: the reactor, flows as continuations of one
+future, and the three ways of serving that were made of it. Nothing it did was the fastest on any backend once
+futures were pinned and parked cheaply and a connection's streams were stages; on Node.js it had hazards of its own.
+What only it used went with it: the hooks that said whether a flow was a continuation and whether an op waited
+through `Async`. `Io.startSubmitted` and what implements it are left, unused.
+
+Its measurements below are of code that is no longer there.
+
 ## What it is for
 
 A server that multiplexes many streams over one connection (HTTP/2 is the model) wants three things that a future

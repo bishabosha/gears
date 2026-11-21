@@ -348,7 +348,7 @@ trait FlowContract extends ContractSuite {
     }
   }
 
-  test("groupBy and foreachPar with no reactor: every element reaches its key's flow, in order") {
+  test("groupBy and foreachPar: every element reaches its key's flow, in order") {
     running {
       val seen = new java.util.concurrent.ConcurrentHashMap[Int, List[Int]]()
       Flow.from(1 to 40).groupBy(_ % 4).foreachPar { (key, elements) =>
@@ -358,7 +358,7 @@ trait FlowContract extends ContractSuite {
     }
   }
 
-  test("foreachPar with no reactor throws a failure of one of its flows") {
+  test("foreachPar throws a failure of one of its flows") {
     running {
       val thrown = intercept[IllegalStateException] {
         Flow.of(1, 2, 3).foreachPar(element => if element == 2 then throw new IllegalStateException("two"))
@@ -489,9 +489,7 @@ trait FlowContract extends ContractSuite {
         } finally server.close()
         assertEquals(failureOf(served), null)
         assert(most.get() <= 3, s"${most.get()} at once")
-        // Run by a reactor's flow on Node.js, an op of the program's own `Io` is waited for by the whole reactor, so
-        // one at a time is all there is: right, and no faster for the stage.
-        if machine then assert(most.get() >= 2, s"only ${most.get()} at once")
+        assert(most.get() >= 2, s"only ${most.get()} at once")
       }
     }
 

@@ -287,9 +287,6 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     }
   }
 
-  /** An op's wait is `Async.await` of the op (`Parking`). */
-  override private[io] def opsAwaitThroughAsync: Boolean = true
-
   override private[io] def performPinned(shard: Int, op: Op, timeoutMillis: Long)(using Async): Unit =
     op.performWith {
       val worker = workerFor(shard.toLong)

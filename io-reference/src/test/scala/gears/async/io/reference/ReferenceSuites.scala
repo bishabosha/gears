@@ -87,7 +87,7 @@ class ReferenceSimpleIOResolveSuite extends SimpleIOResolveChecks {
   val backend: Backend { type Interface <: Resolving } = ReferenceBackend
 }
 
-/** The reference backend has neither shards nor queues: a server on it is futures, or one reactor. */
+/** The reference backend has neither shards nor queues: a server on it is futures. */
 class ReferenceFlowSuite extends FlowContract {
   val backend: Backend { type Interface <: IpStreams } = ReferenceBackend
 }
