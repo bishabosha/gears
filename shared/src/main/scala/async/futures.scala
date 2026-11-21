@@ -122,98 +122,107 @@ object Future:
     private class FutureAsync(val group: CompletionGroup)(using label: ac.support.Label[Unit])
         extends Async(using ac.support, ac.scheduler):
 
-      private class AwaitListener[T](src: Async.Source[T])
-          extends Function[ac.support.Suspension[T | Null, Unit], Unit],
+      /** The listener of one `await`: what the source completes, what the group cancels, and the lock the two meet on,
+        * in one object with one word of state, so that an await costs one allocation, and neither a lock of its own nor
+        * an entry in the group's set.
+        *
+        * It is `Open` while it can be completed: first as the source is polled, when completing it only keeps the item,
+        * and then, once the future is suspended on it, when completing it resumes the future. Whoever takes it from
+        * `Open` to `Locked` has its lock, and either completes it or gives it back.
+        */
+      private final class AwaitListener[T](src: Async.Source[T])
+          extends java.util.concurrent.atomic.AtomicInteger(AwaitListener.Open),
+            Function[ac.support.Suspension[T | Null, Unit], Unit],
             Listener[T],
             Listener.ListenerLock,
-            Listener.NumberedLock,
             Cancellable:
         import AwaitListener.*
-        var state: State = stateUnused
 
-        // guarded by lock; null = before apply or after resume
+        // Written by whoever holds the lock, or before the listener is given to anything.
         private var sus: ac.support.Suspension[T | Null, Unit] | Null = null
-        @volatile private var cancelRequest = false // if cancellation request received, checked after releasing lock
+        private var polled: T | Null = null
+        @volatile private var cancelRequest = false // looked at by whoever gives the lock back
+
+        /** What the source gave as it was polled, if that completed the listener. */
+        def polledItem: T = polled.asInstanceOf[T]
+        def isDone: Boolean = get() == Done
+        def cancelled: Boolean = get() == Cancelled
 
         // == Function, to be passed to suspend. Call this only once and before any other usage of this class.
         def apply(sus: ac.support.Suspension[T | Null, Unit]): Unit =
           this.sus = sus
-          this.link(group) // may resume + remove listener immediately
-          if !cancelled then src.onComplete(this)
+          // The source first, and the group after: a cancel then always finds the listener where it drops it from.
+          // The other way round, one that came between the two would leave the listener with the source for good,
+          // cancelled, in the place of whatever waits for that source next.
+          src.onComplete(this) // may resume immediately, with its item
+          group.addAwaiter(this) // may resume immediately, as cancelled
+          // Resumed already, the future may have left the group before the listener joined it.
+          val state = get()
+          if state == Done || state == Cancelled then group.dropAwaiter(this)
 
         // == Cancellable, to be registered with Async's CompletionGroup (see apply)
         def cancel(): Unit =
-          cancelRequest = true // set before tryLock -> other thread will see after releasing lock (if I fail)
-          if numberedLock.tryLock() && state == stateUnused
-          then // if lock is held -> will handle cancellation in complete or release
-            cancelLocked()
+          cancelRequest = true // before the lock is tried: whoever holds it sees this as it gives it back
+          if compareAndSet(Open, Cancelled) then resumeCancelled()
 
-        private def cancelLocked(): Unit =
-          val cancelledNow =
-            try
-              if sus != null then
-                state = stateCancelled // this will let the resuming code know, it was cancelled
-                ac.support.resumeAsync(sus.asInstanceOf[ac.support.Suspension[T | Null, Unit]])(null)
-                sus = null // update lock-guarded state to not resume again
-                true
-              else false // if sus is null, then was already completed before -> cancellation is ignored
-            finally numberedLock.unlock() // ignore concurrent cancelRequest
-
-          // drop the listener without the lock held (might deadlock in Source otherwise)
-          if cancelledNow then src.dropListener(this)
-        end cancelLocked
+        private def resumeCancelled(): Unit =
+          val waiting = sus
+          sus = null
+          ac.support.resumeAsync(waiting.asInstanceOf[ac.support.Suspension[T | Null, Unit]])(null)
+          src.dropListener(this)
 
         // == ListenerLock, to be exposed by Listener interface (see lock)
-        val selfNumber: Long = number // from Listener.NumberedLock
+        lazy val selfNumber: Long = Listener.NumberedLock.nextNumber()
         def acquire(): Boolean =
-          numberedLock.lock()
-          if sus != null then
-            state = stateLocked
-            true
-          else
-            numberedLock.unlock()
-            false
+          var state = get()
+          while true do
+            if state == Open then
+              if compareAndSet(Open, Locked) then return true
+            else if state != Locked then return false
+            // Held by another source, which completes it or gives it back in a moment.
+            else Thread.onSpinWait()
+            state = get()
+          false
         def release(): Unit =
-          // we still have the numberedLock -> might have missed the cancelRequest
-          if cancelRequest then cancelLocked() // just to prioritize cancellation higher
+          // A cancel that came while the lock was held comes first: no other source gets the lock in between.
+          if cancelRequest && sus != null then
+            set(Cancelled)
+            resumeCancelled()
           else
-            state = stateUnused
-            numberedLock.unlock()
-            // now, I see writes that happened before a failed concurrent acquire, after I release
+            set(Open)
+            // A cancel that failed to lock since then wrote its request before it tried, so it is seen here.
             if cancelRequest then cancel()
 
         // == Listener, to be registered with Source (see apply)
         val lock: Listener.ListenerLock | Null = this
         def complete(data: T, source: Async.Source[T]): Unit =
-          // might have missed the cancelled -> but we ignore it -> still cancelled = false
-          ac.support.resumeAsync(sus.asInstanceOf[ac.support.Suspension[T | Null, Unit]])(data)
-          sus = null
-          state = stateDone
-          numberedLock.unlock()
-
-        inline def cancelled = state == stateCancelled
+          val waiting = sus
+          if waiting == null then
+            polled = data
+            set(Done)
+          else
+            sus = null
+            set(Done)
+            ac.support.resumeAsync(waiting.asInstanceOf[ac.support.Suspension[T | Null, Unit]])(data)
       end AwaitListener
       object AwaitListener:
-        type State = stateUnused.type | stateLocked.type | stateDone.type | stateCancelled.type
-        inline val stateUnused = 0
-        inline val stateLocked = 1
-        inline val stateDone = 2
-        inline val stateCancelled = 3 // resumed due to cancellation - only set with lock held immediately before resume
+        inline val Open = 0
+        inline val Locked = 1
+        inline val Done = 2
+        inline val Cancelled = 3 // resumed due to cancellation
 
       /** Await a source first by polling it, and, if that fails, by suspending in a onComplete call.
         */
       override def await[U](src: Async.Source[U]): U =
         if group.isCancelled then throw new GearsCancellationException()
 
-        src
-          .poll()
-          .getOrElse:
-            val listener = AwaitListener[U](src)
-            val res = ac.support.suspend(listener) // linking and src.onComplete happen in listener
-            listener.unlink()
-            if listener.cancelled then throw new GearsCancellationException()
-            else
-              res.asInstanceOf[U] // not cancelled -> result from Source -> type U (not U | Null, still could be null)
+        val listener = AwaitListener[U](src)
+        if src.poll(listener) && listener.isDone then listener.polledItem
+        else
+          val res = ac.support.suspend(listener) // joining the group and src.onComplete happen in listener
+          group.dropAwaiter(listener)
+          if listener.cancelled then throw new GearsCancellationException()
+          else res.asInstanceOf[U] // not cancelled -> result from Source -> type U (not U | Null, still could be null)
 
       override def withGroup(group: CompletionGroup) = FutureAsync(group)
 

@@ -361,7 +361,10 @@ class EventPollingSchedulingSuite extends munit.FunSuite {
           Thread.currentThread()
         }
         assert(started.await(5, java.util.concurrent.TimeUnit.SECONDS), "the spawned future never ran")
-        assert(spawned.await ne blocked)
+        // Awaited outside the assertion, which holds a monitor over its condition: a future suspended there and
+        // resumed on another thread would never give it back.
+        val ranOn = spawned.await
+        assert(ranOn ne blocked)
       }
     }
     assertEquals(reports.map(_.movedTasks), List(1))
@@ -622,7 +625,8 @@ class EventPollingSchedulingSuite extends munit.FunSuite {
       val cancelled = Future(io.perform(sleeper))
       io.perform(io.ops.timer(50))
       cancelled.cancel()
-      assert(cancelled.awaitResult.isFailure)
+      val outcome = cancelled.awaitResult // outside the assertion, which holds a monitor over its condition
+      assert(outcome.isFailure)
       assertEquals(returned.get(), 2, "the cancel returned before the body had")
       io.perform(io.ops.timer(1)) // and the worker is as it was
     }

@@ -81,7 +81,7 @@ object Listener:
     /** The assigned number of the lock. It is required that listeners that can be locked together to have different
       * [[selfNumber numbers]]. This requirement can be simply done by using a lock created using [[NumberedLock]].
       */
-    val selfNumber: Long
+    def selfNumber: Long
 
     /** Attempt to lock the current [[ListenerLock]]. Locks are guaranteed to be held as short as possible.
       */
@@ -105,3 +105,6 @@ object Listener:
 
   object NumberedLock:
     private val listenerNumber = java.util.concurrent.atomic.AtomicLong()
+
+    /** A number no other lock has, for a lock that is not a [[NumberedLock]] and takes its number only when asked. */
+    private[async] def nextNumber(): Long = listenerNumber.getAndIncrement()
