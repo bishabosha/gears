@@ -1,6 +1,7 @@
 package gears.async.io
 
 import gears.async.Async
+import gears.async.CompletionGroup
 import gears.async.Future
 
 import java.nio.ByteBuffer
@@ -97,8 +98,18 @@ final class Server private (
         drivers.foreach(_.close())
       }
       if closed then stopping.get().nn.apply()
-      running.foreach(_.await)
-      io.perform(io.ops.close(listener))
+      try running.foreach(_.await)
+      finally {
+        // However it ends, a cancel of this future among the ways: nothing more is accepted, each machine closes what
+        // it has and ends, and the listener is closed, none of which a cancel cuts short.
+        val calm = summon[Async].withGroup(CompletionGroup.Unlinked)
+        accepting.cancel()
+        accepting.awaitResult(using calm): Unit
+        drivers.foreach(_.close())
+        running.foreach(_.awaitResult(using calm))
+        try io.perform(io.ops.close(listener))(using calm)
+        catch case _: java.io.IOException => ()
+      }
     }
     val thrown = failure
     if thrown != null then throw thrown
@@ -128,31 +139,62 @@ final class Server private (
       ops.signal()
     }
 
+    // The connections there are, for when all of them are to be given up.
+    private val serving = new java.util.HashSet[Served]()
+    // Cancelled, or failed by its backend: every connection is given up, and those still handed to it are too.
+    private var torn = false
+
+    /** Until closed, and then until every connection has been closed and no work of a stage's is left running.
+      * Cancelled, it gives up what it has first, and that is not cut short: no stage is pushed anything more, each
+      * pipeline is given up (`onComplete`), its work cancelled, and its connection closed. An op submitted and not
+      * started is never started; one in flight has been given up by the queue.
+      */
     def run()(using spawning: Async.Spawn): Unit =
-      while open || live > 0 || !handed.isEmpty() do {
+      try loop(spawning, spawning)
+      catch {
+        case thrown: Throwable =>
+          val cancelled = thrown.isInstanceOf[java.util.concurrent.CancellationException]
+          if !cancelled && failure == null then failure = thrown
+          torn = true
+          ops.withdraw(completed)
+          serving.toArray().foreach(_.asInstanceOf[Served].giveUp())
+          loop(spawning.withGroup(CompletionGroup.Unlinked), spawning)
+          if cancelled then throw thrown
+      }
+
+    private def loop(async: Async, spawning: Async.Spawn): Unit = {
+      // What was handed over as the queue was last performed, if that was cut short.
+      settle()
+      while open || live > 0 || working.get() > 0 || !handed.isEmpty() do {
         var next = handed.poll()
         while next != null do {
           live += 1
-          val served = new Served(next.asInstanceOf[io.ops.Connection])
-          served.begin()
+          val served = new Served(next.asInstanceOf[io.ops.Connection])(using spawning)
+          serving.add(served): Unit
+          if torn then served.giveUp() else served.begin()
           next = handed.poll()
         }
         // With no connection yet, or none with anything in flight, it waits to be handed one, or closed, or for
         // what a stage's work has made.
         ops.lingers = open || working.get() > 0
-        if returned.isEmpty() then io.performSubmitted(ops, completed)
-        var i = 0
-        while i < completed.count do {
-          completed.tag(i).asInstanceOf[Served].done(completed.op(i), completed.failure(i))
-          i += 1
-        }
-        completed.clear()
-        var back = returned.poll()
-        while back != null do {
-          back.run()
-          back = returned.poll()
-        }
+        if returned.isEmpty() then io.performSubmitted(ops, completed)(using async)
+        settle()
       }
+    }
+
+    private def settle(): Unit = {
+      var i = 0
+      while i < completed.count do {
+        completed.tag(i).asInstanceOf[Served].done(completed.op(i), completed.failure(i))
+        i += 1
+      }
+      completed.clear()
+      var back = returned.poll()
+      while back != null do {
+        back.run()
+        back = returned.poll()
+      }
+    }
 
     /** A connection: what is read into, what is written from, the read and the write of them, and the step its bytes
       * are pushed to.
@@ -173,36 +215,41 @@ final class Server private (
       private var closing = false
       private var held = 0
       private var step: Flow.Step[Any] | Null = null
+      private val closeOp = io.ops.close(connection)
 
       // ---- for a stage that waits
 
-      // The work of stages that wait, under way: cancelled when the connection is closed with any of it left.
-      private var under: java.util.Set[Future[Unit]] | Null = null
+      // The work of stages that wait is in a group of the connection's: cancelled when the connection is closed with
+      // any of it left, and with the server's own.
+      private var work: CompletionGroup | Null = null
+      private var workSpawn: Async.Spawn | Null = null
 
-      def spawn(work: Async ?=> Unit): Unit = {
+      def spawn(body: Async ?=> Unit): Unit = {
+        if work == null then {
+          val group = new CompletionGroup
+          group.link(spawning.group)
+          work = group
+          workSpawn = Async.spawning(spawning.withGroup(group))
+        }
         working.incrementAndGet(): Unit
-        if under == null then under = java.util.concurrent.ConcurrentHashMap.newKeySet[Future[Unit]]()
-        val all = under.nn
-        // Null, then the future, then `all` itself for done: so that it is not left there, whichever is first.
-        val begun = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
-        val future = Future {
-          try work
+        startWork(body)(using workSpawn.nn)
+      }
+
+      private def startWork(body: Async ?=> Unit)(using Async.Spawn): Unit =
+        Future {
+          try body
           finally {
-            val self = begun.getAndSet(all)
-            if self != null then all.remove(self): Unit
             working.decrementAndGet(): Unit
             ops.signal()
           }
-        }(using spawning)
-        if begun.compareAndSet(null, future) then {
-          all.add(future): Unit
-          if begun.get() ne future then all.remove(future): Unit
-        }
-      }
+        }: Unit
 
       private def cancelWork(): Unit = {
-        val all = under
-        if all != null then all.forEach(_.cancel())
+        val group = work
+        if group != null then {
+          group.cancel()
+          group.unlink(): Unit
+        }
       }
 
       def later(run: Runnable): Unit = {
@@ -261,6 +308,7 @@ final class Server private (
           val out = new Flow.Step[ByteBuffer] {
             def push(element: ByteBuffer): Unit = take(element)
             def end(): Unit = finished = true
+            def abandon(): Unit = ()
           }
           val made = Flow.compile(pipeline(new Connection(port, sink)), port, out, this)
           if made == null then alone()
@@ -275,6 +323,7 @@ final class Server private (
         */
       private def alone(): Unit = {
         closing = true
+        serving.remove(this): Unit
         working.incrementAndGet(): Unit
         val on: Io[io.ops.type] =
           if io.ops.isInstanceOf[Shards] then
@@ -322,14 +371,32 @@ final class Server private (
         // A read still in flight when a stage stopped the pipeline is left to the close.
         if !closing && finished && (now || (!writing && (!reading || ended) && filling.position() == 0)) then {
           closing = true
+          // Whatever of the pipeline has not ended is given up: a stage closes what it opened, once.
+          val pipeline = step
+          if pipeline != null then
+            try pipeline.abandon()
+            catch case thrown: Throwable => if failure == null then failure = thrown
           cancelWork()
-          ops.submit(io.ops.close(connection), this)
+          ops.submit(closeOp, this)
         }
+
+      /** The server is cancelled: the connection is closed now, whatever it was doing, its failure nobody's. */
+      def giveUp(): Unit = {
+        ended = true
+        finished = true
+        leave(now = true)
+      }
 
       def done(op: io.Op, thrown: Throwable | Null): Unit =
         if closing then {
-          // Its close, or what the close cut short.
-          if !same(op, read) && !same(op, sendWrite) then live -= 1
+          // Its close, or what the close cut short. A close that was itself cut short, by a cancel of the machine,
+          // is asked for again: a connection is not left open.
+          if same(op, closeOp) then
+            if thrown.isInstanceOf[java.util.concurrent.CancellationException] then ops.submit(closeOp, this)
+            else {
+              live -= 1
+              serving.remove(this): Unit
+            }
         } else if same(op, read) then {
           reading = false
           if thrown != null then fail(thrown)
@@ -396,13 +463,23 @@ final class Server private (
       }
       stopping.set(() => accepting.cancel())
       if closed then accepting.cancel()
-      accepting.awaitResult: Unit
-      var next = serving.poll()
-      while next != null do {
-        next.awaitResult: Unit
-        next = serving.poll()
+      try {
+        accepting.awaitResult: Unit
+        var next = serving.poll()
+        while next != null do {
+          next.awaitResult: Unit
+          next = serving.poll()
+        }
+      } finally {
+        // Cancelled, the connections' futures are cancelled with this one, and each closes its own: the listener is
+        // closed when they have, which a cancel does not cut short.
+        val calm = summon[Async].withGroup(CompletionGroup.Unlinked)
+        accepting.cancel()
+        accepting.awaitResult(using calm): Unit
+        serving.forEach(_.awaitResult(using calm))
+        try io.perform(io.ops.close(listener))(using calm)
+        catch case _: java.io.IOException => ()
       }
-      io.perform(io.ops.close(listener))
     }
 
   private def serveAlone(
@@ -445,7 +522,8 @@ final class Server private (
     catch {
       case thrown: Throwable => if failure == null then failure = thrown
     } finally
-      try on.perform(on.ops.close(connection))
+      // Closed though this future has been cancelled.
+      try on.perform(on.ops.close(connection))(using summon[Async].withGroup(CompletionGroup.Unlinked))
       catch case _: java.io.IOException => ()
 
   /** From any thread: no more connections are accepted, and `serve` returns once those there are have been served. */

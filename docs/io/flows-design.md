@@ -44,6 +44,48 @@ What is not stepped is what runs something beside something else (`zip`, `merge`
 not of stages alone but runs that connection in a future, as `serve` would, so that which a pipeline is decides how
 fast it is served and not whether. A test runs every stage both ways and compares.
 
+## What is guaranteed at the end
+
+A server ends in one of two ways. `close()` is the gentle one: no more connections are accepted, those there are
+are served until their peers end, and what they made is written. A cancel of the future that called `serve` or
+`serveFlow` is the other, and what follows is about that, and about a connection that fails.
+
+**What is run, whatever was cancelled.**
+
+- Every accepted connection is closed, once, and the listener is closed. These are performed under a group that
+  nothing cancels, by the machine as by a connection's own future.
+- `onComplete(atLast)` on a flow is run once when the flow has ended, however it did: at its last element, at a
+  failure, at a cancel, or because a stage after it wants no more (`take`). It is where a stage closes what it
+  opened. Run, it is a `finally`; stepped, it is `Step.abandon`, which whatever steps the pipeline calls as it gives
+  the pipeline up, and which every step passes on. It is run on the pipeline's thread and must not wait.
+- `serve` and `serveFlow` return only when all of that is done and no work of a stage's (`mapAsync`, `mapPar`) is
+  still running: that work is in a group of its connection's, cancelled as the connection is closed.
+
+**What is not run.** After a cancel no stage is pushed anything more, though bytes had been read for it. What a
+pipeline had made and not yet written is dropped: a cancel does not flush.
+
+**Ops submitted already.** The machine has ops on its submission queue at any moment, and a cancel finds each in
+one of three states:
+
+- *Submitted and not started.* It is never started: `SubmissionQueue.withdraw` hands each back as failed with a
+  `CancellationException`.
+- *In flight.* `performQueue`, cancelled as it waits, gives up every op in flight before it throws, as `perform`
+  gives up its one: each is cancelled, unless a thread of the backend has it already, which is then waited for, and
+  handed back. So a write in flight may have written some, all or none of its bytes.
+- *Done, and not yet looked at.* Its bytes were read, or written; the machine no longer acts on it.
+
+So after a cancel every op the queue was given is accounted for and none is in use, which is what lets the
+connections' buffers be let go. A close that was itself cut short is asked for again: the one op that is always
+performed.
+
+Tests, on every backend, served both ways: a server cancelled with three connections with a minute's work under
+way and one idle (the work cancelled, each `onComplete` run once, every peer sees the end, the listener refuses);
+`onComplete` at an end, a failure and a `take`; and the same cancel under each strategy of `serve`.
+
+Not guaranteed, and to be decided: there is no time limit on the gentle close; `onComplete` cannot wait, so a
+resource whose release is itself an op has nowhere to do it; and elements lent to a stage (a read's buffer) are
+still lent by convention.
+
 ## Ox's flows
 
 Ox's `Flow` (SoftwareMill, 1.0.3) is the same thing made independently: a stage that is run with what to call for

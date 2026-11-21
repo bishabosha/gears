@@ -661,6 +661,90 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"a server cancelled, served $how, gives up all it has: pipelines, work, connections and listener") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val made = new java.util.concurrent.atomic.AtomicInteger(0)
+        val begun = new java.util.concurrent.atomic.AtomicInteger(0)
+        val completed = new java.util.concurrent.atomic.AtomicInteger(0)
+        val cancelled = new java.util.concurrent.atomic.AtomicInteger(0)
+        val served = Future {
+          server.serveFlow(
+            connection => {
+              made.incrementAndGet(): Unit
+              connection.bytes
+                .onComplete(completed.incrementAndGet(): Unit)
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .mapAsync(2) { value =>
+                  begun.incrementAndGet(): Unit
+                  try io.perform(io.ops.timer(60_000))
+                  catch { case thrown: Throwable => cancelled.incrementAndGet(); throw thrown }
+                  value
+                }
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte)))
+            },
+            machine
+          )
+        }
+        // Three with work under way, a minute of it, and one that has sent nothing.
+        val busy = List.fill(3)(connect(io, server))
+        val idle = connect(io, server)
+        busy.foreach(send(io, _, Array[Byte](1)))
+        while begun.get() < 3 || made.get() < 4 do io.perform(io.ops.timer(2))
+        served.cancel()
+        // It ends, and not in a minute; and by then all of it is done.
+        served.awaitResult: Unit
+        assertEquals(cancelled.get(), 3)
+        assertEquals(completed.get(), 4)
+        for client <- idle :: busy do assertEquals(receive(io, client, 1).length, 0)
+        (idle :: busy).foreach(close(io, _))
+        assert(scala.util.Try(connect(io, server)).isFailure, "the listener is still open")
+      }
+    }
+
+    test(s"a stage's onComplete, served $how, is run once: at the end, at a failure, and at a stage that wants no more") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val completed = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .onComplete(completed.add("bytes"): Unit)
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .map(value => if value == 'X' then throw new IllegalStateException("stage failed") else value)
+                .takeWhile(_ != 'S')
+                .onComplete(completed.add("after"): Unit)
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        def once(what: String): Unit = {
+          while completed.size() < 2 do io.perform(io.ops.timer(2))
+          io.perform(io.ops.timer(10))
+          assertEquals(List(completed.poll(), completed.poll(), completed.poll()).map(String.valueOf).sorted, List("after", "bytes", "null"), what)
+        }
+        try {
+          val ending = connect(io, server)
+          send(io, ending, Array[Byte]('a'))
+          assertEquals(receive(io, ending, 1).toList, List[Byte]('a'))
+          close(io, ending)
+          once("at the end")
+          val failing = connect(io, server)
+          send(io, failing, Array[Byte]('X'))
+          assertEquals(receive(io, failing, 1).length, 0)
+          once("at a failure")
+          close(io, failing)
+          val stopping = connect(io, server)
+          send(io, stopping, Array[Byte]('b', 'S', 'c'))
+          assertEquals(receive(io, stopping, 3).toList, List[Byte]('b'))
+          once("at a stage that wants no more")
+          close(io, stopping)
+        } finally server.close()
+        assert(failureOf(served).isInstanceOf[IllegalStateException], s"${failureOf(served)}")
+      }
+    }
+
     test(s"a stage that waits in each key's pipeline, served $how, answers every element, a key's in order") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())
@@ -806,6 +890,33 @@ trait FlowContract extends ContractSuite {
         close(io, client)
       }
       assertServed(failure)
+    }
+
+    test(s"$strategy: a server cancelled closes every connection, each handler's finally run, and its listener") {
+      running { io ?=>
+        if strategy == Server.Strategy.Auto || Server.strategies(io).contains(strategy) then {
+          val server = Server.tcp(Loopback, sizes(), strategy)
+          val entered = new java.util.concurrent.atomic.AtomicInteger(0)
+          val left = new java.util.concurrent.atomic.AtomicInteger(0)
+          val served = Future {
+            server.serve { connection =>
+              entered.incrementAndGet(): Unit
+              try connection.bytes.to(connection.sink)
+              finally left.incrementAndGet(): Unit
+            }
+          }
+          val clients = List.fill(3)(connect(io, server))
+          send(io, clients.head, Array[Byte](7))
+          assertEquals(receive(io, clients.head, 1).toList, List[Byte](7))
+          while entered.get() < 3 do io.perform(io.ops.timer(2))
+          served.cancel()
+          served.awaitResult: Unit
+          assertEquals(left.get(), 3)
+          for client <- clients do assertEquals(receive(io, client, 1).length, 0)
+          clients.foreach(close(io, _))
+          assert(scala.util.Try(connect(io, server)).isFailure, "the listener is still open")
+        }
+      }
     }
 
     test(s"$strategy: a server closed with no connection ends") {

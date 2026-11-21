@@ -96,12 +96,19 @@ object Flow {
   abstract class Step[-A] {
     def push(element: A): Unit
     def end(): Unit
+
+    /** The pipeline is given up, by a failure, a cancel, or a stage after this that wants no more: nothing more is
+      * pushed, and what the step keeps open is closed (`onComplete`). It is passed on to the step after. It may come
+      * after `end`, and more than once: a step that does something for it does it once.
+      */
+    def abandon(): Unit
   }
 
   /** A step that is a function of an element, and ends the step after it. */
   final class Pushing[A](each: A => Unit, next: Step[?]) extends Step[A] {
     def push(element: A): Unit = each(element)
     def end(): Unit = next.end()
+    def abandon(): Unit = next.abandon()
   }
 
   /** `Pushing`, with something to do at the end before the step after it is ended: what it kept, pushed on. */
@@ -110,6 +117,29 @@ object Flow {
     def end(): Unit = {
       atEnd()
       next.end()
+    }
+    def abandon(): Unit = next.abandon()
+  }
+
+  /** `onComplete`'s step: `atLast` once, as the pipeline ends here or is given up, whichever is first. */
+  final class Completing[A](atLast: () => Unit, next: Step[A]) extends Step[A] {
+    private var done = false
+    def push(element: A): Unit = next.push(element)
+    def end(): Unit = {
+      if !done then {
+        done = true
+        atLast()
+      }
+      next.end()
+    }
+    def abandon(): Unit = {
+      // The steps after are told whatever this one's throws.
+      try
+        if !done then {
+          done = true
+          atLast()
+        }
+      finally next.abandon()
     }
   }
 
@@ -129,6 +159,7 @@ object Flow {
         over = true
         next.end()
       }
+    def abandon(): Unit = next.abandon()
   }
 
   /** A flow that elements are pushed into by whoever drives a pipeline: the beginning of one that is not run but
@@ -387,6 +418,7 @@ object Flow {
   private object Ended extends Step[Any] {
     def push(element: Any): Unit = ()
     def end(): Unit = ()
+    def abandon(): Unit = ()
   }
 
   /** `groupThrough`'s step: a step for each key, made as the key is first met, all of them into `next`. */
@@ -403,6 +435,8 @@ object Flow {
         open -= 1
         if ended && open == 0 then next.end()
       }
+      // The one step after all the keys' is told once, by `abandon` below.
+      def abandon(): Unit = ()
     }
 
     def push(element: A): Unit = {
@@ -410,17 +444,24 @@ object Flow {
       var step = keys.get(k)
       if step == null then {
         val port = new Port[A]
-        // A key's pipeline that wants no more stops its key, not the source: the rest of the key's are dropped.
+        val mine = new Array[Step[Any] | Null](1)
+        // A key's pipeline that wants no more stops its key, not the source: the rest of the key's are dropped, and
+        // the stages before the one that stopped are given up.
         val own = new Drive {
           def spawn(work: Async ?=> Unit): Unit = drive.spawn(work)
           def later(run: Runnable): Unit = drive.later(run)
           def hold(): Unit = drive.hold()
           def release(): Unit = drive.release()
-          def stop(): Unit = keys.put(k, Ended): Unit
+          def stop(): Unit = {
+            keys.put(k, Ended): Unit
+            val step = mine(0)
+            if step != null then step.abandon()
+          }
         }
         val made = compile(sub(k, port), port, shared, own)
         if made == null then throw new IllegalArgumentException("A key's flow must be made of the flow it is given, by stages")
         step = made
+        mine(0) = made
         open += 1
         keys.put(k, step): Unit
       }
@@ -434,6 +475,17 @@ object Flow {
         val each = keys.values().iterator()
         while each.hasNext() do each.next().end()
       }
+    }
+
+    def abandon(): Unit = {
+      var thrown: Throwable | Null = null
+      val each = keys.values().iterator()
+      while each.hasNext() do
+        try each.next().abandon()
+        catch case failed: Throwable => if thrown == null then thrown = failed
+      try next.abandon()
+      catch case failed: Throwable => if thrown == null then thrown = failed
+      if thrown != null then throw thrown
     }
   }
 
@@ -504,6 +556,9 @@ object Flow {
       ended = true
       if flying == 0 then next.end()
     }
+
+    // Its work under way is what steps the pipeline's to cancel (`Drive`), which knows whose it is.
+    def abandon(): Unit = next.abandon()
   }
 
   /** `mapPar`, run: its work in futures, awaited in the order it was begun. */
@@ -682,7 +737,14 @@ object Flow {
     def groupThrough[K, B](key: A => K)(sub: (K, Flow[A]) => Flow[B]): Flow[B] =
       stagedWith[A, B](flow) { from =>
         val dealing = new Dealing[A, K, B](key, sub, new Pushing[B](emit, Ended), new InPlace)
-        from.foreach(dealing.push)
+        try from.foreach(dealing.push)
+        catch {
+          // A failure, a cancel, or a consumer that has left: the keys' pipelines are given up.
+          case thrown: Throwable =>
+            try dealing.abandon()
+            catch case _: Throwable => ()
+            throw thrown
+        }
         dealing.end()
       }((next, drive) => new Dealing[A, K, B](key, sub, next, drive))
 
@@ -861,6 +923,16 @@ object Flow {
     def runDrain()(using Async): Unit = flow.run()
     def runFold[B](zero: B)(f: (B, A) => B)(using Async): B = flow.fold(zero)(f)
     def runLastOption()(using Async): Option[A] = flow.lastOption
+
+    /** `atLast`, once, when this flow has ended, however it did: with its last element, by a failure, by a cancel, or
+      * because what consumes it wants no more. Ox's name for it. It is where a stage closes what it opened, and it
+      * is run though the future that runs the flow, or the server that steps it, has been cancelled. It must not wait.
+      */
+    def onComplete(atLast: => Unit): Flow[A] =
+      staged[A, A](flow) { from =>
+        try from.foreach(emit)
+        finally atLast
+      }(next => new Completing[A](() => atLast, next))
 
     /** Each element, as it goes by. */
     inline def tap(inline see: A => Unit): Flow[A] =

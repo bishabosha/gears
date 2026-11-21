@@ -113,6 +113,20 @@ final class SubmissionQueue[O](val shard: Int) {
     count = 0
   }
   private[io] def flying(by: Int): Unit = flying += by
+
+  /** For a future that was cancelled as it performed the queue and has things to put right: what was submitted and
+    * never started is taken back, each handed over on `completed` as failed with a `CancellationException`. It is
+    * never started. With what `performQueue` does as it is cancelled, giving up every op in flight and handing those
+    * over too, every op the queue was given is then accounted for, and none is in use.
+    */
+  def withdraw(completed: CompletionQueue[O]): Unit = {
+    var i = 0
+    while i < count do {
+      completed.add(ops(i).asInstanceOf[O], tags(i), new java.util.concurrent.CancellationException("Never started"))
+      i += 1
+    }
+    started()
+  }
 }
 
 /** The ops that are done, each with how it ended, in the order they were found to be: filled by `performQueue`, which
