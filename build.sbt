@@ -52,6 +52,10 @@ lazy val root =
         testFrameworks += MUnitFramework
       )
     )
+    // `Result`, for a flow's failures as values (`Flow`'s `...Ok` and `...Err` stages, `directResult`).
+    .jvmSettings(libraryDependencies += "ch.epfl.lamp" % "steps_3" % "0.2.1")
+    .jsSettings(libraryDependencies += "ch.epfl.lamp" % "steps_sjs1_3" % "0.2.1")
+    .nativeSettings(libraryDependencies += "ch.epfl.lamp" % "steps_native0.5_3" % "0.2.1")
     .jvmSettings(
       Seq(
         scalacOptions += "-release:21"

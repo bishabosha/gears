@@ -1,6 +1,7 @@
 package gears.async.io
 
 import gears.async.Async
+import steps.result.Result
 
 import scala.util.boundary
 import scala.util.boundary.break
@@ -1430,6 +1431,117 @@ object Flow {
         next = mailbox.take()
       }
     }
+  }
+
+  // ---- Failures as values: a flow of `Result`s (lampepfl/steps), with no exception in it.
+
+  extension [A](flow: Flow[A]) {
+
+    /** A stage that is code, as `direct`, whose failures are values: the body is a `Result.task`, in which a `Result`
+      * is unwrapped with `.ok`, checked with `.check`, and an error raised with `raise`, and the stage's elements are
+      * `Ok` of what the body emits, and then, if it raised one, the `Err`, which is the last.
+      *
+      * {{{
+      * import steps.result.Result.eval.{ok, raise}
+      *
+      * requests.directResult[Response, Malformed] { requests =>
+      *   val session = open()
+      *   try for request <- requests do emit(session.answer(parse(request).ok))
+      *   finally session.close()
+      * }
+      * }}}
+      *
+      * Nothing is thrown for a failure and nothing is caught: an error of what comes before is an element like any
+      * other, an `Err`, to unwrap, match on or pass by; what is to be cleaned up is cleaned up in a `finally` with no
+      * `catch` beside it, which is run however the stage ends, a cancel among the ways.
+      */
+    def directResult[B, E](
+        body: Flow[A] => (Emit[B], boundary.Label[Result[Unit, E]], Async) ?=> Unit
+    ): Flow[Result[B, E]] =
+      flow.direct[Result[B, E]] { elements =>
+        val out = summon[Emit[Result[B, E]]]
+        val ended: Result[Unit, E] =
+          Result.task[E](body(elements)(using new Emit[B](element => out.each(Result.Ok(element)))))
+        if ended.isErr then out.each(ended.asInstanceOf[Result[B, E]])
+      }
+
+    /** This flow's elements as `Ok`, and what it throws as a last `Err`: from failures that are thrown to failures
+      * that are values. A cancel is not a failure, nor is anything fatal.
+      */
+    def attempt: Flow[Result[A, Throwable]] =
+      flow.map[Result[A, Throwable]](Result.Ok(_)).recover { case thrown => Result.Err(thrown) }
+  }
+
+  extension [A, E](flow: Flow[Result[A, E]]) {
+
+    /** The flow as far as its first `Err`, which is its last element: one failure ends it. The stages below that
+      * may make an `Err` do this themselves; it is for a flow of `Result`s made otherwise, by `map` say, which goes
+      * on past an `Err`. In a key's pipeline (`groupThrough`) it ends that key.
+      */
+    def failFast: Flow[Result[A, E]] =
+      stagedWith[Result[A, E], Result[A, E]](flow) { from =>
+        boundary {
+          from.foreach { element =>
+            emit(element)
+            if element.isErr then break()
+          }
+        }
+      }((next, drive) => new Until[Result[A, E]](element => { next.push(element); element.isErr }, next, drive))
+
+    /** `f` of each `Ok`; an `Err` as it is. */
+    def mapOk[B](f: A => B): Flow[Result[B, E]] = flow.map(_.map(f))
+
+    /** `f` of each `Ok`, which may fail: the first `Err` it makes is the flow's last element. */
+    def flatMapOk[B, E1 >: E](f: A => Result[B, E1]): Flow[Result[B, E1]] = flow.map(_.flatMap(f)).failFast
+
+    /** `f` of each `Err`; an `Ok` as it is. */
+    def mapErr[E1](f: E => E1): Flow[Result[A, E1]] = flow.map(_.mapErr(f))
+
+    /** Shown each `Err`, which goes on as it was. */
+    def tapErr(see: E => Unit): Flow[Result[A, E]] = flow.tap(_.tapErr(see): Unit)
+
+    /** The values: an `Ok`'s, and for an `Err` what `f` makes of it. What recovers a failure, a response to send
+      * in its place say.
+      */
+    def handleErr[B >: A](f: E => B): Flow[B] =
+      flow.map {
+        case Result.Ok(value)  => value
+        case Result.Err(error) => f(error)
+      }
+
+    /** A stage that is code over the values (`directResult`): an `Err` of this flow ends it, and is its last. */
+    def directOk[B, E1 >: E](
+        body: Flow[A] => (Emit[B], boundary.Label[Result[Unit, E1]], Async) ?=> Unit
+    ): Flow[Result[B, E1]] =
+      flow.directResult[B, E1] { elements =>
+        val label = summon[boundary.Label[Result[Unit, E1]]]
+        val values = new Flow[A] {
+          def foreach(each: A => Unit)(using Async): Unit =
+            elements.foreach {
+              case Result.Ok(value) => each(value)
+              case failed           => boundary.break(failed.asInstanceOf[Result[Unit, E1]])(using label)
+            }
+        }
+        body(values)
+      }
+
+    /** Runs the flow: `Ok` when it has ended, or its first `Err`, at which it is left. */
+    def runResult()(using Async): Result[Unit, E] =
+      boundary[Result[Unit, E]] {
+        flow.foreach(element => if element.isErr then break(element.asInstanceOf[Result[Unit, E]]))
+        Result.done
+      }
+
+    /** Runs the flow: its values, or its first `Err`, at which it is left. */
+    def toListResult()(using Async): Result[List[A], E] =
+      boundary[Result[List[A], E]] {
+        val values = List.newBuilder[A]
+        flow.foreach {
+          case Result.Ok(value) => values += value
+          case failed           => break(failed.asInstanceOf[Result[List[A], E]])
+        }
+        Result.Ok(values.result())
+      }
   }
 
   /** Thrown into a `direct` stage's body from its `emit` when what consumes the stage has thrown, or left: not the

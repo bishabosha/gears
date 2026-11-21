@@ -1,6 +1,8 @@
 package gears.async.io
 package testkit
 
+import steps.result.Result
+import steps.result.Result.eval.{ok, raise}
 import gears.async.Async
 import gears.async.Future
 import gears.async.Semaphore
@@ -795,6 +797,53 @@ trait FlowContract extends ContractSuite {
       }
     }
 
+    test(s"a stage that is code with failures as values, served $how: raised, handled, and cleaned up in a finally") {
+      running { io ?=>
+        val server = Server.tcp(Loopback, sizes())
+        val closed = new java.util.concurrent.atomic.AtomicInteger(0)
+        val served = Future {
+          server.serveFlow(
+            connection =>
+              connection.bytes
+                .process[Int](emit => chunk => while chunk.hasRemaining() do emit(chunk.get() & 0xff))
+                .directResult[Int, String] { values =>
+                  var count = 0
+                  // No `catch`: a failure is a value, and the `finally` is for what must be let go.
+                  try
+                    for value <- values do {
+                      if value == 'X' then raise("bad byte")
+                      io.perform(io.ops.timer(1))
+                      count += 1
+                      emit(value + count)
+                    }
+                  finally closed.incrementAndGet(): Unit
+                }
+                .handleErr(_ => '!'.toInt)
+                .map(value => ByteBuffer.wrap(Array[Byte](value.toByte))),
+            machine
+          )
+        }
+        try {
+          val client = connect(io, server)
+          send(io, client, Array[Byte](10, 20, 30))
+          assertEquals(receive(io, client, 3).toList, List[Byte](11, 22, 33))
+          // The failure is answered, and the connection ended as if it had ended.
+          send(io, client, Array[Byte](40, 'X', 50))
+          assertEquals(receive(io, client, 4).toList, List[Byte](44, '!'))
+          close(io, client)
+          // And a connection cancelled with the stage waiting: its finally is run, on every platform.
+          val idle = connect(io, server)
+          send(io, idle, Array[Byte](1))
+          assertEquals(receive(io, idle, 1).toList, List[Byte](2))
+          served.cancel()
+          served.awaitResult: Unit
+          assertEquals(receive(io, idle, 1).length, 0)
+          close(io, idle)
+          assertEquals(closed.get(), 2)
+        } finally server.close()
+      }
+    }
+
     test(s"a failure in one key's pipeline, served $how, recovered there, ends that key and leaves the others") {
       running { io ?=>
         val server = Server.tcp(Loopback, sizes())
@@ -984,6 +1033,39 @@ trait FlowContract extends ContractSuite {
         "a failure before the keys, recovered in each" -> (_.map(n => if n == 9 then throw new IllegalStateException("nine") else n)
           .groupThrough(_ % 3)((key, values) => values.recover { case _: IllegalStateException => -key })
           .recover { case _: IllegalStateException => -99 }),
+        "results, as far as the first Err" -> (_.map(n => Result.cond(n != 6, n, s"bad $n")).failFast),
+        "results, a stage that may fail and those after it" -> (_.map[Result[Int, String]](Result.Ok(_))
+          .flatMapOk(n => if n == 5 then Result.Err("five") else Result.Ok(n * 2))
+          .mapOk(_ + 1)
+          .mapErr(_.length)),
+        "results, a failure handled" -> (_.map[Result[Int, String]](Result.Ok(_))
+          .flatMapOk(n => if n == 5 then Result.Err("five") else Result.Ok(n * 2))
+          .handleErr(_.length)),
+        "results, a stage that is code and raises" -> (_.directResult[Int, String] { elements =>
+          for n <- elements do {
+            if n == 8 then raise("eight")
+            emit(n * 3)
+          }
+        }),
+        "results, a stage that is code and unwraps" -> (_.map(n => Result.cond(n != 4, n, "four")).directResult[String, String] {
+          elements =>
+            var sum = 0
+            for element <- elements do {
+              sum += element.ok
+              emit(s"sum $sum")
+            }
+        }),
+        "results, a stage that is code over the values" -> (_.map(n => Result.cond(n != 7, n, "seven")).directOk[Int, String] {
+          values => for value <- values do emit(value + 1)
+        }.handleErr(_ => -7)),
+        "results, of what is thrown" -> (_.map(n => if n == 3 then throw new IllegalStateException("three") else n).attempt
+          .handleErr(_.getMessage.length)),
+        "results, a key's failure handled in the key" -> (_.groupThrough(_ % 2) { (key, values) =>
+          values
+            .map[Result[Int, String]](Result.Ok(_))
+            .flatMapOk(n => if n == 6 then Result.Err("six") else Result.Ok(n))
+            .handleErr(_ => -100 - key)
+        }),
         "many together" -> (_.drop(1).scan(0)(_ + _).takeWhile(_ < 60).zipWithIndex.grouped(3).intersperse(Nil).take(4))
       )
       for (name, pipe) <- pipes do {
@@ -991,6 +1073,23 @@ trait FlowContract extends ContractSuite {
         // One key, so one pipeline of steps for all of it.
         val stepped = Flow.from(1 to 20).groupThrough(_ => 0)((_, values) => pipe(values)).toList
         assertEquals(stepped, run, name)
+      }
+      // Run for its result: the end, or the first `Err`, at which the flow is left.
+      val checked = Flow.from(1 to 20).map(n => Result.cond(n != 6, n, s"bad $n"))
+      assertEquals(checked.runResult(), Result.Err("bad 6"))
+      assertEquals(checked.toListResult(), Result.Err("bad 6"))
+      assertEquals(Flow.from(1 to 4).map[Result[Int, String]](Result.Ok(_)).toListResult(), Result.Ok(List(1, 2, 3, 4)))
+      assertEquals(Flow.from(1 to 4).map[Result[Int, String]](Result.Ok(_)).runResult(), Result.done)
+      // A stage that is code and raises: what it had to clean up is cleaned up, in a `finally` with no `catch`.
+      for stepped <- List(false, true) do {
+        var cleaned = 0
+        val pipe: Flow[Int] => Flow[Result[Int, String]] = _.directResult[Int, String] { elements =>
+          try for n <- elements do if n == 3 then raise("three") else emit(n)
+          finally cleaned += 1
+        }
+        val flow = if stepped then Flow.from(1 to 9).groupThrough(_ => 0)((_, values) => pipe(values)) else pipe(Flow.from(1 to 9))
+        assertEquals(flow.toList, List(Result.Ok(1), Result.Ok(2), Result.Err("three")), s"stepped: $stepped")
+        assertEquals(cleaned, 1, s"stepped: $stepped")
       }
       // What is not recovered is thrown, the same either way: a failure after `recover`, which is not its to
       // recover; one that no handler has anything for; one of a stage that is code.

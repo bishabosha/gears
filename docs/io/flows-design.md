@@ -153,6 +153,40 @@ The machine's figure with all of this in is two hundredths behind what it was (k
 against 2.52-2.65 on one worker, 0.81-0.84 against 0.79-0.84 on four), the cost being the `try` each element of a
 key now passes.
 
+## Failures as values
+
+The other way to say a failure, and the one to prefer: as a value, a `Result` (lampepfl/steps), with nothing
+thrown and nothing caught. A flow that may fail is a `Flow[Result[A, E]]`: an `Err` is an element like any other, and
+the error has a type.
+
+- `failFast`: the flow as far as its first `Err`, which is its last element. One failure ends the flow, as before;
+  here it is the stages that may make an `Err` that do it, and a flow of results made otherwise goes on past one.
+- `flatMapOk(f)`, for a stage that may fail, which ends at the first `Err` it makes; `mapOk`, `mapErr`, `tapErr`.
+- `handleErr(f)`: the values, an `Err` replaced by what `f` makes of it. What recovers.
+- `attempt`: from a flow that throws to a flow of results, what was thrown a last `Err`.
+- `runResult()` and `toListResult()`: run it for a `Result`.
+- `directResult[B, E] { elements => ... }`: a stage that is code whose body is a `Result.task`: `.ok` unwraps, `raise`
+  fails, and the stage emits `Ok` of what the body emits and then the `Err` it raised, if it did. `directOk` is that
+  over the values of a flow of results, ended by the first `Err` that comes.
+
+```scala
+requests.directResult[Response, Malformed] { requests =>
+  val session = open()
+  try for request <- requests do emit(session.answer(parse(request).ok))
+  finally session.close()
+}.handleErr(Response.badRequest)
+```
+
+They are all stages, made of `map`, `Until` and `direct`, so stepped, and what ends at an `Err` in a key's pipeline
+ends that key. Cleanup is still a `finally`, with no `catch` beside it: that is run however the stage ends, a cancel
+among the ways, and on Scala Native too, where it is a `catch` whose handler calls something that throws that loses
+the `finally` (scala-native#5367). A test serves such a stage both ways on every backend and cancels the server with
+the stage waiting; its `finally` is run on all of them.
+
+Thrown failures are still what the section above says, for what does throw and for Ox's names. `.ok` and `raise` in
+a loop over a flow leave the loop as `boundary.break` does, which across the loop's function is a `Break` thrown by
+the language: nothing of ours throws or catches for it.
+
 ## Against the same server written by hand
 
 The multiplexed server with no flow in it, over `perform` (`flow-mux-hand-*`): `loop`, a future for each
