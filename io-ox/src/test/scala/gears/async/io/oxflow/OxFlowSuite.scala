@@ -68,6 +68,55 @@ class OxFlowSuite extends munit.FunSuite {
     }
   }
 
+  test("a gears stage in the middle of an Ox flow") {
+    // No gears `Async` in sight: the stage is given one where Ox runs it.
+    val evens: Flow[Int] => Flow[String] = _.filter(_ % 2 == 0).mapStateful(0)((sum, n) => (sum + n, s"$n:${sum + n}"))
+    assertEquals(
+      OxFlow.fromIterable(1 to 8).map(_ + 1).throughGears(evens).map(_.toUpperCase).runToList(),
+      List("2:2", "4:6", "6:12", "8:20")
+    )
+    // With Ox's forks on either side of it, and gears' own beside it within.
+    val doubled = OxFlow
+      .fromIterable(1 to 40)
+      .mapPar(4)(_ + 1)
+      .throughGears(_.mapPar(3)(_ * 2).groupThrough(_ % 4)((key, values) => values.map(n => (key, n))))
+      .mapPar(4)(identity)
+      .runToList()
+    assertEquals(doubled.map(_._2).sorted, (1 to 40).map(n => (n + 1) * 2).toList)
+    assert(doubled.forall((key, n) => n % 4 == key))
+    // Left early from the Ox side.
+    assertEquals(OxFlow.iterate(1)(_ + 1).throughGears(_.map(_ * 3)).take(3).runToList(), List(3, 6, 9))
+  }
+
+  test("an Ox stage in the middle of a gears flow") {
+    Async.blocking {
+      val windows: OxFlow[Int] => OxFlow[Int] = _.sliding(2).map(_.sum)
+      assertEquals(Flow.from(1 to 5).map(_ * 10).throughOx(windows).filter(_ > 30).toList, List(50, 70, 90))
+      // An Ox stage that runs what is above it on threads of its own: the gears flow is run there.
+      val par = Flow.from(1 to 30).filter(_ % 3 != 0).throughOx(_.mapPar(4)(_ + 100).buffer()(using _root_.ox.channels.BufferCapacity(4)))
+      assertEquals(par.toList, (1 to 30).filter(_ % 3 != 0).map(_ + 100).toList)
+      // Left early from the gears side, and stages of each kind one inside another.
+      assertEquals(Flow.iterate(1)(_ + 1).throughOx(_.map(_ * 2)).take(4).toList, List(2, 4, 6, 8))
+      val nested = Flow.from(1 to 6).throughOx(_.throughGears(_.filter(_ % 2 == 0)).map(_ + 1)).toList
+      assertEquals(nested, List(3, 5, 7))
+    }
+  }
+
+  test("nothing of either runs until the whole is, and a stage's failure is the whole's") {
+    Async.blocking {
+      var ran = 0
+      val counted = Flow[Int] { ran += 1; Flow.emit(1) }
+      val whole = counted.throughOx(_.map(_ + 1))
+      assertEquals(ran, 0)
+      assertEquals(whole.toList, List(2))
+      assertEquals(ran, 1)
+      val failing = Flow.from(1 to 3).throughOx(_.map(n => if n == 2 then throw new IllegalStateException("ox stage") else n))
+      assertEquals(intercept[IllegalStateException](failing.run()).getMessage, "ox stage")
+    }
+    val failing = OxFlow.fromValues(1, 2, 3).throughGears(_.map(n => if n == 2 then throw new IllegalStateException("gears stage") else n))
+    assertEquals(intercept[IllegalStateException](failing.runDrain()).getMessage, "gears stage")
+  }
+
   test("a failure in either is the other's") {
     Async.blocking {
       val failing = OxFlow.usingEmit[Int] { emit => emit(1); throw new IllegalStateException("ox failed") }

@@ -41,12 +41,16 @@ and a test runs one such against both and compares what comes out. What differs:
 `f` in `mapPar` may itself wait; `groupBy`'s `parallelism` is not a bound here, a key's pipeline being a step and not
 a thread; Ox has many more operators (time, retries, I/O, reactive streams) that ours has not.
 
-**Each as the other** (`io-ox`, package `gears.async.io.oxflow`, JVM): `oxFlow.toGears`, `gearsFlow.toOx` and
-`gearsFlow.toOxOnAnyThread`. Nothing is between them but the call for each element: an Ox flow blocks the thread it
-is run on, a gears flow suspends the future it is run in, and on the JVM a future is a virtual thread, for which
-those are one. `toOx` runs with the `Async` of the future that asked, for an Ox flow run in that future; an Ox
-operator that runs its upstream in a fork of its own needs `toOxOnAnyThread`, which takes an `Async` of whatever
-thread it is on.
+**Each as the other** (`io-ox`, package `gears.async.io.oxflow`, JVM). Nothing is between them but the call for
+each element: an Ox flow blocks the thread it is run on, a gears flow suspends the future it is run in, and on the
+JVM a future is a virtual thread, for which those are one.
+
+- Whole flows: `oxFlow.toGears`, `gearsFlow.toOx`, and `gearsFlow.toOxOnAnyThread` for a caller with no `Async`.
+  `toOx` runs with the `Async` of the future that asked when it is run on that future's thread, and with one of
+  whatever thread it is on when an Ox operator (`buffer`, `mapPar`, `merge`) runs its upstream in a fork.
+- Stages: `gearsFlow.throughOx(pipe: OxFlow[A] => OxFlow[B]): Flow[B]` puts stages of Ox's in a gears flow, and
+  `oxFlow.throughGears(pipe: Flow[A] => Flow[B]): OxFlow[B]` puts stages of gears' in an Ox flow, which needs no
+  `Async` of its caller's. They nest, and either side may leave early.
 
 Limits: an Ox flow is opaque, so a pipeline with one in it is run, not stepped, and `serveFlow`'s machine refuses
 it; and a gears flow run on Ox's threads cannot perform an op of a pool backend, which is performed on the pool's
