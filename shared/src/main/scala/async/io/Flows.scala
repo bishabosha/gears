@@ -492,7 +492,59 @@ object Flow {
   /** `mapAsync`'s step: work begun for an element, what it made pushed on when it is done, the rest waiting their
     * turn. All of it where the pipeline's stages are called, but the work itself.
     */
-  private final class Waiting[A, B](atOnce: Int, ordered: Boolean, f: A => Async ?=> B, next: Step[B], drive: Drive)
+  private final class Waiting[A, B](atOnce: Int, f: A => Async ?=> B, next: Step[B], drive: Drive) extends Step[A] {
+    private val waiting = new Ring[AnyRef]()
+    private var flying = 0
+    private var holding = false
+    private var ended = false
+
+    private final class Failed(val thrown: Throwable)
+
+    private def begin(element: A): Unit = {
+      flying += 1
+      drive.spawn {
+        val made: Any =
+          try f(element)
+          catch case thrown: Throwable => new Failed(thrown)
+        drive.later(() => landed(made))
+      }
+    }
+
+    private def landed(made: Any): Unit = {
+      flying -= 1
+      made match {
+        case failed: Failed @unchecked => throw failed.thrown
+        case _                         => next.push(made.asInstanceOf[B])
+      }
+      if !waiting.isEmpty then begin(waiting.poll().asInstanceOf[A])
+      if holding && waiting.isEmpty then {
+        holding = false
+        drive.release()
+      }
+      if ended && flying == 0 then next.end()
+    }
+
+    def push(element: A): Unit =
+      if flying < atOnce then begin(element)
+      else {
+        waiting.add(element.asInstanceOf[AnyRef])
+        if !holding then {
+          holding = true
+          drive.hold()
+        }
+      }
+
+    def end(): Unit = {
+      ended = true
+      if flying == 0 then next.end()
+    }
+
+    // Its work under way is what steps the pipeline's to cancel (`Drive`), which knows whose it is.
+    def abandon(): Unit = next.abandon()
+  }
+
+  /** `Waiting`, with what the work makes pushed on in the order the work was begun (`ordered`). */
+  private final class WaitingInOrder[A, B](atOnce: Int, ordered: Boolean, f: A => Async ?=> B, next: Step[B], drive: Drive)
       extends Step[A] {
     private val waiting = new Ring[AnyRef]()
     // In order: a place for what each piece of work makes, in the order the work was begun.
@@ -760,7 +812,7 @@ object Flow {
     def mapAsync[B](atOnce: Int)(f: A => Async ?=> B): Flow[B] = {
       require(atOnce > 0, s"At least one at a time, not $atOnce")
       stagedWith[A, B](flow)(from => from.mapParUnordered(atOnce)(f).foreach(emit))((next, drive) =>
-        new Waiting[A, B](atOnce, false, f, next, drive)
+        new Waiting[A, B](atOnce, f, next, drive)
       )
     }
 
@@ -889,7 +941,7 @@ object Flow {
     def mapPar[B](parallelism: Int)(f: A => Async ?=> B): Flow[B] = {
       require(parallelism > 0, s"At least one at a time, not $parallelism")
       stagedWith[A, B](flow)(from => mapParRun(from, parallelism, f))((next, drive) =>
-        new Waiting[A, B](parallelism, true, f, next, drive)
+        new WaitingInOrder[A, B](parallelism, true, f, next, drive)
       )
     }
 
