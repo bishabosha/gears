@@ -86,6 +86,36 @@ Not guaranteed, and to be decided: there is no time limit on the gentle close; `
 resource whose release is itself an op has nowhere to do it; and elements lent to a stage (a read's buffer) are
 still lent by convention.
 
+## Against the same server written by hand
+
+The multiplexed server with no flow in it, over `perform` (`flow-mux-hand-*`): `loop`, a future for each
+connection that reads, answers every frame that came and writes, in a `while`; `pinned`, that with a connection's
+ops on one shard; `queue`, a future for each shard performing a submission queue, the machine written out for this
+one server. Same clients, same bytes. Microseconds a request, four rounds, each in a process of its own (JVM: one
+process, the last six of ten repeats):
+
+| | kqueue, 1 worker | kqueue, 4 | Node.js | JVM pool, 4 |
+|---|---|---|---|---|
+| by hand, a queue for each shard | 2.41-2.47 | 0.76-0.78 | 3.83-3.88 | 0.26-0.39 |
+| by hand, a loop for each connection, pinned | 2.54-2.58 | 0.81-0.85 | no shards | 0.26-0.36 |
+| by hand, a loop for each connection | 2.57-2.67 | 0.80-0.86 | 4.08-4.25 | 0.24-0.41 |
+| flow of stages, the machine | 2.56-2.59 | 0.82 | 3.99-4.21 | 0.27-0.33 |
+| flow of stages, a future for each connection | 2.67-2.74 | 0.88-0.92 | 4.37-4.47 | 0.26-0.36 |
+| handler with a flow for each stream, on futures | 3.47-3.99 | 1.45-1.59 | 5.14-5.23 | 0.43-0.55 |
+
+So flows are not faster than loops. The loop and the machine are the same within the noise; the same queue by
+hand is a twentieth ahead of the machine, which is what the stages cost (a frame object and its copy, a table
+lookup for the stream, the calls); and stages run by a future are a twentieth behind the loop for the same reason.
+What was a third or more slower all along was not flows against loops but a future and a channel for each stream
+against one loop for the connection.
+
+What the loop is here is the easy case for a loop: one connection's streams answered in the order they came, by
+work that never waits. A stream that has to wait for something holds the whole loop, and then the loop needs what
+`mapAsync` gives the pipeline, and is no longer a few lines.
+
+Two runs, one on each platform, came back hundreds of times slower, one of them longer than the time limit it was
+run under, so the clock had jumped, the machine asleep most likely; 240 further runs on Node.js had none.
+
 ## A pipeline as a program, tried
 
 `Pipe` (`FlowVm.scala`) is the same pipeline as instructions: an array of opcodes and their functions, made once
