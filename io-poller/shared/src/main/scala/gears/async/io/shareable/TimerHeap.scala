@@ -182,8 +182,11 @@ abstract class BinaryTimerHeap extends TimerHeap {
     next
   }
 
+  /** The earliest deadline, or negative for none. A deadline that is itself negative, which is long past, is told as
+    * zero, which is as past: it is not to be taken for none by whoever waits for it.
+    */
   final def peekNextDeadline(): Long = editing {
-    if size > 0 then heap(0).heapKey else -1
+    if size > 0 then Math.max(heap(0).heapKey, 0L) else -1
   }
 
   final def debugTimerState() = editing {
@@ -238,5 +241,5 @@ abstract class BinaryTimerHeap extends TimerHeap {
   * time as it is.
   */
 abstract class TimerHeapImpl extends BinaryTimerHeap with Poller {
-  protected final def earliestChanged(): Unit = wake()
+  protected def earliestChanged(): Unit = wake()
 }

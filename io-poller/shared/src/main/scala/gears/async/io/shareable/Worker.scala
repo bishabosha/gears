@@ -87,6 +87,9 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     */
   private var turns = 0L
 
+  /** How many turns in a row went without asking the poller for events, a timer being due each time. */
+  private var pollsSkipped = 0
+
   private[shareable] def turnsBegun: Long = turns
 
   /** Whether tasks wait in the inbox. */
@@ -217,6 +220,12 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     * scheduler as the pool starts, and again each time the one before steps out (`stepOut`).
     */
   @volatile private[shareable] var driver: WorkerThread | Null = null
+
+  /** A new earliest deadline put there by the worker's own thread wakes nobody: that thread is not waiting on the
+    * poller, and reads the heap again before it next does.
+    */
+  override protected final def earliestChanged(): Unit =
+    if driver ne Thread.currentThread() then wake()
 
   /** Set by the scheduler before the worker is first driven: gives the worker another thread to drive it, as the
     * calling thread, which drove it, steps out. Throws if there is none to be had.
@@ -396,9 +405,16 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
           try guarded(waitForDeadline(peekNextDeadline()))
           finally pollOnly = false
         else
-          parked = isEmpty()
-          try guarded(waitForDeadline(idleDeadline()))
-          finally parked = false
+          val deadline = idleDeadline()
+          // A timer already due is fired by the next turn, with no call to the system that would only say so; but its
+          // handles' events are asked for every few such turns, whatever timers come due meanwhile.
+          if deadline >= 0 && deadline - System.nanoTime() <= 0 && isEmpty() && pollsSkipped < Worker.PollsSkipped
+          then pollsSkipped += 1
+          else
+            pollsSkipped = 0
+            parked = isEmpty()
+            try guarded(waitForDeadline(deadline))
+            finally parked = false
       thiefAsked = false
       opsThisRun = 0
     exited = true
@@ -412,6 +428,9 @@ object Worker {
 
   /** How many futures a worker keeps to resume itself before it shares half of them with a worker that has nothing. */
   inline val SharedBacklog = 4
+
+  /** How many turns in a row a worker with timers due goes without asking its poller for events. */
+  inline val PollsSkipped = 16
 
   final class DoAfter(val owner: Worker, val deadlineNow: Long, body: Runnable) extends TimerOp, Cancellable {
     @volatile private var cancelled = false
