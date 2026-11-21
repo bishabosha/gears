@@ -48,6 +48,10 @@ object CapBench {
     "flow-mux-machine",
     "flow-mux-staged",
     "flow-mux-vm",
+    "flow-mux-machine-direct",
+    "flow-mux-staged-direct",
+    "flow-mux-machine-direct-result",
+    "flow-mux-machine-result",
     "flow-mux-hand-loop",
     "flow-mux-hand-pinned",
     "flow-mux-hand-queue",
@@ -976,7 +980,11 @@ object CapBench {
         * reads, answers and writes in a loop; "pinned", that with a connection's ops on one shard; "queue", a future
         * for each shard that performs a submission queue.
         */
-      hand: String | Null = null
+      hand: String | Null = null,
+      /** How a stream's stage is written, where it is not `map`: "direct", a stage that is code; "direct-result",
+        * that with failures as values; "result", function stages over `Result`s.
+        */
+      stage: String = "map"
   )(using Async.Spawn): Unit = {
     if hand == "pinned" && !io.ops.isInstanceOf[Shards] then return
     if hand == "queue" && !io.ops.isInstanceOf[SubmissionQueues] then return
@@ -1190,7 +1198,39 @@ object CapBench {
             connection.bytes.process[MuxFrame](decoding).groupThrough(_.stream) { (stream, requests) =>
               val response = new Array[Byte](LargestValue + Frame)
               val out = ByteBuffer.wrap(response)
-              if waits then
+              if stage == "direct" then
+                // The body is a future beside the pipeline, as the others' are: the cache they share is locked.
+                requests.direct[ByteBuffer] { requests =>
+                  for request <- requests do {
+                    val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                    head(response, 0, stream, end - Frame)
+                    Flow.emit(out.clear().limit(end))
+                  }
+                }
+              else if stage == "direct-result" then
+                requests
+                  .directResult[ByteBuffer, String] { requests =>
+                    for request <- requests do {
+                      if request.bytes.length == 0 then steps.result.Result.eval.raise("empty")
+                      val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                      head(response, 0, stream, end - Frame)
+                      Flow.emit(out.clear().limit(end))
+                    }
+                  }
+                  .handleErr(_ => out.clear().limit(0))
+              else if stage == "result" then
+                requests
+                  .map[steps.result.Result[MuxFrame, String]](steps.result.Result.Ok(_))
+                  .flatMapOk { request =>
+                    if request.bytes.length == 0 then steps.result.Result.Err("empty")
+                    else {
+                      val end = cache.handle(request.bytes, 0, response, Frame)
+                      head(response, 0, stream, end - Frame)
+                      steps.result.Result.Ok(out.clear().limit(end))
+                    }
+                  }
+                  .handleErr(_ => out.clear().limit(0))
+              else if waits then
                 // One at a time for a stream, so its buffer is its own; beside the other streams', so the cache they
                 // share is locked.
                 requests.mapAsync(1) { request =>
@@ -1880,6 +1920,14 @@ object CapBench {
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-hand-pinned", Server.Strategy.Auto, hand = "pinned")
       case "flow-mux-hand-queue" =>
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-hand-queue", Server.Strategy.Auto, hand = "queue")
+      case "flow-mux-machine-direct" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-direct", Server.Strategy.Auto, Some(true), stage = "direct")
+      case "flow-mux-staged-direct" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged-direct", Server.Strategy.Auto, Some(false), stage = "direct")
+      case "flow-mux-machine-direct-result" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-direct-result", Server.Strategy.Auto, Some(true), stage = "direct-result")
+      case "flow-mux-machine-result" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-result", Server.Strategy.Auto, Some(true), stage = "result")
       case "flow-mux-vm" =>
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-vm", Server.Strategy.Auto, vm = true)
       case "flow-mux-staged" =>

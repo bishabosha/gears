@@ -187,6 +187,27 @@ Thrown failures are still what the section above says, for what does throw and f
 a loop over a flow leave the loop as `boundary.break` does, which across the loop's function is a `Break` thrown by
 the language: nothing of ours throws or catches for it.
 
+### What a stage costs by how it is written
+
+The multiplexed server, each stream's stage written each way, microseconds a request, four rounds, each in a
+process of its own:
+
+| A stream's stage | kqueue, 1 worker | kqueue, 4 | Node.js |
+|---|---|---|---|
+| by hand, a loop for the connection, no flow | 2.64-2.73 | 0.80-0.82 | 4.31-4.38 |
+| `map`, a function | 2.67-2.85 | 0.84-0.89 | 4.24-4.65 |
+| `flatMapOk` and `handleErr`, functions over `Result`s | 2.74-2.78 | 0.86-0.88 | 4.45-4.59 |
+| `mapAsync(1)`, a future for each element | 3.84-4.01 | 1.45-1.51 | 5.69-6.09 |
+| `direct`, code, a future for the stream | 4.12-4.16 | 1.42-1.57 | 5.98-6.07 |
+| `directResult`, that with failures as values | 4.41-4.46 | 1.43-1.53 | 6.04-6.44 |
+| `direct`, the pipeline run by a future, not the machine | 9.21-9.51 | 2.15-2.21 | 11.7-12.5 |
+
+Failures as values cost nothing that is measured where the stages are functions: an `Ok` made for an element, and
+a test. A stage that is code costs what a stage that waits does, half as much again as a function, which is the two
+hand-overs an element. And under a pipeline that is itself run, where what runs it waits for the body at each
+element, it is three times a function: there a `Flow { ... }` over the flow, which is not a stage, is the thing to
+write.
+
 ## Against the same server written by hand
 
 The multiplexed server with no flow in it, over `perform` (`flow-mux-hand-*`): `loop`, a future for each
