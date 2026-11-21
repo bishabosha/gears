@@ -78,10 +78,18 @@ final class Server private (
     if machine && io.ops.isInstanceOf[SubmissionQueues] then serveByMachine(pipeline)
     else serve(connection => Flow.to(pipeline(connection))(connection.sink))
 
-  private def serveByMachine(pipeline: Connection => Flow[ByteBuffer])(using Async): Unit = {
+  /** EXPERIMENT: `serveFlow` by the machine, the pipeline a program made once for every connection (`Pipe`). */
+  def serveProgram(program: Pipe.Program[ByteBuffer, ByteBuffer])(using Async): Unit =
+    if io.ops.isInstanceOf[SubmissionQueues] then serveByMachine(null, program)
+    else throw new UnsupportedOperationException("A program is stepped by the machine, which this backend has not")
+
+  private def serveByMachine(
+      pipeline: (Connection => Flow[ByteBuffer]) | Null,
+      program: Pipe.Program[ByteBuffer, ByteBuffer] | Null = null
+  )(using Async): Unit = {
     Async.group {
       val shards = io.submissionShards
-      val drivers = Array.tabulate(shards)(shard => new Driver(shard, pipeline))
+      val drivers = Array.tabulate(shards)(shard => new Driver(shard, pipeline, program))
       val running = drivers.toList.map(driver => Future(driver.run()))
       val accepting = Future {
         val accepted = Slot[io.ops.Connection]()
@@ -118,7 +126,11 @@ final class Server private (
   /** A shard's machine: every connection handed to it is a few fields and a read in flight on the shard's submission
     * queue. One future runs it, and waits once for whatever its connections wait for.
     */
-  private final class Driver(shard: Int, pipeline: Connection => Flow[ByteBuffer]) {
+  private final class Driver(
+      shard: Int,
+      pipeline: (Connection => Flow[ByteBuffer]) | Null,
+      program: Pipe.Program[ByteBuffer, ByteBuffer] | Null
+  ) {
     private val ops = new SubmissionQueue[io.Op](shard)
     private val completed = new CompletionQueue[io.Op]
     private val handed = new java.util.concurrent.ConcurrentLinkedQueue[AnyRef]()
@@ -310,7 +322,9 @@ final class Server private (
             def end(): Unit = finished = true
             def abandon(): Unit = ()
           }
-          val made = Flow.compile(pipeline(new Connection(port, sink)), port, out, this)
+          val made =
+            if program != null then program.start(out).asInstanceOf[Flow.Step[Any]]
+            else Flow.compile(pipeline.nn(new Connection(port, sink)), port, out, this)
           if made == null then alone()
           else {
             step = made
@@ -330,7 +344,7 @@ final class Server private (
             Shards.onShard(io.asInstanceOf[Io[Shards]])(shard).asInstanceOf[Io[io.ops.type]]
           else io.asInstanceOf[Io[io.ops.type]]
         Future {
-          try serveAlone(on, connection, served => Flow.to(pipeline(served))(served.sink), -1)
+          try serveAlone(on, connection, served => Flow.to(pipeline.nn(served))(served.sink), -1)
           finally {
             returned.add(() => live -= 1): Unit
             working.decrementAndGet(): Unit

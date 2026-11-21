@@ -86,6 +86,40 @@ Not guaranteed, and to be decided: there is no time limit on the gentle close; `
 resource whose release is itself an op has nowhere to do it; and elements lent to a stage (a read's buffer) are
 still lent by convention.
 
+## A pipeline as a program, tried
+
+`Pipe` (`FlowVm.scala`) is the same pipeline as instructions: an array of opcodes and their functions, made once
+and shared by every connection, with what a stage keeps in registers, an array for each connection. One-to-one
+instructions run in a loop; `process`, `mapConcat` and a group enter the loop again at the instruction after.
+`Server.serveProgram` has the machine step it. It has `map`, `filter`, `mapConcat`, `scan`, `process`, `mapWith`
+and `groupThrough`, and no stage that waits or stops: enough to compare.
+
+Since there is one program, a stage cannot capture what is its connection's, a cache say: that is made for each
+connection (`Pipe.local`) and handed to the instructions that ask for it. It is a different thing to write.
+
+Measured against the chain of steps, each scenario in a process of its own, four rounds (JVM: one process, the last
+four of eight repeats), microseconds:
+
+| | native kqueue | Node.js | JVM pool |
+|---|---|---|---|
+| an element through three stages: steps | 0.029 | 0.021-0.027 | 0.016-0.032 |
+| the same: program | 0.033 | 0.030-0.034 | 0.008 |
+| a connection begun, with sixteen keys: steps | 1.53 | 1.78-1.82 | 0.50-0.54 |
+| the same: program | 1.41 | 1.78-1.87 | 0.52-0.56 |
+| multiplexed server, a request: steps | 2.75-2.82 (1 worker), 0.84-0.87 (4) | 4.33-4.48 | 0.29-0.39 |
+| the same: program | 2.73-2.80, 0.85-0.90 | 4.39-4.48 | 0.36-0.39 |
+
+An element costs more as an instruction than as a call where nothing compiles the loop to the program (a seventh
+more on Scala Native, two fifths on Node.js) and less on the JVM, which does. Beginning a connection is a twelfth
+cheaper on Scala Native and the same elsewhere: most of it is the keys' table and the stages' own state, which both
+have. And the server, where an element's passage is some tens of nanoseconds of a request's microseconds, cannot
+tell them apart. So it buys nothing here that is measured, at the price of a second way to write a pipeline.
+
+What it was hoped for and is not measured: with the program in hand the ops a pipeline causes could be rewritten
+before they are submitted, a write and the read after it linked, several writes made one vectored write. On kqueue
+and NIO there is nothing to rewrite them into; that is a question for an io_uring backend, and the place for it is
+the submission queue, which sees the ops whichever way the pipeline is written.
+
 ## Ox's flows
 
 Ox's `Flow` (SoftwareMill, 1.0.3) is the same thing made independently: a stage that is run with what to call for

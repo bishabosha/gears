@@ -47,6 +47,11 @@ object CapBench {
     "flow-mux-shard-futures",
     "flow-mux-machine",
     "flow-mux-staged",
+    "flow-mux-vm",
+    "work-steps",
+    "work-vm",
+    "work-setup-steps",
+    "work-setup-vm",
     "flow-mux-await",
     "flow-mux-machine-await",
     "flow-mux-staged-await",
@@ -961,7 +966,9 @@ object CapBench {
       /** None for a handler that is run; else a pipeline of stages, served by the machine or, false, by futures. */
       staged: Option[Boolean] = None,
       /** Whether each request is answered by work that waits: a future of its own, as a call elsewhere would be. */
-      waits: Boolean = false
+      waits: Boolean = false,
+      /** The pipeline as a program made once (`Pipe`), stepped by the machine. */
+      vm: Boolean = false
   )(using Async.Spawn): Unit = {
     // A strategy the backend has not is no scenario of its.
     if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then return
@@ -1024,7 +1031,23 @@ object CapBench {
       }
     }
     val serving = Future {
-      if staged.isDefined then
+      if vm then
+        server.serveProgram(
+          Pipe
+            .local[CacheServer, ByteBuffer](() => new CacheServer)
+            .process[MuxFrame](decoding)
+            .groupThrough(_.stream)(_.mapWith[CacheServer, ByteBuffer] { cache =>
+              val response = new Array[Byte](LargestValue + Frame)
+              val out = ByteBuffer.wrap(response)
+              request => {
+                val end = cache.handle(request.bytes, 0, response, Frame)
+                head(response, 0, request.stream, end - Frame)
+                out.clear().limit(end)
+              }
+            })
+            .program
+        )
+      else if staged.isDefined then
         // No handler is run: a connection's pipeline is described once, and its stages called as its bytes come, one
         // chunk after another on one thread, so what its streams share needs no lock.
         server.serveFlow(
@@ -1495,6 +1518,14 @@ object CapBench {
       i += 1
   }
 
+  private object NoDrive extends Flow.Drive {
+    def spawn(work: Async ?=> Unit): Unit = ()
+    def later(run: Runnable): Unit = run.run()
+    def hold(): Unit = ()
+    def release(): Unit = ()
+    def stop(): Unit = ()
+  }
+
   private def timed(name: String, operations: Long)(body: => List[Future[Unit]])(using Async): Unit = {
     val start = System.nanoTime()
     body.foreach(_.await)
@@ -1597,6 +1628,74 @@ object CapBench {
           }
           if total == 42 then println(total)
         }))
+      case scenario @ ("work-steps" | "work-vm") =>
+        // What an element costs to be pushed through three stages that are stepped: a chain of steps, or a program.
+        val each = 1_000
+        val times = count(20_000)
+        timed(scenario, each.toLong * times)(List(Future {
+          var total = 0L
+          val last = new Flow.Step[Long] {
+            def push(element: Long): Unit = total += element
+            def end(): Unit = ()
+            def abandon(): Unit = ()
+          }
+          var bias = 0
+          val step: Flow.Step[Int] =
+            if scenario == "work-vm" then Pipe.from[Int].map(_ + bias).filter(_ % 3 != 0).map(_ * 2L).program.start(last)
+            else {
+              val port = new Flow.Port[Int]
+              Flow.compile(port.map(_ + bias).filter(_ % 3 != 0).map(_ * 2L), port, last, NoDrive).nn.asInstanceOf[Flow.Step[Int]]
+            }
+          var i = 0
+          while i < times do {
+            bias = i
+            var element = 0
+            while element < each do {
+              step.push(element)
+              element += 1
+            }
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case scenario @ ("work-setup-steps" | "work-setup-vm") =>
+        // What a connection costs to begin: a pipeline with a stage of its own and sixteen keys, each element the
+        // first of its key. As a flow it is made and compiled for each; as a program it is made once and started.
+        val times = count(200_000)
+        timed(scenario, times.toLong)(List(Future {
+          var total = 0L
+          val last = new Flow.Step[Int] {
+            def push(element: Int): Unit = total += element
+            def end(): Unit = ()
+            def abandon(): Unit = ()
+          }
+          val program =
+            Pipe.from[Int].process[Int](emit => element => emit(element)).groupThrough(_ & 15)(_.mapWith[Any, Int](_ => {
+              var seen = 0
+              element => { seen += 1; element + seen }
+            })).program
+          var i = 0
+          while i < times do {
+            val step: Flow.Step[Int] =
+              if scenario == "work-setup-vm" then program.start(last)
+              else {
+                val port = new Flow.Port[Int]
+                val flow = port.process[Int](emit => element => emit(element)).groupThrough(_ & 15) { (_, elements) =>
+                  var seen = 0
+                  elements.map { element => seen += 1; element + seen }
+                }
+                Flow.compile(flow, port, last, NoDrive).nn.asInstanceOf[Flow.Step[Int]]
+              }
+            var element = 0
+            while element < 16 do {
+              step.push(element)
+              element += 1
+            }
+            step.end()
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
       case "work-flow-long" =>
         // A pipeline of a thousand stages, which is cut onto stacks of its own: what a hand-over costs an element.
         val stages = 1_000
@@ -1634,6 +1733,8 @@ object CapBench {
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged-await", Server.Strategy.Auto, Some(false), true)
       case "flow-mux-machine" =>
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine", Server.Strategy.Auto, Some(true))
+      case "flow-mux-vm" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-vm", Server.Strategy.Auto, vm = true)
       case "flow-mux-staged" =>
         flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged", Server.Strategy.Auto, Some(false))
       case "flow-mux-shard-futures" =>
