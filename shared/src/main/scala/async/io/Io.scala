@@ -48,6 +48,44 @@ trait Io[+I <: Interface] extends AsyncOperations {
     performWithin(op, millis)
   }
 
+  /** For a `Reactor`: starts one op of `ops`'s now. Whether it is done, its failure thrown; if not it is in flight, or
+    * submitted, with `tag`, and its completion comes with a later `performQueue`.
+    */
+  private[io] def startSubmitted(ops: SubmissionQueue[Op], op: Op, tag: AnyRef | Null, timeoutMillis: Long)(using
+      Async
+  ): Boolean = {
+    ops.submitWithin(op, tag, timeoutMillis)
+    false
+  }
+
+  // Hooks of the scheduler's, for what serves many futures on a shard: each has a meaning on any backend, and is
+  // worth something on one whose threads are its own.
+
+  /** Runs `run` when the thread of `shard`'s has run what was ready this turn, before it looks for more: once, for
+    * however many asked in the turn, each of whom calls it. For what is better done once for a turn than once for
+    * each thing in it, a connection's writes say. A backend with no turns runs it at once.
+    */
+  private[io] def afterTurn(shard: Int)(run: Runnable): Unit = run.run()
+
+  /** Has the calling future go on on the thread of `shard`'s, if it is not there: what it then begins, and what it
+    * is resumed by, are that thread's. A backend with no threads of its own does nothing.
+    */
+  private[io] def moveTo(shard: Int)(using Async): Unit = ()
+
+  /** Performs `op` as `performWithin` does, but begun on the thread of `shard`'s, one of `submissionShards`, whichever
+    * thread the caller is on: so listened for there if it waits, and settled there. A backend with one thread, or
+    * none of its own, performs it as ever.
+    */
+  private[io] def performPinned(shard: Int, op: Op, timeoutMillis: Long)(using Async): Unit =
+    performWithin(op, timeoutMillis)
+
+  /** What `SubmissionQueues.queueShards` is, for a backend that has that capability. */
+  private[io] def submissionShards: Int = 1
+
+  /** What `SubmissionQueues.performQueue` does, for a backend that has that capability. */
+  private[io] def performSubmitted(ops: SubmissionQueue[Op], completed: CompletionQueue[Op])(using Async): Unit =
+    throw new UnsupportedOperationException("This backend has no submission queues")
+
   /** Performs `op` with a time limit of `timeoutMillis`, none if it is negative: what each backend's `Io` does. */
   private[io] def performWithin(op: Op, timeoutMillis: Long)(using Async): Unit
 

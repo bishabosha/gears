@@ -98,6 +98,48 @@ trait ReadyWaiting extends AbstractTimerHeapOp, TimeoutOnWake, ReadinessOp {
     if waiting then
       try parkUntilSettled()
       finally readiness.clearWaiter(this): Unit
+
+  /** What the op is the waiter of, between `beginWhenReadyOn` and `endWaiting`. */
+  private var waiterOf: HandleReadiness[?] | Null = null
+
+  /** `performWhenReadyOn` up to its wait, for a queue: does the work at once, which most often does it, and says so,
+    * or else leaves the op waiting, as its handle's waiter and with its time limit on the listener's heap, for whoever
+    * finds the handle ready to do it.
+    */
+  protected final def beginWhenReadyOn(handle: ReadinessHandle { type Source = ReadyWaiting.this.Source })(
+      self: Source
+  ): Boolean =
+    self.handleOwner.check(handle)
+    val readiness = handle.readiness(isRead)
+    var waiting = false
+    var done = false
+    while !done && !waiting do
+      val tick = readiness.tick
+      handle.claimWork()
+      try
+        val tried = !readiness.waitsWithoutTrying(tick)
+        if tried && !attempt().isBlocked then done = true
+        else
+          expose()
+          val listening = readiness.registerWaiter(this, tick, tried, self)
+          if listening != null then
+            waiting = true
+            waiterOf = readiness
+            try if hasDeadline then holdTimerOn(listening.nn)
+            catch
+              case failure: Throwable =>
+                waiterOf = null
+                readiness.clearWaiter(this): Unit
+                throw failure
+      finally handle.releaseWork()
+    done
+
+  /** After `beginWhenReadyOn`: the op is its handle's waiter no longer, if it still was. */
+  final def endWaiting(): Unit =
+    val waited = waiterOf
+    if waited != null then
+      waiterOf = null
+      waited.clearWaiter(this): Unit
 }
 
 /** A `ReadyWaiting` op that may be performed again and again, on the handle it was built with. */
@@ -107,6 +149,8 @@ abstract class AbstractReadinessOp[H <: ReadinessHandle](protected val waitsOn: 
   type Source = waitsOn.Source
 
   final def performWhenReady(self: Source)(using Async): Unit = performWhenReadyOn(waitsOn)(self)
+
+  final def beginWhenReady(self: Source): Boolean = beginWhenReadyOn(waitsOn)(self)
 }
 
 /** A read of a stream, whatever it reads into. */

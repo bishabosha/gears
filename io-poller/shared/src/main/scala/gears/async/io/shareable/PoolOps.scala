@@ -49,4 +49,18 @@ abstract class PoolOpWorker[S <: PoolSource](id: Int, owner: HandleOwner) extend
   type Op <: BackendOp[S]
 
   override final def performOp(op: Op)(using Async): Unit = op.performOn(this)
+
+  override final def startQueued[O](ops: gears.async.io.SubmissionQueue[O], op: O, tag: AnyRef | Null, limit: Long)(
+      whole: (Op, Long) => Unit
+  )(using Async): Boolean =
+    Pipeline
+      .of[S, O](ops)(new Pipeline[S] {})
+      .startNow(ops, op, tag, limit, this)((op, limit) => whole(op.asInstanceOf[Op], limit))
+
+  override final def performQueue[O](ops: gears.async.io.SubmissionQueue[O], completed: gears.async.io.CompletionQueue[O])(
+      whole: (Op, Long) => Unit
+  )(using Async): Unit =
+    Pipeline
+      .of[S, O](ops)(new Pipeline[S] {})
+      .perform(ops, completed, this)((op, limit) => whole(op.asInstanceOf[Op], limit))
 }

@@ -55,6 +55,13 @@ object NodeSource extends shareable.BinaryTimerHeap, shareable.EventSource, shar
       case _ => super.performTimed(timed)
     }
 
+  override protected[io] def beginTimed(timed: shareable.BackendOp.Timed[NodeSource.type]): Boolean =
+    timed match {
+      case timer: shareable.AbstractMakeTimerOp if timer.isDue                                      => true
+      case deadline: shareable.AbstractMakeDeadlineOp if deadline.deadline - System.nanoTime() <= 0 => true
+      case _                                                                                        => super.beginTimed(timed)
+    }
+
   /** Set by the event loop as it starts. */
   var rearm: () => Unit = () => ()
 

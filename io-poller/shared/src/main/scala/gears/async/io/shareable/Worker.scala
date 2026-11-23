@@ -147,6 +147,21 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
       true
     else false
 
+  /** One op of a queue's started now, on this worker (see `Pipeline.startNow`). */
+  def startQueued[O](ops: gears.async.io.SubmissionQueue[O], op: O, tag: AnyRef | Null, limit: Long)(
+      whole: (Op, Long) => Unit
+  )(using gears.async.Async): Boolean =
+    throw new UnsupportedOperationException("This worker's ops are not of the kinds a queue performs")
+
+  /** What `Io.performQueue` does, on this worker: the ops of `ops` are begun here, and those that wait are listened for
+    * here. `whole` performs an op that is not begun and ended in two parts. For a worker whose ops are of the kinds a
+    * backend has (`PoolOpWorker`).
+    */
+  def performQueue[O](ops: gears.async.io.SubmissionQueue[O], completed: gears.async.io.CompletionQueue[O])(
+      whole: (Op, Long) => Unit
+  )(using gears.async.Async): Unit =
+    throw new UnsupportedOperationException("This worker's ops are not of the kinds a queue performs")
+
   /** How many ops have been performed on this worker since it last began a turn or had a future yield: an op that waits
     * ends the run of whoever performs it, so only ops done as they are tried add up. Worker thread only.
     */
@@ -327,6 +342,44 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     true
   }
 
+  /** What was asked to run when this turn's work is done (`afterTurn`). The worker's thread's alone. */
+  private var turnEnd = new java.util.ArrayList[Runnable]()
+  private var turnEnding = new java.util.ArrayList[Runnable]()
+
+  /** On the worker's own thread: `run` is run when what is ready this turn has been run, before the worker looks for
+    * more.
+    */
+  private[io] def afterTurn(run: Runnable): Unit = turnEnd.add(run): Unit
+
+  /** Runs what waits for the turn's end, and whatever that made ready. */
+  private def endTurn(drive: Int): Boolean = {
+    var passes = 4 // what it makes ready may ask again, but not without end
+    while !turnEnd.isEmpty() && passes > 0 do {
+      // The two lists change places, so that what is run may ask again without the list it is run from changing,
+      // and nothing is copied.
+      val asked = turnEnd
+      turnEnd = turnEnding
+      turnEnding = asked
+      var i = 0
+      val count = asked.size()
+      while i < count do {
+        val run = asked.get(i)
+        i += 1
+        guarded(run.run())
+        if drives != drive then {
+          // Not this thread's any more: what was not run is left for whoever drives the worker now.
+          while i < count do { turnEnd.add(asked.get(i)): Unit; i += 1 }
+          asked.clear()
+          return false
+        }
+      }
+      asked.clear()
+      if !runReady(drive) then return false
+      passes -= 1
+    }
+    true
+  }
+
   private def drainInbox(drive: Int): Boolean = {
     var inboxBudget = 32
     while inboxBudget > 0 do
@@ -351,7 +404,7 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
       if wakePending.get() then wakePending.set(false)
       val now = System.nanoTime()
       shareBacklog()
-      if !fireTimers(now, drive) || !runReady(drive) || !drainInbox(drive) then return
+      if !fireTimers(now, drive) || !runReady(drive) || !drainInbox(drive) || !endTurn(drive) then return
       // `stop`'s wake-up may have been spent while the inbox was still draining.
       if !stopped then
         // More than a turn's worth, and more than the task or two that a turn's budget may leave for the next.
@@ -383,6 +436,7 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
 }
 
 object Worker {
+
 
   /** How many futures a worker keeps to resume itself before it shares half of them with a worker that has nothing. */
   inline val SharedBacklog = 4

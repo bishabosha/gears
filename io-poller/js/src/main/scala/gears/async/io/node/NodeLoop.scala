@@ -24,8 +24,51 @@ private[node] final class NodeRun extends Io[NodeOps.type] {
   private[io] def performWithin(op: NodeOp, timeoutMillis: Long)(using Async): Unit =
     NodeLoop.perform(op, timeoutMillis, owner)
 
+  /** Many ops, with one wait for all of them (see `Pipeline`). */
+  override private[io] def performSubmitted(ops: SubmissionQueue[NodeOp], completed: CompletionQueue[NodeOp])(using
+      Async
+  ): Unit = {
+    NodeLoop.timers.performing(owner)
+    gears.async.io.shareable.Pipeline
+      .of[NodeSource.type, NodeOp](ops)(new NodePipeline)
+      .perform(ops, completed, NodeLoop.timers)((op, limit) => NodeLoop.perform(op.asInstanceOf[NodeOp], limit, owner))
+  }
+
+  override private[io] def startSubmitted(ops: SubmissionQueue[NodeOp], op: NodeOp, tag: AnyRef | Null, timeoutMillis: Long)(
+      using Async
+  ): Boolean = {
+    NodeLoop.timers.performing(owner)
+    gears.async.io.shareable.Pipeline
+      .of[NodeSource.type, NodeOp](ops)(new NodePipeline)
+      .startNow(ops, op, tag, timeoutMillis, NodeLoop.timers)((op, limit) =>
+        NodeLoop.perform(op.asInstanceOf[NodeOp], limit, owner)
+      )
+  }
+
   /** The run has ended: what it opened and did not close is closed. */
   private[node] def end(): Unit = owner.closeAll()
+}
+
+/** A submission queue's ops in flight, on Node: its performer is woken once for a turn of the event loop, at its end,
+  * however many of its ops the turn settled, so that it takes them together; woken for each, it would wait for each.
+  */
+private[node] final class NodePipeline extends gears.async.io.shareable.Pipeline[NodeSource.type] {
+  private var told = false
+  private val tell: js.Function0[Unit] = () => {
+    told = false
+    wakeNow()
+  }
+
+  override protected def wake(): Unit =
+    if !told then {
+      told = true
+      NodeGlobals.setImmediate(tell): Unit
+    }
+
+  override protected def failureFrom(thrown: Throwable): Throwable = thrown match {
+    case js.JavaScriptException(error) => NodeErr.io(error)
+    case other                         => other
+  }
 }
 
 /** Where the Node.js backend's ops run: Node's event loop, one for every run there is.

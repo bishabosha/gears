@@ -11,7 +11,7 @@ import scala.concurrent.duration.FiniteDuration
 import SocketOption.Kind
 
 /** What every backend's ops have: the type they are built as, and timers. */
-sealed trait NodeInterface extends Interface {
+sealed trait NodeInterface extends Interface, SubmissionQueues {
   override type Op = NodeOp
 
   override def timer(duration: FiniteDuration): NodeTimerOp & Repeatable = {
