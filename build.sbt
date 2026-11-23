@@ -52,6 +52,10 @@ lazy val root =
         testFrameworks += MUnitFramework
       )
     )
+    // `Result`, for a flow's failures as values (`Flow`'s `...Ok` and `...Err` stages, `directResult`).
+    .jvmSettings(libraryDependencies += "ch.epfl.lamp" % "steps_3" % "0.2.1")
+    .jsSettings(libraryDependencies += "ch.epfl.lamp" % "steps_sjs1_3" % "0.2.1")
+    .nativeSettings(libraryDependencies += "ch.epfl.lamp" % "steps_native0.5_3" % "0.2.1")
     .jvmSettings(
       Seq(
         scalacOptions += "-release:21"
@@ -130,6 +134,19 @@ lazy val ioReference =
       Test / fork := true
     )
     .dependsOn(root.jvm, ioTestkit.jvm % Test)
+
+// Ox's flows and ours, each as the other (JVM only, as Ox is): `gears.async.io.oxflow`.
+lazy val ioOx =
+  (project in file("io-ox"))
+    .settings(
+      publish / skip := true,
+      scalacOptions += "-release:21",
+      libraryDependencies ++= Seq("com.softwaremill.ox" %% "core" % "1.0.3", munit % Test),
+      testFrameworks += MUnitFramework,
+      Test / fork := true,
+      Test / javaOptions += "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    )
+    .dependsOn(root.jvm, ioPoller.jvm % Test)
 
 // The reference backend's demo application: the testkit's gears demos over it, as `ioReferenceDemos/run <command>`.
 lazy val ioReferenceDemos =
@@ -274,3 +291,5 @@ lazy val ioCapBench =
       }
     )
     .dependsOn(ioPoller)
+    // The reference backend too, on the JVM: `--backend reference`.
+    .jvmConfigure(_.dependsOn(ioReference))

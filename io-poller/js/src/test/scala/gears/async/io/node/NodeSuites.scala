@@ -121,3 +121,11 @@ class NodeFifoFileSuite extends FifoFileContract with NodeSuite {
 class NodeRunEndSuite extends RunEndContract with NodeSuite {
   val backend: Backend { type Interface <: IpStreams } = NodeBackend
 }
+
+class NodeFlowSuite extends FlowContract with NodeSuite {
+  val backend: Backend { type Interface <: IpStreams } = NodeBackend
+}
+
+class NodeSubmissionQueueSuite extends SubmissionQueueContract with NodeSuite {
+  val backend: Backend { type Interface <: IpStreams & SubmissionQueues } = NodeBackend
+}

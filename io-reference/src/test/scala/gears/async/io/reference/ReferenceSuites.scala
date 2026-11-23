@@ -94,3 +94,8 @@ class ReferenceRunEndSuite extends RunEndContract {
 class ReferenceThreadedRunSuite extends ThreadedRunContract {
   val backend: Backend { type Interface <: Blocking & IpStreams } = ReferenceBackend
 }
+
+/** The reference backend has neither shards nor queues: a server on it is futures. */
+class ReferenceFlowSuite extends FlowContract {
+  val backend: Backend { type Interface <: IpStreams } = ReferenceBackend
+}

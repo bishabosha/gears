@@ -160,3 +160,19 @@ class PoolThreadedRunSuite extends ThreadedRunContract with FailsOnStarvation {
 class PoolOnOneThreadedRunSuite extends ThreadedRunContract with OnWorkers(1) {
   val backend: Backend { type Interface <: Blocking & IpStreams } = PollerPlatform.backend
 }
+
+class PoolFlowSuite extends FlowContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: IpStreams } = PollerPlatform.backend
+}
+
+class PoolShardsSuite extends ShardsContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: IpStreams & Shards } = PollerPlatform.backend
+}
+
+class PoolSubmissionQueueSuite extends SubmissionQueueContract with FailsOnStarvation {
+  val backend: Backend { type Interface <: IpStreams & SubmissionQueues } = PollerPlatform.backend
+}
+
+class PoolOnOneFlowSuite extends FlowContract with OnWorkers(1) {
+  val backend: Backend { type Interface <: IpStreams } = PollerPlatform.backend
+}

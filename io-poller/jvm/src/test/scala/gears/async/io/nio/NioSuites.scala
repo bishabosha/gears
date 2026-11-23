@@ -75,3 +75,15 @@ class NioRunEndSuite extends RunEndContract {
 class NioThreadedRunSuite extends ThreadedRunContract {
   val backend: Backend { type Interface <: Blocking & IpStreams } = NioBackend
 }
+
+class NioFlowSuite extends FlowContract {
+  val backend: Backend { type Interface <: IpStreams } = NioBackend
+}
+
+class NioShardsSuite extends ShardsContract {
+  val backend: Backend { type Interface <: IpStreams & Shards } = NioBackend
+}
+
+class NioSubmissionQueueSuite extends SubmissionQueueContract {
+  val backend: Backend { type Interface <: IpStreams & SubmissionQueues } = NioBackend
+}
