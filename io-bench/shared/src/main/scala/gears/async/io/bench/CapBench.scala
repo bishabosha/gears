@@ -35,6 +35,33 @@ object CapBench {
     "tcp-realistic",
     "tcp-realistic-bulk",
     "tcp-realistic-gather",
+    "queue-concurrent",
+    "queue-realistic",
+    "queue-realistic-bulk",
+    "work-flow",
+    "work-iterator",
+    "work-flow-long",
+    "flow-mux",
+    "flow-mux-futures",
+    "flow-mux-pinned-futures",
+    "flow-mux-shard-futures",
+    "flow-mux-machine",
+    "flow-mux-staged",
+    "flow-mux-vm",
+    "flow-mux-machine-direct",
+    "flow-mux-staged-direct",
+    "flow-mux-machine-direct-result",
+    "flow-mux-machine-result",
+    "flow-mux-hand-loop",
+    "flow-mux-hand-pinned",
+    "flow-mux-hand-queue",
+    "work-steps",
+    "work-vm",
+    "work-setup-steps",
+    "work-setup-vm",
+    "flow-mux-await",
+    "flow-mux-machine-await",
+    "flow-mux-staged-await",
     "work-realistic",
     "unix-pingpong",
     "unix-concurrent",
@@ -101,13 +128,20 @@ object CapBench {
   // ---- byte streams, whatever they are over
 
   /** An echo of `rounds` messages from `in` to `out`, and its client: each message echoed back before the next. */
-  private def echoPair(io: Io[ByteStreams], rounds: Int)(
+  /** How the servers of a scenario are run: a future each. */
+  private final class Servers {
+    def start[T <: Io[?]](io: T)(body: T => Async ?=> Unit)(using Async.Spawn): List[Future[Unit]] =
+      List(Future(body(io)))
+    def launch()(using Async.Spawn): List[Future[Unit]] = Nil
+  }
+
+  private def echoPair(io: Io[ByteStreams], rounds: Int, servers: Servers = new Servers)(
       serverIn: io.ops.Readable,
       serverOut: io.ops.Writable,
       clientIn: io.ops.Readable,
       clientOut: io.ops.Writable
   )(using Async.Spawn): List[Future[Unit]] = {
-    val echo = Future {
+    val echo = servers.start[io.type](io) { io =>
       val buf = buffer(MessageSize)
       val read = io.ops.read(serverIn, buf)
       val write = io.ops.write(serverOut, buf)
@@ -132,7 +166,7 @@ object CapBench {
         while in.hasRemaining() do io.perform(read)
         i += 1
     }
-    List(echo, client)
+    client :: echo
   }
 
   /** `chunks` chunks written to `out`, which `end` then ends, and read from `in` until its end. With GEARS_TRACE set,
@@ -253,13 +287,17 @@ object CapBench {
     (listener, pairs)
   }
 
-  private def socketEcho(sockets: Sockets[? <: StreamSockets], connections: Int, rounds: Int, name: String)(using
-      Async.Spawn
-  ): Unit = {
+  private def socketEcho(
+      sockets: Sockets[? <: StreamSockets],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      servers: Servers = new Servers
+  )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(
-      pairs.flatMap((client, server) => echoPair(io, rounds)(server, server, client, client))
+      pairs.flatMap((client, server) => echoPair(io, rounds, servers)(server, server, client, client)) ++ servers.launch()
     )
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
@@ -510,13 +548,17 @@ object CapBench {
     }
   }
 
-  private def realistic(sockets: Sockets[? <: StreamSockets], connections: Int, rounds: Int, name: String)(using
-      Async.Spawn
-  ): Unit = {
+  private def realistic(
+      sockets: Sockets[? <: StreamSockets],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      servers: Servers = new Servers
+  )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(pairs.zipWithIndex.flatMap { case ((client, server), id) =>
-      val serving = Future {
+      val serving = servers.start[io.type](io) { io =>
         val end = new RespEnd(io, LargestValue)(server, server)
         val cache = new CacheServer
         val request = new Array[Byte](LargestValue)
@@ -540,8 +582,8 @@ object CapBench {
           i += 1
         }
       }
-      List(serving, asking)
-    })
+      asking :: serving
+    } ++ servers.launch())
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
   }
@@ -700,15 +742,16 @@ object CapBench {
       connections: Int,
       rounds: Int,
       name: String,
-      gathering: Boolean
+      gathering: Boolean,
+      servers: Servers = new Servers
   )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(pairs.zipWithIndex.flatMap { case ((client, server), id) =>
       val serving =
-        if gathering then Future(serveGathering(io, rounds)(server, server))
+        if gathering then List(Future(serveGathering(io, rounds)(server, server)))
         else
-          Future {
+          servers.start[io.type](io) { io =>
             val end = new RespEnd(io, LargestBatch)(server, server)
             val cache = new CacheServer
             val requests = new Array[Byte](LargestBatch)
@@ -767,8 +810,8 @@ object CapBench {
           i += batch
         }
       }
-      List(serving, asking)
-    })
+      asking :: serving
+    } ++ servers.launch())
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
   }
@@ -816,6 +859,593 @@ object CapBench {
           try io.perform(io.ops.close(connection))
           catch case _: java.io.IOException => ()
       }
+    }
+  }
+
+  // ---- one future serving every connection, through a queue of ops (`SubmissionQueues`)
+
+  /** `count` connections over TCP, through one listener, each as (client end, server end). */
+  private def connectedTcp(io: Io[IpStreams], count: Int)(using
+      Async.Spawn
+  ): (io.ops.Listener, List[(io.ops.Connection, io.ops.Connection)]) = {
+    val listener =
+      opening[io.ops.Listener](io)(into => io.ops.listen(IpSocketAddress(IpAddress.IPv4Loopback, 0), into))
+    val address = io.ops.localAddress(listener).asInstanceOf[IpSocketAddress]
+    val accepted = Slot[io.ops.Connection]()
+    val accept = io.ops.accept(listener, accepted)
+    val pairs = List.fill(count) {
+      val connecting = Future(opening[io.ops.Connection](io)(into => io.ops.connect(address, into)))
+      io.perform(accept)
+      (connecting.await, accepted.clear())
+    }
+    (listener, pairs)
+  }
+
+  /** What the queue's server keeps for a connection: its buffer, the read and the write of it, and how much is left. */
+  private final class Served[R, W](val buf: java.nio.ByteBuffer, val read: R, val write: W, var left: Long) {
+    val cache = new CacheServer
+    val requests = new Array[Byte](LargestBatch)
+    val responses = new Array[Byte](LargestBatch)
+    var have = 0
+  }
+
+  /** `tcp-concurrent` with its server one future: a read is in flight on every connection, what one brings is written
+    * back by an op that is most often done as it is started, and the future waits once for however many reads a turn
+    * of the backend completes. The clients are `tcp-concurrent`'s, a future each.
+    */
+  private def queueEcho(io: Io[IpStreams & SubmissionQueues], connections: Int, rounds: Int, name: String)(using
+      Async.Spawn
+  ): Unit = {
+    import SubmissionQueues.performQueue
+    val (listener, pairs) = connectedTcp(io, connections)
+    timed(name, rounds.toLong * connections) {
+      val shards = io.queueShards
+      val serving = (0 until shards).toList.map { shard => Future {
+        val ops = new SubmissionQueue[io.Op](shard)
+        val completed = new CompletionQueue[io.Op]
+        var open = 0
+        for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do {
+          val buf = buffer(MessageSize)
+          val served = new Served(buf, io.ops.read(server, buf), io.ops.write(server, buf), rounds.toLong * MessageSize)
+          ops.submit(served.read, served)
+          open += 1
+        }
+        var waits = 0L
+        var taken = 0L
+        while open > 0 do {
+          io.performQueue(ops, completed)
+          waits += 1
+          taken += completed.count
+          var i = 0
+          while i < completed.count do {
+            val failure = completed.failure(i)
+            if failure != null then throw failure
+            val served = completed.tag(i).asInstanceOf[Served[io.Op, io.Op]]
+            val buf = served.buf
+            if completed.op(i).asInstanceOf[AnyRef] eq served.read.asInstanceOf[AnyRef] then {
+              served.left -= buf.position()
+              buf.flip()
+              ops.submit(served.write, served)
+            } else if buf.hasRemaining() then ops.submit(served.write, served)
+            else if served.left > 0 then {
+              buf.clear()
+              ops.submit(served.read, served)
+            } else open -= 1
+            i += 1
+          }
+          completed.clear()
+        }
+        if BenchFiles.environment("GEARS_TRACE") != null then
+          System.err.println(s"queue: $waits calls of performQueue, $taken completions, ${taken.toDouble / waits} each")
+      } }
+      val asking = pairs.map { (client, _) =>
+        Future {
+          val out = buffer(MessageSize)
+          val in = buffer(MessageSize)
+          val write = io.ops.write(client, out)
+          val read = io.ops.read(client, in)
+          var i = 0
+          while i < rounds do {
+            out.clear()
+            while out.hasRemaining() do io.perform(write)
+            in.clear()
+            while in.hasRemaining() do io.perform(read)
+            i += 1
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** A frame of `flow-mux`'s, its bytes its own. */
+  private final class MuxFrame(val stream: Int, val bytes: Array[Byte])
+
+  /** The session cache with its connection carrying `Batch` streams, as HTTP/2's does: a request and its answer are
+    * frames, a stream's number, a length, and the bytes, and the client sends a request on every stream at once. The
+    * server is written with `Server`, `Flow` and `Sink`: a handler that is run, a connection's bytes decoded into
+    * frames, dealt by stream, each stream's flow answering into the connection's sink; or, `staged`, a pipeline of
+    * stages that is stepped. A frame's bytes are an array of its own.
+    */
+  private def flowMux(
+      io: Io[IpStreams],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      strategy: Server.Strategy,
+      /** None for a handler that is run; else a pipeline of stages, served by the machine or, false, by futures. */
+      staged: Option[Boolean] = None,
+      /** Whether each request is answered by work that waits: a future of its own, as a call elsewhere would be. */
+      waits: Boolean = false,
+      /** The pipeline as a program made once (`Pipe`), stepped by the machine. */
+      vm: Boolean = false,
+      /** The same server with no flow in it, written out over `perform`: "loop", a future for each connection that
+        * reads, answers and writes in a loop; "pinned", that with a connection's ops on one shard; "queue", a future
+        * for each shard that performs a submission queue.
+        */
+      hand: String | Null = null,
+      /** How a stream's stage is written, where it is not `map`: "direct", a stage that is code; "direct-result",
+        * that with failures as values; "result", function stages over `Result`s.
+        */
+      stage: String = "map"
+  )(using Async.Spawn): Unit = {
+    if hand == "pinned" && !io.ops.isInstanceOf[Shards] then return
+    if hand == "queue" && !io.ops.isInstanceOf[SubmissionQueues] then return
+    // A strategy the backend has not is no scenario of its.
+    if strategy != Server.Strategy.Auto && !Server.strategies(io).contains(strategy) then return
+    val Frame = 4
+    val Most = LargestBatch + Frame * Batch
+    def length(in: Array[Byte], at: Int): Int = ((in(at + 2) & 0xff) << 8) | (in(at + 3) & 0xff)
+    def head(in: Array[Byte], at: Int, stream: Int, length: Int): Unit = {
+      in(at) = stream.toByte
+      in(at + 1) = 0
+      in(at + 2) = (length >> 8).toByte
+      in(at + 3) = length.toByte
+    }
+    /** Bytes as they come into frames: what is left of one read begins the next frame. */
+    def frames(bytes: Flow[ByteBuffer]): Flow[MuxFrame] = Flow {
+      val kept = new Array[Byte](2 * Most)
+      var have = 0
+      for chunk <- bytes do {
+        val came = chunk.remaining()
+        chunk.get(kept, have, came)
+        have += came
+        var from = 0
+        while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+          val size = length(kept, from)
+          Flow.emit(new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size)))
+          from += Frame + size
+        }
+        if from > 0 then {
+          System.arraycopy(kept, from, kept, 0, have - from)
+          have -= from
+        }
+      }
+    }
+
+    val paired = if hand != null then Some(connectedTcp(io, connections)) else None
+    val server =
+      if hand != null then null
+      else
+        Server.tcp(
+          IpSocketAddress(IpAddress.IPv4Loopback, 0),
+          Server.Sizes(read = Most, write = Most, buffers = buffer),
+          strategy
+        )(using io)
+    if server != null && BenchFiles.environment("GEARS_TRACE") != null then System.err.println(s"$name: ${server.strategy}")
+    val address = if server != null then server.address else null
+
+    /** What a read brought, joined to what was kept at `kept`: every whole frame in it answered into `responses`,
+      * what is left of the last kept. How much was kept, and how much was answered, as `kept << 32 | answered`.
+      */
+    def answerAll(cache: CacheServer, kept: Array[Byte], held: Int, responses: Array[Byte]): Long = {
+      var have = held
+      var from = 0
+      var written = 0
+      while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+        val size = length(kept, from)
+        val end = cache.handle(kept, from + Frame, responses, written + Frame)
+        head(responses, written, kept(from), end - written - Frame)
+        written = end
+        from += Frame + size
+      }
+      if from > 0 then {
+        System.arraycopy(kept, from, kept, 0, have - from)
+        have -= from
+      }
+      (have.toLong << 32) | written
+    }
+
+    /** A connection served by a loop of its own: read, answer what came, write it, again, until the peer ends. */
+    def serveInLoop(on: Io[io.ops.type], connection: io.ops.Connection)(using Async): Unit = {
+      val cache = new CacheServer
+      val in = buffer(Most)
+      val read = on.ops.read(connection, in)
+      val out = buffer(2 * Most)
+      val write = on.ops.write(connection, out)
+      val kept = new Array[Byte](2 * Most)
+      val responses = new Array[Byte](2 * Most)
+      var have = 0
+      var open = true
+      while open do {
+        in.clear()
+        on.perform(read)
+        in.flip()
+        val came = in.remaining()
+        if came == 0 then open = false
+        else {
+          in.get(kept, have, came)
+          val both = answerAll(cache, kept, have + came, responses)
+          have = (both >>> 32).toInt
+          val written = both.toInt
+          if written > 0 then {
+            out.clear()
+            out.put(responses, 0, written)
+            out.flip()
+            while out.hasRemaining() do on.perform(write)
+          }
+        }
+      }
+    }
+
+    final class ByQueue(val connection: io.ops.Connection) {
+      val cache = new CacheServer
+      val in: ByteBuffer = buffer(Most)
+      val read = io.ops.read(connection, in)
+      val out: ByteBuffer = buffer(2 * Most)
+      val write = io.ops.write(connection, out)
+      val kept = new Array[Byte](2 * Most)
+      val responses = new Array[Byte](2 * Most)
+      var have = 0
+    }
+
+    /** A shard's connections served by one future and a submission queue: the machine, written out for this server. */
+    def serveByQueue(shard: Int, connections: List[io.ops.Connection])(using Async): Unit = {
+      val ops = new SubmissionQueue[io.Op](shard)
+      val completed = new CompletionQueue[io.Op]
+      var open = 0
+      for connection <- connections do {
+        val served = new ByQueue(connection)
+        ops.submit(served.read, served)
+        open += 1
+      }
+      while open > 0 do {
+        io.performSubmitted(ops, completed)
+        var i = 0
+        while i < completed.count do {
+          val failure = completed.failure(i)
+          if failure != null then throw failure
+          val served = completed.tag(i).asInstanceOf[ByQueue]
+          if completed.op(i).asInstanceOf[AnyRef] eq served.read.asInstanceOf[AnyRef] then {
+            served.in.flip()
+            val came = served.in.remaining()
+            if came == 0 then open -= 1
+            else {
+              served.in.get(served.kept, served.have, came)
+              val both = answerAll(served.cache, served.kept, served.have + came, served.responses)
+              served.have = (both >>> 32).toInt
+              val written = both.toInt
+              served.in.clear()
+              if written > 0 then {
+                served.out.clear()
+                served.out.put(served.responses, 0, written)
+                served.out.flip()
+                ops.submit(served.write, served)
+              } else ops.submit(served.read, served)
+            }
+          } else if served.out.hasRemaining() then ops.submit(served.write, served)
+          else ops.submit(served.read, served)
+          i += 1
+        }
+        completed.clear()
+      }
+    }
+    /** `frames` as a stage that is stepped: the same loop, called with each chunk as it comes. */
+    def decoding(emit: MuxFrame => Unit): ByteBuffer => Unit = {
+      val kept = new Array[Byte](2 * Most)
+      var have = 0
+      chunk => {
+        val came = chunk.remaining()
+        chunk.get(kept, have, came)
+        have += came
+        var from = 0
+        while have - from >= Frame && have - from >= Frame + length(kept, from) do {
+          val size = length(kept, from)
+          emit(new MuxFrame(kept(from), java.util.Arrays.copyOfRange(kept, from + Frame, from + Frame + size)))
+          from += Frame + size
+        }
+        if from > 0 then {
+          System.arraycopy(kept, from, kept, 0, have - from)
+          have -= from
+        }
+      }
+    }
+    val serving = Future {
+      if hand != null then {
+        val servers = paired.get._2.map(_._2)
+        val shards = if io.ops.isInstanceOf[Shards] then io.submissionShards else 1
+        if hand == "queue" then
+          (0 until shards).toList
+            .map(shard => Future(serveByQueue(shard, servers.zipWithIndex.collect { case (c, at) if at % shards == shard => c })))
+            .foreach(_.await)
+        else
+          servers.zipWithIndex.map { (connection, at) =>
+            val on: Io[io.ops.type] =
+              if hand == "pinned" then Shards.onShard(io.asInstanceOf[Io[Shards]])(at % shards).asInstanceOf[Io[io.ops.type]]
+              else io.asInstanceOf[Io[io.ops.type]]
+            Future(serveInLoop(on, connection))
+          }.foreach(_.await)
+        closeAll(io, servers :+ paired.get._1)
+      } else if vm then
+        server.serveProgram(
+          Pipe
+            .local[CacheServer, ByteBuffer](() => new CacheServer)
+            .process[MuxFrame](decoding)
+            .groupThrough(_.stream)(_.mapWith[CacheServer, ByteBuffer] { cache =>
+              val response = new Array[Byte](LargestValue + Frame)
+              val out = ByteBuffer.wrap(response)
+              request => {
+                val end = cache.handle(request.bytes, 0, response, Frame)
+                head(response, 0, request.stream, end - Frame)
+                out.clear().limit(end)
+              }
+            })
+            .program
+        )
+      else if staged.isDefined then
+        // No handler is run: a connection's pipeline is described once, and its stages called as its bytes come, one
+        // chunk after another on one thread, so what its streams share needs no lock.
+        server.serveFlow(
+          connection => {
+            val cache = new CacheServer
+            connection.bytes.process[MuxFrame](decoding).groupThrough(_.stream) { (stream, requests) =>
+              val response = new Array[Byte](LargestValue + Frame)
+              val out = ByteBuffer.wrap(response)
+              if stage == "direct" then
+                // The body is a future beside the pipeline, as the others' are: the cache they share is locked.
+                requests.direct[ByteBuffer] { requests =>
+                  for request <- requests do {
+                    val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                    head(response, 0, stream, end - Frame)
+                    Flow.emit(out.clear().limit(end))
+                  }
+                }
+              else if stage == "direct-result" then
+                requests
+                  .directResult[ByteBuffer, String] { requests =>
+                    for request <- requests do {
+                      if request.bytes.length == 0 then steps.result.Result.eval.raise("empty")
+                      val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                      head(response, 0, stream, end - Frame)
+                      Flow.emit(out.clear().limit(end))
+                    }
+                  }
+                  .handleErr(_ => out.clear().limit(0))
+              else if stage == "result" then
+                requests
+                  .map[steps.result.Result[MuxFrame, String]](steps.result.Result.Ok(_))
+                  .flatMapOk { request =>
+                    if request.bytes.length == 0 then steps.result.Result.Err("empty")
+                    else {
+                      val end = cache.handle(request.bytes, 0, response, Frame)
+                      head(response, 0, stream, end - Frame)
+                      steps.result.Result.Ok(out.clear().limit(end))
+                    }
+                  }
+                  .handleErr(_ => out.clear().limit(0))
+              else if waits then
+                // One at a time for a stream, so its buffer is its own; beside the other streams', so the cache they
+                // share is locked.
+                requests.mapAsync(1) { request =>
+                  val end = cache.synchronized(cache.handle(request.bytes, 0, response, Frame))
+                  head(response, 0, stream, end - Frame)
+                  out.clear().limit(end)
+                }
+              else
+                requests.map { request =>
+                  val end = cache.handle(request.bytes, 0, response, Frame)
+                  head(response, 0, stream, end - Frame)
+                  out.clear().limit(end)
+                }
+            }
+          },
+          machine = staged.get
+        )
+      else server.serve { connection =>
+        val cache = new CacheServer
+        val guard = new gears.async.Semaphore(1)
+        frames(connection.bytes).groupBy(_.stream).foreachPar { (stream, requests) =>
+          val response = new Array[Byte](LargestValue + Frame)
+          val out = ByteBuffer.wrap(response)
+          for request <- requests do {
+            // The handler does not know how it is served: made of futures, a connection's streams are on any
+            // thread, so the cache they share is locked, with a lock that awaits and is no thread's.
+            def answer()(using Async): Int = {
+              val held = guard.acquire()
+              try cache.handle(request.bytes, 0, response, Frame)
+              finally held.release()
+            }
+            val end = if waits then Async.group(Future(answer()).await) else answer()
+            head(response, 0, stream, end - Frame)
+            connection.send(out.clear().limit(end))
+          }
+        }
+      }
+    }
+    val clients =
+      if hand != null then paired.get._2.map(_._1)
+      else List.tabulate(connections)(_ => opening[io.ops.Connection](io)(into => io.ops.connect(address.nn, into)))
+    timed(name, rounds.toLong * connections) {
+      clients.zipWithIndex.map { (client, id) =>
+        Future {
+          val end = new RespEnd(io, Most)(client, client)
+          // A client for each stream, with keys of its own: streams are answered in no order among themselves.
+          val users = Array.tabulate(Batch)(k => new CacheClient(id * Batch + k))
+          val requests = new Array[Byte](Most)
+          val responses = new Array[Byte](2 * Most)
+          val answers = new Array[Array[Byte]](Batch)
+          var i = 0
+          while i < rounds do {
+            val batch = math.min(Batch, rounds - i)
+            var size = 0
+            var k = 0
+            while k < batch do {
+              val start = size
+              size = users(k).request(i / Batch, requests, start + Frame)
+              head(requests, start, k, size - start - Frame)
+              answers(k) = users(k).answer
+              k += 1
+            }
+            end.send(requests, size)
+            var have = 0
+            var from = 0
+            var checked = 0
+            while checked < batch do {
+              have += end.more(responses, have)
+              while have - from >= Frame && have - from >= Frame + length(responses, from) do {
+                val stream = responses(from)
+                val until = from + Frame + length(responses, from)
+                users(stream).check(i / Batch, answers(stream), responses, from + Frame, until)
+                from = until
+                checked += 1
+              }
+            }
+            i += batch
+          }
+        }
+      }
+    }
+    closeAll(io, clients)
+    if server != null then server.close()
+    serving.await
+  }
+
+  /** `tcp-realistic`, or with `together` `tcp-realistic-bulk`, with its server one future over a queue of ops, as
+    * `queueEcho`'s is: each connection's requests are answered from what the server keeps for it.
+    */
+  private def queueRealistic(
+      io: Io[IpStreams & SubmissionQueues],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      together: Boolean
+  )(using Async.Spawn): Unit = {
+    import SubmissionQueues.performQueue
+    val (listener, pairs) = connectedTcp(io, connections)
+    timed(name, rounds.toLong * connections) {
+      val shards = io.queueShards
+      val serving = (0 until shards).toList.map { shard => Future {
+        val ops = new SubmissionQueue[io.Op](shard)
+        val completed = new CompletionQueue[io.Op]
+        var open = 0
+        for ((_, server), index) <- pairs.zipWithIndex if index % shards == shard do {
+          val buf = arrayBuffer(LargestBatch)
+          val served = new Served(buf, io.ops.read(server, buf), io.ops.write(server, buf), rounds.toLong)
+          ops.submit(served.read, served)
+          open += 1
+        }
+        while open > 0 do {
+          io.performQueue(ops, completed)
+          var i = 0
+          while i < completed.count do {
+            val failure = completed.failure(i)
+            if failure != null then throw failure
+            val served = completed.tag(i).asInstanceOf[Served[io.Op, io.Op]]
+            val buf = served.buf
+            if completed.op(i).asInstanceOf[AnyRef] eq served.read.asInstanceOf[AnyRef] then {
+              // What the read brought joins what was kept, and every whole request in it is answered.
+              buf.flip()
+              val came = buf.remaining()
+              if came == 0 then throw new java.io.EOFException("The connection ended within a request")
+              buf.get(served.requests, served.have, came)
+              var have = served.have + came
+              var from = 0
+              var written = 0
+              var next = Resp.end(served.requests, from, have)
+              while next >= 0 do {
+                written = served.cache.handle(served.requests, from, served.responses, written)
+                served.left -= 1
+                from = next
+                next = Resp.end(served.requests, from, have)
+              }
+              if from > 0 then {
+                System.arraycopy(served.requests, from, served.requests, 0, have - from)
+                have -= from
+              }
+              served.have = have
+              buf.clear()
+              if written > 0 then {
+                buf.put(served.responses, 0, written)
+                buf.flip()
+                ops.submit(served.write, served)
+              } else ops.submit(served.read, served)
+            } else if buf.hasRemaining() then ops.submit(served.write, served)
+            else if served.left > 0 then {
+              buf.clear()
+              ops.submit(served.read, served)
+            } else open -= 1
+            i += 1
+          }
+          completed.clear()
+        }
+      } }
+      val asking = pairs.zipWithIndex.map { case ((client, _), id) =>
+        Future {
+          if together then askTogether(io, id, rounds)(client)
+          else {
+            val end = new RespEnd(io, LargestValue)(client, client)
+            val user = new CacheClient(id)
+            val request = new Array[Byte](LargestValue)
+            val response = new Array[Byte](LargestValue)
+            var i = 0
+            while i < rounds do {
+              end.send(request, user.request(i, request, 0))
+              user.check(i, user.answer, response, 0, end.receive(response))
+              i += 1
+            }
+          }
+        }
+      }
+      serving ++ asking
+    }
+    closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
+  }
+
+  /** The client of `tcp-realistic-bulk`: its requests sent `Batch` at once, their answers checked as they come. */
+  private def askTogether(io: Io[ByteStreams], id: Int, rounds: Int)(client: io.ops.Readable & io.ops.Writable)(using
+      Async
+  ): Unit = {
+    val end = new RespEnd(io, LargestBatch)(client, client)
+    val user = new CacheClient(id)
+    val requests = new Array[Byte](LargestBatch)
+    val responses = new Array[Byte](LargestBatch)
+    val answers = new Array[Array[Byte]](Batch)
+    var i = 0
+    while i < rounds do {
+      val batch = math.min(Batch, rounds - i)
+      var length = 0
+      var k = 0
+      while k < batch do {
+        length = user.request(i + k, requests, length)
+        answers(k) = user.answer
+        k += 1
+      }
+      end.send(requests, length)
+      var have = 0
+      var from = 0
+      var checked = 0
+      while checked < batch do {
+        have += end.more(responses, have)
+        var next = Resp.end(responses, from, have)
+        while next >= 0 && checked < batch do {
+          user.check(i + checked, answers(checked), responses, from, next)
+          checked += 1
+          from = next
+          next = Resp.end(responses, from, have)
+        }
+      }
+      i += batch
     }
   }
 
@@ -1068,6 +1698,17 @@ object CapBench {
       i += 1
   }
 
+  private object NoDrive extends Flow.Drive {
+    def spawn(work: Async ?=> Unit): Unit = ()
+    def later(run: Runnable): Unit = run.run()
+    def hold(): Unit = ()
+    def release(): Unit = ()
+    def stop(): Unit = ()
+    def start(body: Async ?=> Unit): Runnable = () => ()
+    def waits: Boolean = false
+    def pause(register: Runnable => Unit): Unit = ()
+  }
+
   private def timed(name: String, operations: Long)(body: => List[Future[Unit]])(using Async): Unit = {
     val start = System.nanoTime()
     body.foreach(_.await)
@@ -1079,6 +1720,8 @@ object CapBench {
   private def supports(ops: Interface, scenario: String): Boolean = scenario.takeWhile(_ != '-') match
     case "pipe"     => ops.isInstanceOf[Pipes]
     case "tcp"      => ops.isInstanceOf[IpStreams]
+    case "queue"    => ops.isInstanceOf[IpStreams] && ops.isInstanceOf[SubmissionQueues]
+    case "flow"     => ops.isInstanceOf[IpStreams]
     case "unix"     => ops.isInstanceOf[UnixStreams]
     case "udp"      => ops.isInstanceOf[IpDatagrams]
     case "udg"      => ops.isInstanceOf[UnixDatagrams]
@@ -1150,11 +1793,167 @@ object CapBench {
           println(s"options $name: nodelay ${io.ops.option(c, SocketOption.NoDelay)} snd ${io.ops
               .option(c, SocketOption.SendBuffer)} rcv ${io.ops.option(c, SocketOption.ReceiveBuffer)}")
         closeAll(io, Seq(client, server, listener))
-      case "tcp-pingpong"       => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong")
-      case "tcp-concurrent"     => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent")
-      case "tcp-stream"         => socketStream(tcp(io), count(20_000), "tcp-stream")
-      case "tcp-connect"        => socketConnect(tcp(io), count(1_000), "tcp-connect")
-      case "tcp-realistic"      => realistic(tcp(io), many, count(2_000), "tcp-realistic")
+      case "tcp-pingpong"    => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong")
+      case "tcp-concurrent"  => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent")
+      case "tcp-stream"      => socketStream(tcp(io), count(20_000), "tcp-stream")
+      case "tcp-connect"     => socketConnect(tcp(io), count(1_000), "tcp-connect")
+      case "tcp-realistic"   => realistic(tcp(io), many, count(2_000), "tcp-realistic")
+      case "work-flow" =>
+        // A pipeline with no I/O in it: what an element costs to pass through three stages and a fold.
+        val each = 1_000
+        val times = count(20_000)
+        timed("work-flow", each.toLong * times)(List(Future {
+          var total = 0L
+          var i = 0
+          while i < times do {
+            total += Flow.from(0 until each).map(_ + i).filter(_ % 3 != 0).map(_ * 2L).fold(0L)(_ + _)
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case scenario @ ("work-steps" | "work-vm") =>
+        // What an element costs to be pushed through three stages that are stepped: a chain of steps, or a program.
+        val each = 1_000
+        val times = count(20_000)
+        timed(scenario, each.toLong * times)(List(Future {
+          var total = 0L
+          val last = new Flow.Step[Long] {
+            def push(element: Long): Unit = total += element
+            def end(): Unit = ()
+            def abandon(): Unit = ()
+            def fail(thrown: Throwable): Unit = throw thrown
+          }
+          var bias = 0
+          val step: Flow.Step[Int] =
+            if scenario == "work-vm" then Pipe.from[Int].map(_ + bias).filter(_ % 3 != 0).map(_ * 2L).program.start(last)
+            else {
+              val port = new Flow.Port[Int]
+              Flow.compile(port.map(_ + bias).filter(_ % 3 != 0).map(_ * 2L), port, last, NoDrive).nn.asInstanceOf[Flow.Step[Int]]
+            }
+          var i = 0
+          while i < times do {
+            bias = i
+            var element = 0
+            while element < each do {
+              step.push(element)
+              element += 1
+            }
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case scenario @ ("work-setup-steps" | "work-setup-vm") =>
+        // What a connection costs to begin: a pipeline with a stage of its own and sixteen keys, each element the
+        // first of its key. As a flow it is made and compiled for each; as a program it is made once and started.
+        val times = count(200_000)
+        timed(scenario, times.toLong)(List(Future {
+          var total = 0L
+          val last = new Flow.Step[Int] {
+            def push(element: Int): Unit = total += element
+            def end(): Unit = ()
+            def abandon(): Unit = ()
+            def fail(thrown: Throwable): Unit = throw thrown
+          }
+          val program =
+            Pipe.from[Int].process[Int](emit => element => emit(element)).groupThrough(_ & 15)(_.mapWith[Any, Int](_ => {
+              var seen = 0
+              element => { seen += 1; element + seen }
+            })).program
+          var i = 0
+          while i < times do {
+            val step: Flow.Step[Int] =
+              if scenario == "work-setup-vm" then program.start(last)
+              else {
+                val port = new Flow.Port[Int]
+                val flow = port.process[Int](emit => element => emit(element)).groupThrough(_ & 15) { (_, elements) =>
+                  var seen = 0
+                  elements.map { element => seen += 1; element + seen }
+                }
+                Flow.compile(flow, port, last, NoDrive).nn.asInstanceOf[Flow.Step[Int]]
+              }
+            var element = 0
+            while element < 16 do {
+              step.push(element)
+              element += 1
+            }
+            step.end()
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case "work-flow-long" =>
+        // A pipeline of a thousand stages, which is cut onto stacks of its own: what a hand-over costs an element.
+        val stages = 1_000
+        val elements = count(20_000)
+        timed("work-flow-long", elements.toLong)(List(Future {
+          var flow: Flow[Int] = Flow.from(0 until elements)
+          var i = 0
+          while i < stages do {
+            flow = flow.map(_ + 1)
+            i += 1
+          }
+          val total = flow.fold(0L)(_ + _)
+          if total == 42 then println(total)
+        }))
+      case "work-iterator" =>
+        // The same with the library's iterators, to read `work-flow` against.
+        val each = 1_000
+        val times = count(20_000)
+        timed("work-iterator", each.toLong * times)(List(Future {
+          var total = 0L
+          var i = 0
+          while i < times do {
+            total += (0 until each).iterator.map(_ + i).filter(_ % 3 != 0).map(_ * 2L).foldLeft(0L)(_ + _)
+            i += 1
+          }
+          if total == 42 then println(total)
+        }))
+      case "flow-mux" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux", Server.Strategy.Auto)
+      case "flow-mux-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-await", Server.Strategy.Auto, None, true)
+      case "flow-mux-machine-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-await", Server.Strategy.Auto, Some(true), true)
+      case "flow-mux-staged-await" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged-await", Server.Strategy.Auto, Some(false), true)
+      case "flow-mux-machine" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine", Server.Strategy.Auto, Some(true))
+      case "flow-mux-hand-loop" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-hand-loop", Server.Strategy.Auto, hand = "loop")
+      case "flow-mux-hand-pinned" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-hand-pinned", Server.Strategy.Auto, hand = "pinned")
+      case "flow-mux-hand-queue" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-hand-queue", Server.Strategy.Auto, hand = "queue")
+      case "flow-mux-machine-direct" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-direct", Server.Strategy.Auto, Some(true), stage = "direct")
+      case "flow-mux-staged-direct" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged-direct", Server.Strategy.Auto, Some(false), stage = "direct")
+      case "flow-mux-machine-direct-result" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-direct-result", Server.Strategy.Auto, Some(true), stage = "direct-result")
+      case "flow-mux-machine-result" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-machine-result", Server.Strategy.Auto, Some(true), stage = "result")
+      case "flow-mux-vm" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-vm", Server.Strategy.Auto, vm = true)
+      case "flow-mux-staged" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-staged", Server.Strategy.Auto, Some(false))
+      case "flow-mux-shard-futures" =>
+        flowMux(io.asInstanceOf[Io[IpStreams]], many, count(2_000), "flow-mux-shard-futures", Server.Strategy.ShardFutures)
+      case "flow-mux-pinned-futures" =>
+        flowMux(
+          io.asInstanceOf[Io[IpStreams & SubmissionQueues]],
+          many,
+          count(2_000),
+          "flow-mux-pinned-futures",
+          Server.Strategy.PinnedFutures
+        )
+      case "flow-mux-futures" =>
+        flowMux(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "flow-mux-futures", Server.Strategy.Futures)
+      case "queue-concurrent" =>
+        queueEcho(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(5_000), "queue-concurrent")
+      case "queue-realistic" =>
+        queueRealistic(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "queue-realistic", false)
+      case "queue-realistic-bulk" =>
+        queueRealistic(io.asInstanceOf[Io[IpStreams & SubmissionQueues]], many, count(2_000), "queue-realistic-bulk", true)
       case "tcp-realistic-bulk" =>
         realisticBulk(tcp(io), many, count(2_000), "tcp-realistic-bulk", gathering = false)
       case "tcp-realistic-gather" =>
