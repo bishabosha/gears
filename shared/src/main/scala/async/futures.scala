@@ -217,21 +217,53 @@ object Future:
 
       override def withGroup(group: CompletionGroup) = FutureAsync(group)
 
-    override def cancel(): Unit = if setCancelled() then this.innerGroup.cancel()
+      /** The future is set aside, and resumed by its scheduler as the runnable is run, or as the future is
+        * cancelled, whichever takes it from where it is parked first.
+        */
+      override private[async] def park(register: Runnable => Unit): Unit =
+        if group eq CompletionGroup.Unlinked then
+          // Not to be cancelled: nothing but the runnable resumes it.
+          ac.support.parkHere(wake => register(() => wake(false))): Unit
+        else if group ne innerGroup then
+          // Under a group of its own making, which something other than the future's cancel may cancel, a time
+          // limit say: parked as any `Async` parks, by an await in that group.
+          super.park(register)
+        else
+          if group.isCancelled then throw new GearsCancellationException()
+          val cancelled = ac.support.parkHere { wake =>
+            parked.set(wake)
+            register(() => if parked.compareAndSet(wake, null) then wake(false))
+            // Cancelled between the look above and being parked: its cancel found nothing here.
+            if cancelRequest.get() && parked.compareAndSet(wake, null) then wake(true)
+          }
+          if cancelled then throw new GearsCancellationException()
+
+    /** Where the future is parked (`Async.park`), if it is: what wakes it, for whoever does so first. */
+    private val parked = java.util.concurrent.atomic.AtomicReference[(Boolean => Unit) | Null](null)
+
+    override def cancel(): Unit =
+      if setCancelled() then
+        this.innerGroup.cancel()
+        val wake = parked.getAndSet(null)
+        if wake != null then wake.asInstanceOf[Boolean => Unit](true)
 
     link()
     ac.support.scheduleBoundary:
-      val result: Try[T] = Async.withNewCompletionGroup(innerGroup) {
-        // not `Try(...)`: it leaves an `InterruptedException` to be thrown, as it is not `NonFatal`, and the future
-        // would never complete.
+      // Written out, where it was `Async.withNewCompletionGroup` around a `Try`: each was two frames between the
+      // body and the boundary, which every wait of the future's copies out and back.
+      val unlinked = FutureAsync(CompletionGroup.Unlinked)
+      val result: Try[T] =
         try
-          val r = body
-          checkCancellation()
-          Success(r)
-        catch
-          case _: InterruptedException | _: CancellationException => Failure(new GearsCancellationException())
-          case NonFatal(e)                                        => Failure(e)
-      }(using FutureAsync(CompletionGroup.Unlinked))
+          // not `Try(...)`: it leaves an `InterruptedException` to be thrown, as it is not `NonFatal`, and the future
+          // would never complete.
+          try
+            val r = body(using Async.spawning(unlinked.withGroup(innerGroup)))
+            checkCancellation()
+            Success(r)
+          catch
+            case _: InterruptedException | _: CancellationException => Failure(new GearsCancellationException())
+            case NonFatal(e)                                        => Failure(e)
+        finally Async.cancelAndWaitGroup(innerGroup)(using unlinked)
       complete(result)
 
   end RunnableFuture

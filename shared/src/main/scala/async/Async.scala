@@ -39,6 +39,18 @@ trait Async private[async] (using val support: AsyncSupport, val scheduler: supp
     */
   def await[T](src: Async.Source[T]): T
 
+  /** EXPERIMENT. Suspends the caller until the `Runnable` that `register` is handed has been run, by any thread,
+    * once: the least a wait can be, for waits between futures that are made to be cheap, a queue's reader for its
+    * writer. A cancel ends it, with `CancellationException`, as it ends an `await`; the runnable run afterwards does
+    * nothing. A future, in its own group, keeps the one place it is parked in, which its cancel looks at, so that it
+    * is no source's listener and in no group; under a group made inside it, and for any other `Async`, a park is an
+    * `await`.
+    */
+  private[async] def park(register: Runnable => Unit): Unit =
+    val gate = new ParkGate
+    register(gate)
+    await(gate)
+
   /** Returns the cancellation group for this [[Async]] context. */
   def group: CompletionGroup
 
@@ -119,13 +131,16 @@ object Async extends AsyncImpl:
     */
   opaque type Spawn <: Async = Async
 
+  /** `async`, as what may spawn: for what makes a scope's `Async` itself. */
+  private[async] inline def spawning(async: Async): Spawn = async
+
   /** Runs `body` inside a spawnable context where it is allowed to spawn concurrently runnable [[Future]]s. When the
     * body returns, all spawned futures are cancelled and waited for.
     */
   def group[T](body: Async.Spawn ?=> T)(using Async): T =
     withNewCompletionGroup(CompletionGroup().link())(body)
 
-  private def cancelAndWaitGroup(group: CompletionGroup)(using async: Async) =
+  private[async] def cancelAndWaitGroup(group: CompletionGroup)(using async: Async) =
     val completionAsync =
       if CompletionGroup.Unlinked == async.group
       then async

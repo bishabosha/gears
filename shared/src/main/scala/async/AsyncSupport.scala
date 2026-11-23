@@ -31,6 +31,15 @@ trait AsyncSupport extends SuspendSupport:
     s.execute(() => suspension.resume(arg))
 
   /** Schedule a computation with the suspension boundary already created. */
+  /** For `Async.park`: suspends what runs under the label until the function `register` is handed is called, once,
+    * and returns what it was called with. Here by a suspension that the scheduler resumes; a platform that can wait
+    * where it is does that.
+    */
+  private[async] def parkHere(register: (Boolean => Unit) => Unit)(using Label[Unit], Scheduler): Boolean =
+    suspend[java.lang.Boolean, Unit](suspension =>
+      register(value => resumeAsync(suspension)(java.lang.Boolean.valueOf(value)))
+    ).booleanValue()
+
   private[async] def scheduleBoundary(body: Label[Unit] ?=> Unit)(using s: Scheduler): Unit =
     s.execute(() => boundary(body))
 
