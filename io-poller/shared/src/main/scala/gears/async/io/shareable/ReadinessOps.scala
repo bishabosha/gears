@@ -69,6 +69,16 @@ trait ReadyWaiting extends AbstractTimerHeapOp, TimeoutOnWake, ReadinessOp {
   protected final def performWhenReadyOn(handle: ReadinessHandle { type Source = ReadyWaiting.this.Source })(
       self: Source
   )(using Async): Unit =
+    if beginWhenReadyOn(handle)(self) then
+      try parkUntilSettled()
+      finally handle.readiness(isRead).clearWaiter(this): Unit
+
+  /** `performWhenReadyOn` up to where it suspends: whether the op now waits, as its handle's waiter, for whoever
+    * performs it to wait for in its own way, and then to clear from the handle.
+    */
+  protected final def beginWhenReadyOn(handle: ReadinessHandle { type Source = ReadyWaiting.this.Source })(
+      self: Source
+  ): Boolean =
     self.handleOwner.check(handle)
     val readiness = handle.readiness(isRead)
     var waiting = false
@@ -95,9 +105,7 @@ trait ReadyWaiting extends AbstractTimerHeapOp, TimeoutOnWake, ReadinessOp {
                 readiness.clearWaiter(this): Unit
                 throw failure
       finally handle.releaseWork()
-    if waiting then
-      try parkUntilSettled()
-      finally readiness.clearWaiter(this): Unit
+    waiting
 }
 
 /** A `ReadyWaiting` op that may be performed again and again, on the handle it was built with. */
@@ -107,6 +115,8 @@ abstract class AbstractReadinessOp[H <: ReadinessHandle](protected val waitsOn: 
   type Source = waitsOn.Source
 
   final def performWhenReady(self: Source)(using Async): Unit = performWhenReadyOn(waitsOn)(self)
+  final def beginWhenReady(self: Source): Boolean = beginWhenReadyOn(waitsOn)(self)
+  final def endWhenReady(): Unit = waitsOn.readiness(isRead).clearWaiter(this): Unit
 }
 
 /** A read of a stream, whatever it reads into. */

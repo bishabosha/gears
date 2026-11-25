@@ -249,6 +249,16 @@ abstract class WorkpoolScheduler[I <: Interface { type Op <: AsyncOp & Reentrant
     }
   }
 
+  /** Runs `flows` as the calling future's (see `Flow.run`). */
+  private[io] def performFlows(flows: Array[gears.async.io.flow.Flow[?]])(using Async): Unit =
+    new FlowRun[I](this, flows).perform()
+
+  /** A queue of this pool's ops, for one future (see `Batch`). */
+  private[io] def newQueue(): OpQueue[I] = new OpQueue[I](this)
+
+  /** The worker the caller is on, or null. */
+  private[shareable] def currentWorker: PoolWorker | Null = workerOf(callerThread())
+
   /** Whether the future performing an op on `worker` now should yield first (see `Worker.opBudgetSpent`): for a pool
     * whose futures run on its workers, which is what the budget is for.
     */
@@ -368,6 +378,17 @@ object WorkpoolScheduler {
     def parkUntilSettled()(using Async): Unit
 
     def clearTimeout(): Unit
+
+    /** In place of `parkUntilSettled`, for a performer that is not suspended (see `FlowRun`): `waiter` is told the op's
+      * outcome once it is settled, at once if it is already. Nothing is returned or thrown here: see `takeOutcome`.
+      */
+    def waitWith(waiter: gears.async.Listener[TimerHeapOp.Outcome]): Unit
+
+    /** After `waitWith`'s waiter was told: returns, or throws the op's failure, as `parkUntilSettled` does. */
+    def takeOutcome(): Unit
+
+    /** What a performer that is cancelled does to its op: whether that settled it. */
+    def cancelByPerformer(): Boolean
   }
 
   val SuccessUnit: Try[Unit] = Success(())

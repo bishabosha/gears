@@ -79,13 +79,25 @@ abstract class AbstractTimerHeapOp private[shareable] ()
       case TimerHeapOp.CancelledSentinel => throw new GearsCancellationException()
   }
 
+  final def waitWith(waiter: Listener[Outcome]): Unit = {
+    exposed = true
+    waited = true
+    onComplete(waiter)
+  }
+
+  final def takeOutcome(): Unit =
+    outcomeOf(result.get()) match
+      case null                          => throw new IllegalStateException("The op is not settled")
+      case result: Try[Unit]             => result.get
+      case TimerHeapOp.CancelledSentinel => throw new GearsCancellationException()
+
   // async state management
 
   /** What a performer that is cancelled does to its op, as `parkUntilSettled` does it, which is the only way an op is
     * cancelled: word is left for whoever has claimed the op, to see before it does the work, and the op is settled as
     * cancelled if nobody has. Whether it was settled here.
     */
-  private[io] final def cancelByPerformer(): Boolean =
+  final def cancelByPerformer(): Boolean =
     _cancelLater = true
     settleCancelled()
 

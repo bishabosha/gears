@@ -49,4 +49,6 @@ abstract class PoolOpWorker[S <: PoolSource](id: Int, owner: HandleOwner) extend
   type Op <: BackendOp[S]
 
   override final def performOp(op: Op)(using Async): Unit = op.performOn(this)
+  override final def beginOp(op: Op): Boolean = op.beginOn(this)
+  override final def endOp(op: Op): Unit = op.endBegun()
 }

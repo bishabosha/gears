@@ -135,6 +135,193 @@ object CapBench {
     List(echo, client)
   }
 
+  /** `echoPair` as two flows of one future: the same loops, which suspend nobody (see `Flow`). */
+  private def echoPairFlow(io: Io[ByteStreams], rounds: Int)(
+      serverIn: io.ops.Readable,
+      serverOut: io.ops.Writable,
+      clientIn: io.ops.Readable,
+      clientOut: io.ops.Writable
+  )(using Async.Spawn): List[Future[Unit]] = {
+    import gears.async.io.flow.Flow
+    import gears.async.io.flow.Flow.*
+    val echo = Flow(io) {
+      val buf = buffer(MessageSize)
+      val read = io.ops.read(serverIn, buf)
+      val write = io.ops.write(serverOut, buf)
+      repeat(rounds) {
+        exec(buf.clear())
+        loop(buf.hasRemaining())(perform(read))
+        exec(buf.flip())
+        loop(buf.hasRemaining())(perform(write))
+      }
+    }
+    val client = Flow(io) {
+      val out = buffer(MessageSize)
+      val in = buffer(MessageSize)
+      val write = io.ops.write(clientOut, out)
+      val read = io.ops.read(clientIn, in)
+      repeat(rounds) {
+        exec(out.clear())
+        loop(out.hasRemaining())(perform(write))
+        exec(in.clear())
+        loop(in.hasRemaining())(perform(read))
+      }
+    }
+    List(Future(Flow.run(io)(echo, client)))
+  }
+
+  /** `echoPair` as one future over a batch (see `Batch`): the ops of both sides, of every pair of `pairs`, are added to
+    * it, and the future deals with whichever are done, a perform at a time.
+    */
+  private def echoBatch(io: Io[ByteStreams], rounds: Int)(
+      pairs: Seq[(io.ops.Readable, io.ops.Writable, io.ops.Readable, io.ops.Writable)]
+  )(using Async.Spawn): Future[Unit] = Future {
+    import gears.async.io.flow.Batch as OpBatch
+    final class Pair(sIn: io.ops.Readable, sOut: io.ops.Writable, cIn: io.ops.Readable, cOut: io.ops.Writable) {
+      val buf = buffer(MessageSize)
+      val out = buffer(MessageSize)
+      val in = buffer(MessageSize)
+      val serverRead = io.ops.read(sIn, buf)
+      val serverWrite = io.ops.write(sOut, buf)
+      val clientWrite = io.ops.write(cOut, out)
+      val clientRead = io.ops.read(cIn, in)
+      var served = 0
+      var asked = 0
+    }
+    val batch = OpBatch(io)
+    var live = pairs.length
+    for (sIn, sOut, cIn, cOut) <- pairs do
+      val pair = new Pair(sIn, sOut, cIn, cOut)
+      batch.add(pair.clientWrite, pair)
+      batch.add(pair.serverRead, pair)
+    try
+      while live > 0 do
+        val done = batch.perform()
+        var i = 0
+        while i < done do
+          val failure = batch.failure(i)
+          if failure != null then throw failure
+          val pair = batch.note(i).asInstanceOf[Pair]
+          val op = batch.op(i)
+          if batch.isOp(i, pair.clientWrite) then
+            if pair.out.hasRemaining() then batch.add(op, pair)
+            else
+              pair.in.clear()
+              batch.add(pair.clientRead, pair)
+          else if batch.isOp(i, pair.serverRead) then
+            if pair.buf.hasRemaining() then batch.add(op, pair)
+            else
+              pair.buf.flip()
+              batch.add(pair.serverWrite, pair)
+          else if batch.isOp(i, pair.serverWrite) then
+            if pair.buf.hasRemaining() then batch.add(op, pair)
+            else
+              pair.served += 1
+              if pair.served < rounds then
+                pair.buf.clear()
+                batch.add(pair.serverRead, pair)
+          else if pair.in.hasRemaining() then batch.add(op, pair)
+          else
+            pair.asked += 1
+            if pair.asked < rounds then
+              pair.out.clear()
+              batch.add(pair.clientWrite, pair)
+            else live -= 1
+          i += 1
+    finally batch.close()
+  }
+
+  /** `echoPair` as one future over `Streams`: both sides of every pair of `pairs`, a message at a time. */
+  private def echoStreams(io: Io[ByteStreams], rounds: Int)(
+      pairs: Seq[(io.ops.Readable, io.ops.Writable, io.ops.Readable, io.ops.Writable)]
+  )(using Async.Spawn): Future[Unit] = Future {
+    import gears.async.io.flow.Streams
+    import gears.async.io.flow.Streams.*
+    final class Side(val server: Boolean) {
+      val buf = buffer(MessageSize)
+      val in = if server then buf else buffer(MessageSize)
+      var left = rounds
+    }
+    val streams = Streams[Side](io)
+    var live = pairs.length
+    for (sIn, sOut, cIn, cOut) <- pairs do
+      val serving = new Side(server = true)
+      streams.open(sIn, sOut, serving).receive(serving.buf)
+      val asking = new Side(server = false)
+      val client = streams.open(cIn, cOut, asking)
+      client.send(asking.buf.clear())
+      client.receive(asking.in)
+    try
+      while live > 0 do
+        streams.next() match
+          case Received(stream) =>
+            val side = stream.note
+            if side.server then stream.send(side.buf)
+            else
+              side.left -= 1
+              if side.left == 0 then live -= 1
+              else
+                stream.send(side.buf.clear())
+                stream.receive(side.in)
+          case Sent(stream) =>
+            val side = stream.note
+            if side.server then
+              side.left -= 1
+              if side.left > 0 then stream.receive(side.buf)
+          case Failed(_, cause) => throw cause
+          case other            => throw new IllegalStateException(s"$other")
+    finally streams.close()
+  }
+
+  /** The serving sides of `servers`, as one future over `Streams`, with an ordinary future for each client of
+    * `clients`: what a server gains from serving all its connections in one future, its clients being someone else's.
+    */
+  private def serveStreams(io: Io[ByteStreams], rounds: Int)(
+      servers: Seq[(io.ops.Readable, io.ops.Writable)],
+      clients: Seq[(io.ops.Readable, io.ops.Writable)]
+  )(using Async.Spawn): List[Future[Unit]] = {
+    import gears.async.io.flow.Streams
+    import gears.async.io.flow.Streams.*
+    final class Session {
+      val buf = buffer(MessageSize)
+      var left = rounds
+    }
+    val server = Future {
+      val streams = Streams[Session](io)
+      var live = servers.length
+      for (in, out) <- servers do
+        val session = new Session
+        streams.open(in, out, session).receive(session.buf)
+      try
+        while live > 0 do
+          streams.next() match
+            case Received(stream) => stream.send(stream.note.buf)
+            case Sent(stream)     =>
+              val session = stream.note
+              session.left -= 1
+              if session.left > 0 then stream.receive(session.buf) else live -= 1
+            case Failed(_, cause) => throw cause
+            case other            => throw new IllegalStateException(s"$other")
+      finally streams.close()
+    }
+    val asking = clients.map((clientIn, clientOut) =>
+      Future {
+        val out = buffer(MessageSize)
+        val in = buffer(MessageSize)
+        val write = io.ops.write(clientOut, out)
+        val read = io.ops.read(clientIn, in)
+        var i = 0
+        while i < rounds do
+          out.clear()
+          while out.hasRemaining() do io.perform(write)
+          in.clear()
+          while in.hasRemaining() do io.perform(read)
+          i += 1
+      }
+    )
+    server :: asking.toList
+  }
+
   /** `chunks` chunks written to `out`, which `end` then ends, and read from `in` until its end. With GEARS_TRACE set,
     * how the two took turns is printed: one worker runs them, so the plain fields are safe there.
     */
@@ -202,10 +389,16 @@ object CapBench {
     (read.clear(), write.clear())
   }
 
-  private def pipeEcho(io: Io[Pipes], rounds: Int)(using Async.Spawn): List[Future[Unit]] = {
+  private def pipeEcho(io: Io[Pipes], rounds: Int, flows: Boolean = false, batch: Int = 0)(using
+      Async.Spawn
+  ): List[Future[Unit]] = {
     val (requestIn, requestOut) = pipe(io)
     val (replyIn, replyOut) = pipe(io)
-    val both = echoPair(io, rounds)(requestIn, replyOut, replyIn, requestOut)
+    val both =
+      if flows then echoPairFlow(io, rounds)(requestIn, replyOut, replyIn, requestOut)
+      else if batch == 3 then List(echoStreams(io, rounds)(Seq((requestIn, replyOut, replyIn, requestOut))))
+      else if batch > 0 then List(echoBatch(io, rounds)(Seq((requestIn, replyOut, replyIn, requestOut))))
+      else echoPair(io, rounds)(requestIn, replyOut, replyIn, requestOut)
     List(Future { both.foreach(_.await); closeAll(io, Seq(requestIn, requestOut, replyIn, replyOut)) })
   }
 
@@ -253,13 +446,31 @@ object CapBench {
     (listener, pairs)
   }
 
-  private def socketEcho(sockets: Sockets[? <: StreamSockets], connections: Int, rounds: Int, name: String)(using
+  private def socketEcho(
+      sockets: Sockets[? <: StreamSockets],
+      connections: Int,
+      rounds: Int,
+      name: String,
+      flows: Boolean = false,
+      batch: Int = 0
+  )(using
       Async.Spawn
   ): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(
-      pairs.flatMap((client, server) => echoPair(io, rounds)(server, server, client, client))
+      if batch == 2 then List(echoBatch(io, rounds)(pairs.map((client, server) => (server, server, client, client))))
+      else if batch == 5 then
+        serveStreams(io, rounds)(pairs.map((_, server) => (server, server)), pairs.map((client, _) => (client, client)))
+      else if batch == 4 then
+        List(echoStreams(io, rounds)(pairs.map((client, server) => (server, server, client, client))))
+      else
+        pairs.flatMap((client, server) =>
+          if flows then echoPairFlow(io, rounds)(server, server, client, client)
+          else if batch == 3 then List(echoStreams(io, rounds)(Seq((server, server, client, client))))
+          else if batch > 0 then List(echoBatch(io, rounds)(Seq((server, server, client, client))))
+          else echoPair(io, rounds)(server, server, client, client)
+        )
     )
     closeAll(io, pairs.flatMap((client, server) => Seq(client, server)) :+ listener)
     sockets.cleanup()
@@ -1150,6 +1361,49 @@ object CapBench {
           println(s"options $name: nodelay ${io.ops.option(c, SocketOption.NoDelay)} snd ${io.ops
               .option(c, SocketOption.SendBuffer)} rcv ${io.ops.option(c, SocketOption.ReceiveBuffer)}")
         closeAll(io, Seq(client, server, listener))
+      case "pipe-pingpong-flow" =>
+        val rounds = count(200_000)
+        timed("pipe-pingpong-flow", rounds)(pipeEcho(io, rounds, flows = true))
+      case "pipe-concurrent-flow" =>
+        val rounds = count(10_000)
+        timed("pipe-concurrent-flow", rounds.toLong * many)(List.fill(many)(pipeEcho(io, rounds, flows = true)).flatten)
+      case "tcp-pingpong-flow"    => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong-flow", flows = true)
+      case "tcp-concurrent-flow"  => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-flow", flows = true)
+      case "unix-pingpong-flow"   => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-flow", flows = true)
+      case "unix-concurrent-flow" => socketEcho(unix(io), many, count(5_000), "unix-concurrent-flow", flows = true)
+      case "pipe-pingpong-batch"  =>
+        val rounds = count(200_000)
+        timed("pipe-pingpong-batch", rounds)(pipeEcho(io, rounds, batch = 1))
+      case "pipe-concurrent-batch" =>
+        val rounds = count(10_000)
+        timed("pipe-concurrent-batch", rounds.toLong * many)(List.fill(many)(pipeEcho(io, rounds, batch = 1)).flatten)
+      case "tcp-pingpong-batch"       => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong-batch", batch = 1)
+      case "tcp-concurrent-batch"     => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-batch", batch = 1)
+      case "unix-pingpong-batch"      => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-batch", batch = 1)
+      case "unix-concurrent-batch"    => socketEcho(unix(io), many, count(5_000), "unix-concurrent-batch", batch = 1)
+      case "tcp-pingpong-batchall"    => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong-batchall", batch = 2)
+      case "tcp-concurrent-batchall"  => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-batchall", batch = 2)
+      case "unix-pingpong-batchall"   => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-batchall", batch = 2)
+      case "unix-concurrent-batchall" => socketEcho(unix(io), many, count(5_000), "unix-concurrent-batchall", batch = 2)
+      case "pipe-pingpong-streams"    =>
+        val rounds = count(200_000)
+        timed("pipe-pingpong-streams", rounds)(pipeEcho(io, rounds, batch = 3))
+      case "pipe-concurrent-streams" =>
+        val rounds = count(10_000)
+        timed("pipe-concurrent-streams", rounds.toLong * many)(List.fill(many)(pipeEcho(io, rounds, batch = 3)).flatten)
+      case "tcp-pingpong-streams"      => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong-streams", batch = 3)
+      case "tcp-concurrent-streams"    => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-streams", batch = 3)
+      case "unix-pingpong-streams"     => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-streams", batch = 3)
+      case "unix-concurrent-streams"   => socketEcho(unix(io), many, count(5_000), "unix-concurrent-streams", batch = 3)
+      case "tcp-concurrent-serve"      => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-serve", batch = 5)
+      case "unix-pingpong-serve"       => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-serve", batch = 5)
+      case "unix-concurrent-serve"     => socketEcho(unix(io), many, count(5_000), "unix-concurrent-serve", batch = 5)
+      case "tcp-pingpong-streamsall"   => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong-streamsall", batch = 4)
+      case "tcp-concurrent-streamsall" =>
+        socketEcho(tcp(io), many, count(5_000), "tcp-concurrent-streamsall", batch = 4)
+      case "unix-pingpong-streamsall" => socketEcho(unix(io), 1, count(100_000), "unix-pingpong-streamsall", batch = 4)
+      case "unix-concurrent-streamsall" =>
+        socketEcho(unix(io), many, count(5_000), "unix-concurrent-streamsall", batch = 4)
       case "tcp-pingpong"       => socketEcho(tcp(io), 1, count(100_000), "tcp-pingpong")
       case "tcp-concurrent"     => socketEcho(tcp(io), many, count(5_000), "tcp-concurrent")
       case "tcp-stream"         => socketStream(tcp(io), count(20_000), "tcp-stream")

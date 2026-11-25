@@ -13,6 +13,19 @@ trait BackendOp[S <: EventSource] extends TimerHeapOp {
     * op is done, and if it throws, that is its failure.
     */
   def performOn(performer: OpPerformer[S] & S)(using Async): Unit
+
+  /** Begins the op on `performer` without suspending anyone, for a performer that is not a future's stack (see
+    * `FlowRun`): whether the op is done already. If not it waits, and whoever began it then has itself told with
+    * `waitWith`, calls `endBegun`, and reads the outcome with `takeOutcome`. A kind that can only be performed by a
+    * future that suspends refuses.
+    */
+  def beginOn(performer: OpPerformer[S] & S): Boolean =
+    throw new UnsupportedOperationException(s"An op of this kind needs a future to suspend: $this")
+
+  /** After an op begun with `beginOn` that waited was settled, or as its performer gives up on it: what the performer
+    * undoes of the wait.
+    */
+  def endBegun(): Unit = ()
 }
 
 /** The kinds of op a backend has. A backend's op is one of them, with the shared class that does its work; a backend
@@ -24,12 +37,22 @@ object BackendOp {
   trait Readiness[S <: EventSource] extends BackendOp[S] {
     def performWhenReady(self: S)(using Async): Unit
     final def performOn(performer: OpPerformer[S] & S)(using Async): Unit = performWhenReady(performer)
+
+    /** As `performWhenReady` up to where it would suspend: whether the op now waits. */
+    def beginWhenReady(self: S): Boolean
+    def endWhenReady(): Unit
+    final override def beginOn(performer: OpPerformer[S] & S): Boolean = !beginWhenReady(performer)
+    final override def endBegun(): Unit = endWhenReady()
   }
 
   /** An op done as it is performed, with nothing to wait for (see `ImmediateOp`). */
   trait Immediate[S <: EventSource] extends BackendOp[S] {
     def perform(owner: HandleOwner): Unit
     final def performOn(performer: OpPerformer[S] & S)(using Async): Unit = perform(performer.handleOwner)
+    final override def beginOn(performer: OpPerformer[S] & S): Boolean = {
+      perform(performer.handleOwner)
+      true
+    }
   }
 
   /** An op whose work blocks (see `WorkOffThread`): done on the blocking pool's thread, on the performer's own, or on a
@@ -51,12 +74,20 @@ object BackendOp {
   /** A timer or a deadline: an op that is nothing but its time on a heap (`OpPerformer.performTimed`). */
   trait Timed[S <: EventSource] extends BackendOp[S] {
     final def performOn(performer: OpPerformer[S] & S)(using Async): Unit = performer.performTimed(this)
+    final override def beginOn(performer: OpPerformer[S] & S): Boolean = {
+      holdTimerOn(performer)
+      false
+    }
   }
 
   /** A close, which waits for the handle's work and its listeners to let go (see `AbstractCloseOp`). */
   trait Close[S <: EventSource] extends BackendOp[S] {
     def performClose(self: S)(using Async): Unit
     final def performOn(performer: OpPerformer[S] & S)(using Async): Unit = performClose(performer)
+
+    /** As `performClose` up to where it would suspend: whether the op now waits. */
+    def beginClose(self: S): Boolean
+    final override def beginOn(performer: OpPerformer[S] & S): Boolean = !beginClose(performer)
   }
 }
 

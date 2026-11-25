@@ -22,13 +22,17 @@ abstract class AbstractCloseOp(val handle: BaseHandle)
     * keep, the performer waits. `self` is the performer's worker.
     */
   final def performClose(self: Source)(using gears.async.Async): Unit =
+    if beginClose(self) then parkUntilSettled()
+
+  /** Whether the performer is to wait. */
+  final def beginClose(self: Source): Boolean =
     self.handleOwner.check(handle)
     var shouldWait = false
     if hasDeadline then
       holdTimerOn(self)
       shouldWait = true
     if !pollClose() then shouldWait = true
-    if shouldWait then parkUntilSettled()
+    shouldWait
 
   /** Whether the handle is closed already. If not, work claimed on it is still under way, and the last of it to be
     * released closes the handle and tells this op, its one owner.

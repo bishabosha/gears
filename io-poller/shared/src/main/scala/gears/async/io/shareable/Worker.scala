@@ -211,7 +211,10 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
   /** Worker thread only: continuations to run as soon as the listener resuming them has returned, ahead of the rest of
     * the timers and the inbox. Declared before `thread`, which reads it from the moment it starts.
     */
-  private val ready = new java.util.ArrayDeque[Continuation[?, ?]]
+  private val ready = new java.util.ArrayDeque[Runnable]
+
+  /** Worker thread only: `task` runs as a resumed future does, as soon as whatever is running now has returned. */
+  private[shareable] def runNext(task: Runnable): Unit = ready.addLast(task)
 
   private[shareable] def resumeNext[T, R](suspension: Suspension[T, R], value: T): Unit =
     ready.addLast(Continuation(suspension, value))
@@ -293,6 +296,12 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     */
   def performOp(op: Op)(using Async): Unit
 
+  /** Begins `op` without suspending anyone (see `BackendOp.beginOn`): whether it is done already. */
+  def beginOp(op: Op): Boolean = throw new UnsupportedOperationException("This worker's ops need a future to suspend")
+
+  /** After `beginOp` (see `BackendOp.endBegun`). */
+  def endOp(op: Op): Unit = ()
+
   /** As a task of this worker's: the report is made on its thread, where its own are. */
   override def reportLater(handle: Handle, read: Boolean): Unit =
     submit(() => handle.readiness(read).report(this, ReadinessOp.Unknown)): Unit
@@ -302,6 +311,23 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
     Worker.DoAfter(this, TimerHeap.deadlineAfter(nanos), body)
 
   def isEmpty(): Boolean = inbox.isEmpty && ready.isEmpty() && !pollOnly
+
+  /** Whether the worker's thread is asking its poller for events. */
+  private var polling = false
+
+  /** For a future running on this worker's thread, in place of suspending to let the worker do it: asks the poller for
+    * the events it has now, without waiting, and has them reported, which settles the ops they are for and queues the
+    * futures those resume. It runs nothing. Not from within a report.
+    */
+  private[shareable] def lookForEvents(): Unit =
+    if !polling && (driver eq Thread.currentThread()) then
+      val wasPollOnly = pollOnly
+      pollOnly = true
+      polling = true
+      try guarded(waitForDeadline(peekNextDeadline()))
+      finally
+        polling = false
+        pollOnly = wasPollOnly
 
   /** A worker outlives what it runs, as event loops do: it can't be replaced, and its timers and inbox would be lost
     * with it. What a task throws, of any kind, is reported to the thread's uncaught exception handler, as it would be
@@ -402,8 +428,11 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
           if drives != drive || !runReady(drive) then return
           // Its own handles' events still get their turn, without waiting: there may be more to take.
           pollOnly = true
+          polling = true
           try guarded(waitForDeadline(peekNextDeadline()))
-          finally pollOnly = false
+          finally
+            polling = false
+            pollOnly = false
         else
           val deadline = idleDeadline()
           // A timer already due is fired by the next turn, with no call to the system that would only say so; but its
@@ -413,8 +442,11 @@ abstract class Worker(val id: Int, final val handleOwner: HandleOwner) extends T
           else
             pollsSkipped = 0
             parked = isEmpty()
+            polling = true
             try guarded(waitForDeadline(deadline))
-            finally parked = false
+            finally
+              polling = false
+              parked = false
       thiefAsked = false
       opsThisRun = 0
     exited = true
