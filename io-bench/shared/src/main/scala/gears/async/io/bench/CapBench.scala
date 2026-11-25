@@ -35,6 +35,7 @@ object CapBench {
     "tcp-realistic",
     "tcp-realistic-bulk",
     "tcp-realistic-gather",
+    "tcp-realistic-flow",
     "work-realistic",
     "unix-pingpong",
     "unix-concurrent",
@@ -691,6 +692,47 @@ object CapBench {
     }
   }
 
+  /** A request of the cache's, where it is in the bytes it came in. */
+  private final class RespRequest(val bytes: Array[Byte], val from: Int)
+
+  /** Finds the cache's requests in what a read brought, for `tcp-realistic-flow`: the bytes are copied to an array,
+    * where the protocol is read, as the other scenarios' servers copy them.
+    */
+  private final class RespFraming(size: Int) extends gears.async.io.flow.Framing[RespRequest] {
+    private val mirror = new Array[Byte](size)
+    def decode(buf: ByteBuffer, into: gears.async.io.flow.Chunk.Builder[RespRequest]): Unit = {
+      val at = buf.position()
+      val have = buf.remaining()
+      buf.get(mirror, 0, have)
+      var from = 0
+      var next = Resp.end(mirror, from, have)
+      while next >= 0 do {
+        into += new RespRequest(mirror, from)
+        from = next
+        next = Resp.end(mirror, from, have)
+      }
+      buf.position(at + from)
+    }
+  }
+
+  /** Serves a connection of `tcp-realistic-flow`: the server of `tcp-realistic-bulk` as a flow. */
+  private def serveFlow(io: Io[ByteStreams], rounds: Int)(in: io.ops.Readable, out: io.ops.Writable)(using
+      Async
+  ): Unit = {
+    import gears.async.io.flow.Flow
+    val cache = new CacheServer
+    val answer = new Array[Byte](LargestValue)
+    Flow
+      .read(io)(in, arrayBuffer(LargestBatch))
+      .frames(new RespFraming(LargestBatch))
+      .take(rounds)
+      .encode(arrayBuffer(LargestBatch), LargestValue) { (request, buf) =>
+        buf.put(answer, 0, cache.handle(request.bytes, request.from, answer, 0)): Unit
+      }
+      .writeTo(io)(out)
+      .run()
+  }
+
   /** As `realistic`, the requests sent `Batch` at once, as a client that pipelines sends them: the server answers every
     * request a read brought, in one write, and the client checks every answer a read brought. A wait for each read
     * there is, not for each request.
@@ -700,13 +742,15 @@ object CapBench {
       connections: Int,
       rounds: Int,
       name: String,
-      gathering: Boolean
+      gathering: Boolean,
+      flow: Boolean = false
   )(using Async.Spawn): Unit = {
     val io: sockets.io.type = sockets.io
     val (listener, pairs) = connected(sockets, connections)
     timed(name, rounds.toLong * connections)(pairs.zipWithIndex.flatMap { case ((client, server), id) =>
       val serving =
         if gathering then Future(serveGathering(io, rounds)(server, server))
+        else if flow then Future(serveFlow(io, rounds)(server, server))
         else
           Future {
             val end = new RespEnd(io, LargestBatch)(server, server)
@@ -1159,6 +1203,8 @@ object CapBench {
         realisticBulk(tcp(io), many, count(2_000), "tcp-realistic-bulk", gathering = false)
       case "tcp-realistic-gather" =>
         realisticBulk(tcp(io), many, count(2_000), "tcp-realistic-gather", gathering = true)
+      case "tcp-realistic-flow" =>
+        realisticBulk(tcp(io), many, count(2_000), "tcp-realistic-flow", gathering = false, flow = true)
       case "work-realistic" =>
         val rounds = count(2_000)
         timed("work-realistic", rounds.toLong * many)(List(realisticWork(many, rounds)))
