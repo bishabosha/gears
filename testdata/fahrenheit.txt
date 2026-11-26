@@ -1,0 +1,8 @@
+// Temperatures in degrees Fahrenheit, one to a line: the input of `gears.async.streams.Converter`.
+-40.0
+0.0
+32.0
+
+50.0
+98.6
+212.0
